@@ -1,0 +1,261 @@
+"""設定讀寫路由：細粒度寫入，每個操作在鎖內 load→驗證→改→save→回 updated config。spec §6.3 §7。"""
+from __future__ import annotations
+
+import re
+import threading
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from fledge_sidecar.app_config import AppConfig
+from fledge_sidecar.paths import canonicalize, expand_and_validate, probe_dir, resolve_best_effort
+
+router = APIRouter()
+
+# 全域鎖：整個 load-mutate-save 是 critical section，避免並發請求互相覆蓋（Codex round 1 High）
+_config_lock = threading.Lock()
+
+
+class PathAccountBody(BaseModel):
+    path: str
+    account: str
+
+
+class PathBody(BaseModel):
+    path: str
+
+
+class OnboardRoot(BaseModel):
+    path: str
+    default_account: str
+
+
+class OnboardBody(BaseModel):
+    roots: list[OnboardRoot]
+
+
+class AccountBody(BaseModel):
+    key: str
+    config_dir: str
+    label: str = ""
+
+
+class AccountPatchBody(BaseModel):
+    config_dir: str | None = None
+    label: str | None = None
+
+
+class AccountDeleteBody(BaseModel):
+    reassign_to: str | None = None
+
+
+class CheckDirBody(BaseModel):
+    path: str
+
+
+def _require_account(config: AppConfig, account: str) -> None:
+    if account not in config.accounts:
+        raise HTTPException(status_code=400, detail=f"unknown account: {account}")
+
+
+def _canonical_or_400(raw: str) -> str:
+    """移除/改帳號類：canonicalize（拒空/相對→400），不驗存在。"""
+    try:
+        return canonicalize(raw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _validated_dir_or_400(raw: str) -> str:
+    """add 類三步：expand_and_validate（拒空/相對→400）→ probe_dir（missing/not_dir→400）
+    → resolve_best_effort 回 canonical（denied 放行）。"""
+    try:
+        abs_ = expand_and_validate(raw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    st = probe_dir(abs_)
+    if st == "missing":
+        raise HTTPException(status_code=400, detail="找不到此資料夾")
+    if st == "not_dir":
+        raise HTTPException(status_code=400, detail="這不是資料夾")
+    # denied（存在但 TCC 不可讀）仍放行：掃描器已 best-effort 容錯，強制拒絕反而讓使用者
+    # 加不了受限目錄（如外接磁碟、受保護路徑）。設計決策見 path-normalization-design §3。
+    return resolve_best_effort(abs_)
+
+
+_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")  # account key 會進 URL path 與 env，限英數/底線/連字號
+
+
+def _with_first_run(config: AppConfig) -> dict:
+    """在 config dict 附上 is_first_run（= 設定檔尚未落地）。
+    GET 時 load 不 save → 檔不存在 → True；任何寫入 save 後 → 檔存在 → False。無特例。"""
+    return {**config.to_dict(), "is_first_run": not config.path.exists()}
+
+
+@router.get("/api/config")
+def get_config():
+    return _with_first_run(AppConfig.load())
+
+
+@router.post("/api/config/roots")
+def add_root(body: PathAccountBody):
+    path = _validated_dir_or_400(body.path)
+    with _config_lock:
+        config = AppConfig.load()
+        _require_account(config, body.account)
+        if any(r["path"] == path for r in config.roots):
+            raise HTTPException(status_code=400, detail="duplicate root")
+        config.add_root(path, body.account)
+        config.save()
+        return config.to_dict()
+
+
+@router.delete("/api/config/roots")
+def remove_root(body: PathBody):
+    path = _canonical_or_400(body.path)
+    with _config_lock:
+        config = AppConfig.load()
+        config.remove_root(path)
+        config.save()
+        return config.to_dict()
+
+
+@router.patch("/api/config/roots")
+def set_root_account(body: PathAccountBody):
+    path = _canonical_or_400(body.path)
+    with _config_lock:
+        config = AppConfig.load()
+        _require_account(config, body.account)
+        config.set_root_account(path, body.account)
+        config.save()
+        return config.to_dict()
+
+
+@router.post("/api/config/manual")
+def add_manual(body: PathAccountBody):
+    path = _validated_dir_or_400(body.path)
+    with _config_lock:
+        config = AppConfig.load()
+        _require_account(config, body.account)
+        if any(m["path"] == path for m in config.manual_projects):
+            raise HTTPException(status_code=400, detail="duplicate manual project")
+        config.add_manual(path, body.account)
+        config.save()
+        return config.to_dict()
+
+
+@router.delete("/api/config/manual")
+def remove_manual(body: PathBody):
+    path = _canonical_or_400(body.path)
+    with _config_lock:
+        config = AppConfig.load()
+        config.remove_manual(path)
+        config.save()
+        return config.to_dict()
+
+
+@router.put("/api/config/overrides")
+def set_override(body: PathAccountBody):
+    path = _canonical_or_400(body.path)
+    with _config_lock:
+        config = AppConfig.load()
+        _require_account(config, body.account)
+        config.set_override(path, body.account)
+        config.save()
+        return config.to_dict()
+
+
+@router.delete("/api/config/overrides")
+def clear_override(body: PathBody):
+    path = _canonical_or_400(body.path)
+    with _config_lock:
+        config = AppConfig.load()
+        config.clear_override(path)
+        config.save()
+        return config.to_dict()
+
+
+@router.post("/api/config/onboard")
+def onboard(body: OnboardBody):
+    """onboarding 完成：一次原子寫入多個根。任一帳號非法則整批不寫（save 前 raise）。"""
+    if not body.roots:
+        raise HTTPException(status_code=400, detail="onboard 需要至少一個根目錄")
+    with _config_lock:
+        config = AppConfig.load()
+        if config.path.exists():
+            # first-run guard：onboard 僅供首次初始化。擋同 process 重複呼叫與「設定檔已存在」重入
+            # （Codex F-1）。注意 _config_lock 是單 process 鎖，跨 process（兩個 app 實例同時首次）的
+            # save race 不在此防護內 → 見 Known Limitations / Plan 04。既有加根請走 POST /api/config/roots。
+            raise HTTPException(status_code=409, detail="已完成初始設定，onboard 僅供首次初始化")
+        for r in body.roots:  # 先全驗證帳號，任一非法則整批不落檔
+            _require_account(config, r.default_account)
+        seen: set[str] = set()
+        for r in body.roots:
+            path = _validated_dir_or_400(r.path)
+            if path in seen or any(rt["path"] == path for rt in config.roots):
+                continue  # 同批重複或已存在 → 略過
+            seen.add(path)
+            config.add_root(path, r.default_account)
+        config.save()
+        return _with_first_run(config)
+
+
+@router.post("/api/config/accounts")
+def add_account(body: AccountBody):
+    key = body.key.strip()
+    if not _KEY_RE.match(key):
+        raise HTTPException(status_code=400, detail="帳號代號只能含英數字、底線、連字號（會進 URL path 與 env）")
+    config_dir = body.config_dir.strip()
+    if not config_dir:
+        raise HTTPException(status_code=400, detail="config_dir 不可為空")
+    with _config_lock:
+        config = AppConfig.load()
+        if key in config.accounts:
+            raise HTTPException(status_code=400, detail=f"帳號代號已存在: {key}")
+        config.add_account(key, config_dir, body.label.strip())  # config_dir 存 raw（含 ~）
+        config.save()
+        return config.to_dict()
+
+
+@router.patch("/api/config/accounts/{key}")
+def patch_account(key: str, body: AccountPatchBody):
+    with _config_lock:
+        config = AppConfig.load()
+        if key not in config.accounts:
+            raise HTTPException(status_code=404, detail=f"unknown account: {key}")
+        if body.config_dir is not None:
+            config_dir = body.config_dir.strip()
+            if not config_dir:
+                raise HTTPException(status_code=400, detail="config_dir 不可為空")
+            config.set_account_config_dir(key, config_dir)
+        if body.label is not None:
+            config.set_account_label(key, body.label.strip())
+        config.save()
+        return config.to_dict()
+
+
+@router.delete("/api/config/accounts/{key}")
+def delete_account(key: str, body: AccountDeleteBody):
+    with _config_lock:
+        config = AppConfig.load()
+        if key not in config.accounts:
+            raise HTTPException(status_code=404, detail=f"unknown account: {key}")
+        if len(config.accounts) <= 1:
+            raise HTTPException(status_code=400, detail="至少保留一個帳號")
+        # reassign_to 給了就驗證合法（不論有無引用）：不可等於自己、必須存在
+        if body.reassign_to is not None:
+            if body.reassign_to == key or body.reassign_to not in config.accounts:
+                raise HTTPException(status_code=400, detail=f"invalid reassign_to: {body.reassign_to}")
+        refs = config.account_references(key)
+        has_refs = bool(refs["roots"] or refs["manual"] or refs["overrides"])
+        if has_refs and not body.reassign_to:
+            raise HTTPException(status_code=400, detail=f"帳號 {key} 仍被引用，需指定 reassign_to")
+        config.remove_account(key, body.reassign_to)
+        config.save()
+        return config.to_dict()
+
+
+@router.post("/api/config/check-dir")
+def check_dir(body: CheckDirBody):
+    """查 config_dir 狀態（給前端 config_dir 警告用；不改任何狀態）。"""
+    return {"status": probe_dir(body.path)}

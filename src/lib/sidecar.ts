@@ -1,0 +1,264 @@
+import { invoke } from "@tauri-apps/api/core";
+
+// per-launch 認證 token；App 啟動時由 setAuthToken 設一次，跨 restart 不變。
+let authToken: string | null = null;
+export function setAuthToken(t: string | null): void {
+  authToken = t;
+}
+export function authHeaders(): Record<string, string> {
+  return authToken != null ? { "X-Fledge-Token": authToken } : {};
+}
+export function wsUrl(port: number, sessionId: string): string {
+  const u = `ws://127.0.0.1:${port}/ws/${sessionId}`;
+  return authToken != null ? `${u}?token=${encodeURIComponent(authToken)}` : u;
+}
+
+/** 輪詢 Tauri command 直到拿到非空 token（Rust 在 setup 早就生好、應幾乎即時）。逾時 throw。 */
+export async function waitForSidecarToken(maxWaitMs = 10000): Promise<string> {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const t = await invoke<string | null>("sidecar_token");
+    if (t) return t;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error("sidecar token 未就緒");
+}
+
+/** 輪詢 Tauri command 直到 sidecar port 就緒（最多等 maxWaitMs）。
+ *
+ * 預設 30s：PyInstaller onefile sidecar 在 Tauri（dev、unsigned）下被 spawn 後
+ * 約需 ~15s 才 listening（疑 macOS 對 unsigned binary 的驗證；直接 spawn 僅 ~5s）。
+ * Plan 05 簽名/打包後啟動可縮短，屆時再調回較短上限。
+ */
+export async function waitForSidecarPort(maxWaitMs = 30000): Promise<number> {
+  const start = Date.now();
+  while (Date.now() - start < maxWaitMs) {
+    const port = await invoke<number | null>("sidecar_port");
+    if (port != null) return port;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error("Sidecar did not start in time");
+}
+
+export interface Health {
+  ok: boolean;
+  version: string;
+  claude_found: boolean;
+}
+
+/** 輪詢 /api/health 直到回應就緒（或逾時）。
+ *
+ * sidecar 先印 FLEDGE_PORT 再啟動 uvicorn，故 Tauri 抓到 port、前端拿到 port 時
+ * server 可能仍在 startup（實測約 0.5s gap）；單次 fetch 會撞連線被拒
+ * （webview 報 TypeError: Load failed）。此處 retry 至 health 200 或逾時。
+ */
+export async function fetchHealth(port: number, maxWaitMs = 10000): Promise<Health> {
+  const start = Date.now();
+  let lastErr: unknown = null;
+  while (Date.now() - start < maxWaitMs) {
+    try {
+      const resp = await fetch(`http://127.0.0.1:${port}/api/health`, { headers: authHeaders() });
+      if (resp.ok) return resp.json();
+      lastErr = new Error(`status ${resp.status}`);
+    } catch (e) {
+      lastErr = e; // server 尚未就緒（連線被拒），稍候重試
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`Health check failed: ${lastErr}`);
+}
+
+/** 週期 health poll 用：單次 raw fetch（不 retry）。回 parsed Health（含 P3 的 claude_found）或 null（失敗）。 */
+export async function rawHealth(port: number): Promise<Health | null> {
+  try {
+    const resp = await fetch(`http://127.0.0.1:${port}/api/health`, { headers: authHeaders() });
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+/** 重啟 sidecar：Rust kill 當前 child + 重 spawn + 回新 port。 */
+export async function restartSidecar(): Promise<number> {
+  return invoke<number>("restart_sidecar");
+}
+
+export type DirStatus = "dir" | "missing" | "not_dir" | "denied";
+export type PreviewStatus = "ok" | "denied" | "missing" | "not_dir" | "invalid";
+
+export interface Project {
+  name: string;
+  path: string;
+  account: string;
+  source: string;
+  root: string | null;
+  recent: number | null;
+}
+
+const base = (port: number) => `http://127.0.0.1:${port}`;
+
+export async function fetchProjects(port: number): Promise<{ projects: Project[]; permissionError: boolean }> {
+  const resp = await fetch(`${base(port)}/api/projects`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`fetchProjects failed: ${resp.status}`);
+  const body = await resp.json();
+  return { projects: body.projects, permissionError: body.permission_error ?? false };
+}
+
+// 回 { path, count, status }：path 是後端 canonicalize（resolve）後的路徑，前端用它當 draft
+// 的 dedup key（與後端 onboard 存的一致）。status 讓 wizard 決定加不加 draft。
+export async function scanPreview(
+  port: number,
+  path: string,
+): Promise<{ path: string; count: number; status: PreviewStatus }> {
+  const resp = await fetch(`${base(port)}/api/projects/scan-preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ path }),
+  });
+  if (!resp.ok) throw new Error(`scanPreview failed: ${resp.status}`);
+  const data = await resp.json();
+  return { path: data.path, count: data.count, status: data.status };
+}
+
+export async function createSession(
+  port: number,
+  path: string,
+  account: string,
+): Promise<string> {
+  const resp = await fetch(`${base(port)}/api/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ path, account }),
+  });
+  if (!resp.ok) throw new Error(`createSession failed: ${resp.status}`);
+  return (await resp.json()).session_id;
+}
+
+export async function closeSession(port: number, sessionId: string): Promise<void> {
+  // 失敗時 log（不再靜默吞，符合 CLAUDE.md §3.2）：session 可能殘留在 sidecar，
+  // 完整的重試／orphan reaper 留 Plan 04。仍不 throw——closeTab／orphan 清理不應因此中斷（mode A）。
+  try {
+    const resp = await fetch(`${base(port)}/api/sessions/${sessionId}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    if (!resp.ok) {
+      console.error(`closeSession ${sessionId} 失敗：HTTP ${resp.status}（session 可能殘留）`);
+    }
+  } catch (e) {
+    console.error(`closeSession ${sessionId} 連線錯誤（session 可能殘留）：`, e);
+  }
+}
+
+export async function resizeSession(
+  port: number,
+  sessionId: string,
+  rows: number,
+  cols: number,
+): Promise<void> {
+  // resize 低頻、失敗影響小（PTY 尺寸沒同步）；失敗時 log 不 throw（符合 CLAUDE.md §3.2）。
+  try {
+    const resp = await fetch(`${base(port)}/api/sessions/${sessionId}/resize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ rows, cols }),
+    });
+    if (!resp.ok) {
+      console.error(`resizeSession ${sessionId} 失敗：HTTP ${resp.status}`);
+    }
+  } catch (e) {
+    console.error(`resizeSession ${sessionId} 連線錯誤：`, e);
+  }
+}
+
+export interface AppConfigData {
+  version: number;
+  roots: { path: string; default_account: string }[];
+  accounts: Record<string, { config_dir: string; label: string }>;
+  manual_projects: { path: string; account: string }[];
+  project_overrides: Record<string, { account: string }>;
+  ui: { theme: string };
+  // startup-only metadata：僅 GET /api/config 與 onboard 回應帶（設定檔不存在為 true）。
+  // 其他 config write 不帶 → 寫入後此欄位為 undefined 屬正常；只在 App 啟動讀一次決定是否進
+  // onboarding，之後改用獨立的 showOnboarding state，勿用於 render gate（Codex F-7）。
+  is_first_run?: boolean;
+}
+
+export async function fetchConfig(port: number): Promise<AppConfigData> {
+  const resp = await fetch(`${base(port)}/api/config`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`fetchConfig failed: ${resp.status}`);
+  return resp.json();
+}
+
+async function configWrite(
+  port: number,
+  path: string,
+  method: string,
+  body: Record<string, unknown>,
+): Promise<AppConfigData> {
+  const resp = await fetch(`${base(port)}${path}`, {
+    method,
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    // 取出 FastAPI 的 {"detail": "..."}（如「找不到此資料夾」），讓前端能顯示具體原因
+    let detail = `HTTP ${resp.status}`;
+    try {
+      const j = await resp.json();
+      if (j?.detail) detail = j.detail;
+    } catch {
+      /* 非 JSON body → 用 HTTP 狀態碼 */
+    }
+    throw new Error(detail);
+  }
+  return resp.json();
+}
+
+export const addRoot = (port: number, path: string, account: string) =>
+  configWrite(port, "/api/config/roots", "POST", { path, account });
+export const removeRoot = (port: number, path: string) =>
+  configWrite(port, "/api/config/roots", "DELETE", { path });
+export const setRootAccount = (port: number, path: string, account: string) =>
+  configWrite(port, "/api/config/roots", "PATCH", { path, account });
+export const addManualProject = (port: number, path: string, account: string) =>
+  configWrite(port, "/api/config/manual", "POST", { path, account });
+export const removeManualProject = (port: number, path: string) =>
+  configWrite(port, "/api/config/manual", "DELETE", { path });
+export const setProjectOverride = (port: number, path: string, account: string) =>
+  configWrite(port, "/api/config/overrides", "PUT", { path, account });
+export const clearProjectOverride = (port: number, path: string) =>
+  configWrite(port, "/api/config/overrides", "DELETE", { path });
+
+export async function onboard(
+  port: number,
+  roots: { path: string; default_account: string }[],
+): Promise<AppConfigData> {
+  const resp = await fetch(`${base(port)}/api/config/onboard`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ roots }),
+  });
+  if (!resp.ok) throw new Error(`onboard failed: ${resp.status}`);
+  return resp.json();
+}
+
+export const addAccount = (port: number, key: string, config_dir: string, label: string) =>
+  configWrite(port, "/api/config/accounts", "POST", { key, config_dir, label });
+export const setAccountConfigDir = (port: number, key: string, config_dir: string) =>
+  configWrite(port, `/api/config/accounts/${encodeURIComponent(key)}`, "PATCH", { config_dir });
+export const setAccountLabel = (port: number, key: string, label: string) =>
+  configWrite(port, `/api/config/accounts/${encodeURIComponent(key)}`, "PATCH", { label });
+export const removeAccount = (port: number, key: string, reassignTo?: string) =>
+  configWrite(port, `/api/config/accounts/${encodeURIComponent(key)}`, "DELETE", { reassign_to: reassignTo });
+
+export async function checkDir(port: number, path: string): Promise<DirStatus> {
+  const resp = await fetch(`${base(port)}/api/config/check-dir`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ path }),
+  });
+  if (!resp.ok) throw new Error(`checkDir failed: ${resp.status}`);
+  return (await resp.json()).status as DirStatus;
+}

@@ -1,0 +1,332 @@
+/* ===== Onboarding.css — 品牌 token 版 ===== */
+
+/* ── 全螢幕 overlay（onboarding 為強制向導，無關閉鈕）── */
+.ob-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 400;
+  font-family: var(--font-ui);
+  color: var(--text);
+  overflow: hidden;
+}
+
+/* ── 裝飾光暈（pointer-events none，擺在 inner 之後）── */
+/* 上方：primary 暖光，對應 demo .ob-glow */
+.ob-glow {
+  position: absolute;
+  width: 760px;
+  height: 760px;
+  border-radius: 50%;
+  top: -200px;
+  /* 用 color-mix 模擬 demo 的柔光效果；primary 22% 透明度打散 */
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--primary) 22%, transparent),
+    transparent 62%
+  );
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* 左下：ai 冷光，對應 demo .ob-glow.two */
+.ob-glow-two {
+  position: absolute;
+  width: 760px;
+  height: 760px;
+  border-radius: 50%;
+  bottom: -260px;
+  left: -160px;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--ai) 24%, transparent),
+    transparent 62%
+  );
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* ── 內容容器（z-index 1 覆在光暈之上）── */
+.ob-inner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 560px;
+}
+
+/* ── 品牌 header（三步都持續顯示）── */
+.ob-logo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+
+/* "Fledge" wordmark */
+.ob-logo-name {
+  font-size: 38px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+/* tagline：Where your AI projects take off. */
+.ob-tag {
+  font-size: 16px;
+  color: var(--dim);
+  font-weight: 500;
+}
+
+/* 副標：Built for Claude Code */
+.ob-built {
+  font-size: 12px;
+  color: var(--faint);
+  margin-top: 5px;
+  letter-spacing: 0.03em;
+}
+
+/* ── 卡片主體 ── */
+.ob-card {
+  margin-top: 34px;
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 24px;
+  font-size: 13px;
+}
+
+/* ── 進度條（三條橫槓，填色表示已到達的步驟）── */
+.ob-steps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+/* 每一條 */
+.ob-step-bar {
+  flex: 1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border);
+  transition: background 0.2s ease;
+}
+
+/* 已填色（n <= 當前 step）*/
+.ob-step-bar.is-on {
+  background: var(--primary);
+}
+
+/* ── 步驟標題 ── */
+.ob-h {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0 0 5px;
+  color: var(--text);
+}
+
+/* 步驟 1/3 置中容器 */
+.ob-step-center {
+  text-align: center;
+}
+
+/* ── 步驟副說明文字 ── */
+.ob-sub {
+  font-size: 13.5px;
+  color: var(--dim);
+  margin: 0 0 18px;
+  line-height: 1.5;
+}
+
+/* ── 內嵌訊息（錯誤 / 注意）── */
+/* 紅色 error（路徑無效、後端失敗）*/
+.ob-error {
+  color: var(--error);
+  font-size: 12px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+/* amber notice（denied 但仍允許加入）*/
+.ob-notice {
+  color: var(--warning);
+  font-size: 12px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+/* ── draft root 一列（現有根目錄）── */
+.ob-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+/* 路徑文字（超出寬度截斷）*/
+.ob-row-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+
+/* 掃描計數（✓ N）*/
+.ob-row-count {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--session); /* 對應 demo mint / 原 #4ade80 */
+  flex: 0 0 auto;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* ── select（帳號選擇）── */
+.ob-sel {
+  flex: 0 0 92px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 4px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: var(--font-ui);
+}
+
+.ob-sel:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ── 輸入列（新增根目錄）── */
+.ob-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+/* 路徑 input */
+.ob-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: var(--font-ui);
+}
+
+.ob-input::placeholder {
+  color: var(--faint);
+}
+
+.ob-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ── 按鈕共通基底 ── */
+.ob-btn,
+.ob-btn-ghost,
+.ob-btn-del {
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: var(--font-ui);
+  font-weight: 600;
+}
+
+.ob-btn:focus-visible,
+.ob-btn-ghost:focus-visible,
+.ob-btn-del:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* primary 按鈕：背景 --primary，文字 --primary-ink */
+.ob-btn {
+  background: var(--primary);
+  color: var(--primary-ink);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--primary) 40%, transparent);
+}
+
+.ob-btn:hover {
+  filter: brightness(1.05);
+}
+
+.ob-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  filter: none;
+}
+
+/* ghost 按鈕：表面色背景，dimmed 文字 */
+.ob-btn-ghost {
+  background: var(--surface-2);
+  color: var(--dim);
+}
+
+.ob-btn-ghost:hover {
+  background: var(--hover);
+}
+
+.ob-btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 刪除按鈕：錯誤紅 */
+.ob-btn-del {
+  background: var(--error);
+  color: var(--error-ink);
+  padding: 6px 10px;
+}
+
+.ob-btn-del:hover {
+  filter: brightness(1.08);
+}
+
+/* ── 動作列（上一步 / 下一步 等）── */
+.ob-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 22px;
+}
+
+/* 置中動作（步驟 1 / 3 的單按鈕）*/
+.ob-actions-center {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 22px;
+}
+
+/* ── 完成步驟計數（加粗數字）── */
+.ob-summary {
+  color: var(--dim);
+  line-height: 1.9;
+  margin: 0 0 4px;
+  font-size: 13.5px;
+}
+
+.ob-summary b {
+  color: var(--text);
+  font-weight: 700;
+}

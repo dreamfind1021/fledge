@@ -1,0 +1,139 @@
+/* ===== App.css — App chrome 品牌 token 版 ===== */
+
+/* ── 根容器：full-height flex，底色走 token（修正原先寫死 #0f0f0f）── */
+.app-root {
+  display: flex;
+  height: 100vh;
+  background: var(--bg);
+}
+
+/* ===== Banner 基底 ===== */
+/* 警示/錯誤 banner 共用結構：fixed 頂端條、flex + icon + 訊息 + 可選按鈕 */
+.app-banner {
+  position: fixed;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--text);
+}
+
+/* icon（AlertTriangle）尺寸固定，顏色由各 variant class 覆蓋 */
+.app-banner-icon {
+  flex-shrink: 0;
+  display: flex;
+}
+
+/* 訊息文字佔剩餘空間 */
+.app-banner-msg {
+  flex: 1;
+}
+
+/* ===== Error banner（後端斷線）— §3.2 error 版型 ===== */
+/* 淡底：error 15% + bg；不用飽和填色，與 --primary CTA 形狀/位置不同（§3.2 規則 1） */
+.app-banner--error {
+  top: 0;
+  z-index: 400;
+  background: color-mix(in srgb, var(--error) 15%, var(--bg));
+  border-bottom: 1px solid color-mix(in srgb, var(--error) 40%, transparent);
+}
+
+.app-banner--error .app-banner-icon {
+  color: var(--error);
+}
+
+/* 重啟按鈕：error 家族實心（與 amber --primary 明確區分），disabled 時降透明度 */
+.app-banner-btn--error {
+  background: var(--error);
+  color: var(--error-ink);
+  border: none;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.app-banner-btn--error:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.app-banner-btn--error:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+/* focus ring：與 Sidebar.css 一致，用 --focus token */
+.app-banner-btn--error:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ===== Warning banner（claude not found / 權限錯誤）— §3.2 warning 版型 ===== */
+/* 淡底：warning 14% + bg；確保不與 --primary amber 填色形式混淆（§3.2 規則 1/4） */
+.app-banner--warning {
+  z-index: 399;
+  background: color-mix(in srgb, var(--warning) 14%, var(--bg));
+}
+
+/* 頂端出現的 warning（claude-not-found）：下緣邊框 */
+.app-banner--warning-top {
+  top: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--warning) 38%, transparent);
+}
+
+/* 底端出現的 warning（permission-error）：上緣邊框 */
+.app-banner--warning-bottom {
+  bottom: 0;
+  border-top: 1px solid color-mix(in srgb, var(--warning) 38%, transparent);
+}
+
+.app-banner--warning .app-banner-icon {
+  color: var(--warning);
+}
+
+/* 安裝說明按鈕：warning-outline ghost，不用 amber 填色（§3.2 規則 1）*/
+.app-banner-btn--warning {
+  background: transparent;
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent);
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.app-banner-btn--warning:hover {
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+
+.app-banner-btn--warning:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ===== Toast ===== */
+/* 底部置中浮層；用 surface/border token，不接 error/warning（只給中性訊息）*/
+.app-toast {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  box-shadow: var(--shadow-sm);
+  z-index: 300;
+  white-space: nowrap;
+}

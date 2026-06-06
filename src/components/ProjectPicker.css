@@ -1,0 +1,218 @@
+/* ===== ProjectPicker.css — 命令面板（lavender/ai accent）===== */
+
+/* ── 全螢幕 overlay：click-outside 關閉，blur 背景 ── */
+.pp-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 96px;
+  z-index: 150;
+}
+
+/* ── 面板主體 ── */
+.pal-card {
+  width: 600px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--modal-shadow);
+  overflow: hidden;
+  font-family: var(--font-ui);
+}
+
+/* ── 搜尋列：sparkles 圖示 + input ── */
+.pal-search {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 15px 17px;
+  border-bottom: 1px solid var(--divider);
+}
+
+/* sparkles 圖示顏色用 ai（lavender）*/
+.pal-search .pico {
+  color: var(--ai);
+  display: flex;
+  flex-shrink: 0;
+}
+
+.pal-search input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font-family: var(--font-ui);
+  font-size: 15.5px;
+  color: var(--text);
+}
+
+.pal-search input::placeholder {
+  color: var(--faint);
+}
+
+/* focus-visible ring：僅鍵盤操作時顯示，滑鼠點擊不觸發 */
+.pal-search input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ── 結果清單 ── */
+.pal-list {
+  padding: 8px;
+  max-height: min(320px, 60vh);
+  overflow-y: auto;
+}
+
+/* 捲軸輕量化（跟 Sidebar 一致）*/
+.pal-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.pal-list::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+/* 區塊標題「專案」*/
+.pal-sec {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding: 8px 10px 5px;
+}
+
+/* ── 單一專案列 ── */
+.pal-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  cursor: pointer;
+  color: var(--text);
+  transition: background 0.1s ease;
+}
+
+.pal-row:hover {
+  background: var(--hover);
+}
+
+/* folder 圖示（預設 faint）*/
+.pal-row .rico {
+  color: var(--faint);
+  display: flex;
+  flex-shrink: 0;
+}
+
+/* 專案名稱 */
+.pal-row .rname {
+  font-size: 14px;
+  font-weight: 500;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 路徑（等寬字型）*/
+.pal-row .rpath {
+  font-size: 12px;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+  flex-shrink: 0;
+}
+
+/* 帳號 chip：彩色方塊 + 帳號名 */
+.pal-row .rchip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--dim);
+  flex-shrink: 0;
+}
+
+/* 彩色方塊（background 由 inline style 注入）*/
+.pal-row .rchip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ── 選中列（is-sel）：lavender tint + 圖示換色 + hint 顯示 ── */
+/* 「非顏色唯一」：同時有淡色背景 + folder 轉色 + hint 文字三層視覺線索 */
+.pal-row.is-sel {
+  background: color-mix(in srgb, var(--ai) 16%, transparent);
+}
+
+.pal-row.is-sel .rico {
+  color: var(--ai);
+}
+
+/* 選中 hint：↵ 啟動 session（含 sparkles icon）*/
+.pal-row.is-sel .rhint {
+  margin-left: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ai);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* ── 無結果空狀態 ── */
+.pal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  gap: 10px;
+  text-align: center;
+}
+
+.pal-empty-ico {
+  color: var(--faint);
+  display: flex;
+  flex-shrink: 0;
+}
+
+.pal-empty-msg {
+  font-size: 13.5px;
+  color: var(--faint);
+}
+
+/* ── 底部 footer：鍵盤快捷鍵提示 ── */
+.pal-foot {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--divider);
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.pal-foot kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--hover);
+  border: 1px solid var(--border);
+  color: var(--dim);
+  margin-right: 5px;
+}

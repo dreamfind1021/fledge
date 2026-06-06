@@ -1,0 +1,327 @@
+/* ===== Settings.css — 設定 modal 品牌 token 版 ===== */
+
+/* ── overlay：click-outside 關閉，模糊背景 ── */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+/* ── modal 面板主體（flex column，限高後 body 捲動）── */
+.settings-modal {
+  width: 580px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--modal-shadow);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  /* 最大高度：80vh 但不超過 660px，對應 demo .modal */
+  max-height: min(80vh, 660px);
+  font-family: var(--font-ui);
+  color: var(--text);
+  font-size: 13px;
+}
+
+/* ── 頂部 header：gear 圖示 + 標題 + X 關閉 ── */
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--divider);
+  flex-shrink: 0;
+}
+
+/* header 齒輪圖示色 */
+.settings-head-ico {
+  color: var(--dim);
+  display: flex;
+  flex-shrink: 0;
+}
+
+/* "設定" 標題 */
+.settings-head-title {
+  font-size: 17px;
+  font-weight: 700;
+  flex: 1;
+}
+
+/* X 關閉按鈕：靠右，faint，hover 轉 dim */
+.settings-head-close {
+  margin-left: auto;
+  color: var(--faint);
+  cursor: pointer;
+  display: flex;
+  border: none;
+  background: transparent;
+  padding: 4px;
+  border-radius: 6px;
+  line-height: 0;
+}
+
+.settings-head-close:hover {
+  color: var(--dim);
+  background: var(--hover);
+}
+
+.settings-head-close:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ── 捲動主體 ── */
+.settings-body {
+  padding: 8px 22px 12px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.settings-body::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+/* ── 全域 error 提示（addRoot/addManual 失敗）── */
+.settings-error {
+  color: var(--error);
+  font-size: 12px;
+  margin-bottom: 8px;
+  padding: 6px 0;
+}
+
+/* ── 區塊標題：uppercase + 圖示 ── */
+.settings-sec-title {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dim);
+  /* 上下 18/10 的節奏對應 demo .sec-title margin */
+  margin: 18px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* 第一個 sec-title 不需要上 margin（用 modifier class，不靠 :first-child——
+   錯誤訊息列會搶 first-child 位置，會讓首段間距在有 error 時跳掉）*/
+.settings-sec-title--first {
+  margin-top: 6px;
+}
+
+/* ── 根目錄 / 手動專案 既有列（.rrow 風格）── */
+.settings-rrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 7px;
+  font-size: 13px;
+}
+
+/* 路徑文字：等寬，flex:1，超出省略 */
+.settings-rrow-path {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 帳號標籤（手動專案列）*/
+.settings-rrow-acct {
+  color: var(--dim);
+  font-size: 12px;
+  flex: 0 0 auto;
+}
+
+/* 帳號 select（根目錄列）*/
+.settings-rrow-select {
+  flex: 0 0 100px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+}
+
+.settings-rrow-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* 刪除 icon 按鈕：faint → hover 轉 error + hover bg */
+.settings-del {
+  color: var(--faint);
+  cursor: pointer;
+  display: flex;
+  padding: 3px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+.settings-del:hover {
+  color: var(--error);
+  background: var(--hover);
+}
+
+.settings-del:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.settings-del:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ── 新增表單列（根目錄 / 手動專案）── */
+.settings-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* 上方給點空間，與 rrow 群組分開 */
+  padding-top: 2px;
+  margin-bottom: 4px;
+}
+
+/* 新增列 input */
+.settings-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+}
+
+.settings-input::placeholder {
+  color: var(--faint);
+  font-family: var(--font-ui);
+}
+
+.settings-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* 新增列帳號 select */
+.settings-add-select {
+  flex: 0 0 100px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 4px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: var(--font-ui);
+}
+
+.settings-add-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ── 共用按鈕（modal 內）── */
+
+/* ghost 按鈕：透明背景，border，dim 文字 */
+.settings-btn-ghost {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--dim);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.settings-btn-ghost:hover {
+  background: var(--hover);
+}
+
+.settings-btn-ghost:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.settings-btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* primary 按鈕：amber（--primary）+ primary-ink 文字 */
+.settings-btn-primary {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: var(--primary);
+  border: 0;
+  color: var(--primary-ink);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--primary) 40%, transparent);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.settings-btn-primary:hover {
+  filter: brightness(1.05);
+}
+
+.settings-btn-primary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.settings-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+  filter: none;
+}
+
+/* ── 底部 footer：「完成」按鈕靠右 ── */
+/* Settings 自動儲存——無「取消」；「完成」= 關閉 */
+.settings-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 16px 22px;
+  border-top: 1px solid var(--divider);
+  flex-shrink: 0;
+}
+
+/* footer 「完成」按鈕用較大 padding 對應 demo .btn-primary */
+.settings-foot .settings-btn-primary {
+  padding: 9px 18px;
+  font-size: 13.5px;
+  border-radius: 9px;
+}

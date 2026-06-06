@@ -1,0 +1,30 @@
+/* ===== ContextMenu.css — 通用右鍵選單（token 版）=====
+   top/left 為邊緣 clamp 後的動態定位，保留 inline style；其餘走 class。 */
+.ctx-menu {
+  position: fixed;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--row-radius);
+  padding: 4px 0;
+  z-index: 200;
+  min-width: 180px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  box-shadow: var(--shadow-sm);
+}
+
+.ctx-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.ctx-item:hover {
+  background: var(--hover);
+}
+
+/* 危險動作（如「移除」）：紅字 */
+.ctx-item.is-danger {
+  color: var(--error);
+}

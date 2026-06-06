@@ -1,0 +1,184 @@
+/* ===== TabBar.css — 品牌 token 版 ===== */
+
+/* 外層容器 */
+.tabbar {
+  display: flex;
+  height: 34px;
+  background: var(--bg);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  overflow-x: auto;
+}
+
+/* 單一 tab */
+.tabbar-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  max-width: 200px;
+  /* 上方圓角 8px（與原始 inline style 保持一致；13px 的合併 tab radius 屬後續 Workspace 任務）*/
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+  border-right: 1px solid var(--divider);
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--dim);
+}
+
+/* hover 態（非 active tab 才需要） */
+.tabbar-tab:not(.is-active):hover {
+  background: var(--hover);
+}
+
+/* 啟用中的 tab */
+.tabbar-tab.is-active {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* tab title span */
+.tabbar-tab-title {
+  flex: 1;
+  /* flex-child 需要 min-width:0 才能縮到 ellipsis（否則 text-overflow 形同無效）*/
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 帳號 chip（background 由 inline style 動態注入 accountColor()）*/
+.tabbar-chip {
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 3px;
+  /* chip 上的文字用 --bg（深色），確保在各帳號色背景上可讀 */
+  color: var(--bg);
+}
+
+/* 關閉按鈕 */
+.tabbar-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  padding: 0;
+  border-radius: 4px;
+}
+
+.tabbar-close:hover {
+  background: var(--hover);
+}
+
+.tabbar-close:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* ===== strip 變體：合成 Workspace 內的 TabBar（純 CSS，JSX 不變）=====
+   把 demo 的 .ws-tabs/.ws-tab/.ws-tab.on 對映到既有 class，讓同一個 <TabBar/>
+   在 .workspace 內呈現為與終端機融為一體的 tab strip。*/
+
+/* .ws-tabs：strip 本體（覆蓋獨立態的 height:34px / bg:var(--bg)）*/
+.workspace .tabbar {
+  height: auto;
+  /* strip 與終端機同底色（--term-bg），不加分隔線/不同底色，tab 與終端機融為一體 */
+  background: var(--term-bg);
+  padding: 8px 12px 0;
+  gap: 3px;
+  align-items: center;
+}
+
+/* .ws-tab：strip tab（覆蓋獨立態的 8px 圓角與 border-right 分隔線）。
+   margin-bottom:-1px 讓 active tab 的底邊壓在 strip 下緣，與終端機接縫。*/
+.workspace .tabbar-tab {
+  padding: 9px 14px;
+  border-radius: var(--tab-radius) var(--tab-radius) 0 0;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  margin-bottom: -1px;
+  color: var(--term-dim);
+}
+
+/* strip hover 只變文字色（覆蓋獨立態的 hover 背景）*/
+.workspace .tabbar-tab:not(.is-active):hover {
+  background: transparent;
+  color: var(--term-text);
+}
+
+/* .ws-tab.on：active tab 與下方終端機無縫融合——
+   border-bottom 用 --term-bg 抹平接縫，border-top 的 --primary 是琥珀色指示條。*/
+.workspace .tabbar-tab.is-active {
+  color: var(--term-text);
+  border: 1px solid var(--term-divider);
+  border-bottom: 1px solid var(--term-bg);
+  border-radius: var(--tab-radius) var(--tab-radius) 0 0;
+  /* 視覺語言 A：選取（前景）＝靜態琥珀底（無動畫、無上方線）。
+     「呼吸燈」語義保留給未來的 session 活動指示功能（工作中=呼吸、等待=穩定點）。*/
+  background: color-mix(in srgb, var(--primary) 15%, var(--term-bg));
+}
+
+/* ===== 統一狀態點（取代 ●/⚠）：色+動作編碼 working/waiting/連線態 ===== */
+.tab-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+/* working：琥珀實心呼吸（2s 發光脈動）*/
+.tab-dot.is-working {
+  background: var(--primary);
+  animation: tab-dot-breathe 2s ease-in-out infinite;
+}
+@keyframes tab-dot-breathe {
+  0%, 100% { opacity: 0.5; box-shadow: 0 0 0 0 transparent; }
+  50% { opacity: 1; box-shadow: 0 0 7px 1px color-mix(in srgb, var(--primary) 70%, transparent); }
+}
+/* waiting：mint 穩定 + 柔暈（你的回合）。
+   一次性「完成脈動」：working→waiting 換 class 時動畫自動觸發一次（連續 waiting 不重播），
+   脈動兩下漣漪拉注意力（尤其背景 tab 剛跑完）後 settle 成穩定暈。 */
+.tab-dot.is-waiting {
+  background: var(--session);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--session) 22%, transparent);
+  animation: tab-dot-finish 0.7s ease-out 2;
+}
+@keyframes tab-dot-finish {
+  0% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--session) 60%, transparent); }
+  60% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--session) 0%, transparent); }
+  100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--session) 22%, transparent); }
+}
+/* connecting：灰 慢脈動 */
+.tab-dot.is-connecting {
+  background: var(--term-dim);
+  animation: tab-dot-pulse 1.6s ease-in-out infinite;
+}
+/* offline：warning 黃空心環 + 慢脈動（與實心 working 區隔）*/
+.tab-dot.is-offline {
+  background: transparent;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--warning);
+  animation: tab-dot-pulse 1.4s ease-in-out infinite;
+}
+@keyframes tab-dot-pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.95; }
+}
+/* ended：灰暗靜態 */
+.tab-dot.is-ended {
+  background: var(--faint);
+  opacity: 0.55;
+}
+/* error：紅靜態 */
+.tab-dot.is-error {
+  background: var(--error);
+}
+/* reduced-motion 後備：index.css 全域已凍結動畫，這裡給點靜態可辨識外觀 */
+@media (prefers-reduced-motion: reduce) {
+  .tab-dot.is-working {
+    opacity: 1;
+    box-shadow: 0 0 6px 1px color-mix(in srgb, var(--primary) 60%, transparent);
+  }
+  .tab-dot.is-connecting { opacity: 0.8; }
+  .tab-dot.is-offline { opacity: 0.85; }
+}

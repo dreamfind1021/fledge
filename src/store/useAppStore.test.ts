@@ -1,0 +1,176 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import * as sidecar from "../lib/sidecar";
+import { useAppStore } from "./useAppStore";
+
+vi.mock("../lib/sidecar");
+
+const proj = (path: string): sidecar.Project => ({
+  name: path.split("/").pop()!,
+  path,
+  account: "work",
+  source: "root",
+  root: "/Users/tc/NAS/work",
+  recent: null,
+});
+
+describe("useAppStore", () => {
+  beforeEach(() => {
+    useAppStore.setState({ port: 1234, projects: [], tabs: [], activeTabId: null, config: null });
+    vi.clearAllMocks();
+  });
+
+  it("openTab 同一專案第二次改為切換、不重複開", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValue("sess-1");
+    await useAppStore.getState().openTab(proj("/p/a"));
+    const firstId = useAppStore.getState().tabs[0].id;
+    await useAppStore.getState().openTab(proj("/p/a"));
+    expect(useAppStore.getState().tabs).toHaveLength(1);
+    expect(useAppStore.getState().activeTabId).toBe(firstId);
+    expect(sidecar.createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("close creating tab 後，session 建好仍會被補清（防 orphan）", async () => {
+    let resolveCreate!: (s: string) => void;
+    vi.mocked(sidecar.createSession).mockReturnValue(
+      new Promise<string>((r) => {
+        resolveCreate = r;
+      }),
+    );
+    vi.mocked(sidecar.closeSession).mockResolvedValue();
+    const opening = useAppStore.getState().openTab(proj("/p/b"));
+    const id = useAppStore.getState().tabs[0].id;
+    // 在 createSession resolve 前關 tab
+    await useAppStore.getState().closeTab(id);
+    resolveCreate("sess-orphan");
+    await opening;
+    expect(sidecar.closeSession).toHaveBeenCalledWith(1234, "sess-orphan");
+    expect(useAppStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("closeTab active 後 active 落到剩下的最後一個", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValueOnce("s1").mockResolvedValueOnce("s2");
+    vi.mocked(sidecar.closeSession).mockResolvedValue();
+    await useAppStore.getState().openTab(proj("/p/1"));
+    await useAppStore.getState().openTab(proj("/p/2"));
+    const [t1, t2] = useAppStore.getState().tabs;
+    useAppStore.getState().setActive(t2.id);
+    await useAppStore.getState().closeTab(t2.id);
+    expect(useAppStore.getState().activeTabId).toBe(t1.id);
+  });
+
+  it("openTab 帶 accountOverride 用指定帳號（臨時、不寫 config）", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValue("sess-ov");
+    await useAppStore.getState().openTab(proj("/p/x"), "personal");
+    expect(sidecar.createSession).toHaveBeenCalledWith(1234, "/p/x", "personal");
+    expect(useAppStore.getState().tabs[0].account).toBe("personal");
+    expect(sidecar.setProjectOverride).not.toHaveBeenCalled();
+  });
+
+  it("同專案不同帳號開兩個 tab（(path,account) 比對）", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValueOnce("s-work").mockResolvedValueOnce("s-personal");
+    await useAppStore.getState().openTab(proj("/p/y")); // work（proj 預設）
+    await useAppStore.getState().openTab(proj("/p/y"), "personal");
+    expect(useAppStore.getState().tabs).toHaveLength(2);
+    expect(sidecar.createSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("setProjectAccount 寫 override 後重新 loadProjects", async () => {
+    const cfg = {
+      version: 1, roots: [], accounts: {}, manual_projects: [],
+      project_overrides: { "/p/z": { account: "personal" } }, ui: { theme: "dark" },
+    };
+    vi.mocked(sidecar.setProjectOverride).mockResolvedValue(cfg);
+    vi.mocked(sidecar.fetchProjects).mockResolvedValue({ projects: [], permissionError: false });
+    await useAppStore.getState().setProjectAccount("/p/z", "personal");
+    expect(sidecar.setProjectOverride).toHaveBeenCalledWith(1234, "/p/z", "personal");
+    expect(sidecar.fetchProjects).toHaveBeenCalled();
+    expect(useAppStore.getState().config).toEqual(cfg);
+  });
+
+  it("completeOnboarding 寫入後 set config 並 loadProjects", async () => {
+    const cfg = {
+      version: 1,
+      roots: [{ path: "/r1", default_account: "work" }],
+      accounts: {},
+      manual_projects: [],
+      project_overrides: {},
+      ui: { theme: "dark" },
+      is_first_run: false,
+    };
+    vi.mocked(sidecar.onboard).mockResolvedValue(cfg);
+    vi.mocked(sidecar.fetchProjects).mockResolvedValue({ projects: [], permissionError: false });
+    await useAppStore.getState().completeOnboarding([{ path: "/r1", default_account: "work" }]);
+    expect(sidecar.onboard).toHaveBeenCalledWith(1234, [{ path: "/r1", default_account: "work" }]);
+    expect(sidecar.fetchProjects).toHaveBeenCalled();
+    expect(useAppStore.getState().config).toEqual(cfg);
+  });
+
+  it("addAccount 寫入後 set config 並 loadProjects", async () => {
+    const cfg = {
+      version: 1, roots: [], accounts: { team: { config_dir: "~/.claude-team", label: "團隊" } },
+      manual_projects: [], project_overrides: {}, ui: { theme: "dark" },
+    };
+    vi.mocked(sidecar.addAccount).mockResolvedValue(cfg);
+    vi.mocked(sidecar.fetchProjects).mockResolvedValue({ projects: [], permissionError: false });
+    await useAppStore.getState().addAccount("team", "~/.claude-team", "團隊");
+    expect(sidecar.addAccount).toHaveBeenCalledWith(1234, "team", "~/.claude-team", "團隊");
+    expect(useAppStore.getState().config).toEqual(cfg);
+  });
+
+  it("removeAccount 帶 reassignTo 呼叫後重掃", async () => {
+    const cfg = {
+      version: 1, roots: [], accounts: { work: { config_dir: "~/.claude", label: "工作" } },
+      manual_projects: [], project_overrides: {}, ui: { theme: "dark" },
+    };
+    vi.mocked(sidecar.removeAccount).mockResolvedValue(cfg);
+    vi.mocked(sidecar.fetchProjects).mockResolvedValue({ projects: [], permissionError: false });
+    await useAppStore.getState().removeAccount("personal", "work");
+    expect(sidecar.removeAccount).toHaveBeenCalledWith(1234, "personal", "work");
+    expect(sidecar.fetchProjects).toHaveBeenCalled();
+  });
+
+  it("recordHealth：fail→suspect→down、連 2 次成功回 up；setBackendStatus 直接設", () => {
+    useAppStore.setState({ backendStatus: "up", backendOkStreak: 0 });
+    useAppStore.getState().recordHealth(false);
+    expect(useAppStore.getState().backendStatus).toBe("suspect");
+    useAppStore.getState().recordHealth(false);
+    expect(useAppStore.getState().backendStatus).toBe("down");
+    useAppStore.getState().recordHealth(true);
+    expect(useAppStore.getState().backendStatus).toBe("down"); // 第 1 次成功還不回
+    expect(useAppStore.getState().backendOkStreak).toBe(1); // 成功計數累積
+    useAppStore.getState().recordHealth(true);
+    expect(useAppStore.getState().backendStatus).toBe("up"); // 第 2 次成功回 up
+    useAppStore.getState().setBackendStatus("restarting");
+    expect(useAppStore.getState().backendStatus).toBe("restarting");
+    expect(useAppStore.getState().backendOkStreak).toBe(0); // setBackendStatus 歸零 streak
+  });
+
+  it("setTabActivity 更新指定 tab 的 activity（working/idle/undefined 重置）", () => {
+    useAppStore.setState({
+      tabs: [{ id: "t1", projectPath: "/p", account: "work", title: "p", sessionId: "s1", status: "ready" }],
+    });
+    useAppStore.getState().setTabActivity("t1", "working");
+    expect(useAppStore.getState().tabs[0].activity).toBe("working");
+    useAppStore.getState().setTabActivity("t1", "idle");
+    expect(useAppStore.getState().tabs[0].activity).toBe("idle");
+    useAppStore.getState().setTabActivity("t1", undefined);
+    expect(useAppStore.getState().tabs[0].activity).toBeUndefined();
+  });
+
+  it("setTabStatus 改某 tab 狀態；markAllTabsEnded 把所有 tab 標 ended、清 sessionId", () => {
+    useAppStore.setState({
+      tabs: [
+        { id: "t1", projectPath: "/a", account: "work", title: "a", sessionId: "s1", status: "ready" },
+        { id: "t2", projectPath: "/b", account: "work", title: "b", sessionId: "s2", status: "ready" },
+      ],
+    });
+    useAppStore.getState().setTabStatus("t1", "offline");
+    expect(useAppStore.getState().tabs.find((t) => t.id === "t1")!.status).toBe("offline");
+
+    useAppStore.getState().markAllTabsEnded();
+    for (const t of useAppStore.getState().tabs) {
+      expect(t.status).toBe("ended");
+      expect(t.sessionId).toBeNull();
+    }
+  });
+});

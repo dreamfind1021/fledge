@@ -1,0 +1,129 @@
+"""Session 路由：建立/關閉 + WebSocket 雙向 PTY 串流。spec §8.2-8.4。"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from pathlib import Path
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
+
+from fledge_sidecar.app_config import AppConfig
+from fledge_sidecar.auth import require_ws_token
+from fledge_sidecar.pty_bridge import PtyBridge
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+# 單一共用 bridge（spec：共用一個 sidecar 管理多 session）
+_bridge = PtyBridge()
+
+
+def close_all_sessions() -> None:
+    """關閉共用 _bridge 的所有 session（app lifespan shutdown 呼叫，避免 PTY orphan）。"""
+    _bridge.close_all()
+
+
+class CreateSessionRequest(BaseModel):
+    path: str
+    account: str
+
+
+class ResizeRequest(BaseModel):
+    rows: int
+    cols: int
+
+
+def _resolve_command() -> list[str]:
+    """正常跑 claude；測試模式（FLEDGE_TEST_COMMAND）用替代命令。"""
+    test_cmd = os.environ.get("FLEDGE_TEST_COMMAND")
+    if test_cmd:
+        return test_cmd.split()
+    return ["claude"]
+
+
+@router.post("/api/sessions")
+def create_session(req: CreateSessionRequest):
+    config = AppConfig.load()
+    account = config.accounts.get(req.account, {})
+    config_dir = account.get("config_dir", "~/.claude")
+    env_overrides = {"CLAUDE_CONFIG_DIR": str(Path(config_dir).expanduser())}
+
+    session = _bridge.create_session(
+        command=_resolve_command(),
+        cwd=req.path,
+        env_overrides=env_overrides,
+        project_path=req.path,
+        account=req.account,
+    )
+    return {"session_id": session.session_id, "ws_url": f"/ws/{session.session_id}"}
+
+
+@router.delete("/api/sessions/{session_id}")
+def delete_session(session_id: str):
+    _bridge.close_session(session_id)
+    return {"closed": session_id}
+
+
+@router.post("/api/sessions/{session_id}/resize")
+def resize_session(session_id: str, req: ResizeRequest):
+    _bridge.setwinsize(session_id, req.rows, req.cols)
+    return {"resized": session_id, "rows": req.rows, "cols": req.cols}
+
+
+@router.websocket("/ws/{session_id}")
+async def session_ws(websocket: WebSocket, session_id: str):
+    # accept 前先驗 token（query ?token=）：不過就 close 1008、不進 bridge
+    if not require_ws_token(websocket):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    if not _bridge.has_session(session_id):
+        await websocket.close(code=1008)
+        return
+
+    loop = asyncio.get_running_loop()
+
+    async def pump_pty_to_ws():
+        # PTY → WS：is_alive False（claude 退出）時自然結束。
+        # 用 executor 跑 read_nonblocking 避免 blocking read 卡住 event loop；
+        # read_nonblocking 內 select 上限 0.2s，確保 cancel 後 executor thread 能返回。
+        while _bridge.is_alive(session_id):
+            data = await loop.run_in_executor(None, _bridge.read_nonblocking, session_id)
+            if data:
+                await websocket.send_bytes(data)
+
+    async def pump_ws_to_pty():
+        # WS → PTY：client 斷線時 receive_bytes 拋 WebSocketDisconnect
+        while True:
+            data = await websocket.receive_bytes()
+            _bridge.write(session_id, data)
+
+    pump_task = asyncio.create_task(pump_pty_to_ws())
+    recv_task = asyncio.create_task(pump_ws_to_pty())
+
+    # 兩 task 競賽：先結束的決定走哪條（pump 完＝PTY EOF；recv 拋＝client 斷）
+    await asyncio.wait({pump_task, recv_task}, return_when=asyncio.FIRST_COMPLETED)
+
+    # 收尾兩 task（cancel + 等結束；CancelledError/WebSocketDisconnect 預期、其餘 log）
+    for t in (pump_task, recv_task):
+        t.cancel()
+    for t in (pump_task, recv_task):
+        try:
+            await t
+        except (asyncio.CancelledError, WebSocketDisconnect):
+            pass
+        except Exception:
+            logger.exception("session %s task 結束於非預期例外", session_id)
+
+    # tie-break 以 is_alive 為準（不靠「哪個 task 先回」）：
+    # 死了 → 清 session 並送 4001（client 還連著才送得出，已斷則 except 吞、前端下次 reconnect 收 1008）。
+    # 仍 alive（client 自己斷）→ 保留 session（模式 A：可重連）。
+    if not _bridge.is_alive(session_id):
+        _bridge.close_session(session_id)
+        try:
+            await websocket.close(code=4001)
+        except Exception:
+            pass

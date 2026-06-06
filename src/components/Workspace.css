@@ -1,0 +1,102 @@
+/* ===== Workspace.css — TabBar+Terminal 合成面板 ===== */
+
+/* 右側主區外殼：貼齊視窗、不留外框內距，讓 tab+終端機與視窗融為一體
+   （不再用 demo 的浮起卡片，避免「懸在框內」的割裂感）*/
+.ws-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+}
+
+/* 合成面板：tab strip 與終端機共用一張深色面板（一體），貼齊右側邊界、
+   不加外框圓角/陰影；上方作用中分頁自身仍保留圓角。overflow:hidden 裁切內容。 */
+.workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--term-bg);
+  overflow: hidden;
+}
+
+/* 終端機區（取代 App 舊有的 flex:1/relative/minHeight:0 容器）。
+   內部 per-tab 容器是 position:absolute; inset:0，故此區必須 position:relative。 */
+.ws-term-area {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  background: var(--term-bg);
+}
+
+/* ── Tab 狀態 sub-states（§5 state matrix）── */
+
+/* 連線中 / 一般文字狀態（connecting、creating、error）的基底 */
+.ws-status {
+  font-family: var(--font-ui);
+  padding: 16px;
+}
+
+/* connecting：後端尚未就緒（port == null）—— 連線中提示用 term-dim，錯誤用 error */
+.ws-connecting-text {
+  color: var(--term-dim);
+}
+
+.ws-conn-error {
+  color: var(--error);
+}
+
+/* offline badge：連線中斷重連 pill（warning family，貼頂左角）*/
+.ws-offline-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  background: color-mix(in srgb, var(--warning) 20%, var(--term-bg));
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: var(--font-ui);
+  pointer-events: none;
+}
+
+/* ended 狀態：text faint（§5 ended）+ 重啟入口按鈕 primary */
+.ws-ended-text {
+  color: var(--faint);
+  margin-bottom: 10px;
+  /* font-family 繼承自 .ws-status 父元素，不重複宣告 */
+}
+
+.ws-restart-btn {
+  background: var(--primary);
+  color: var(--primary-ink);
+  border: 0;
+  border-radius: 8px;
+  padding: 7px 16px;
+  /* font-family 繼承自 .ws-status 父元素，不重複宣告 */
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--primary) 42%, transparent);
+}
+
+.ws-restart-btn:hover {
+  filter: brightness(1.05);
+}
+
+.ws-restart-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* creating：正在開啟 session —— dim */
+.ws-creating-text {
+  color: var(--term-dim);
+}
+
+/* error：開啟失敗 —— error 色 */
+.ws-error-text {
+  color: var(--error);
+}

@@ -1,0 +1,97 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: macos-14            # Apple Silicon (arm64)
+    permissions:
+      contents: write            # 建/編輯 release
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm' }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: aarch64-apple-darwin }
+
+      - name: Version guard (format + tag base == tauri.conf.json)
+        run: |
+          # 只接受正式 vX.Y.Z 或 prerelease vX.Y.Z-rc.N（擋 -beta 等被當正式 publish）
+          echo "${GITHUB_REF_NAME}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' \
+            || { echo "::error::tag 格式須為 vX.Y.Z 或 vX.Y.Z-rc.N，收到 ${GITHUB_REF_NAME}"; exit 1; }
+          TAG="${GITHUB_REF_NAME#v}"; BASE="${TAG%%-*}"   # v0.1.0-rc.1 → 0.1.0
+          CONF=$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          echo "tag base=$BASE conf=$CONF"
+          [ "$BASE" = "$CONF" ] || { echo "::error::tag base $BASE != conf $CONF"; exit 1; }
+
+      - name: Build sidecar (onedir + nested codesign)
+        run: |
+          cd sidecar
+          python3 -m venv .venv && source .venv/bin/activate
+          pip install -e ".[dev]"
+          ./build_binary.sh
+
+      - run: npm ci
+
+      - name: Tauri build + draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # tauri-action 建 release 用（gh CLI 另吃 job-level GH_TOKEN）
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Fledge ${{ github.ref_name }}'
+          releaseDraft: true
+          args: --target aarch64-apple-darwin
+
+      - name: Verify bundle (codesign + resource path + sidecar runs)
+        run: |
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Fledge.app"
+          codesign --verify --deep --strict --verbose=4 "$APP"
+          SIDE="$APP/Contents/Resources/fledge-sidecar/fledge-sidecar"
+          test -x "$SIDE" || { echo "::error::sidecar 不在 $SIDE"; exit 1; }
+          # 啟動 sidecar，確認印出 FLEDGE_PORT 且 /api/health 真的回應——不只「曾印 port 後崩潰」
+          # （__main__.py 先印 port 再 uvicorn.run，故 create_app/bind 失敗會在印 port 後；Codex PR-gate R2）
+          FLEDGE_TEST_UNAUTH=1 "$SIDE" >/tmp/side.log 2>&1 & PID=$!
+          PORT=""
+          for _ in $(seq 1 20); do
+            PORT=$(grep -m1 '^FLEDGE_PORT=' /tmp/side.log | cut -d= -f2 | tr -d '[:space:]')
+            [ -n "$PORT" ] && break
+            sleep 0.5
+          done
+          [ -n "$PORT" ] || { echo "::error::sidecar 未印 FLEDGE_PORT"; cat /tmp/side.log; kill "$PID" 2>/dev/null || true; exit 1; }
+          OK=""
+          for _ in $(seq 1 20); do
+            curl -fsS --connect-timeout 1 --max-time 2 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && { OK=1; break; }
+            kill -0 "$PID" 2>/dev/null || break   # 進程已死（印 port 後崩潰）→ 別再等
+            sleep 0.5
+          done
+          kill -TERM "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true
+          [ -n "$OK" ] || { echo "::error::sidecar /api/health 無回應（啟動後崩潰？）"; cat /tmp/side.log; exit 1; }
+
+      - name: Package tarball + checksums
+        run: |
+          B="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          tar -czf Fledge_aarch64.app.tar.gz -C "$B/macos" Fledge.app
+          # 確認剛好一個 dmg；用實際 basename（tauri-action 命名 Fledge_<ver>_aarch64.dmg）
+          DMG_PATH=$(ls "$B"/dmg/*.dmg)
+          [ "$(printf '%s\n' "$DMG_PATH" | wc -l)" -eq 1 ] || { echo "::error::dmg 不是剛好一個"; exit 1; }
+          DMG=$(basename "$DMG_PATH")
+          shasum -a 256 Fledge_aarch64.app.tar.gz > checksums.txt
+          ( cd "$B/dmg" && shasum -a 256 "$DMG" ) >> checksums.txt
+          gh release upload "${GITHUB_REF_NAME}" "$DMG_PATH" Fledge_aarch64.app.tar.gz checksums.txt --clobber
+
+      - name: Publish release (rc → prerelease)
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            *-rc.*) gh release edit "${GITHUB_REF_NAME}" --draft=false --prerelease ;;
+            *)      gh release edit "${GITHUB_REF_NAME}" --draft=false ;;
+          esac
+
+      - name: Cleanup draft on failure
+        if: failure()
+        run: gh release delete "${GITHUB_REF_NAME}" --yes || true

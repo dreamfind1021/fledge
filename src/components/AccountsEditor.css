@@ -1,0 +1,269 @@
+/* ===== AccountsEditor.css — 帳號編輯器品牌 token 版 ===== */
+
+/* ── 說明文字（頂部灰色小字）── */
+.ae-desc {
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.6;
+  padding-bottom: 8px;
+}
+
+/* ── 帳號列容器（含 dir-status warn）── */
+.ae-account-block {
+  margin-bottom: 4px;
+}
+
+/* ── 帳號主列（.arow 風格）── */
+.ae-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+/* 帳號色點：background 由 inline style 動態注入（accountColor(key)） */
+.ae-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* key chip：mono，dim（替代 demo #93c5fd 藍，保持中性）*/
+.ae-key {
+  flex: 0 0 70px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* config_dir input：flex:1，等寬字型 */
+.ae-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+}
+
+.ae-input::placeholder {
+  color: var(--faint);
+  font-family: var(--font-ui);
+}
+
+.ae-input:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.ae-input:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* label input：固定寬度 */
+.ae-input-label {
+  flex: 0 0 80px;
+}
+
+/* ghost 按鈕：瀏覽… */
+.ae-btn-ghost {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--dim);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ae-btn-ghost:hover {
+  background: var(--hover);
+}
+
+.ae-btn-ghost:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.ae-btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 刪除 icon 按鈕：faint → hover 轉 error + hover bg */
+.ae-del {
+  color: var(--faint);
+  cursor: pointer;
+  display: flex;
+  padding: 3px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  flex-shrink: 0;
+  line-height: 0;
+}
+
+.ae-del:hover {
+  color: var(--error);
+  background: var(--hover);
+}
+
+.ae-del:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.ae-del:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ── DirStatus 警告列（dir 不存在/無權限/非資料夾）── */
+/* 縮排 89px（dot 9 + gap 10 + key 70 ＝對齊 input 左側）*/
+.ae-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.45;
+  padding: 2px 0 6px 89px;
+}
+
+.ae-warn-ico {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* ── 刪除確認 reassign 面板 ── */
+.ae-reassign {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 4px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+/* 說明文字 */
+.ae-reassign-text {
+  color: var(--text);
+}
+
+/* reassign select */
+.ae-reassign-select {
+  flex: 0 0 110px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: var(--font-ui);
+}
+
+.ae-reassign-select:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* 確認刪除並轉移：紅底（error 語義色）*/
+.ae-btn-confirm-del {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 7px;
+  background: var(--error);
+  border: 0;
+  color: var(--error-ink);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ae-btn-confirm-del:hover {
+  filter: brightness(1.08);
+}
+
+.ae-btn-confirm-del:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.ae-btn-confirm-del:disabled {
+  opacity: 0.5;
+  cursor: default;
+  filter: none;
+}
+
+/* ── 新增帳號表單列 ── */
+.ae-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+/* 代號 input：固定寬 */
+.ae-input-key {
+  flex: 0 0 110px;
+}
+
+/* primary 按鈕：amber，加帳號 */
+.ae-btn-primary {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--primary);
+  border: 0;
+  color: var(--primary-ink);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--primary) 40%, transparent);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.ae-btn-primary:hover {
+  filter: brightness(1.05);
+}
+
+.ae-btn-primary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.ae-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+  filter: none;
+}
+
+/* ── error 提示（新增 / 刪除失敗）── */
+.ae-error {
+  color: var(--error);
+  font-size: 12px;
+  padding: 6px 0 2px;
+}

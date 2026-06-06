@@ -1,0 +1,267 @@
+import { create } from "zustand";
+import { nextBackendState, type BackendStatus } from "../lib/backendStatus";
+import {
+  Project,
+  AppConfigData,
+  createSession,
+  closeSession,
+  fetchProjects,
+  fetchConfig,
+  addRoot,
+  removeRoot,
+  setRootAccount,
+  addManualProject,
+  removeManualProject,
+  setProjectOverride,
+  clearProjectOverride,
+  onboard,
+  addAccount,
+  setAccountConfigDir,
+  setAccountLabel,
+  removeAccount,
+} from "../lib/sidecar";
+
+// loadProjects 的 request-id：只套用最新一次 loadProjects 的結果，
+// 防並發 config 寫入各自觸發的 loadProjects 互相蓋成 stale（Codex review）。
+let loadProjectsSeq = 0;
+
+export interface Tab {
+  id: string; // 前端產生的 tab id（非 sessionId）
+  projectPath: string;
+  account: string;
+  title: string;
+  sessionId: string | null; // null = 建立中
+  status: "creating" | "ready" | "error" | "offline" | "ended";
+  error?: string;
+  activity?: "working" | "idle"; // 就緒後忙碌態（best-effort，只在 status==="ready" 有意義）
+}
+
+interface AppState {
+  port: number | null;
+  projects: Project[];
+  tabs: Tab[];
+  activeTabId: string | null;
+  config: AppConfigData | null;
+  backendStatus: BackendStatus;
+  backendOkStreak: number;
+  permissionError: boolean;
+  claudeFound: boolean;
+  setClaudeFound: (found: boolean) => void;
+  setPort: (port: number) => void;
+  loadProjects: () => Promise<void>;
+  openTab: (project: Project, accountOverride?: string) => Promise<void>;
+  closeTab: (tabId: string) => Promise<void>;
+  recordHealth: (ok: boolean) => void;
+  setBackendStatus: (status: BackendStatus) => void;
+  setActive: (tabId: string) => void;
+  setTabStatus: (tabId: string, status: Tab["status"]) => void;
+  setTabActivity: (tabId: string, activity: "working" | "idle" | undefined) => void;
+  restartTab: (tabId: string) => Promise<void>;
+  markAllTabsEnded: () => void;
+  loadConfig: () => Promise<void>;
+  addRoot: (path: string, account: string) => Promise<void>;
+  removeRoot: (path: string) => Promise<void>;
+  setRootAccount: (path: string, account: string) => Promise<void>;
+  addManual: (path: string, account: string) => Promise<void>;
+  removeManual: (path: string) => Promise<void>;
+  setProjectAccount: (path: string, account: string) => Promise<void>;
+  clearProjectAccount: (path: string) => Promise<void>;
+  completeOnboarding: (roots: { path: string; default_account: string }[]) => Promise<void>;
+  addAccount: (key: string, configDir: string, label: string) => Promise<void>;
+  setAccountConfigDir: (key: string, configDir: string) => Promise<void>;
+  setAccountLabel: (key: string, label: string) => Promise<void>;
+  removeAccount: (key: string, reassignTo?: string) => Promise<void>;
+}
+
+export const useAppStore = create<AppState>((set, get) => ({
+  port: null,
+  projects: [],
+  tabs: [],
+  activeTabId: null,
+  config: null,
+  backendStatus: "up",
+  backendOkStreak: 0,
+  permissionError: false,
+  claudeFound: true,
+
+  setPort: (port) => set({ port }),
+
+  loadProjects: async () => {
+    const port = get().port;
+    if (port == null) return;
+    const seq = ++loadProjectsSeq;
+    const { projects, permissionError } = await fetchProjects(port);
+    if (seq === loadProjectsSeq) set({ projects, permissionError }); // 只套用最新一次（防並發 stale）
+  },
+
+  openTab: async (project, accountOverride) => {
+    const { port, tabs } = get();
+    if (port == null) return;
+    const account = accountOverride ?? project.account;
+    // 已開比對用 (path, account)：同專案不同帳號 = 不同 tab
+    const existing = tabs.find(
+      (t) => t.projectPath === project.path && t.account === account,
+    );
+    if (existing) {
+      set({ activeTabId: existing.id });
+      return;
+    }
+    const id = crypto.randomUUID();
+    const tab: Tab = {
+      id,
+      projectPath: project.path,
+      account,
+      title: project.name,
+      sessionId: null,
+      status: "creating",
+    };
+    set((s) => ({ tabs: [...s.tabs, tab], activeTabId: id }));
+    try {
+      const sessionId = await createSession(port, project.path, account);
+      // 若 tab 在建立期間已被關閉，補清這個剛建好的 session（防 orphan，審查 round 1 HIGH）
+      if (!get().tabs.some((t) => t.id === id)) {
+        await closeSession(port, sessionId);
+        return;
+      }
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          t.id === id ? { ...t, sessionId, status: "ready" } : t,
+        ),
+      }));
+    } catch (e) {
+      // tab 還在才標 error（已關閉就無需處理）
+      if (get().tabs.some((t) => t.id === id)) {
+        set((s) => ({
+          tabs: s.tabs.map((t) =>
+            t.id === id ? { ...t, status: "error", error: String(e) } : t,
+          ),
+        }));
+      }
+    }
+  },
+
+  loadConfig: async () => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await fetchConfig(port) });
+  },
+  addRoot: async (path, account) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await addRoot(port, path, account) });
+    await get().loadProjects();
+  },
+  removeRoot: async (path) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await removeRoot(port, path) });
+    await get().loadProjects();
+  },
+  setRootAccount: async (path, account) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await setRootAccount(port, path, account) });
+    await get().loadProjects();
+  },
+  addManual: async (path, account) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await addManualProject(port, path, account) });
+    await get().loadProjects();
+  },
+  removeManual: async (path) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await removeManualProject(port, path) });
+    await get().loadProjects();
+  },
+  setProjectAccount: async (path, account) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await setProjectOverride(port, path, account) });
+    await get().loadProjects();
+  },
+  clearProjectAccount: async (path) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await clearProjectOverride(port, path) });
+    await get().loadProjects();
+  },
+  completeOnboarding: async (roots) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await onboard(port, roots) });
+    await get().loadProjects();
+  },
+  addAccount: async (key, configDir, label) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await addAccount(port, key, configDir, label) });
+    await get().loadProjects();
+  },
+  setAccountConfigDir: async (key, configDir) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await setAccountConfigDir(port, key, configDir) });
+    await get().loadProjects(); // config_dir 影響 recent 掃描
+  },
+  setAccountLabel: async (key, label) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await setAccountLabel(port, key, label) });
+    // label 純顯示、不影響掃描，不需 loadProjects
+  },
+  removeAccount: async (key, reassignTo) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await removeAccount(port, key, reassignTo) });
+    await get().loadProjects(); // 級聯 reassign 改了 account 分組
+  },
+
+  closeTab: async (tabId) => {
+    const { port, tabs, activeTabId } = get();
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab) return;
+    // 先移 tab（UI 即時）；active 落到最後一個剩下的 tab
+    const remaining = tabs.filter((t) => t.id !== tabId);
+    const newActive =
+      activeTabId === tabId
+        ? (remaining[remaining.length - 1]?.id ?? null)
+        : activeTabId;
+    set({ tabs: remaining, activeTabId: newActive });
+    // async 關 session（claude 子進程）；creating 中的 tab 由 openTab resolve 後補清
+    if (port != null && tab.sessionId) {
+      await closeSession(port, tab.sessionId);
+    }
+  },
+
+  recordHealth: (ok) =>
+    set((s) => {
+      const next = nextBackendState({ status: s.backendStatus, okStreak: s.backendOkStreak }, ok);
+      return { backendStatus: next.status, backendOkStreak: next.okStreak };
+    }),
+  setBackendStatus: (status) => set({ backendStatus: status, backendOkStreak: 0 }),
+
+  setClaudeFound: (found) => set({ claudeFound: found }),
+  setActive: (tabId) => set({ activeTabId: tabId }),
+
+  setTabStatus: (tabId, status) =>
+    set((s) => ({ tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, status } : t)) })),
+
+  setTabActivity: (tabId, activity) =>
+    set((s) => ({ tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, activity } : t)) })),
+
+  // ended 的 tab 按「重啟」：關舊 tab + 用同專案同帳號開新 session
+  restartTab: async (tabId) => {
+    const tab = get().tabs.find((t) => t.id === tabId);
+    if (!tab) return;
+    const project = get().projects.find((p) => p.path === tab.projectPath);
+    if (!project) return; // 專案已不在清單（root/manual 被移除）→ 不動，避免無聲銷毀 ended tab
+    await get().closeTab(tabId);
+    await get().openTab(project, tab.account);
+  },
+
+  // sidecar 重啟：舊 session 全沒了，所有 tab 標 ended、清 sessionId（前端原子轉移用）
+  markAllTabsEnded: () =>
+    set((s) => ({ tabs: s.tabs.map((t) => ({ ...t, status: "ended" as const, sessionId: null })) })),
+}));

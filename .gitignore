@@ -1,0 +1,28 @@
+# Node
+node_modules/
+dist/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/binaries/
+
+# Python
+sidecar/.venv/
+sidecar/build/
+sidecar/dist/
+sidecar/*.spec
+sidecar/__pycache__/
+sidecar/**/__pycache__/
+sidecar/*.egg-info/
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Tooling（本機）
+.codegraph/
+
+# Secrets 安全網（目前無 .env 被追蹤；保留範本）
+.env
+.env.*
+!.env.example

@@ -1,0 +1,114 @@
+from pathlib import Path
+
+from fledge_sidecar.app_config import AppConfig
+from fledge_sidecar.project_scanner import scan_root, encode_cc_project_dir, scan_all
+
+
+def test_scan_root_lists_depth1_dirs(tmp_path: Path):
+    (tmp_path / "proj-a").mkdir()
+    (tmp_path / "proj-b").mkdir()
+    (tmp_path / "proj-a" / "nested").mkdir()  # depth 2，不應列出
+    (tmp_path / "file.txt").write_text("x")  # 檔案，不應列出
+
+    projects = scan_root(tmp_path, account="work")
+    names = sorted(p["name"] for p in projects)
+    assert names == ["proj-a", "proj-b"]
+    assert all(p["account"] == "work" for p in projects)
+    assert all(p["root"] == str(tmp_path.resolve()) for p in projects)
+
+
+def test_scan_root_excludes_hidden(tmp_path: Path):
+    (tmp_path / "visible").mkdir()
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / ".git").mkdir()
+
+    projects = scan_root(tmp_path, account="work")
+    names = [p["name"] for p in projects]
+    assert names == ["visible"]
+
+
+def test_encode_cc_project_dir():
+    # Claude Code 把專案路徑編碼成目錄名：/ 換成 -
+    assert encode_cc_project_dir("/Users/tc/NAS/work/foo") == "-Users-tc-NAS-work-foo"
+
+
+def _accounts_cfg(tmp_path: Path) -> AppConfig:
+    cfg = AppConfig(path=tmp_path / "config.json")
+    cfg.accounts = {
+        "work": {"config_dir": "/tmp/none", "label": "工作"},
+        "personal": {"config_dir": "/tmp/none2", "label": "私人"},
+    }
+    return cfg
+
+
+def test_scan_all_applies_override_to_root_project(tmp_path: Path):
+    (tmp_path / "proj-a").mkdir()
+    cfg = _accounts_cfg(tmp_path)
+    cfg.roots = [{"path": str(tmp_path), "default_account": "work"}]
+    proj_a = str((tmp_path / "proj-a").resolve())
+    cfg.project_overrides = {proj_a: {"account": "personal"}}
+
+    projects, _ = scan_all(cfg)
+    p = next(x for x in projects if x["path"] == proj_a)
+    assert p["account"] == "personal"
+
+
+def test_scan_all_applies_override_to_manual_project(tmp_path: Path):
+    cfg = _accounts_cfg(tmp_path)
+    manual_path = str((tmp_path / "manual-x").resolve())
+    cfg.manual_projects = [{"path": manual_path, "account": "work"}]
+    cfg.project_overrides = {manual_path: {"account": "personal"}}
+
+    projects, _ = scan_all(cfg)
+    p = next(x for x in projects if x["path"] == manual_path)
+    assert p["account"] == "personal"  # manual 也吃 override（不靜默失效）
+
+
+def test_scan_all_permission_error_is_best_effort(tmp_path, monkeypatch):
+    """某 root 噴 PermissionError → 跳過該 root、permission_error=True、不整個拋。"""
+    from fledge_sidecar.app_config import AppConfig
+    from fledge_sidecar import project_scanner
+
+    ok_root = tmp_path / "ok"
+    (ok_root / "proj").mkdir(parents=True)
+    cfg = AppConfig(
+        path=tmp_path / "config.json",  # AppConfig 第一個欄位為必填 path
+        roots=[{"path": str(ok_root), "default_account": "work"}, {"path": str(tmp_path / "denied"), "default_account": "work"}],
+        accounts={"work": {"config_dir": "/tmp/fake", "label": "工作"}},
+    )
+    orig = project_scanner.scan_root
+
+    def fake_scan_root(root, account):
+        if "denied" in str(root):
+            raise PermissionError("denied")
+        return orig(root, account)
+
+    monkeypatch.setattr(project_scanner, "scan_root", fake_scan_root)
+
+    projects, permission_error = project_scanner.scan_all(cfg)
+    assert permission_error is True
+    assert any(p["name"] == "proj" for p in projects)  # ok root 仍掃到
+
+
+def test_scan_all_recent_permission_error_keeps_proj(tmp_path, monkeypatch):
+    """讀 recent（config_dir）撞 PermissionError → 該 proj 仍在、recent 留 None、permission_error=True。"""
+    from fledge_sidecar.app_config import AppConfig
+    from fledge_sidecar import project_scanner
+
+    root = tmp_path / "r"
+    (root / "proj").mkdir(parents=True)
+    cfg = AppConfig(
+        path=tmp_path / "config.json",
+        roots=[{"path": str(root), "default_account": "work"}],
+        accounts={"work": {"config_dir": "/tmp/fake", "label": "工作"}},
+    )
+
+    def raise_perm(*_a, **_k):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(project_scanner, "_recent_mtime", raise_perm)
+
+    projects, permission_error = project_scanner.scan_all(cfg)
+    assert permission_error is True
+    proj = next(p for p in projects if p["name"] == "proj")
+    assert proj["recent"] is None  # recent 讀失敗但 proj 仍保留

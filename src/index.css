@@ -1,0 +1,69 @@
+/* ===== Layer 1 · 品牌調色盤（固定，只給 Logo 用）===== */
+:root {
+  --brand-coral: #FF8A65;
+  --brand-mint: #67D5C0;
+  --brand-lavender: #9B8CFF;
+  --font-ui: "Plus Jakarta Sans", "Noto Sans TC", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ===== Layer 2 + 表面/終端機（Nightfall：v1 實作）===== */
+[data-theme="nightfall"] {
+  /* 語義/UI */
+  --primary: #F59E42; --primary-ink: #3B2207;
+  --session: #67D5C0;
+  --ai: #A99BFF;
+  /* 帳號識別色（work 藍 / personal 紫）由 lib/accountColor.ts 提供（經 JS inline style 套用、CSS 不需 token）*/
+  --warning: #FBBF24; --error: #EF4444; --error-ink: #FFFFFF;
+  --focus: color-mix(in srgb, var(--primary) 60%, transparent);
+  /* 表面/文字/結構 */
+  --bg: #0C111B; --sidebar: #0F1623; --surface: #161F30; --surface-2: #1E2940;
+  --hover: #1B2640; --active: #233152; --overlay: rgba(6,9,15,.62);
+  --text: #E7EAF0; --dim: #93A0B4; --faint: #5E6981;
+  --border: rgba(255,255,255,.08); --divider: rgba(255,255,255,.055);
+  --win-radius: 12px; --row-radius: 8px; --tab-radius: 13px; --item-py: 7px;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 46px rgba(0,0,0,.5);
+  --shadow-sm: 0 4px 18px rgba(0,0,0,.35);
+  --modal-shadow: 0 24px 70px rgba(0,0,0,.6);
+  /* 終端機 */
+  --term-bg: #080B12; --term-elev: #11161F; --term-text: #E2E6EE; --term-dim: #7E879A;
+  --term-border: rgba(255,255,255,.07); --term-divider: rgba(255,255,255,.06);
+}
+
+/* ===== Daylight：結構預留（草稿值，v1 不啟用、不驗證）===== */
+[data-theme="daylight"] {
+  --primary: #F59E42; --primary-ink: #3B2207; --session: #67D5C0; --ai: #9B8CFF;
+  --warning: #FBBF24; --error: #EF4444; --error-ink: #FFFFFF;
+  --focus: color-mix(in srgb, var(--primary) 60%, transparent);
+  --bg: #F4EFE9; --sidebar: #FBF8F4; --surface: #FFFFFF; --surface-2: #FFEEE6;
+  --hover: #F2ECE5; --active: #FFE4D8; --overlay: rgba(45,40,35,.34);
+  --text: #2D3748; --dim: #79808D; --faint: #AEB4BE;
+  --border: rgba(45,55,72,.10); --divider: rgba(45,55,72,.07);
+  --win-radius: 12px; --row-radius: 8px; --tab-radius: 13px; --item-py: 7px;
+  --shadow: 0 1px 2px rgba(45,55,72,.06), 0 12px 34px rgba(45,55,72,.10);
+  --shadow-sm: 0 4px 16px rgba(45,55,72,.10); --modal-shadow: 0 24px 60px rgba(45,55,72,.22);
+  --term-bg: #1A1B1E; --term-elev: #26282C; --term-text: #E6E8EC; --term-dim: #8B9099;
+  --term-border: rgba(0,0,0,.32); --term-divider: rgba(255,255,255,.07);
+}
+
+/* 全域 reset + base：body 用 token（缺 reset 會露出 body 預設 8px margin 白邊）。 */
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  /* App 自己用 100vh 鋪滿並各自捲動，body 不需要捲軸 */
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 尊重「減少動態」系統偏好：停用動畫/過場（cursor blink 由 xterm 自管，不在此列）。 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
