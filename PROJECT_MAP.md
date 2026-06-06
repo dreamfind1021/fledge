@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-06-06
+- **最後更新：** 2026-06-07
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -69,7 +69,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `components/ProjectPicker.tsx` | 選專案 dialog（Cmd+T，fuzzy filter） | `ProjectPicker` |
 | `components/Onboarding.tsx` | 首次設定全屏 3 步 wizard（is_first_run 觸發：歡迎→設根+即時試掃→總結，完成才寫檔）；依 scan-preview status 擋無效 draft、denied 用 amber notice | `Onboarding` |
 | `components/AccountsEditor.tsx` | 設定頁帳號編輯區：加/改 config_dir/改 label/刪（級聯轉移面板）+ config_dir 警告依 DirStatus（不存在/不可讀/非資料夾） | `AccountsEditor` |
-| `components/Logo.tsx` | 品牌三色羽毛標（線條版）共用元件；接受 `size` prop | `FeatherMark` |
+| `components/Logo.tsx` | 品牌三色填色羽毛標（去背 PNG，與桌面 app icon 同源）共用元件；`<img>` 引用 `assets/fledge-feather.png`，接受 `size` prop（＝高度 px） | `FeatherMark` |
 | `components/Workspace.tsx` | TabBar+Terminal 合成一體面板（保留全 tab mount + display 切換）；tab 狀態矩陣與 ended/offline 子狀態 | `Workspace` |
 | `styles/term-theme.ts` | 從 CSS 變數讀終端機色組，回傳 xterm `ITheme`；讀取時機：xterm 初始化 + 主題切換 | `readTermTheme` |
 | `index.css` | CSS 變數 token 層（`:root` 品牌色 + `[data-theme]` 語義/表面/終端機 token）；各 UI 元件 CSS 均從此繼承，末尾含 `prefers-reduced-motion` 全局重置 | — |

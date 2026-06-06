@@ -1,8 +1,5 @@
-/* ===== Layer 1 · 品牌調色盤（固定，只給 Logo 用）===== */
+/* ===== Layer 1 · 字型 token（品牌三色已內嵌於 Logo 圖檔，不再需要 --brand-* 變數）===== */
 :root {
-  --brand-coral: #FF8A65;
-  --brand-mint: #67D5C0;
-  --brand-lavender: #9B8CFF;
   --font-ui: "Plus Jakarta Sans", "Noto Sans TC", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }

@@ -133,7 +133,7 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
     <div className="sidebar">
       {/* === 品牌 header === */}
       <div className="sidebar-brand">
-        <FeatherMark size={26} />
+        <FeatherMark size={24} />
         <span className="sidebar-brand-name">Fledge</span>
         <button
           className="sidebar-gear"

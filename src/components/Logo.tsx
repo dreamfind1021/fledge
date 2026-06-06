@@ -1,10 +1,21 @@
-// 品牌識別資產：三色羽毛標（線條版 A）。固定 --brand-* 色，不隨 --primary 變。
-export function FeatherMark({ size = 26 }: { size?: number }) {
+// 品牌識別資產：三色填色羽毛（去背版，與桌面 app icon 同源的那張羽毛）。
+// 為什麼用 <img> 點陣而非 SVG：母圖的多葉平滑漸層難以向量化（手畫 SVG 還原不了、
+// 從 tile 圖去背又會留下圓角方塊鬼影），故直接引用去背 PNG。
+// 羽毛固定品牌三色、不隨 --primary 變色。
+import featherUrl from "../assets/fledge-feather.png";
+
+// 去背資產長寬比（240×256）；由 size（高）反推寬，避免 layout shift
+const FEATHER_RATIO = 240 / 256;
+
+export function FeatherMark({ size = 24 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" aria-hidden="true">
-      <path d="M7 28 Q 8.5 14 17 5.5" stroke="var(--brand-coral)" strokeWidth="4.4" strokeLinecap="round" />
-      <path d="M11.5 28 Q 15 12.5 24.5 7.5" stroke="var(--brand-mint)" strokeWidth="4.4" strokeLinecap="round" />
-      <path d="M16 28 Q 22.5 14 28.5 12.5" stroke="var(--brand-lavender)" strokeWidth="4.4" strokeLinecap="round" />
-    </svg>
+    <img
+      src={featherUrl}
+      alt=""
+      aria-hidden="true"
+      width={Math.round(size * FEATHER_RATIO)}
+      height={size}
+      style={{ display: "block" }}
+    />
   );
 }
