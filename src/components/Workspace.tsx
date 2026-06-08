@@ -39,7 +39,10 @@ export function Workspace({ connError }: { connError: string | null }) {
                 }}
               >
                 {(t.status === "ready" || t.status === "offline") && t.sessionId ? (
-                  <div style={{ position: "absolute", inset: 0 }}>
+                  // 左側 inset 12px 讓終端機文字不貼著 sidebar——縫隙露出 ws-term-area 的 --term-bg。
+                  // 不用外層 padding：本 div 是 absolute、會以外層 padding box 為基準填滿而蓋掉 padding，
+                  // 故間距要寫在這層的 inset 上。FitAddon 依縮小後寬度自動重算欄數。
+                  <div style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 12 }}>
                     <Terminal
                       port={port}
                       sessionId={t.sessionId}
