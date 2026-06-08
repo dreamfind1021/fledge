@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-06-07
+- **最後更新：** 2026-06-08
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -52,8 +52,8 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 ### src/ — React 前端
 | 檔案 | 職責 | 匯出 |
 |------|------|------|
-| `App.tsx` | 根元件：組裝 Sidebar+TabBar+多 Terminal、啟動連線（port→token→setAuthToken→health→setPort，token 先於受保護請求）、5s health poll→backendStatus、後端斷線 banner+重啟原子轉移、claude/權限 notice、快捷鍵（Cmd+W/1-9/,/T/R）、掛 Settings/Picker/Onboarding | `App` |
-| `store/useAppStore.ts` | Zustand 單一真相源：tabs/activeTab/projects/config + session 生命週期（模式 A）+ config actions + 韌性（Tab.status offline/ended、backendStatus 狀態機、setTabStatus/restartTab/markAllTabsEnded/recordHealth）+ `Tab.activity`（working/idle 活動態）+ setTabActivity；openTab 以 (path,account) 識別 | `useAppStore`, `Tab` |
+| `App.tsx` | 根元件：組裝 Sidebar+TabBar+多 Terminal、啟動連線（port→token→setAuthToken→health→setPort，token 先於受保護請求）、5s health poll→backendStatus、後端斷線 banner+重啟原子轉移、claude/權限 notice、快捷鍵（Cmd+W/1-9/,/T/R）、掛 Settings/Picker/Onboarding、關閉執行中分頁確認框（CloseConfirm） | `App` |
+| `store/useAppStore.ts` | Zustand 單一真相源：tabs/activeTab/projects/config + session 生命週期（模式 A）+ config actions + 韌性（Tab.status offline/ended、backendStatus 狀態機、setTabStatus/restartTab/markAllTabsEnded/recordHealth）+ `Tab.activity`（working/idle 活動態）+ setTabActivity + 關閉守門（requestCloseTab：ready+sessionId 一律跳確認框〔含 idle〕、offline/ended 直接關、pendingCloseTabId）；openTab 以 (path,account) 識別 | `useAppStore`, `Tab` |
 | `lib/sidecar.ts` | 拿 port/token、HTTP client wrapper（所有 fetch 帶 `X-Fledge-Token`）；`scanPreview` 回 `{path,count,status}`、`checkDir` 回 `DirStatus`；`wsUrl` 附 `?token=` | `waitForSidecarPort()`, `waitForSidecarToken()`, `setAuthToken()`, `authHeaders()`, `wsUrl()`, `fetchHealth()`, `rawHealth()`, `restartSidecar()`, `fetchProjects()`, `scanPreview()`, `onboard()`, account/config 寫入 wrappers, `checkDir()`, `DirStatus`, `PreviewStatus`, `Project`, `AppConfigData`, `Health` |
 | `lib/dialog.ts` | Tauri plugin-dialog 封裝：開系統資料夾選擇器 | `pickDirectory()` |
 | `lib/sidebarGroups.ts` | 純函式：依帳號分組 + 三 band 分類/排序（Sidebar 呈現邏輯，可單元測試） | `groupProjectsByAccount()`, `tabKey()`, `AccountGroup` |

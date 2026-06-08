@@ -46,11 +46,14 @@ interface AppState {
   backendOkStreak: number;
   permissionError: boolean;
   claudeFound: boolean;
+  pendingCloseTabId: string | null;
   setClaudeFound: (found: boolean) => void;
   setPort: (port: number) => void;
   loadProjects: () => Promise<void>;
   openTab: (project: Project, accountOverride?: string) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
+  requestCloseTab: (tabId: string) => void;
+  setPendingCloseTab: (tabId: string | null) => void;
   recordHealth: (ok: boolean) => void;
   setBackendStatus: (status: BackendStatus) => void;
   setActive: (tabId: string) => void;
@@ -83,6 +86,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   backendOkStreak: 0,
   permissionError: false,
   claudeFound: true,
+  pendingCloseTabId: null,
 
   setPort: (port) => set({ port }),
 
@@ -234,6 +238,22 @@ export const useAppStore = create<AppState>((set, get) => ({
       await closeSession(port, tab.sessionId);
     }
   },
+
+  // 關閉守門：只要分頁是「作用中的 session」(status==="ready" && sessionId) 就攔下、跳確認框。這涵蓋
+  // AI 處理中 / 回覆完成 / 等待選擇(權限提示) / 等待輸入——這些都是 ready 子狀態，誤關任一都會殺掉 claude
+  // 子進程、丟掉當前進度，故一律先確認。offline(ws 斷線重連中) / ended / 無 session → 直接關，不確認
+  // （使用者裁示 offline 不需擋；誤關仍可 /resume 救對話）。
+  // 為何不只擋「AI 處理中」：activity 只有 working/idle（餵自 PTY 輸出量），回覆完成/等待選擇/等待輸入
+  // 在它眼中都是 idle、分不出來；要分得解析 claude TUI 畫面＝脆弱且違背套殼架構，故改成「ready 一律確認」。
+  requestCloseTab: (tabId) => {
+    const tab = get().tabs.find((t) => t.id === tabId);
+    if (tab && tab.status === "ready" && tab.sessionId) {
+      set({ pendingCloseTabId: tabId });
+    } else {
+      get().closeTab(tabId);
+    }
+  },
+  setPendingCloseTab: (tabId) => set({ pendingCloseTabId: tabId }),
 
   recordHealth: (ok) =>
     set((s) => {

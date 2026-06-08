@@ -15,7 +15,7 @@ const proj = (path: string): sidecar.Project => ({
 
 describe("useAppStore", () => {
   beforeEach(() => {
-    useAppStore.setState({ port: 1234, projects: [], tabs: [], activeTabId: null, config: null });
+    useAppStore.setState({ port: 1234, projects: [], tabs: [], activeTabId: null, config: null, pendingCloseTabId: null });
     vi.clearAllMocks();
   });
 
@@ -56,6 +56,52 @@ describe("useAppStore", () => {
     useAppStore.getState().setActive(t2.id);
     await useAppStore.getState().closeTab(t2.id);
     expect(useAppStore.getState().activeTabId).toBe(t1.id);
+  });
+
+  it("requestCloseTab：ready+sessionId（處理中 working）攔下跳確認框、不關 tab", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValue("s-busy");
+    vi.mocked(sidecar.closeSession).mockResolvedValue();
+    await useAppStore.getState().openTab(proj("/p/busy"));
+    const id = useAppStore.getState().tabs[0].id;
+    useAppStore.getState().setTabActivity(id, "working");
+    useAppStore.getState().requestCloseTab(id);
+    expect(useAppStore.getState().pendingCloseTabId).toBe(id);
+    expect(useAppStore.getState().tabs).toHaveLength(1); // 沒被關
+    expect(sidecar.closeSession).not.toHaveBeenCalled();
+  });
+
+  it("requestCloseTab：ready+sessionId（回覆完成／等待選擇／等待輸入＝idle）也攔下——ready 一律確認", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValue("s-idle");
+    vi.mocked(sidecar.closeSession).mockResolvedValue();
+    await useAppStore.getState().openTab(proj("/p/idle"));
+    const id = useAppStore.getState().tabs[0].id;
+    useAppStore.getState().setTabActivity(id, "idle"); // idle 仍是 ready 子狀態 → 仍攔
+    useAppStore.getState().requestCloseTab(id);
+    expect(useAppStore.getState().pendingCloseTabId).toBe(id);
+    expect(useAppStore.getState().tabs).toHaveLength(1);
+    expect(sidecar.closeSession).not.toHaveBeenCalled();
+  });
+
+  it("requestCloseTab：offline（斷線重連中）直接關、不跳框（使用者裁示 offline 不需確認）", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValue("s-off");
+    vi.mocked(sidecar.closeSession).mockResolvedValue();
+    await useAppStore.getState().openTab(proj("/p/off"));
+    const id = useAppStore.getState().tabs[0].id;
+    useAppStore.getState().setTabStatus(id, "offline"); // 非 ready → 直接關
+    useAppStore.getState().requestCloseTab(id);
+    expect(useAppStore.getState().pendingCloseTabId).toBeNull();
+    expect(useAppStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("requestCloseTab：非 live（ended／無 session）直接關、不跳框", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValue("s-x");
+    vi.mocked(sidecar.closeSession).mockResolvedValue();
+    await useAppStore.getState().openTab(proj("/p/x"));
+    const id = useAppStore.getState().tabs[0].id;
+    useAppStore.getState().markAllTabsEnded(); // status=ended、sessionId=null → 非 ready
+    useAppStore.getState().requestCloseTab(id);
+    expect(useAppStore.getState().pendingCloseTabId).toBeNull();
+    expect(useAppStore.getState().tabs).toHaveLength(0);
   });
 
   it("openTab 帶 accountOverride 用指定帳號（臨時、不寫 config）", async () => {

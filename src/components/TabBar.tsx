@@ -8,7 +8,7 @@ export function TabBar() {
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const setActive = useAppStore((s) => s.setActive);
-  const closeTab = useAppStore((s) => s.closeTab);
+  const requestCloseTab = useAppStore((s) => s.requestCloseTab);
 
   return (
     <div className="tabbar">
@@ -32,9 +32,9 @@ export function TabBar() {
               className="tabbar-close"
               onClick={(e) => {
                 e.stopPropagation();
-                // 直接關（window.confirm 在 Tauri webview 不彈出；與 Cmd+W 行為一致）。
-                // claude 對話可 claude --resume 救回，誤關代價有限。確認 UX 留 Plan 03 評估。
-                closeTab(t.id);
+                // 經守門：AI 執行中會跳確認框（app 內 modal，非 window.confirm——後者在 Tauri webview 不彈），
+                // 其餘直接關。與 Cmd+W 走同一條 requestCloseTab。
+                requestCloseTab(t.id);
               }}
             >
               <X size={14} strokeWidth={1.75} />

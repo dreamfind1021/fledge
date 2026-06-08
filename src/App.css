@@ -119,6 +119,127 @@
   outline-offset: 1px;
 }
 
+/* ===== 關閉執行中 session 確認框 ===== */
+/* overlay：比照 Settings modal（var(--overlay) 模糊背景、置中、click-outside 取消）*/
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500; /* 高於 banner(400)，確保斷線/警示條上方仍可確認 */
+}
+
+.confirm-modal {
+  width: 400px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--modal-shadow);
+  font-family: var(--font-ui);
+  color: var(--text);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+/* 圖示 gutter + 內容欄：標題與說明文字同在右欄、共用左邊緣（圖示不再把標題推到比內文更右）。
+   align-items:flex-start 讓圖示對齊標題首行，而非整段垂直置中。 */
+.confirm-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px 16px;
+}
+
+/* 警示圖示用 warning 色（提醒語氣，非 error——關閉是使用者主動行為）；微調 1px 對齊標題首行視覺中線 */
+.confirm-ico {
+  color: var(--warning);
+  display: flex;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+/* 內容欄：min-width:0 讓長字串能正常換行而非撐破 flex */
+.confirm-content {
+  min-width: 0;
+}
+
+.confirm-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 7px;
+}
+
+/* 說明段落：兩端對齊（justify）讓 CJK 段落左右邊緣齊整；line-height 放寬到 1.7 利長段閱讀 */
+.confirm-desc {
+  margin: 0;
+  color: var(--dim);
+  line-height: 1.7;
+  text-align: justify;
+}
+
+.confirm-desc code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.confirm-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 20px;
+  border-top: 1px solid var(--divider);
+}
+
+/* 取消：ghost（透明 + border + dim 文字）*/
+.confirm-btn-ghost {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 7px 14px;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--dim);
+}
+
+.confirm-btn-ghost:hover {
+  background: var(--hover);
+}
+
+.confirm-btn-ghost:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* 確認關閉：error 家族實心（§3.2，與 amber --primary 區分，標示破壞性後果）*/
+.confirm-btn-danger {
+  font-family: var(--font-ui);
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 7px 14px;
+  border-radius: 8px;
+  background: var(--error);
+  color: var(--error-ink);
+  border: none;
+}
+
+.confirm-btn-danger:hover {
+  filter: brightness(1.1);
+}
+
+.confirm-btn-danger:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
 /* ===== Toast ===== */
 /* 底部置中浮層；用 surface/border token，不接 error/warning（只給中性訊息）*/
 .app-toast {
