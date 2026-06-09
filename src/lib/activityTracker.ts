@@ -1,7 +1,11 @@
 import { useAppStore } from "../store/useAppStore";
 
-// 最後一個「實質輸出」之後多久沒新輸出視為 waiting（best-effort，見 spec §5；可調）。
-export const IDLE_MS = 800;
+// 「離開 working 的確認窗」：最後一個實質輸出之後，要連續安靜這麼久才確認轉 waiting。
+// 為什麼是 2000 而非更短：agent 思考時輸出是爆發式的（吐一串 token→停下思考→再吐），
+// 思考暫停常常 >800ms；門檻太短會把每個思考暫停誤判成 waiting，造成燈號 working↔waiting
+// 反覆閃爍（見 spec §5）。取 2000ms 容忍多數短思考暫停；代價是真正結束後約 2s 才顯示 waiting，
+// 屬可接受的延遲。殘留（暫停 >2s）的偶發抖動由 TabBar.css 的完成漣漪去抖（animation-delay）吸收。
+export const IDLE_MS = 2000;
 
 // 小於此 byte 數的 PTY chunk 視為「非實質輸出」、忽略（不算 working）。
 // 依 runtime 診斷（2026-06-05）：claude TUI 在 idle 時每 ~200ms 吐一個 ~5-byte
