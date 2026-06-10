@@ -63,7 +63,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `lib/tabDotState.ts` | 純函式：`Tab` 的 status × activity → 單一 `DotState`（status 優先；給 TabBar 狀態點用） | `tabDotState()`, `DotState` |
 | `components/Sidebar.tsx` | 依帳號（＝專案類型）分組列專案 + 三 band（開啟中/已接觸/自動發現收合）+ 帳號色塊標題 + 底部開資料夾 + 右鍵選單（改帳號/Finder/移除） | `Sidebar` |
 | `components/TabBar.tsx` | tab 列：切換 + 帳號 chip + 關 tab + 統一狀態點（`tabDotState`：working 呼吸/waiting 穩定/連線態，取代 ●/⚠ 前綴） | `TabBar` |
-| `components/Terminal.tsx` | xterm.js 渲染：連 WS（用 `wsUrl()` 帶 `?token=`）雙向 I/O + ResizeObserver 回報 PTY 尺寸 + onclose 重連狀態機（4001 ended/其他 backoff，gate on backendStatus 用 getState 不放 effect 依賴）；onmessage→recordActivity、teardown→clearActivity（活動偵測旁路，§7 僅 3 處） | `Terminal` |
+| `components/Terminal.tsx` | xterm.js 渲染：連 WS（用 `wsUrl()` 帶 `?token=`）雙向 I/O + ResizeObserver 回報 PTY 尺寸 + onclose 重連狀態機（4001 ended/其他 backoff，gate on backendStatus 用 getState 不放 effect 依賴）；onmessage→recordActivity、teardown→clearActivity（活動偵測旁路，§7 僅 3 處）；回前景/切 tab 強制重繪（visibilitychange/focus/isActive → fit+refresh，rAF coalesce、dims 變動才回報 resize）+ WebGL renderer（active-only 掛載、context loss/載入失敗全域退 DOM 並 console.warn、`ENABLE_WEBGL` kill switch、fonts.ready 清 atlas）+ smoothScrollDuration 125/scrollback 5000 | `Terminal` |
 | `components/Settings.tsx` | 設定頁 modal（Cmd+,）：roots/manual 編輯（打字或「瀏覽…」picker）+ 帳號編輯（接 AccountsEditor） | `Settings` |
 | `components/ContextMenu.tsx` | 通用右鍵選單（邊緣 clamp、任意鍵關） | `ContextMenu`, `MenuItem` |
 | `components/ProjectPicker.tsx` | 選專案 dialog（Cmd+T，fuzzy filter） | `ProjectPicker` |
