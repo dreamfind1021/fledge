@@ -2,11 +2,17 @@ import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { resizeSession, wsUrl } from "../lib/sidecar";
 import { useAppStore } from "../store/useAppStore";
 import { shouldReconnect, nextDelay, MAX_RECONNECT_ATTEMPTS } from "../lib/wsReconnect";
 import { recordActivity, clearActivity } from "../lib/activityTracker";
 import { readTermTheme } from "../styles/term-theme";
+
+// WebGL kill switch：Tahoe WebKit 有破圖前例（xterm#5816），驗收若中獎改 false 一鍵退 DOM
+const ENABLE_WEBGL = true;
+// context loss / 載入失敗後，本次 app 生命週期內全域停用 WebGL（避免 loss 風暴反覆重建）
+let webglFailed = false;
 
 interface TerminalProps {
   port: number;
@@ -20,6 +26,31 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
   const termRef = useRef<XTerm | null>(null);
   const isActiveRef = useRef(isActive);
   const forceRefreshRef = useRef<(() => void) | null>(null);
+  const webglRef = useRef<WebglAddon | null>(null);
+
+  // WebGL 只掛 active terminal：隱藏 tab 的渲染本來就暫停（畫了也看不到），
+  // 且 WebKit 對單頁 WebGL context 數量有上限，全 tab 掛載會在多 tab 時互逐（design §4.3）
+  const detachWebgl = () => {
+    webglRef.current?.dispose(); // dispose 後 xterm 自動退回 DOM renderer
+    webglRef.current = null;
+  };
+  const attachWebgl = () => {
+    if (!ENABLE_WEBGL || webglFailed || webglRef.current || !termRef.current) return;
+    try {
+      const addon = new WebglAddon();
+      addon.onContextLoss(() => {
+        webglFailed = true;
+        detachWebgl();
+        forceRefreshRef.current?.(); // renderer 轉換後重繪閉環：退 DOM 也要畫面即刻完整
+      });
+      termRef.current.loadAddon(addon);
+      webglRef.current = addon;
+    } catch {
+      webglFailed = true; // 環境不支援 WebGL（建構/載入丟例外）→ 本生命週期停用
+    }
+    forceRefreshRef.current?.(); // 成功（首幀）與失敗（DOM 接手）都補一次重繪
+  };
+
   const setTabStatus = useAppStore((s) => s.setTabStatus);
 
   useEffect(() => {
@@ -140,6 +171,19 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
     document.addEventListener("visibilitychange", onVisibilityChange);
     window.addEventListener("focus", onWindowFocus);
 
+    // 字型非同步載完後清 WebGL glyph atlas，避免用 fallback 字型快取出錯字形（design §4.3）
+    document.fonts?.ready.then(() => webglRef.current?.clearTextureAtlas());
+
+    // 首次掛載與 mount effect 重建（restartTab 換 sessionId 等）時，若本 tab 為 active
+    // 直接掛 WebGL——isActive effect 只依賴 isActive，effect 重建時不會重跑，漏掛會讓
+    // active terminal 卡在 DOM renderer 直到下次切 tab。attachWebgl 有 webglRef guard，冪等。
+    // forceRefresh 獨立呼叫：attachWebgl 在 kill switch／webglFailed 路徑會早退、不補 refresh
+    //（Codex plan review R1 MEDIUM）；rAF coalesce 使其與 attachWebgl 內部那次同 frame 合一。
+    if (isActiveRef.current) {
+      attachWebgl();
+      forceRefreshRef.current?.();
+    }
+
     return () => {
       disposed = true;
       if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
@@ -149,6 +193,7 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       forceRefreshRef.current = null;
       ro.disconnect();
       ws?.close();
+      detachWebgl();
       term.dispose();
       clearActivity(tabId);
       termRef.current = null;
@@ -160,8 +205,11 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
   useEffect(() => {
     isActiveRef.current = isActive;
     if (isActive) {
+      attachWebgl(); // active-only：掛 WebGL（失敗自動留在 DOM renderer）
       termRef.current?.focus();
-      forceRefreshRef.current?.(); // 切回 tab：display 切換後下一個 frame fit+refresh
+      forceRefreshRef.current?.();
+    } else {
+      detachWebgl(); // 切走即卸；此時已 display:none，不需 refresh
     }
   }, [isActive]);
 
