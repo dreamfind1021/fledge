@@ -11,8 +11,15 @@ import { readTermTheme } from "../styles/term-theme";
 
 // WebGL kill switch：Tahoe WebKit 有破圖前例（xterm#5816），驗收若中獎改 false 一鍵退 DOM
 const ENABLE_WEBGL = true;
-// context loss / 載入失敗後，本次 app 生命週期內全域停用 WebGL（避免 loss 風暴反覆重建）
+// context loss / 載入失敗的永久停用旗標（attach throw 或短窗內 loss 達 3 次才設）
 let webglFailed = false;
+// 60 秒滾動窗內的 loss 計數：零星 loss（WebKit context 上限驅逐等暫時因素）允許下次
+// activation 重掛；同窗累計 3 次 = 此頁 WebGL 渲染當前不穩（不限定 GPU 異常）→ 為避免
+// 重建風暴永久停用。計數跨 tab 共享（module-level）——上限驅逐本就是 page-level 現象。
+let lossWindowStart = 0;
+let lossCountInWindow = 0;
+const LOSS_WINDOW_MS = 60_000;
+const LOSS_PERMANENT_THRESHOLD = 3;
 
 interface TerminalProps {
   port: number;
@@ -27,29 +34,61 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
   const isActiveRef = useRef(isActive);
   const forceRefreshRef = useRef<(() => void) | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
+  const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // WebGL 只掛 active terminal：隱藏 tab 的渲染本來就暫停（畫了也看不到），
   // 且 WebKit 對單頁 WebGL context 數量有上限，全 tab 掛載會在多 tab 時互逐（design §4.3）
   const detachWebgl = () => {
-    webglRef.current?.dispose(); // dispose 後 xterm 自動退回 DOM renderer
+    const addon = webglRef.current;
+    if (!addon) return;
+    const canvas = webglCanvasRef.current; // attach 成功當下 capture，不在 detach 時 query DOM
     webglRef.current = null;
+    webglCanvasRef.current = null;
+    addon.dispose(); // dispose 後 xterm 自動退回 DOM renderer、canvas 移出 DOM
+    // addon 不釋放 WebGL context（等 GC）；WebKit 對單頁 context 有上限、滾動驅逐
+    //（真機驗收實證）→ 顯式歸還。對已 lost 的 context 呼叫為預期 no-op。
+    canvas?.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
   };
   const attachWebgl = () => {
     if (!ENABLE_WEBGL || webglFailed || webglRef.current || !termRef.current) return;
+    let addon: WebglAddon | null = null;
     try {
-      const addon = new WebglAddon();
+      addon = new WebglAddon();
       addon.onContextLoss(() => {
-        webglFailed = true;
-        console.warn("WebGL context loss：本次 app 生命週期全域退回 DOM renderer");
+        const now = Date.now();
+        if (now - lossWindowStart > LOSS_WINDOW_MS) {
+          lossWindowStart = now;
+          lossCountInWindow = 0;
+        }
+        lossCountInWindow += 1;
+        if (lossCountInWindow >= LOSS_PERMANENT_THRESHOLD) {
+          // 短窗內反覆 loss：此頁 WebGL 當前不穩 → 停止重建風暴，本生命週期退 DOM
+          webglFailed = true;
+          console.warn("WebGL context 短時間內反覆 loss：本次 app 生命週期全域退回 DOM renderer");
+        } else {
+          console.warn("WebGL context loss：已卸載，下次切回此分頁時重試 WebGL");
+        }
         detachWebgl();
-        forceRefreshRef.current?.(); // renderer 轉換後重繪閉環：退 DOM 也要畫面即刻完整
+        forceRefreshRef.current?.(); // renderer 轉換後重繪閉環不變
       });
       termRef.current.loadAddon(addon);
       webglRef.current = addon;
+      // attach 成功當下 capture 主 canvas（無 class；link layer 有 xterm-link-layer class）。
+      // 依賴 xterm 6.0.0 / addon-webgl 0.19.0 的 DOM contract——升級這兩個套件時重驗（design §4.3-3）
+      webglCanvasRef.current =
+        termRef.current.element?.querySelector<HTMLCanvasElement>(".xterm-screen canvas:not([class])") ?? null;
     } catch (err) {
-      // 環境不支援 WebGL（建構/載入丟例外）→ 本生命週期停用；log 供真機驗收歸因 fallback 原因
-      webglFailed = true;
+      webglFailed = true; // 建構/載入 throw＝環境不支援 → 本生命週期停用
       console.warn("WebGL renderer 載入失敗，本生命週期退回 DOM renderer", err);
+      // throw 可能發生在 context 已建立之後 → best-effort 清掉 partial addon 與殘留 context
+      try {
+        addon?.dispose();
+      } catch {
+        // partial addon dispose 再失敗屬預期可能，忽略
+      }
+      const orphan = termRef.current.element?.querySelector<HTMLCanvasElement>(".xterm-screen canvas:not([class])");
+      orphan?.getContext("webgl2")?.getExtension("WEBGL_lose_context")?.loseContext();
+      orphan?.remove();
     }
     forceRefreshRef.current?.(); // 成功（首幀）與失敗（DOM 接手）都補一次重繪
   };
