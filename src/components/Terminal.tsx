@@ -29,6 +29,11 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       fontSize: 13,
       theme: readTermTheme(),
       cursorBlink: true,
+      // 實體滾輪以 125ms 動畫捲動（VS Code 同值）；xterm 6.0 內建判別器只對實體滾輪
+      // 生效、觸控板維持即時捲動，不會重演 5.x「smooth scroll 毀觸控板」的坑
+      smoothScrollDuration: 125,
+      // 預設 1000 行對 claude 長對話太早丟歷史；記憶體成本見 design §5（實測於 Task 4-2-5）
+      scrollback: 5000,
     });
     termRef.current = term;
     const fit = new FitAddon();
