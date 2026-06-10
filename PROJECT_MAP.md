@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-06-08
+- **最後更新：** 2026-06-10
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -59,7 +59,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `lib/sidebarGroups.ts` | 純函式：依帳號分組 + 三 band 分類/排序（Sidebar 呈現邏輯，可單元測試） | `groupProjectsByAccount()`, `tabKey()`, `AccountGroup` |
 | `lib/wsReconnect.ts` | 純函式：WS 重連策略（4001/1008 不重連、其他 backoff 5 次） | `shouldReconnect()`, `nextDelay()`, `MAX_RECONNECT_ATTEMPTS` |
 | `lib/backendStatus.ts` | 純函式：backend health 狀態機（up/suspect/down/restarting + up-hysteresis） | `nextBackendState()`, `BackendStatus`, `BackendState` |
-| `lib/activityTracker.ts` | PTY 活動偵測：per-tab 閒置計時器 + 轉換節流（IDLE_MS=800）+ **size-gate（MIN_OUTPUT_BYTES=16，忽略 idle 游標心跳等小 chunk；打字整行重繪 >16 無法濾，屬接受限制）**，由 Terminal.onmessage 餵（含 chunk size）、標記 `Tab.activity`（best-effort working/idle） | `recordActivity(tabId,size)`, `clearActivity()`, `IDLE_MS`, `MIN_OUTPUT_BYTES` |
+| `lib/activityTracker.ts` | PTY 活動偵測：per-tab 閒置計時器 + 轉換節流（IDLE_MS=2000，離開 working 的確認窗，容忍思考暫停、防 working↔waiting 閃爍）+ **size-gate（MIN_OUTPUT_BYTES=16，忽略 idle 游標心跳等小 chunk；打字整行重繪 >16 無法濾，屬接受限制）**，由 Terminal.onmessage 餵（含 chunk size）、標記 `Tab.activity`（best-effort working/idle） | `recordActivity(tabId,size)`, `clearActivity()`, `IDLE_MS`, `MIN_OUTPUT_BYTES` |
 | `lib/tabDotState.ts` | 純函式：`Tab` 的 status × activity → 單一 `DotState`（status 優先；給 TabBar 狀態點用） | `tabDotState()`, `DotState` |
 | `components/Sidebar.tsx` | 依帳號（＝專案類型）分組列專案 + 三 band（開啟中/已接觸/自動發現收合）+ 帳號色塊標題 + 底部開資料夾 + 右鍵選單（改帳號/Finder/移除） | `Sidebar` |
 | `components/TabBar.tsx` | tab 列：切換 + 帳號 chip + 關 tab + 統一狀態點（`tabDotState`：working 呼吸/waiting 穩定/連線態，取代 ●/⚠ 前綴） | `TabBar` |

@@ -135,12 +135,15 @@
   50% { opacity: 1; box-shadow: 0 0 7px 1px color-mix(in srgb, var(--primary) 70%, transparent); }
 }
 /* waiting：mint 穩定 + 柔暈（你的回合）。
-   一次性「完成脈動」：working→waiting 換 class 時動畫自動觸發一次（連續 waiting 不重播），
-   脈動兩下漣漪拉注意力（尤其背景 tab 剛跑完）後 settle 成穩定暈。 */
+   穩定暈（box-shadow）一進 waiting 立即顯示；一次性「完成脈動」漣漪則延遲 0.5s 才起跑。
+   去抖用意：思考暫停 >IDLE_MS 偶爾會短暫翻 waiting 又被下一個輸出彈回 working——若彈回發生在
+   0.5s 內，class 換掉、尚在 delay 階段的漣漪直接被取消（從未播放），避免每次假 waiting 都放
+   「叮！完成」的擴張環、把輕微抖動放大成刺眼閃爍。只有 waiting 撐過 0.5s（真正確認完成）才播。
+   播兩下漣漪拉注意力（尤其背景 tab 剛跑完）後 settle 成穩定暈。 */
 .tab-dot.is-waiting {
   background: var(--session);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--session) 22%, transparent);
-  animation: tab-dot-finish 0.7s ease-out 2;
+  animation: tab-dot-finish 0.7s ease-out 0.5s 2;
 }
 @keyframes tab-dot-finish {
   0% { box-shadow: 0 0 0 1px color-mix(in srgb, var(--session) 60%, transparent); }

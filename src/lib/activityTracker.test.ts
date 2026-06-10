@@ -52,16 +52,16 @@ describe("activityTracker", () => {
   });
 
   it("working 中只剩小心跳不續命：最後一次實質輸出後 IDLE_MS 仍轉 idle（解卡 working bug）", () => {
-    recordActivity("t1", BIG); // t=0：working，timer 排在 t=IDLE_MS(800)
+    recordActivity("t1", BIG); // t=0：working，timer 排在 t=IDLE_MS
     spy().mockClear();
-    // 期間每 ~200ms 只有游標心跳（小 chunk），不應 reset idle timer
-    vi.advanceTimersByTime(200);
-    recordActivity("t1", SMALL);
-    vi.advanceTimersByTime(200);
-    recordActivity("t1", SMALL);
-    vi.advanceTimersByTime(200);
-    recordActivity("t1", SMALL);
-    vi.advanceTimersByTime(200); // 共 800ms = IDLE_MS → 原 timer fire
+    // 期間每 ~200ms 只有游標心跳（小 chunk），不應 reset idle timer。
+    // 用 IDLE_MS 推導步數（非寫死），確保 IDLE_MS 調整時此測試仍成立。
+    const HEARTBEAT_MS = 200;
+    for (let elapsed = 0; elapsed < IDLE_MS; elapsed += HEARTBEAT_MS) {
+      vi.advanceTimersByTime(HEARTBEAT_MS);
+      recordActivity("t1", SMALL);
+    }
+    // 累計達 IDLE_MS → 原 timer fire（小心跳沒續命）
     expect(spy()).toHaveBeenCalledWith("t1", "idle");
   });
 
