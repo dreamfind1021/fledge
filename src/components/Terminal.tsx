@@ -18,6 +18,8 @@ interface TerminalProps {
 export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
+  const isActiveRef = useRef(isActive);
+  const forceRefreshRef = useRef<(() => void) | null>(null);
   const setTabStatus = useAppStore((s) => s.setTabStatus);
 
   useEffect(() => {
@@ -97,17 +99,54 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
     // 以及從隱藏（display:none）切回顯示時都會觸發，據以 fit + 回報 PTY 尺寸。
     // 隱藏中的 tab container 尺寸為 0、offsetParent 為 null → 跳過；否則 fit 會算出
     // 最小 1×2、切回時 Claude 全螢幕 TUI 亂掉（Codex／final review MEDIUM）。
+    const lastDims = { rows: 0, cols: 0 };
     const syncSize = () => {
       if (!containerRef.current?.offsetParent) return;
       fit.fit();
-      resizeSession(port, sessionId, term.rows, term.cols);
+      // 行列實際變動才回報 PTY：切回瞬間多觸發點齊發時不連打 resize HTTP（design §4.2）
+      if (term.rows !== lastDims.rows || term.cols !== lastDims.cols) {
+        lastDims.rows = term.rows;
+        lastDims.cols = term.cols;
+        resizeSession(port, sessionId, term.rows, term.cols);
+      }
     };
     const ro = new ResizeObserver(syncSize);
     ro.observe(containerRef.current);
 
+    // 回前景／切回 tab 的強制重繪：fit 結果相同也補一次 full refresh——
+    // 堵住「fit 不變就不重繪」的洞（WKWebView 停 rAF 後 xterm 的恢復補繪訊號會漏接，
+    // design §1）。多觸發點（isActive/visibilitychange/focus）以 rAF coalesce 成同
+    // frame 一次；rAF 同時讓 display:none→block 的 layout 先發生再量測。
+    let refreshRaf: number | null = null;
+    const forceRefresh = () => {
+      if (refreshRaf != null) return;
+      refreshRaf = requestAnimationFrame(() => {
+        refreshRaf = null;
+        // 排程後才切走的殘留 rAF：隱藏中不量測不重繪（hidden tab 不渲染、不 churn）
+        if (!containerRef.current?.offsetParent) return;
+        syncSize();
+        term.refresh(0, term.rows - 1);
+      });
+    };
+    forceRefreshRef.current = forceRefresh;
+
+    // 視窗回前景／app 回焦：僅 active terminal 響應（ref 取當下值，不擴 effect 依賴）
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && isActiveRef.current) forceRefresh();
+    };
+    const onWindowFocus = () => {
+      if (isActiveRef.current) forceRefresh();
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onWindowFocus);
+
     return () => {
       disposed = true;
       if (reconnectTimer != null) window.clearTimeout(reconnectTimer);
+      if (refreshRaf != null) cancelAnimationFrame(refreshRaf);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onWindowFocus);
+      forceRefreshRef.current = null;
       ro.disconnect();
       ws?.close();
       term.dispose();
@@ -116,10 +155,14 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
     };
   }, [port, sessionId, tabId, setTabStatus]);
 
-  // 開 tab／切回此 tab（變 active）時聚焦終端機，鍵盤輸入直接進 claude，
-  // 免得開啟後還要先點一下右側才能打字。隱藏中的 tab 不聚焦（focus 對 display:none 無效）。
+  // 開 tab／切回此 tab（變 active）時聚焦終端機 + 強制重繪。
+  // 隱藏中的 tab 不聚焦（focus 對 display:none 無效）。
   useEffect(() => {
-    if (isActive) termRef.current?.focus();
+    isActiveRef.current = isActive;
+    if (isActive) {
+      termRef.current?.focus();
+      forceRefreshRef.current?.(); // 切回 tab：display 切換後下一個 frame fit+refresh
+    }
   }, [isActive]);
 
   return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
