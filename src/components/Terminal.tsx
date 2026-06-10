@@ -40,13 +40,16 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       const addon = new WebglAddon();
       addon.onContextLoss(() => {
         webglFailed = true;
+        console.warn("WebGL context loss：本次 app 生命週期全域退回 DOM renderer");
         detachWebgl();
         forceRefreshRef.current?.(); // renderer 轉換後重繪閉環：退 DOM 也要畫面即刻完整
       });
       termRef.current.loadAddon(addon);
       webglRef.current = addon;
-    } catch {
-      webglFailed = true; // 環境不支援 WebGL（建構/載入丟例外）→ 本生命週期停用
+    } catch (err) {
+      // 環境不支援 WebGL（建構/載入丟例外）→ 本生命週期停用；log 供真機驗收歸因 fallback 原因
+      webglFailed = true;
+      console.warn("WebGL renderer 載入失敗，本生命週期退回 DOM renderer", err);
     }
     forceRefreshRef.current?.(); // 成功（首幀）與失敗（DOM 接手）都補一次重繪
   };
