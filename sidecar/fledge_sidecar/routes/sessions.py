@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from pathlib import Path
@@ -42,6 +43,29 @@ def _resolve_command() -> list[str]:
     if test_cmd:
         return test_cmd.split()
     return ["claude"]
+
+
+def _apply_flow_control(text: str, flow_gate: asyncio.Event) -> None:
+    """WS text frame 控制訊息 → 調整 flow_gate（PTY→WS 方向的閘）。
+
+    安全不變式：text frame 永不寫入 PTY（杜絕「終端機輸入/輸出內容偽裝控制指令」注入面）。
+    未知 type／非法 JSON／非物件一律 log + 忽略——向前相容，不斷線（design §4）。
+    """
+    try:
+        msg = json.loads(text)
+    except json.JSONDecodeError:
+        logger.debug("flow control 忽略非法 JSON: %r", text)
+        return
+    if not isinstance(msg, dict):
+        logger.debug("flow control 忽略非物件訊息: %r", text)
+        return
+    msg_type = msg.get("type")
+    if msg_type == "pause":
+        flow_gate.clear()  # 停讀 PTY
+    elif msg_type == "resume":
+        flow_gate.set()  # 恢復讀
+    else:
+        logger.debug("flow control 忽略未知 type: %r", msg_type)
 
 
 @router.post("/api/sessions")

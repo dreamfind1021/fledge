@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 
@@ -130,3 +131,43 @@ def test_app_lifespan_shutdown_closes_sessions(tmp_path):
     with TestClient(create_app()):
         assert s.session_id in sr._bridge.sessions
     assert sr._bridge.sessions == {}
+
+
+def test_apply_flow_control_pause_clears_gate():
+    from fledge_sidecar.routes.sessions import _apply_flow_control
+    gate = asyncio.Event()
+    gate.set()
+    _apply_flow_control(json.dumps({"type": "pause"}), gate)
+    assert not gate.is_set()  # pause → 停讀
+
+
+def test_apply_flow_control_resume_sets_gate():
+    from fledge_sidecar.routes.sessions import _apply_flow_control
+    gate = asyncio.Event()
+    gate.clear()
+    _apply_flow_control(json.dumps({"type": "resume"}), gate)
+    assert gate.is_set()  # resume → 恢復讀
+
+
+def test_apply_flow_control_unknown_type_noop():
+    from fledge_sidecar.routes.sessions import _apply_flow_control
+    gate = asyncio.Event()
+    gate.set()
+    _apply_flow_control(json.dumps({"type": "bogus"}), gate)
+    assert gate.is_set()  # 未知 type：不動 gate、不拋（向前相容）
+
+
+def test_apply_flow_control_bad_json_noop():
+    from fledge_sidecar.routes.sessions import _apply_flow_control
+    gate = asyncio.Event()
+    gate.clear()
+    _apply_flow_control("not json at all", gate)
+    assert not gate.is_set()  # 壞 JSON：不動 gate、不拋
+
+
+def test_apply_flow_control_non_object_noop():
+    from fledge_sidecar.routes.sessions import _apply_flow_control
+    gate = asyncio.Event()
+    gate.set()
+    _apply_flow_control("123", gate)  # 合法 JSON 但非物件
+    assert gate.is_set()  # 非 dict：不動 gate、不拋
