@@ -171,7 +171,7 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
           imeBlockedData = ie.data;
           window.setTimeout(() => { imeBlockedData = null; }, 0);
         }
-        console.warn("IME 重放已攔截（commit-once）：", ie.data);
+        console.warn("IME 重放已攔截（真懸置保險網）：", ie.data);
       }
       if (ie.inputType === "insertText") {
         imeDraft.dismiss(); // Enter 重放（或一般英數輸入）→ 幽靈草稿退場
