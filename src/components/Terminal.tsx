@@ -8,6 +8,7 @@ import { useAppStore } from "../store/useAppStore";
 import { shouldReconnect, nextDelay, MAX_RECONNECT_ATTEMPTS } from "../lib/wsReconnect";
 import { recordActivity, clearActivity } from "../lib/activityTracker";
 import { readTermTheme } from "../styles/term-theme";
+import { ImeReplayGuard } from "../lib/imeReplayGuard";
 
 // WebGL kill switch：Tahoe WebKit 有破圖前例（xterm#5816），驗收若中獎改 false 一鍵退 DOM
 const ENABLE_WEBGL = true;
@@ -115,6 +116,43 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
     term.loadAddon(fit);
     term.open(containerRef.current);
 
+    // 機制 A 重放攔截。listener 掛 container 的 capture phase（第三參數 true）是攔截成立的前提：
+    // 同一 target 上的 listener 按註冊序執行、xterm 在 term.open() 已先在 textarea 註冊，
+    // 掛 ancestor capture 才保證先於 xterm 看到事件、preventDefault 才來得及。
+    const imeGuard = new ImeReplayGuard();
+    const imeContainer = containerRef.current!; // cleanup 時 ref 可能已被 React 清掉，捕捉成變數
+    let imeBlockedData: string | null = null;
+    const onImeCompStart = () => imeGuard.compositionStart();
+    const onImeCompEnd = (e: Event) => imeGuard.compositionEnd((e as CompositionEvent).data ?? "", performance.now());
+    const onImeWinBlur = () => imeGuard.markBlur(performance.now());
+    const onImeBeforeInput = (e: Event) => {
+      const ie = e as InputEvent;
+      if (imeGuard.shouldBlock(ie.inputType, ie.data, ie.isTrusted)) {
+        if (ie.cancelable) {
+          ie.preventDefault(); // 取消插入：xterm 收不到 input、textarea 也不會殘值重灌
+        } else {
+          // 防禦性分支（標準上 insertText beforeinput 可取消）：由下方 input capture 擋傳播；
+          // setTimeout(0) 同 task 過期——preventDefault 生效時 input 不會 fire，flag 不清會
+          // 殘留到日後誤攔相同字串（階段 4 審查 H2）
+          imeBlockedData = ie.data;
+          window.setTimeout(() => { imeBlockedData = null; }, 0);
+        }
+        console.warn("IME 重放已攔截（commit-once）：", ie.data);
+      }
+    };
+    const onImeInput = (e: Event) => {
+      const ie = e as InputEvent;
+      if (imeBlockedData !== null && ie.inputType === "insertText" && ie.data === imeBlockedData) {
+        ie.stopPropagation(); // xterm 的 textarea input listener 收不到 → 不送出（殘值無害）
+      }
+      imeBlockedData = null; // one-shot
+    };
+    imeContainer.addEventListener("compositionstart", onImeCompStart, true);
+    imeContainer.addEventListener("compositionend", onImeCompEnd, true);
+    imeContainer.addEventListener("beforeinput", onImeBeforeInput, true);
+    imeContainer.addEventListener("input", onImeInput, true);
+    window.addEventListener("blur", onImeWinBlur);
+
     let ws: WebSocket | null = null;
     let attempt = 0;
     let reconnectTimer: number | null = null;
@@ -161,6 +199,7 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
     };
 
     term.onData((data) => {
+      imeGuard.noteData(data);
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(new TextEncoder().encode(data));
       }
@@ -236,6 +275,11 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       ro.disconnect();
       ws?.close();
       detachWebgl();
+      imeContainer.removeEventListener("compositionstart", onImeCompStart, true);
+      imeContainer.removeEventListener("compositionend", onImeCompEnd, true);
+      imeContainer.removeEventListener("beforeinput", onImeBeforeInput, true);
+      imeContainer.removeEventListener("input", onImeInput, true);
+      window.removeEventListener("blur", onImeWinBlur);
       term.dispose();
       clearActivity(tabId);
       termRef.current = null;
