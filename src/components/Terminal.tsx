@@ -9,6 +9,7 @@ import { shouldReconnect, nextDelay, MAX_RECONNECT_ATTEMPTS } from "../lib/wsRec
 import { recordActivity, clearActivity } from "../lib/activityTracker";
 import { readTermTheme } from "../styles/term-theme";
 import { ImeReplayGuard } from "../lib/imeReplayGuard";
+import { ImeDraftTracker } from "../lib/imeDraftTracker";
 
 // WebGL kill switch：Tahoe WebKit 有破圖前例（xterm#5816），驗收若中獎改 false 一鍵退 DOM
 const ENABLE_WEBGL = true;
@@ -122,9 +123,42 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
     const imeGuard = new ImeReplayGuard();
     const imeContainer = containerRef.current!; // cleanup 時 ref 可能已被 React 清掉，捕捉成變數
     let imeBlockedData: string | null = null;
-    const onImeCompStart = () => imeGuard.compositionStart();
-    const onImeCompEnd = (e: Event) => imeGuard.compositionEnd((e as CompositionEvent).data ?? "", performance.now());
-    const onImeWinBlur = () => imeGuard.markBlur(performance.now());
+    // 幽靈草稿（接線）：純視覺、不進 PTY。掛 .xterm-helpers＝與 helper textarea 同座標系，
+    // 其 style.left/top 即游標座標；懸置當下定格、第一個互動移除，偏移屬可接受的暫態。
+    const imeDraft = new ImeDraftTracker();
+    const imeGhost = document.createElement("div");
+    imeGhost.style.cssText =
+      "position:absolute;pointer-events:none;z-index:2;display:none;white-space:pre;" +
+      "opacity:0.55;border-bottom:1px dashed currentColor;" +
+      "font-family:JetBrains Mono,ui-monospace,monospace;font-size:13px;";
+    imeGhost.style.color = readTermTheme().foreground ?? "#ccc";
+    term.element?.querySelector(".xterm-helpers")?.appendChild(imeGhost);
+    const syncImeGhost = () => {
+      const draft = imeDraft.suspendedDraft;
+      if (draft == null) {
+        imeGhost.style.display = "none";
+        return;
+      }
+      imeGhost.textContent = draft;
+      imeGhost.style.left = term.textarea?.style.left || "0px";
+      imeGhost.style.top = term.textarea?.style.top || "0px";
+      imeGhost.style.display = "block";
+    };
+    const onImeCompStart = () => {
+      imeGuard.compositionStart();
+      imeDraft.compositionStart();
+      syncImeGhost();
+    };
+    const onImeCompEnd = (e: Event) => {
+      imeGuard.compositionEnd((e as CompositionEvent).data ?? "", performance.now());
+      imeDraft.compositionEnd((e as CompositionEvent).data ?? "", performance.now());
+      syncImeGhost();
+    };
+    const onImeWinBlur = () => {
+      imeGuard.markBlur(performance.now());
+      imeDraft.markBlur(performance.now());
+      syncImeGhost();
+    };
     const onImeBeforeInput = (e: Event) => {
       const ie = e as InputEvent;
       if (imeGuard.shouldBlock(ie.inputType, ie.data, ie.isTrusted)) {
@@ -138,6 +172,10 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
           window.setTimeout(() => { imeBlockedData = null; }, 0);
         }
         console.warn("IME 重放已攔截（commit-once）：", ie.data);
+      }
+      if (ie.inputType === "insertText") {
+        imeDraft.dismiss(); // Enter 重放（或一般英數輸入）→ 幽靈草稿退場
+        syncImeGhost();
       }
     };
     const onImeInput = (e: Event) => {
@@ -153,12 +191,28 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
         // xterm 看不到 Meta keydown 就不會提前 finalize 組字（design §1.1 真懸置）
         e.stopPropagation();
       }
+      if ((e as KeyboardEvent).key === "Escape") {
+        imeDraft.dismiss();
+        syncImeGhost();
+      }
+    };
+    const onImeCompUpdate = (e: Event) => imeDraft.compositionUpdate((e as CompositionEvent).data ?? "");
+    const onImePointerDown = () => {
+      imeDraft.dismiss(); // 點擊即消隱（保守：點擊後 IME 是否保留懸置不可知，視覺先收掉）
+      syncImeGhost();
+    };
+    const onImeFocusOut = () => {
+      imeDraft.dismiss(); // in-app 焦點轉移（切 tab、點 sidebar）→ 不殘留 ghost；
+      syncImeGhost();     // Cmd+Tab 切走不觸發 focusout（WKWebView 保持 activeElement）、ghost 正確保留
     };
     imeContainer.addEventListener("compositionstart", onImeCompStart, true);
     imeContainer.addEventListener("compositionend", onImeCompEnd, true);
     imeContainer.addEventListener("beforeinput", onImeBeforeInput, true);
     imeContainer.addEventListener("input", onImeInput, true);
     imeContainer.addEventListener("keydown", onImeKeyDown, true);
+    imeContainer.addEventListener("compositionupdate", onImeCompUpdate, true);
+    imeContainer.addEventListener("mousedown", onImePointerDown, true);
+    imeContainer.addEventListener("focusout", onImeFocusOut, true);
     window.addEventListener("blur", onImeWinBlur);
 
     let ws: WebSocket | null = null;
@@ -288,6 +342,10 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       imeContainer.removeEventListener("beforeinput", onImeBeforeInput, true);
       imeContainer.removeEventListener("input", onImeInput, true);
       imeContainer.removeEventListener("keydown", onImeKeyDown, true);
+      imeContainer.removeEventListener("compositionupdate", onImeCompUpdate, true);
+      imeContainer.removeEventListener("mousedown", onImePointerDown, true);
+      imeContainer.removeEventListener("focusout", onImeFocusOut, true);
+      imeGhost.remove();
       window.removeEventListener("blur", onImeWinBlur);
       term.dispose();
       clearActivity(tabId);
