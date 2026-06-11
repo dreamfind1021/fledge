@@ -1,7 +1,9 @@
 import asyncio
 import json
+import time
 from pathlib import Path
 
+import anyio
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -33,6 +35,17 @@ def _write_config(tmp_path: Path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg_path))
+
+
+def _try_recv_message(ws, timeout: float):
+    """有限等待 app→client 訊息；逾時回 None。透過 TestClient 的 portal 包 anyio.move_on_after
+    取內部 _send_rx：逾時以 cancel 結束 receive、不消耗訊息、不留 orphan thread（之後 receive_bytes
+    仍能正常收）。回傳原始 ASGI message dict 或 None。"""
+    async def _recv():
+        with anyio.move_on_after(timeout):
+            return await ws._send_rx.receive()
+        return None
+    return ws.portal.call(_recv)
 
 
 def test_create_session_then_ws_echo(tmp_path: Path, monkeypatch):
@@ -171,3 +184,107 @@ def test_apply_flow_control_non_object_noop():
     gate.set()
     _apply_flow_control("123", gate)  # 合法 JSON 但非物件
     assert gate.is_set()  # 非 dict：不動 gate、不拋
+
+
+def test_flow_pause_actually_gates_pty_to_ws(tmp_path: Path, monkeypatch):
+    """pause 真的閘住 PTY→WS：暫停期間 server 不交付輸出，resume 後才補送。
+    核心防呆——漏掉 pump 的 flow_gate.wait() 時，唯獨此測試會失敗（design §9「pause 後 server 停送」）。"""
+    _write_config(tmp_path, monkeypatch)
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "cat")
+    client = TestClient(create_app())
+    sid = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work"}).json()["session_id"]
+
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_bytes(b"first\n")
+        assert b"first" in ws.receive_bytes()  # baseline：未暫停 echo 正常
+        # drain 掉 baseline 殘留的 echo chunk，回到 quiet（否則殘留會被後面誤判成 held 漏出）
+        while _try_recv_message(ws, 0.3) is not None:
+            pass
+        # 送 pause 後 sleep > read_nonblocking 的 poll timeout(0.2s)：讓任何「已通過 gate、正卡在
+        # select」的在途 read 先返回、pump 卡回「已 clear」的 gate。否則該在途 read 會讀到隨後寫入的
+        # held（design §9「在途 ≤1 chunk」），正確實作下仍偽失敗。time.sleep 在測試 thread；
+        # TestClient 的 app 跑在另一條 portal thread，不阻塞 server。
+        ws.send_text(json.dumps({"type": "pause"}))
+        time.sleep(0.35)
+        ws.send_bytes(b"held\n")
+        # 此刻 pump 已確定阻塞在 gate → held echo 不被讀 → 有界視窗內必為 None
+        assert _try_recv_message(ws, 0.5) is None
+        # resume → 暫停期間累積的輸出補送（證明解閘）
+        ws.send_text(json.dumps({"type": "resume"}))
+        data = b""
+        while b"held" not in data:
+            data += ws.receive_bytes()
+
+    client.delete(f"/api/sessions/{sid}")
+
+
+def test_flow_pause_resume_roundtrip_no_data_loss(tmp_path: Path, monkeypatch):
+    """pause/resume 一個週期不破壞 echo、不丟資料：暫停期間的輸出 resume 後完整補送。"""
+    _write_config(tmp_path, monkeypatch)
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "cat")
+    client = TestClient(create_app())
+    sid = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work"}).json()["session_id"]
+
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_bytes(b"first\n")
+        assert b"first" in ws.receive_bytes()
+        ws.send_text(json.dumps({"type": "pause"}))
+        ws.send_bytes(b"second\n")
+        ws.send_text(json.dumps({"type": "resume"}))
+        assert b"second" in ws.receive_bytes()
+
+    client.delete(f"/api/sessions/{sid}")
+
+
+def test_flow_text_frame_never_reaches_pty(tmp_path: Path, monkeypatch):
+    """安全不變式：text 控制 frame 不被當輸入寫進 PTY（否則 cat 會 echo 出 JSON）。"""
+    _write_config(tmp_path, monkeypatch)
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "cat")
+    client = TestClient(create_app())
+    sid = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work"}).json()["session_id"]
+
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_text(json.dumps({"type": "pause"}))
+        ws.send_text(json.dumps({"type": "resume"}))  # 回到可讀
+        ws.send_bytes(b"clean\n")
+        data = ws.receive_bytes()
+        # 若 JSON 被誤寫進 cat，第一個 chunk 會是 echo 出來的 JSON（含 "type"）
+        assert b"clean" in data
+        assert b"type" not in data
+
+    client.delete(f"/api/sessions/{sid}")
+
+
+def test_flow_bad_control_frame_does_not_disconnect(tmp_path: Path, monkeypatch):
+    """壞 JSON / 未知 type 不斷線：之後仍能正常雙向通訊。"""
+    _write_config(tmp_path, monkeypatch)
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "cat")
+    client = TestClient(create_app())
+    sid = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work"}).json()["session_id"]
+
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_text("not json")
+        ws.send_text(json.dumps({"type": "bogus"}))
+        ws.send_bytes(b"alive\n")
+        assert b"alive" in ws.receive_bytes()  # 連線仍活著
+
+    client.delete(f"/api/sessions/{sid}")
+
+
+def test_flow_paused_pty_eof_still_closes_4001(tmp_path: Path, monkeypatch):
+    """paused 中 PTY EOF：pump 仍在 ≤1s 內醒來偵測 is_alive False → 清 session + close 4001。"""
+    _write_config(tmp_path, monkeypatch)
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "cat")
+    from fledge_sidecar.routes.sessions import _bridge
+
+    client = TestClient(create_app())
+    sid = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work"}).json()["session_id"]
+
+    with client.websocket_connect(f"/ws/{sid}") as ws:
+        ws.send_text(json.dumps({"type": "pause"}))  # 閘住 PTY→WS
+        ws.send_bytes(b"\x04")  # Ctrl-D：cat 在行首讀到 EOF → 退出 → PTY master EOF
+        with pytest.raises(WebSocketDisconnect) as exc:
+            while True:
+                ws.receive_bytes()
+        assert exc.value.code == 4001
+    assert sid not in _bridge.sessions

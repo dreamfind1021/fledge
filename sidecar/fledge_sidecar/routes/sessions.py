@@ -110,20 +110,39 @@ async def session_ws(websocket: WebSocket, session_id: str):
 
     loop = asyncio.get_running_loop()
 
+    # flow control gate：connection-scoped，初始 set()=可讀。clear()=暫停讀 PTY、set()=恢復。
+    # 生命週期＝WS 連線：斷線即消滅、重連全新 gate(set)，與模式 A「斷線＝本來就不讀」一致，
+    # 天然避免 paused 狀態殘留（design §5）。
+    flow_gate = asyncio.Event()
+    flow_gate.set()
+
     async def pump_pty_to_ws():
         # PTY → WS：is_alive False（claude 退出）時自然結束。
-        # 用 executor 跑 read_nonblocking 避免 blocking read 卡住 event loop；
-        # read_nonblocking 內 select 上限 0.2s，確保 cancel 後 executor thread 能返回。
+        # 迴圈頂部先過 flow_gate：paused 時 wait_for 每 1s timeout → continue → 回到
+        # while is_alive 條件，確保 claude 在 paused 中退出也能被察覺收尾、不留 zombie task。
         while _bridge.is_alive(session_id):
+            try:
+                await asyncio.wait_for(flow_gate.wait(), timeout=1.0)
+            except TimeoutError:
+                continue
             data = await loop.run_in_executor(None, _bridge.read_nonblocking, session_id)
             if data:
                 await websocket.send_bytes(data)
 
     async def pump_ws_to_pty():
-        # WS → PTY：client 斷線時 receive_bytes 拋 WebSocketDisconnect
+        # WS → PTY：receive() 通用分支。receive() 不像 receive_bytes() 會自動拋
+        # WebSocketDisconnect → 手動拋，保留「recv task 結束 → FIRST_COMPLETED → 收尾」競賽語義。
         while True:
-            data = await websocket.receive_bytes()
-            _bridge.write(session_id, data)
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                raise WebSocketDisconnect(message.get("code", 1000))
+            text = message.get("text")
+            if text is not None:
+                _apply_flow_control(text, flow_gate)  # text frame＝控制訊息，永不入 PTY
+                continue
+            data = message.get("bytes")
+            if data is not None:
+                _bridge.write(session_id, data)
 
     pump_task = asyncio.create_task(pump_pty_to_ws())
     recv_task = asyncio.create_task(pump_ws_to_pty())
