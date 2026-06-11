@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import "./Terminal.css"; // 排在 xterm.css 之後：composition-view 覆寫同特異度、後者勝
 import { WebglAddon } from "@xterm/addon-webgl";
 import { resizeSession, wsUrl } from "../lib/sidecar";
 import { useAppStore } from "../store/useAppStore";

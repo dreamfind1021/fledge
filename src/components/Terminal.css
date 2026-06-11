@@ -1,0 +1,13 @@
+/* ===== Terminal.css — 終端機範圍樣式 ===== */
+
+/* IME 組字浮層：對齊原生終端機體感（marked text 用主題色＋底線標示「尚未確認」）。
+   stock xterm 是黑底白字、無底線（xterm.css 的 .composition-view），在深色主題下像一塊
+   突兀的黑盒。字體/字級/行高由 xterm 的 updateCompositionElements 以 inline style 同步，
+   這裡只蓋色彩與底線。本檔 import 順序在 xterm.css 之後，同特異度後者勝。 */
+.xterm .composition-view {
+  background: var(--term-bg);
+  color: var(--term-text);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
