@@ -46,7 +46,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `pty_bridge.py` | PTY 橋接、Session 管理（threading.Lock）、env 切帳號、resize；child env 剔除 `FLEDGE_TOKEN`/`FLEDGE_TEST_UNAUTH`（不灌 secret 進 claude） | `PtyBridge`, `Session` |
 | `routes/health.py` | `GET /api/health`（附 `claude_found`：shutil.which 判 claude 是否安裝） | `router` |
 | `routes/projects.py` | `GET /api/projects`（回 `permission_error`）+ `POST .../scan-preview`（onboarding 試掃計數、不落檔；回 `status` 判別碼 ok/denied/missing/not_dir/invalid，讓 wizard 預先擋無效 draft） | `router` |
-| `routes/sessions.py` | `POST/DELETE /api/sessions` + `POST .../resize` + WS `/ws/{id}`（accept 前 `require_ws_token` 驗 `?token=`；模式 A：WS 斷不關 session；PTY EOF→close 4001+清 session、tie-break 以 is_alive 為準） | `router` |
+| `routes/sessions.py` | `POST/DELETE /api/sessions` + `POST .../resize` + WS `/ws/{id}`（accept 前 `require_ws_token` 驗 `?token=`；模式 A：WS 斷不關 session；PTY EOF→close 4001+清 session、tie-break 以 is_alive 為準）+ flow control gate（connection-scoped `asyncio.Event`：WS text frame `{"type":"pause"/"resume"}` 經 `_apply_flow_control` 閘住 PTY→WS 方向；binary=PTY bytes、text 永不入 PTY；pump 1s timeout 仍可察覺 paused 中 EOF） | `router` |
 | `routes/config.py` | `GET /api/config`（附 is_first_run）+ 細粒度寫入（roots/manual/overrides/accounts；add 類 canonicalize+驗存在、移除/改帳號類只 canonicalize）+ `POST .../onboard` + `POST .../check-dir`（回 `status` 判別碼）；account CRUD（級聯 reassign、key grammar、至少留1），鎖 + 驗證 | `router` |
 
 ### src/ — React 前端
@@ -63,9 +63,10 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `lib/tabDotState.ts` | 純函式：`Tab` 的 status × activity → 單一 `DotState`（status 優先；給 TabBar 狀態點用） | `tabDotState()`, `DotState` |
 | `lib/imeReplayGuard.ts` | 純狀態機：IME 切視窗重放攔截保險網（組字中文字 onData＝候選 → compositionend 空＋blur 確認武裝 → 攔相同 trusted insertText 恰一次）＋組字中 Meta keydown 該吞判定（真懸置核心——防 xterm 提前 finalize） | `ImeReplayGuard` |
 | `lib/imeDraftTracker.ts` | 純狀態機：IME 懸置幽靈草稿該不該顯示（compositionupdate 記草稿 → end 空＋blur 確認顯示 → compositionstart/dismiss 退場），渲染在 Terminal 接線 | `ImeDraftTracker` |
+| `lib/flowControl.ts` | 純狀態機：PTY 輸出 watermark flow control（`record` 計入/`ack` 扣除 → 越 HIGH=100K 回 pause、回落 LOW=10K 回 resume，遲滯+冪等；`pendingBytes` 供驗收量測），由 Terminal.onmessage 計帳、觸發送 WS 控制訊息 | `FlowController`, `FlowSignal`, `HIGH_WATERMARK`, `LOW_WATERMARK` |
 | `components/Sidebar.tsx` | 依帳號（＝專案類型）分組列專案 + 三 band（開啟中/已接觸/自動發現收合）+ 帳號色塊標題 + 底部開資料夾 + 右鍵選單（改帳號/Finder/移除） | `Sidebar` |
 | `components/TabBar.tsx` | tab 列：切換 + 帳號 chip + 關 tab + 統一狀態點（`tabDotState`：working 呼吸/waiting 穩定/連線態，取代 ●/⚠ 前綴） | `TabBar` |
-| `components/Terminal.tsx` | xterm.js 渲染：連 WS（用 `wsUrl()` 帶 `?token=`）雙向 I/O + ResizeObserver 回報 PTY 尺寸 + onclose 重連狀態機（4001 ended/其他 backoff，gate on backendStatus 用 getState 不放 effect 依賴）；onmessage→recordActivity、teardown→clearActivity（活動偵測旁路，§7 僅 3 處）；回前景/切 tab 強制重繪（visibilitychange/focus/isActive → fit+refresh，rAF coalesce、dims 變動才回報 resize）+ WebGL renderer（active-only 掛載、context loss/載入失敗全域退 DOM 並 console.warn、`ENABLE_WEBGL` kill switch、fonts.ready 清 atlas）+ smoothScrollDuration 125/scrollback 5000 + IME 真懸置（container capture 吞組字中 Meta keydown 防 xterm 提前 finalize；`ImeReplayGuard` 重放保險網＋`ImeDraftTracker` 幽靈草稿 ghost DOM 掛 .xterm-helpers；切回後 Esc/點擊＝確認文字屬已知平台差異；`Terminal.css` 蓋 composition-view 為主題色＋底線） | `Terminal` |
+| `components/Terminal.tsx` | xterm.js 渲染：連 WS（用 `wsUrl()` 帶 `?token=`）雙向 I/O + ResizeObserver 回報 PTY 尺寸 + onclose 重連狀態機（4001 ended/其他 backoff，gate on backendStatus 用 getState 不放 effect 依賴）；onmessage→recordActivity、teardown→clearActivity（活動偵測旁路，§7 僅 3 處）+ flow control 計帳（per-connection `FlowController`：write 前 record/write callback ack，越 HIGH 送 pause、回落 LOW 送 resume，控制訊息綁該連線 socket 不引用外層 ws）；回前景/切 tab 強制重繪（visibilitychange/focus/isActive → fit+refresh，rAF coalesce、dims 變動才回報 resize）+ WebGL renderer（active-only 掛載、context loss/載入失敗全域退 DOM 並 console.warn、`ENABLE_WEBGL` kill switch、fonts.ready 清 atlas）+ smoothScrollDuration 125/scrollback 5000 + IME 真懸置（container capture 吞組字中 Meta keydown 防 xterm 提前 finalize；`ImeReplayGuard` 重放保險網＋`ImeDraftTracker` 幽靈草稿 ghost DOM 掛 .xterm-helpers；切回後 Esc/點擊＝確認文字屬已知平台差異；`Terminal.css` 蓋 composition-view 為主題色＋底線） | `Terminal` |
 | `components/Settings.tsx` | 設定頁 modal（Cmd+,）：roots/manual 編輯（打字或「瀏覽…」picker）+ 帳號編輯（接 AccountsEditor） | `Settings` |
 | `components/ContextMenu.tsx` | 通用右鍵選單（邊緣 clamp、任意鍵關） | `ContextMenu`, `MenuItem` |
 | `components/ProjectPicker.tsx` | 選專案 dialog（Cmd+T，fuzzy filter） | `ProjectPicker` |
@@ -87,7 +88,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `test_projects.py` | /api/projects |
 | `test_config_routes.py` | config 寫入 endpoints（鎖/驗證/防呆/持久化） |
 | `test_pty_bridge.py` | PTY round-trip、env override、並發 |
-| `test_sessions.py` | session 建立 + WS echo + resize + 模式 A |
+| `test_sessions.py` | session 建立 + WS echo + resize + 模式 A + flow control（`_apply_flow_control` 單測 + pause 真閘住 PTY→WS/roundtrip/text 不入 PTY/壞 frame 不斷線/paused EOF→4001） |
 
 ### build / 環境
 | 檔案 | 用途 |
