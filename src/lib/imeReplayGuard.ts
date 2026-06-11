@@ -55,6 +55,14 @@ export class ImeReplayGuard {
     }
   }
 
+  /** 組字中的 Cmd（Meta）keydown 該被吞掉：xterm 的 CompositionHelper.keydown 看到非
+   *  229/16/17/18 的 keydown 會 _finalizeComposition(false) 提前送出半成品（重複的根源，
+   *  design §1.1）。吞掉讓 macOS 原生懸置→還原接手（真「留著」）；非組字中不吞，
+   *  Cmd 快捷鍵照常。 */
+  shouldSwallowKeydown(key: string): boolean {
+    return this.composing && key === "Meta";
+  }
+
   /** beforeinput 是否該攔（攔即消耗武裝 one-shot；不匹配不消耗） */
   shouldBlock(inputType: string, data: string | null, trusted: boolean): boolean {
     if (!this.armed || !trusted || inputType !== "insertText" || !data || data !== this.candidate) {

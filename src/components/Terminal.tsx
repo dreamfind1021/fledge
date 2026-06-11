@@ -147,10 +147,18 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       }
       imeBlockedData = null; // one-shot
     };
+    const onImeKeyDown = (e: Event) => {
+      if (imeGuard.shouldSwallowKeydown((e as KeyboardEvent).key)) {
+        // 只擋 xterm（stopPropagation）、不擋 OS（無 preventDefault）：Cmd+Tab 照常切視窗，
+        // xterm 看不到 Meta keydown 就不會提前 finalize 組字（design §1.1 真懸置）
+        e.stopPropagation();
+      }
+    };
     imeContainer.addEventListener("compositionstart", onImeCompStart, true);
     imeContainer.addEventListener("compositionend", onImeCompEnd, true);
     imeContainer.addEventListener("beforeinput", onImeBeforeInput, true);
     imeContainer.addEventListener("input", onImeInput, true);
+    imeContainer.addEventListener("keydown", onImeKeyDown, true);
     window.addEventListener("blur", onImeWinBlur);
 
     let ws: WebSocket | null = null;
@@ -279,6 +287,7 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       imeContainer.removeEventListener("compositionend", onImeCompEnd, true);
       imeContainer.removeEventListener("beforeinput", onImeBeforeInput, true);
       imeContainer.removeEventListener("input", onImeInput, true);
+      imeContainer.removeEventListener("keydown", onImeKeyDown, true);
       window.removeEventListener("blur", onImeWinBlur);
       term.dispose();
       clearActivity(tabId);

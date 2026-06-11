@@ -87,4 +87,25 @@ describe("ImeReplayGuard", () => {
     g.noteData("\r");
     expect(g.shouldBlock("insertText", "你好", true)).toBe(false);
   });
+  it("組字中 Meta keydown 該吞（xterm 提前 finalize 的觸發鍵）", () => {
+    const g = new ImeReplayGuard();
+    g.compositionStart();
+    expect(g.shouldSwallowKeydown("Meta")).toBe(true);
+  });
+  it("非組字中 Meta 不吞（平時 Cmd 快捷鍵照常）", () => {
+    const g = new ImeReplayGuard();
+    expect(g.shouldSwallowKeydown("Meta")).toBe(false);
+  });
+  it("組字中其他鍵不吞", () => {
+    const g = new ImeReplayGuard();
+    g.compositionStart();
+    expect(g.shouldSwallowKeydown("a")).toBe(false);
+    expect(g.shouldSwallowKeydown("Shift")).toBe(false);
+  });
+  it("組字結束後 Meta 不吞", () => {
+    const g = new ImeReplayGuard();
+    g.compositionStart();
+    g.compositionEnd("你好", 1000);
+    expect(g.shouldSwallowKeydown("Meta")).toBe(false);
+  });
 });
