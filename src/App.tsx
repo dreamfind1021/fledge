@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { waitForSidecarPort, waitForSidecarToken, setAuthToken, fetchHealth, rawHealth, restartSidecar } from "./lib/sidecar";
 import { useAppStore } from "./store/useAppStore";
@@ -85,6 +85,7 @@ function App() {
   const requestCloseTab = useAppStore((s) => s.requestCloseTab);
   const pendingCloseTabId = useAppStore((s) => s.pendingCloseTabId);
   const setPendingCloseTab = useAppStore((s) => s.setPendingCloseTab);
+  const setModalOpen = useAppStore((s) => s.setModalOpen);
   // 只取 pending tab 的標題（primitive string|null，避免訂閱整個 tabs 陣列、在 activity churn 時狂 re-render）。
   // 回 null＝框該收掉：驅動「框是否顯示」與下方懸空清理。判斷式與 store requestCloseTab 一致：
   // status==="ready" && sessionId（working/idle 等 ready 子狀態都續顯示）；tab 變 offline/ended/消失 → null
@@ -181,6 +182,16 @@ function App() {
   useEffect(() => {
     if (pendingCloseTabId && pendingTitle === null) setPendingCloseTab(null);
   }, [pendingCloseTabId, pendingTitle, setPendingCloseTab]);
+
+  // 任一 modal 開啟 → 寫進 store 單一旗標，供 Terminal 的拖檔 drop gate 判定（modal 期間 drop no-op，
+  // design §5；drop 穿透背景 terminal 會破壞 modal 語義）。App 是所有 modal 的開關來源 → 唯一寫入者。
+  // 關閉確認框的「開啟」＝ pendingCloseTabId 有值且 pendingTitle 仍為 live（與 render 顯示條件一致）。
+  // 用 useLayoutEffect：paint 前同步更新旗標，避免「modal 開啟到旗標寫入」之間的 drop 漏判（Codex 階段3）。
+  useLayoutEffect(() => {
+    const open =
+      showSettings || showPicker || showOnboarding || (pendingCloseTabId !== null && pendingTitle !== null);
+    setModalOpen(open);
+  }, [showSettings, showPicker, showOnboarding, pendingCloseTabId, pendingTitle, setModalOpen]);
 
   // 每 5s raw health poll → 餵 backendStatus 狀態機（suspect/down + up-hysteresis）
   useEffect(() => {

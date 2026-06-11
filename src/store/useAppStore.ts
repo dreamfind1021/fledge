@@ -47,6 +47,8 @@ interface AppState {
   permissionError: boolean;
   claudeFound: boolean;
   pendingCloseTabId: string | null;
+  modalOpen: boolean; // 任一 modal（Settings/Picker/Onboarding/關閉確認框）開啟＝true；拖檔 drop gate 用
+  setModalOpen: (open: boolean) => void;
   setClaudeFound: (found: boolean) => void;
   setPort: (port: number) => void;
   loadProjects: () => Promise<void>;
@@ -87,6 +89,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   permissionError: false,
   claudeFound: true,
   pendingCloseTabId: null,
+  modalOpen: false,
 
   setPort: (port) => set({ port }),
 
@@ -254,6 +257,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   setPendingCloseTab: (tabId) => set({ pendingCloseTabId: tabId }),
+  setModalOpen: (open) => set({ modalOpen: open }),
 
   recordHealth: (ok) =>
     set((s) => {
