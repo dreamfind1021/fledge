@@ -11,6 +11,7 @@ import { recordActivity, clearActivity } from "../lib/activityTracker";
 import { readTermTheme } from "../styles/term-theme";
 import { ImeReplayGuard } from "../lib/imeReplayGuard";
 import { ImeDraftTracker } from "../lib/imeDraftTracker";
+import { FlowController, type FlowSignal } from "../lib/flowControl";
 
 // WebGL kill switch：Tahoe WebKit 有破圖前例（xterm#5816），驗收若中獎改 false 一鍵退 DOM
 const ENABLE_WEBGL = true;
@@ -222,19 +223,32 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
     let disposed = false;
 
     const connect = () => {
-      ws = new WebSocket(wsUrl(port, sessionId));
-      ws.binaryType = "arraybuffer";
-      ws.onopen = () => {
+      const socket = new WebSocket(wsUrl(port, sessionId));
+      ws = socket; // 外層 mutable：term.onData 送鍵盤輸入、cleanup 的 ws?.close() 都參照「當前」連線
+      socket.binaryType = "arraybuffer";
+      // 每條連線全新計帳：重連後舊連線的延遲 ack 落在舊 instance，無共享狀態、無計數污染（design §6）
+      const flow = new FlowController();
+      // 控制訊息一律送往這條連線的 socket（closure capture，不引用外層 ws）：
+      // 舊連線延遲 ack 觸發的 resume 不會誤入新連線的 gate。舊 socket 已 CLOSED → readyState guard no-op。
+      const sendFlow = (sig: FlowSignal) => {
+        if (sig && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: sig })); // text frame＝控制通道
+        }
+      };
+      socket.onopen = () => {
         attempt = 0; // 連上就重置重連計數
         setTabStatus(tabId, "ready");
       };
-      ws.onmessage = (ev) => {
+      socket.onmessage = (ev) => {
         const buf = new Uint8Array(ev.data as ArrayBuffer);
-        term.write(buf);
+        const n = buf.byteLength;
+        // 越過 HIGH → 請後端暫停讀 PTY（write 前計入；write callback 回呼時扣除、回落 LOW → resume）
+        sendFlow(flow.record(n));
+        term.write(buf, () => sendFlow(flow.ack(n)));
         // 先 write 再記活動（旁路、不阻斷 bytes）；傳 chunk 大小供 size-gate 過濾 idle 游標心跳
-        recordActivity(tabId, buf.byteLength);
+        recordActivity(tabId, n);
       };
-      ws.onclose = (e) => {
+      socket.onclose = (e) => {
         if (disposed) return;
         // 4001/1008：session 已結束 → 不重連
         if (!shouldReconnect(e.code)) {
