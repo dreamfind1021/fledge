@@ -12,6 +12,8 @@ import { readTermTheme } from "../styles/term-theme";
 import { ImeReplayGuard } from "../lib/imeReplayGuard";
 import { ImeDraftTracker } from "../lib/imeDraftTracker";
 import { FlowController, type FlowSignal } from "../lib/flowControl";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { formatPathsForPaste } from "../lib/dropPath";
 
 // WebGL kill switch：Tahoe WebKit 有破圖前例（xterm#5816），驗收若中獎改 false 一鍵退 DOM
 const ENABLE_WEBGL = true;
@@ -39,6 +41,10 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
   const forceRefreshRef = useRef<(() => void) | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // drop gate 需要「無 gap」的 active 旗標：render body 同步賦值（每次 render 即時，早於任何 effect）。
+  // 底部 isActive effect 只保留 focus／WebGL 副作用，不再負責更新此 ref（Codex 階段3 LOW）。
+  isActiveRef.current = isActive;
 
   // WebGL 只掛 active terminal：隱藏 tab 的渲染本來就暫停（畫了也看不到），
   // 且 WebKit 對單頁 WebGL context 數量有上限，全 tab 掛載會在多 tab 時互逐（design §4.3）
@@ -284,6 +290,25 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
 
     connect();
 
+    // 拖檔貼路徑（包 4）：Finder 拖檔/資料夾進視窗任意位置 → 跳脫後路徑貼進 active terminal。
+    // 整窗收 drop（決策 4-2，不做 hit-test／座標）；N 個 Terminal 各掛一份、isActive 閘控 → 同時恰一個動作。
+    // onDragDropEvent 回傳 Promise<UnlistenFn>；cleanup 以 then(f => f()) unlisten（StrictMode 雙掛載不漏）。
+    const dropUnlisten = getCurrentWebview().onDragDropEvent((event) => {
+      const payload = event.payload;
+      if (payload.type !== "drop") return; // enter/over/leave 忽略
+      if (!isActiveRef.current) return; // 僅 active tab 動作
+      if (disposed) return; // unlisten 是 async，teardown 後到 unlisten 生效前的窗內不得動 disposed term
+      if (useAppStore.getState().modalOpen) return; // modal 開啟 → no-op（design §5）
+      // 此 tab 須為 ready：offline/ended/creating 安靜忽略，不得寫進死連線
+      const tab = useAppStore.getState().tabs.find((t) => t.id === tabId);
+      if (!tab || tab.status !== "ready") return;
+      if (payload.paths.length === 0) return; // 非檔案拖曳（文字/URL）paths 為空
+      const text = formatPathsForPaste(payload.paths);
+      if (!text) return; // 全部項目被跳過（控制字元）→ no-op
+      term.focus();
+      term.paste(text); // 單次整串；xterm 6.0 自動換行正規化 + bracketed paste + 走 onData→既有 ws.send guard
+    });
+
     // 用 ResizeObserver 觀察自己的 container 尺寸：視窗縮放、sidebar 變化、
     // 以及從隱藏（display:none）切回顯示時都會觸發，據以 fit + 回報 PTY 尺寸。
     // 隱藏中的 tab container 尺寸為 0、offsetParent 為 null → 跳過；否則 fit 會算出
@@ -351,6 +376,8 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       forceRefreshRef.current = null;
       ro.disconnect();
       ws?.close();
+      // unlisten 拖檔 listener（Promise<UnlistenFn>）；.catch 避免註冊/unlisten reject 變 unhandled rejection（Codex 階段3 LOW）
+      dropUnlisten.then((f) => f()).catch((err) => console.warn("拖檔 listener 清理失敗", err));
       detachWebgl();
       imeContainer.removeEventListener("compositionstart", onImeCompStart, true);
       imeContainer.removeEventListener("compositionend", onImeCompEnd, true);
@@ -371,7 +398,6 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
   // 開 tab／切回此 tab（變 active）時聚焦終端機 + 強制重繪。
   // 隱藏中的 tab 不聚焦（focus 對 display:none 無效）。
   useEffect(() => {
-    isActiveRef.current = isActive;
     if (isActive) {
       attachWebgl(); // active-only：掛 WebGL（失敗自動留在 DOM renderer）
       termRef.current?.focus();
