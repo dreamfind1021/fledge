@@ -103,3 +103,14 @@ def test_bad_subscription_items_skipped():
                         subscriptions=[{"name": "X", "monthly_cost": "abc"}, {"name": "Y", "monthly_cost": 5}],
                         now=NOW)
     assert d["kpi"]["subscriptions_total"] == 5.0   # 壞項目跳過不炸
+
+
+def test_zero_token_unpriced_entry_not_in_warning():
+    # 零 token 的無模型條目（空 session 快照）沒有低估可言 → 不進警示；
+    # 有 token 的查無定價模型仍要警示（真低估）
+    zero = _e(model="unknown-codex", source="codex", dedup="", missing=True, cost=0.0,
+              input_tokens=0, output_tokens=0, cache_read_tokens=0)
+    real = _e(model="gpt-9-future", source="codex", dedup="", missing=True, cost=0.0,
+              input_tokens=500)
+    d = build_dashboard([zero, real], codex_rate_limits=None, subscriptions=[], now=NOW)
+    assert d["scan_meta"]["missing_pricing"] == ["gpt-9-future"]

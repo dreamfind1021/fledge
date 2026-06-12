@@ -80,8 +80,10 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
             week += e.cost
         if e.ts >= today_start:
             today += e.cost
-        if e.missing_pricing and e.model != "<synthetic>":
-            missing.add(e.model)   # synthetic 是「排除計價」非「查無定價」，不進使用者警示
+        # 警示語義＝「有 token 被算成 0 元」：synthetic 是排除計價非查無定價；
+        # 零 token 條目（如無模型的空 session 快照）沒有低估可言，掛警示只是噪音
+        if e.missing_pricing and e.model != "<synthetic>" and _total_tokens(e) > 0:
+            missing.add(e.model)
         if e.ts < horizon:
             # horizon cut 後才累加 cache 命中率——與 daily/models 同視窗；
             # 全史命中率會漸近凍結、與月視窗 KPI 並列誤導（design §12 / NF-1）
