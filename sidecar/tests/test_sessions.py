@@ -288,3 +288,69 @@ def test_flow_paused_pty_eof_still_closes_4001(tmp_path: Path, monkeypatch):
                 ws.receive_bytes()
         assert exc.value.code == 4001
     assert sid not in _bridge.sessions
+
+
+def test_resolve_command_terminal_returns_login_shell(monkeypatch):
+    from fledge_sidecar.routes.sessions import _resolve_command
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    assert _resolve_command("terminal") == ["/bin/bash", "-l"]
+
+
+def test_resolve_command_terminal_fallback_when_no_shell(monkeypatch):
+    from fledge_sidecar.routes.sessions import _resolve_command
+    monkeypatch.delenv("SHELL", raising=False)
+    assert _resolve_command("terminal") == ["/bin/zsh", "-l"]
+
+
+def test_resolve_command_claude_default(monkeypatch):
+    from fledge_sidecar.routes.sessions import _resolve_command
+    monkeypatch.delenv("FLEDGE_TEST_COMMAND", raising=False)
+    assert _resolve_command("claude") == ["claude"]
+
+
+def test_resolve_command_test_command_only_affects_claude(monkeypatch):
+    from fledge_sidecar.routes.sessions import _resolve_command
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "cat")
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    assert _resolve_command("claude") == ["cat"]           # claude 受測試命令影響
+    assert _resolve_command("terminal") == ["/bin/bash", "-l"]  # terminal 不受影響
+
+
+def test_create_session_passes_terminal_command(tmp_path, monkeypatch):
+    """POST kind=terminal → create_session 收到 [$SHELL, -l]。用 spy 攔命令、實際以 cat 起無害 session。"""
+    _write_config(tmp_path, monkeypatch)
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    from fledge_sidecar.routes import sessions as sr
+    captured = {}
+    real = sr._bridge.create_session
+
+    def spy(command, **kw):
+        captured["command"] = command
+        return real(command=["cat"], **kw)  # 用 cat 起真 Session、避免 spawn 互動 shell
+
+    monkeypatch.setattr(sr._bridge, "create_session", spy)
+    client = TestClient(create_app())
+    resp = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work", "kind": "terminal"})
+    assert resp.status_code == 200
+    assert captured["command"] == ["/bin/bash", "-l"]
+    client.delete(f"/api/sessions/{resp.json()['session_id']}")
+
+
+def test_create_session_defaults_to_claude_when_kind_omitted(tmp_path, monkeypatch):
+    """不傳 kind → 預設 claude（向後相容）。"""
+    _write_config(tmp_path, monkeypatch)
+    monkeypatch.delenv("FLEDGE_TEST_COMMAND", raising=False)
+    from fledge_sidecar.routes import sessions as sr
+    captured = {}
+    real = sr._bridge.create_session
+
+    def spy(command, **kw):
+        captured["command"] = command
+        return real(command=["cat"], **kw)
+
+    monkeypatch.setattr(sr._bridge, "create_session", spy)
+    client = TestClient(create_app())
+    resp = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work"})
+    assert resp.status_code == 200
+    assert captured["command"] == ["claude"]
+    client.delete(f"/api/sessions/{resp.json()['session_id']}")

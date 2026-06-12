@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -30,6 +31,7 @@ def close_all_sessions() -> None:
 class CreateSessionRequest(BaseModel):
     path: str
     account: str
+    kind: Literal["claude", "terminal"] = "claude"
 
 
 class ResizeRequest(BaseModel):
@@ -37,8 +39,12 @@ class ResizeRequest(BaseModel):
     cols: int
 
 
-def _resolve_command() -> list[str]:
-    """正常跑 claude；測試模式（FLEDGE_TEST_COMMAND）用替代命令。"""
+def _resolve_command(kind: str = "claude") -> list[str]:
+    """claude session 跑 claude（測試模式用 FLEDGE_TEST_COMMAND 替代）；
+    terminal session 跑使用者登入 shell（不進 claude），spec §1.2。"""
+    if kind == "terminal":
+        shell = os.environ.get("SHELL") or "/bin/zsh"
+        return [shell, "-l"]
     test_cmd = os.environ.get("FLEDGE_TEST_COMMAND")
     if test_cmd:
         return test_cmd.split()
@@ -76,7 +82,7 @@ def create_session(req: CreateSessionRequest):
     env_overrides = {"CLAUDE_CONFIG_DIR": str(Path(config_dir).expanduser())}
 
     session = _bridge.create_session(
-        command=_resolve_command(),
+        command=_resolve_command(req.kind),
         cwd=req.path,
         env_overrides=env_overrides,
         project_path=req.path,
