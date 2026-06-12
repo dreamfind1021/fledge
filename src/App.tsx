@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { waitForSidecarPort, waitForSidecarToken, setAuthToken, fetchHealth, rawHealth, restartSidecar } from "./lib/sidecar";
 import { useAppStore } from "./store/useAppStore";
+import { isLiveClaudeTab } from "./lib/liveTab";
 import { Sidebar } from "./components/Sidebar";
 import { Workspace } from "./components/Workspace";
 import { Settings } from "./components/Settings";
@@ -94,7 +95,7 @@ function App() {
     const id = s.pendingCloseTabId;
     if (!id) return null;
     const t = s.tabs.find((x) => x.id === id);
-    return t && t.status === "ready" && t.sessionId ? t.title : null;
+    return t && isLiveClaudeTab(t) ? t.title : null;
   });
   const claudeFound = useAppStore((s) => s.claudeFound);
   const permissionError = useAppStore((s) => s.permissionError);
