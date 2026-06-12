@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings } from "lucide-react";
+import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useAppStore } from "../store/useAppStore";
 import type { Project } from "../lib/sidecar";
@@ -27,6 +27,24 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   // 「已接觸」溢出（surfacedMore）展開狀態，per 帳號群組（與自動發現 expanded 分開）
   const [surfacedExpanded, setSurfacedExpanded] = useState<Record<string, boolean>>({});
+  // 側欄收合：localStorage 開機讀回、toggle 時寫入（純前端 UI 狀態，spec §3.1）
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("fledge.sidebarCollapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleCollapsed = () =>
+    setCollapsed((c) => {
+      const next = !c;
+      try {
+        localStorage.setItem("fledge.sidebarCollapsed", next ? "1" : "0");
+      } catch {
+        /* localStorage 不可用時僅不持久化，不影響功能 */
+      }
+      return next;
+    });
   // 底部「開啟其他資料夾」：選完新資料夾後彈帳號選單選類型
   const [accountPicker, setAccountPicker] = useState<{ x: number; y: number; dir: string } | null>(null);
   const openFolderBtn = useRef<HTMLButtonElement>(null);
@@ -136,6 +154,61 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
     }
   };
 
+  // 開資料夾後的帳號選單：展開／收合兩種版面共用
+  const accountPickerMenu = accountPicker && (
+    <ContextMenu
+      x={accountPicker.x}
+      y={accountPicker.y}
+      items={accountKeys.map((k) => ({
+        label: `用「${config?.accounts[k]?.label || k}」開啟`,
+        onClick: () => chooseTypeForNewDir(accountPicker.dir, k),
+      }))}
+      onClose={() => setAccountPicker(null)}
+    />
+  );
+
+  // 收合：窄軌（寬度對齊品牌圖示）。三段式 flex——上(品牌/展開/設定)、中(nav 留空、未來儀表板)、下(開資料夾)。
+  if (collapsed) {
+    return (
+      <div className="sidebar is-collapsed">
+        <div className="sidebar-rail-top">
+          <FeatherMark size={24} />
+          <button
+            className="sidebar-rail-btn"
+            onClick={toggleCollapsed}
+            aria-label="展開側欄"
+            title="展開側欄"
+          >
+            <PanelLeftOpen size={16} strokeWidth={1.75} />
+          </button>
+          <button
+            className="sidebar-rail-btn"
+            onClick={onOpenSettings}
+            aria-label="設定"
+            title="設定"
+          >
+            <Settings size={16} strokeWidth={1.75} />
+          </button>
+        </div>
+        {/* 中段：未來儀表板 icon 放這，現在留空 spacer（不寫任何程式碼，spec §3.3） */}
+        <div className="sidebar-rail-mid" />
+        <div className="sidebar-rail-foot">
+          <button
+            ref={openFolderBtn}
+            className="sidebar-rail-btn"
+            onClick={onOpenFolder}
+            disabled={accountKeys.length === 0}
+            aria-label="開啟其他資料夾"
+            title="開啟其他資料夾"
+          >
+            <FolderPlus size={16} strokeWidth={2} />
+          </button>
+        </div>
+        {accountPickerMenu}
+      </div>
+    );
+  }
+
   return (
     <div className="sidebar">
       {/* === 品牌 header === */}
@@ -149,6 +222,14 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           title="設定"
         >
           <Settings size={16} strokeWidth={1.75} />
+        </button>
+        <button
+          className="sidebar-collapse-btn"
+          onClick={toggleCollapsed}
+          aria-label="收合側欄"
+          title="收合側欄"
+        >
+          <PanelLeftClose size={16} strokeWidth={1.75} />
         </button>
       </div>
 
@@ -232,17 +313,7 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
       </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
-      {accountPicker && (
-        <ContextMenu
-          x={accountPicker.x}
-          y={accountPicker.y}
-          items={accountKeys.map((k) => ({
-            label: `用「${config?.accounts[k]?.label || k}」開啟`,
-            onClick: () => chooseTypeForNewDir(accountPicker.dir, k),
-          }))}
-          onClose={() => setAccountPicker(null)}
-        />
-      )}
+      {accountPickerMenu}
     </div>
   );
 }

@@ -13,6 +13,7 @@
   font-family: var(--font-ui);
   font-size: 13px;
   box-sizing: border-box;
+  transition: width 0.16s ease;
   user-select: none;
   -webkit-user-select: none;
 }
@@ -50,6 +51,71 @@
 }
 
 .sidebar-gear:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* 收合鈕：緊貼齒輪右側（齒輪已 margin-left:auto 把兩者推到最右） */
+.sidebar-collapse-btn {
+  color: var(--faint);
+  cursor: pointer;
+  display: flex;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 5px;
+}
+.sidebar-collapse-btn:hover {
+  background: var(--hover);
+  color: var(--dim);
+}
+.sidebar-collapse-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* === 收合窄軌（寬度對齊品牌圖示） === */
+.sidebar.is-collapsed {
+  width: 56px;
+  align-items: center;
+}
+.sidebar-rail-top,
+.sidebar-rail-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  width: 100%;
+}
+.sidebar-rail-top {
+  padding: 16px 0 12px;
+}
+.sidebar-rail-mid {
+  flex: 1;
+}
+.sidebar-rail-foot {
+  padding: 10px 0 14px;
+  border-top: 1px solid var(--divider);
+}
+.sidebar-rail-btn {
+  color: var(--faint);
+  cursor: pointer;
+  display: flex;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  padding: 6px;
+}
+.sidebar-rail-btn:hover {
+  background: var(--hover);
+  color: var(--dim);
+}
+.sidebar-rail-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sidebar-rail-btn:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
 }
