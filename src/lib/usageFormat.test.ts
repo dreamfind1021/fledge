@@ -2,10 +2,11 @@ import { describe, it, expect } from "vitest";
 import { fmtUSD, fmtPct, fmtTokens, fmtClock } from "./usageFormat";
 
 describe("usageFormat", () => {
-  it("fmtUSD：常規/小額/零", () => {
+  it("fmtUSD：常規/小額/零/負數", () => {
     expect(fmtUSD(1234.567)).toBe("$1,234.57");
     expect(fmtUSD(0.004)).toBe("<$0.01");
     expect(fmtUSD(0)).toBe("$0.00");
+    expect(fmtUSD(-50)).toBe("-$50.00");
   });
   it("fmtPct 與 fmtTokens", () => {
     expect(fmtPct(0.8234)).toBe("82%");

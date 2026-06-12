@@ -1,0 +1,387 @@
+/* ── Dashboard 面板樣式（Nightfall token 直接沿用 var(--…)，從 demo HTML 移植）── */
+
+/* ── 根容器：單頁長滾動 ── */
+.dash-root {
+  height: 100%;
+  overflow-y: auto;
+  padding: 22px 26px 60px;
+  background: var(--bg);
+  max-width: 1060px;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+.dash-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  font-size: 13px;
+  min-height: 200px;
+}
+
+/* ── 頂列：標題 + 狀態 pill ── */
+.dash-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.dash-title {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .2px;
+}
+.dash-stale {
+  font-size: 11px;
+  color: var(--dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+/* ── 警告/錯誤條 ── */
+.dash-error {
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+  border-radius: var(--row-radius);
+  color: var(--error);
+  font-size: 12px;
+  padding: 8px 14px;
+  margin-bottom: 10px;
+}
+.dash-warn {
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 30%, transparent);
+  border-radius: var(--row-radius);
+  color: var(--warning);
+  font-size: 12px;
+  padding: 8px 14px;
+  margin-bottom: 10px;
+}
+
+/* ── KPI 條 ── */
+.dash-kpi {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.dash-kpi-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--row-radius);
+  padding: 12px 14px 10px;
+}
+.dash-kpi-value {
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -.3px;
+}
+.dash-kpi-value.is-pos {
+  color: var(--session);
+}
+.dash-kpi-label {
+  color: var(--dim);
+  font-size: 11px;
+  margin-top: 3px;
+}
+.dash-kpi-extra {
+  color: var(--faint);
+  font-size: 10.5px;
+  margin-top: 1px;
+}
+
+/* ── 窗口列 ── */
+.dash-windows {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.dash-win-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--win-radius);
+  padding: 14px 16px;
+}
+.dash-win-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.dash-badge {
+  font-size: 10px;
+  font-weight: 700;
+  color: #191038;
+  background: var(--ai);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+.dash-win-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 9px;
+  color: var(--dim);
+  font-size: 11.5px;
+}
+.dash-win-meta b {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.dash-eta {
+  color: var(--warning);
+}
+
+/* ── 進度條（claude 橘，codex 青）── */
+.dash-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+  position: relative;
+}
+.dash-bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--primary), #FFBE76);
+}
+.dash-bar.is-codex > i {
+  background: linear-gradient(90deg, var(--session), #8FE7D6);
+}
+
+/* ── Gauge（Codex 窗口格）── */
+.dash-gauge {
+  display: grid;
+  grid-template-columns: 52px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.dash-gauge-label {
+  color: var(--dim);
+  font-size: 11.5px;
+}
+.dash-gauge-meta {
+  color: var(--dim);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+/* ── 面板共用 ── */
+.dash-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--win-radius);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.dash-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dim);
+  margin-bottom: 12px;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+/* ── 每日成本堆疊長條 ── */
+.dash-daily {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 120px;
+  padding-top: 4px;
+}
+.dash-daily-col {
+  /* height 由 inline style 依比例設定；flex 讓各欄等寬 */
+  flex: 1;
+  display: flex;
+  flex-direction: column-reverse;
+  border-radius: 2px 2px 0 0;
+  overflow: hidden;
+  min-width: 6px;
+}
+.dash-daily-col:hover {
+  outline: 1px solid var(--border);
+}
+.dash-daily-col > i {
+  display: block;
+  width: 100%;
+  /* flex 比例由 inline style 的 flex 屬性控制（各 model 成本比例）*/
+}
+.dash-legend {
+  display: flex;
+  gap: 14px;
+  color: var(--dim);
+  font-size: 11px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.dash-legend > span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.dash-legend > span > i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+  flex: none;
+}
+
+/* ── 分布列：donut + heatmap ── */
+.dash-row {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.dash-row > .dash-panel {
+  margin-bottom: 0;
+}
+
+/* Donut */
+.dash-donut-wrap {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+}
+.dash-donut {
+  width: 124px;
+  height: 124px;
+  border-radius: 50%;
+  position: relative;
+  flex: none;
+  /* background: conic-gradient(…) 由 inline style 注入 */
+}
+.dash-donut::after {
+  content: "";
+  position: absolute;
+  inset: 26px;
+  border-radius: 50%;
+  background: var(--surface);
+}
+.dash-donut-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+}
+.dash-donut-center b {
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+.dash-donut-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--dim);
+  flex: 1;
+}
+.dash-donut-legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--divider);
+}
+.dash-donut-legend li:last-child {
+  border-bottom: none;
+}
+.dash-donut-legend i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+.dash-donut-legend em {
+  margin-left: auto;
+  font-style: normal;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+/* Heatmap */
+.dash-heatmap {
+  display: grid;
+  grid-template-columns: 30px repeat(24, 1fr);
+  gap: 2px;
+  align-items: center;
+}
+.dash-heatmap-dow {
+  color: var(--faint);
+  font-size: 10px;
+  text-align: right;
+  padding-right: 6px;
+}
+.dash-heatmap b {
+  display: block;
+  aspect-ratio: 1.5 / 1;
+  border-radius: 2px;
+  background: var(--session);
+  /* opacity 由 inline style 注入 */
+}
+
+/* ── 專案表 ── */
+.dash-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.dash-table th {
+  color: var(--faint);
+  font-weight: 500;
+  text-align: left;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.dash-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--divider);
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+/* 第一欄（專案名）左對齊、用 ui 字型 */
+.dash-table td:first-child {
+  text-align: left;
+  font-family: var(--font-ui);
+}
+.dash-table th:first-child {
+  text-align: left;
+}
+.dash-table tr:last-child td {
+  border-bottom: none;
+}
+.dash-table tr:hover td {
+  background: var(--hover);
+}
+.dash-td-total {
+  color: var(--text);
+  font-weight: 600;
+}
+.dash-proj-name {
+  color: var(--text);
+}
+.dash-proj-path {
+  color: var(--faint);
+  font-size: 10.5px;
+  display: block;
+  font-family: var(--font-mono);
+}

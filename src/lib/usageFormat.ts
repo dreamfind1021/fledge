@@ -1,7 +1,9 @@
 // 觀測 dashboard 共用格式化工具（design §10）
 
-/** 金額格式化：小於 $0.01 顯示 "<$0.01"，其餘兩位小數加千分位逗號。 */
+/** 金額格式化：小於 $0.01 顯示 "<$0.01"，其餘兩位小數加千分位逗號。
+ *  Net ROI 可為負——負數回 "-$50.00" 而非 "$-50.00"。 */
 export function fmtUSD(n: number): string {
+  if (n < 0) return `-${fmtUSD(-n)}`;
   if (n > 0 && n < 0.01) return "<$0.01";
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }

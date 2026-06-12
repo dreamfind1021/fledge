@@ -36,12 +36,14 @@ export function TabBar() {
             <span className="tabbar-tab-title">
               {t.kind === "dashboard" ? tDash("tabTitle") : t.title}
             </span>
-            <span
-              className="tabbar-chip"
-              style={{ background: accountColor(t.account) }}
-            >
-              {t.account}
-            </span>
+            {t.account && (
+              <span
+                className="tabbar-chip"
+                style={{ background: accountColor(t.account) }}
+              >
+                {t.account}
+              </span>
+            )}
             <button
               className="tabbar-close"
               onClick={(e) => {

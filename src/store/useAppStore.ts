@@ -253,12 +253,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeTabId === tabId
         ? (remaining[remaining.length - 1]?.id ?? null)
         : activeTabId;
+    // 先移 tab（UI 即時）；兩類 tab 均需此 set，故提前執行後再依種類決定後續
+    set({ tabs: remaining, activeTabId: newActive });
     if (tab.kind === "dashboard") {
-      // 純前端 tab：不打 closeSession，直接移除＋沿用既有的下一個 tab 選擇邏輯
-      set({ tabs: remaining, activeTabId: newActive });
+      // 純前端 tab：不打 closeSession，移除後直接結束
       return;
     }
-    set({ tabs: remaining, activeTabId: newActive });
     // async 關 session（claude 子進程）；creating 中的 tab 由 openTab resolve 後補清
     if (port != null && tab.sessionId) {
       await closeSession(port, tab.sessionId);
@@ -309,7 +309,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().openTab(project, tab.account, tab.kind);
   },
 
-  // sidecar 重啟：舊 session 全沒了，所有 tab 標 ended、清 sessionId（前端原子轉移用）
+  // sidecar 重啟：舊 session 全沒了，所有 tab 標 ended、清 sessionId（前端原子轉移用）。
+  // dashboard tab 純前端、無 session，不標 ended（否則會出現重啟按鈕、但 dashboard 無法重啟）。
   markAllTabsEnded: () =>
-    set((s) => ({ tabs: s.tabs.map((t) => ({ ...t, status: "ended" as const, sessionId: null })) })),
+    set((s) => ({
+      tabs: s.tabs.map((t) =>
+        t.kind === "dashboard" ? t : { ...t, status: "ended" as const, sessionId: null },
+      ),
+    })),
 }));

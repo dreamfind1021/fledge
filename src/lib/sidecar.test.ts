@@ -60,7 +60,7 @@ describe("auth token", () => {
     const seen: Array<Record<string, string>> = [];
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
       seen.push((init?.headers ?? {}) as Record<string, string>);
-      return { ok: true, json: async () => ({ projects: [], permission_error: false, status: "ok", path: "", count: 0, version: "", ok: true, claude_found: false, session_id: "s" }) } as unknown as Response;
+      return { ok: true, json: async () => ({ projects: [], permission_error: false, status: "ok", path: "", count: 0, version: "", ok: true, claude_found: false, session_id: "s", kpi: {} }) } as unknown as Response;
     }));
     const m = await import("./sidecar");
     await m.fetchHealth(1);
@@ -74,7 +74,8 @@ describe("auth token", () => {
     await m.addRoot(1, "/x", "work");
     await m.onboard(1, []);
     await m.checkDir(1, "/x");
-    expect(seen.length).toBeGreaterThanOrEqual(11);
+    await m.fetchUsageDashboard(1);
+    expect(seen.length).toBeGreaterThanOrEqual(12);
     for (const h of seen) expect(h["X-Fledge-Token"]).toBe("tok");
     setAuthToken(null);
   });
