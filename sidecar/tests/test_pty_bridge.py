@@ -101,6 +101,7 @@ def test_create_session_strips_secrets_from_child_env(monkeypatch):
     monkeypatch.setattr(pty_bridge.PtyProcess, "spawn", staticmethod(_fake_spawn))
     monkeypatch.setenv("FLEDGE_TOKEN", "secret")
     monkeypatch.setenv("FLEDGE_TEST_UNAUTH", "1")
+    monkeypatch.setenv("FLEDGE_PORT", "54321")
 
     bridge = pty_bridge.PtyBridge()
     # 連 caller 若不慎在 overrides 傳入 secret 也要被剔除（最終 env 剔除）
@@ -109,4 +110,5 @@ def test_create_session_strips_secrets_from_child_env(monkeypatch):
     env = captured["env"]
     assert "FLEDGE_TOKEN" not in env
     assert "FLEDGE_TEST_UNAUTH" not in env
+    assert "FLEDGE_PORT" not in env  # 內部協定變數不洩進子進程（含使用者 terminal shell）
     assert env["CLAUDE_CONFIG_DIR"] == "/tmp/cc"  # 正常 override 仍在

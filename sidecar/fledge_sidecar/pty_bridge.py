@@ -38,9 +38,9 @@ class PtyBridge:
         account: str = "",
     ) -> Session:
         env = {**os.environ, **env_overrides}
-        # 從最終合併 env 剔除 sidecar 自己的 auth secret，不灌進 claude 子進程
-        # （使用者/模型在 terminal 內 env 就會看到）；在 overrides 後剔除，連 caller 誤傳也擋掉。
-        for _k in ("FLEDGE_TOKEN", "FLEDGE_TEST_UNAUTH"):
+        # 從最終合併 env 剔除 sidecar 自己的 auth secret 與內部協定變數，不灌進子進程
+        # （claude 與使用者 terminal shell 都不該看到）。
+        for _k in ("FLEDGE_TOKEN", "FLEDGE_TEST_UNAUTH", "FLEDGE_PORT"):
             env.pop(_k, None)
         pty = PtyProcess.spawn(command, cwd=cwd, env=env)
         session_id = uuid.uuid4().hex
