@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-06-12
+- **最後更新：** 2026-06-13
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -47,7 +47,14 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `routes/health.py` | `GET /api/health`（附 `claude_found`：shutil.which 判 claude 是否安裝） | `router` |
 | `routes/projects.py` | `GET /api/projects`（回 `permission_error`）+ `POST .../scan-preview`（onboarding 試掃計數、不落檔；回 `status` 判別碼 ok/denied/missing/not_dir/invalid，讓 wizard 預先擋無效 draft） | `router` |
 | `routes/sessions.py` | `POST/DELETE /api/sessions` + `POST .../resize` + WS `/ws/{id}`（accept 前 `require_ws_token` 驗 `?token=`；模式 A：WS 斷不關 session；PTY EOF→close 4001+清 session、tie-break 以 is_alive 為準）+ flow control gate（connection-scoped `asyncio.Event`：WS text frame `{"type":"pause"/"resume"}` 經 `_apply_flow_control` 閘住 PTY→WS 方向；binary=PTY bytes、text 永不入 PTY；pump 1s timeout 仍可察覺 paused 中 EOF）；`CreateSessionRequest.kind`（claude/terminal）→`_resolve_command`：terminal 跑 `$SHELL -l` | `router` |
-| `routes/config.py` | `GET /api/config`（附 is_first_run）+ 細粒度寫入（roots/manual/overrides/accounts；add 類 canonicalize+驗存在、移除/改帳號類只 canonicalize）+ `POST .../onboard` + `POST .../check-dir`（回 `status` 判別碼）；account CRUD（級聯 reassign、key grammar、至少留1），鎖 + 驗證 | `router` |
+| `routes/config.py` | `GET /api/config`（附 is_first_run）+ 細粒度寫入（roots/manual/overrides/accounts；add 類 canonicalize+驗存在、移除/改帳號類只 canonicalize）+ `POST .../onboard` + `POST .../check-dir`（回 `status` 判別碼）+ `PUT .../subscriptions`（訂閱費清單，name 非空/cost 有限非負）；account CRUD（級聯 reassign、key grammar、至少留1），鎖 + 驗證 | `router` |
+| `routes/usage.py` | `GET /usage/dashboard?days=`（觀測儀表板單一端點）：single-flight 掃描（25s stale gate、error 立即 retry、days 變更視為 stale）＋`asyncio.to_thread` 不卡 event loop＋last-good 語義（掃描中回舊資料標 scanning、冷掃 202+Retry-After、冷掃失敗 error-only 200）；模組級 `_state`（snapshot/cache/scanning） | `router`, `reset_state_for_tests()` |
+| `usage/pricing.py` | 定價表（Claude＋gpt-5 系列含 mini/nano 尺寸帶）＋模型名正規化（別名/日期後綴/`<synthetic>`→None/尺寸帶不跨價）＋兩源計價（USD per MTok ÷1e6、cache 三層倍率、cached⊆input）；`PRICING_VERSION` 供 L2 重算 | `PRICING_VERSION`, `CLAUDE_PRICING`, `CODEX_PRICING`, `normalize_*_model()`, `claude_cost()`, `codex_cost()` |
+| `usage/parser.py` | 兩格式逐行解析→瘦條目 `UsageEntry`（內容層不拋例外：壞行/壞值跳過計數；I/O 例外由呼叫端 wrap）：claude（快篩純最佳化、cache precedence nested 優先、dedup_key、sidechain）＋codex rollout（last/累計差分 clamp、turn_context model、session_meta cwd、rate_limits 末筆） | `UsageEntry`, `CodexFileResult`, `parse_claude_file()`, `parse_codex_file()` |
+| `usage/scanner.py` | 兩源檔案發現（回傳一律 realpath）：claude＝各帳號 config_dir/projects 遞迴＋realpath 去重；codex＝sessions/archived 的 per-session canonical selection（active>mtime_ns>size>路徑全序；首行窺視 session_id、_PEEK_LIMIT 1MiB） | `claude_files()`, `codex_files()` |
+| `usage/blocks.py` | Claude 5hr block 演算法（UTC）：floor-to-hour 起點、雙條件 break、gap block（ccusage 對齊不重疊）、is_active 雙 AND、burn rate（max(1,min)）、projection（active 且 ≥5min）、P90 限額估計（≥5 個非零 closed） | `Block`, `BlocksResult`, `build_blocks()` |
+| `usage/cache.py` | L1 記憶體＋L2 磁碟瘦條目快取：(size, mtime_ns) 失效、bounded ThreadPool 平行 parse、`threading.Lock` 序列化、L2 損壞寬 catch 重建、pricing_version 變更只重算 cost 不重 parse、generation 防舊蓋新（同 schema 代才比較）、變動才落盤、atomic write | `UsageCache`, `FileCacheEntry`, `RefreshResult`, `SCHEMA_VERSION` |
+| `usage/aggregator.py` | dashboard payload 組裝：claude dedup 替換規則（parent>sidechain>token 多者）、synthetic 濾除、KPI（本地時區視窗/Net ROI/分源 cache 命中率）、daily/models/projects（memoized realpath）/hourly（7×24 週一起）聚合（900s bucket memo 消 datetime 成本）、blocks 全量建後濾 7 天 | `build_dashboard()` |
 
 ### src/ — React 前端
 | 檔案 | 職責 | 匯出 |
@@ -66,6 +73,13 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `lib/imeDraftTracker.ts` | 純狀態機：IME 懸置幽靈草稿該不該顯示（compositionupdate 記草稿 → end 空＋blur 確認顯示 → compositionstart/dismiss 退場），渲染在 Terminal 接線 | `ImeDraftTracker` |
 | `lib/flowControl.ts` | 純狀態機：PTY 輸出 watermark flow control（`record` 計入/`ack` 扣除 → 越 HIGH=100K 回 pause、回落 LOW=10K 回 resume，遲滯+冪等；`pendingBytes` 供驗收量測），由 Terminal.onmessage 計帳、觸發送 WS 控制訊息 | `FlowController`, `FlowSignal`, `HIGH_WATERMARK`, `LOW_WATERMARK` |
 | `lib/dropPath.ts` | 純函式：拖檔路徑智慧引號格式化（safe charset `[\p{L}\p{N}/._-]` 原樣、其餘 POSIX 單引號跳脫 `'`→`'\''`、含控制字元整項跳過、多檔空白 join+尾隨空白、全跳過回空字串），供 Terminal 拖檔接線 | `formatPathsForPaste()` |
+| `i18n.ts` | i18n 最小基建（react-i18next）：語言權威序 localStorage `fledge-lang` > OS zh 偵測 > en；defaultNS dashboard | default `i18n` |
+| `locales/{zh-TW,en}/dashboard.json` | 觀測儀表板 locale catalog（兩檔 key 對齊，`i18nCatalog.test.ts` parity 鎖定）；既有元件字串遷移留後續 | — |
+| `lib/usageFormat.ts` | 純函式：儀表板數字格式化（fmtUSD 含負數/<$0.01、fmtPct、fmtTokens K/M、fmtClock HH:mm、fmtDayClock 今天/昨天/M/D） | `fmtUSD()`, `fmtPct()`, `fmtTokens()`, `fmtClock()`, `fmtDayClock()` |
+| `lib/usagePoll.ts` | 純函式：儀表板輪詢 gating（作用分頁＋頁面可見才打 API）＋30s 間隔常數 | `shouldPoll()`, `POLL_INTERVAL_MS` |
+| `lib/dashboardLogic.ts` | 純函式：面板邏輯（donutParts top4+rest 角度、blockEta 依 burn rate 外推達 P90 時刻含三 null gate） | `donutParts()`, `blockEta()` |
+| `lib/subscriptionsForm.ts` | 純函式：訂閱費表單驗證（與 sidecar PUT 400 規則一致：name 非空、cost 有限非負） | `validateSubscriptions()` |
+| `components/Dashboard.tsx` | 觀測儀表板分頁（單頁長滾動）：30s 輕輪詢（首掃 2s、visibility/isActive gating、error 保留舊資料標 stale）＋六面板（KPI 5 卡/Claude 5hr 窗口條＋Codex 官方雙 gauge/每日成本堆疊長條/模型 donut/時段 heatmap 週一起/專案表 top30）；全手刻 SVG/CSS 零圖表依賴、字串全走 t() | `Dashboard` |
 | `components/Sidebar.tsx` | 依帳號（＝專案類型）分組列專案 + 三 band（開啟中/已接觸/自動發現收合）+ 帳號色塊標題 + 底部開資料夾 + 右鍵選單（改帳號/Finder/移除/使用終端機開啟）；open/active 判定只認 claude tab；溢出展開器（surfacedMore）；收合窄軌（`localStorage fledge.sidebarCollapsed`） | `Sidebar` |
 | `components/TabBar.tsx` | tab 列：切換 + 帳號 chip + 關 tab + 統一狀態點（`tabDotState`：working 呼吸/waiting 穩定/連線態，取代 ●/⚠ 前綴）；terminal 分頁以 SquareTerminal 圖示取代狀態點 | `TabBar` |
 | `components/Terminal.tsx` | xterm.js 渲染：連 WS（用 `wsUrl()` 帶 `?token=`）雙向 I/O + ResizeObserver 回報 PTY 尺寸 + onclose 重連狀態機（4001 ended/其他 backoff，gate on backendStatus 用 getState 不放 effect 依賴）；onmessage→recordActivity、teardown→clearActivity（活動偵測旁路，§7 僅 3 處）+ flow control 計帳（per-connection `FlowController`：write 前 record/write callback ack，越 HIGH 送 pause、回落 LOW 送 resume，控制訊息綁該連線 socket 不引用外層 ws）；回前景/切 tab 強制重繪（visibilitychange/focus/isActive → fit+refresh，rAF coalesce、dims 變動才回報 resize）+ WebGL renderer（active-only 掛載、context loss/載入失敗全域退 DOM 並 console.warn、`ENABLE_WEBGL` kill switch、fonts.ready 清 atlas）+ smoothScrollDuration 125/scrollback 5000 + IME 真懸置（container capture 吞組字中 Meta keydown 防 xterm 提前 finalize；`ImeReplayGuard` 重放保險網＋`ImeDraftTracker` 幽靈草稿 ghost DOM 掛 .xterm-helpers；切回後 Esc/點擊＝確認文字屬已知平台差異；`Terminal.css` 蓋 composition-view 為主題色＋底線）+ 拖檔貼路徑（整窗 `onDragDropEvent`、isActive 閘控、drop gate：!disposed/!modalOpen/ready/paths>0/格式化非空 → `term.focus()`+`term.paste(formatPathsForPaste)`，走既有 onData→ws guard；`isActiveRef` 改 render body 同步賦值消 gap） | `Terminal` |
@@ -91,6 +105,14 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `test_config_routes.py` | config 寫入 endpoints（鎖/驗證/防呆/持久化） |
 | `test_pty_bridge.py` | PTY round-trip、env override、並發 |
 | `test_sessions.py` | session 建立 + WS echo + resize + 模式 A + flow control（`_apply_flow_control` 單測 + pause 真閘住 PTY→WS/roundtrip/text 不入 PTY/壞 frame 不斷線/paused EOF→4001） |
+| `test_usage_pricing.py` | 定價正規化（別名/後綴/synthetic/尺寸帶）＋兩源計價公式 |
+| `test_usage_parser.py` | 兩格式解析（容錯/cache precedence/差分 clamp/壞 ts/中文 cwd/rate_limits 末筆） |
+| `test_usage_scanner.py` | realpath 去重（symlink 帳號）＋codex canonical 三層 tier＋fallback |
+| `test_usage_blocks.py` | 5hr block（floor/雙條件/gap/active/burn/projection gate/P90 ceil＋零值排除） |
+| `test_usage_cache.py` | L1 命中/L2 roundtrip/損壞重建/pricing 重算/generation 防舊蓋新/並發序列化/ghost |
+| `test_usage_aggregator.py` | dedup 替換規則/KPI 視窗/分源命中率/horizon/synthetic 濾除/壞訂閱防衛 |
+| `test_usage_routes.py` | dashboard route（冷掃 202→ok/days 收斂/last-good/穩態 ok/error 語義/訂閱 PUT 驗證） |
+| `test_usage_perf.py` | 效能煙囪（slow marker）：200k 條冷掃/增量/單檔變動/build_dashboard 計時 |
 
 ### build / 環境
 | 檔案 | 用途 |
@@ -117,6 +139,11 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `sidecar/pyproject.toml`（新增套件） | `build_binary.sh`（PyInstaller hidden imports） |
 | `src/components/Sidebar.tsx`（分組邏輯變更） | `src/lib/sidebarGroups.ts`、`src/lib/sidebarGroups.test.ts` |
 | `store/useAppStore.ts`（Tab 模型變更） | `src/App.tsx`（共用 isLiveClaudeTab predicate）、`src/components/TabBar.tsx`、`src/components/Terminal.tsx` |
+| `sidecar/.../usage/pricing.py`（定價表/正規化變更） | **儀表板所有成本數字**；改表必升 `PRICING_VERSION`（L2 自動重算）；`test_usage_pricing.py` |
+| `sidecar/.../usage/parser.py`（UsageEntry 欄位變更） | `usage/cache.py`（L2 序列化 roundtrip——欄位變更需升 `SCHEMA_VERSION`）、`usage/aggregator.py`、`usage/blocks.py` |
+| `sidecar/.../routes/usage.py`（payload shape 變更） | `src/lib/sidecar.ts`（`UsageDashboard` 型別）、`src/components/Dashboard.tsx`、`test_usage_routes.py` |
+| `app_config.subscriptions`（結構變更） | `routes/config.py` PUT 驗證、`src/lib/subscriptionsForm.ts`、`Settings.tsx`、KPI Net ROI |
+| `src/locales/*/dashboard.json`（key 增刪） | 另一語言 catalog 同步（`i18nCatalog.test.ts` parity 會擋）、`Dashboard.tsx`/`Settings.tsx`/`Sidebar.tsx`/`TabBar.tsx` 的 t() 引用 |
 
 ---
 
@@ -129,6 +156,8 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `FLEDGE_TEST_COMMAND` | 測試模式替代 `claude` 的命令（如 `cat`） | 無（正常跑 claude） | ❌（僅測試） |
 | `FLEDGE_TOKEN` | sidecar 認證 token（HTTP `X-Fledge-Token` / WS `?token=`） | 無 | 由 Tauri 殼 per-launch 生成注入（prod 必有；不灌進 claude 子進程） |
 | `FLEDGE_TEST_UNAUTH` | 設 `1` 關閉認證（測試/手動執行 opt-out；conftest autouse 預設設此） | 無 | ❌（僅測試/手動） |
+| `FLEDGE_CODEX_HOME` | 覆蓋 codex 資料根（觀測掃描；測試用） | `~/.codex` | ❌ |
+| `FLEDGE_USAGE_CACHE` | 覆蓋觀測 L2 快取路徑（測試用） | `~/.fledge/cache/usage-v1.json` | ❌ |
 
 ---
 
