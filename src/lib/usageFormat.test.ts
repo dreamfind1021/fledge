@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUSD, fmtPct, fmtTokens, fmtClock } from "./usageFormat";
+import { fmtUSD, fmtPct, fmtTokens, fmtClock, fmtDayClock } from "./usageFormat";
 
 describe("usageFormat", () => {
   it("fmtUSD：常規/小額/零/負數", () => {
@@ -17,5 +17,11 @@ describe("usageFormat", () => {
   it("fmtClock：epoch → HH:mm（固定時區斷言用 UTC 注入）", () => {
     // 1780304700 = 2026-06-01T09:05:00Z（2026-01-01T00:00:00Z=1767225600 + 151d + 9h05m）
     expect(fmtClock(1780304700, "UTC")).toBe("09:05");
+  });
+  it("fmtDayClock：今天/昨天/更早", () => {
+    const now = 1780304700; // 2026-06-01T09:05:00Z
+    expect(fmtDayClock(now - 3600, "昨天", now, "UTC")).toBe("08:05");
+    expect(fmtDayClock(now - 86400, "昨天", now, "UTC")).toBe("昨天 09:05");
+    expect(fmtDayClock(now - 3 * 86400, "昨天", now, "UTC")).toBe("5/29 09:05");
   });
 });

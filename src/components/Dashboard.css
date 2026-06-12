@@ -366,6 +366,9 @@
 .dash-table th:first-child {
   text-align: left;
 }
+.dash-table .dash-th-num {
+  text-align: right;
+}
 .dash-table tr:last-child td {
   border-bottom: none;
 }
@@ -384,4 +387,17 @@
   font-size: 10.5px;
   display: block;
   font-family: var(--font-mono);
+}
+
+/* Heatmap 時軸（00 / 06 / 12 / 18）*/
+.dash-hm-axis {
+  display: grid;
+  grid-template-columns: 30px 1fr 1fr 1fr 1fr;
+  color: var(--faint);
+  font-size: 10px;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+}
+.dash-hm-axis span:not(:first-child) {
+  text-align: left;
 }

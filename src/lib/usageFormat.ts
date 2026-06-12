@@ -28,3 +28,18 @@ export function fmtClock(epochSec: number, timeZone?: string): string {
     ...(timeZone ? { timeZone } : {}),
   });
 }
+
+/** 非今日時間戳的人性化顯示：今天→HH:mm、昨天→`{昨天標籤} HH:mm`、更早→`M/D HH:mm`。
+ *  yesterdayLabel 由呼叫端帶 t() 結果（lib 不依賴 i18n）；nowSec/timeZone 供測試注入。 */
+export function fmtDayClock(epochSec: number, yesterdayLabel: string,
+                            nowSec?: number, timeZone?: string): string {
+  const tzOpt = timeZone ? { timeZone } : {};
+  const dateKey = (sec: number) => new Date(sec * 1000).toLocaleDateString("en-CA", tzOpt); // YYYY-MM-DD
+  const now = nowSec ?? Date.now() / 1000;
+  const clock = fmtClock(epochSec, timeZone);
+  if (dateKey(epochSec) === dateKey(now)) return clock;
+  if (dateKey(epochSec) === dateKey(now - 86400)) return `${yesterdayLabel} ${clock}`;
+  const md = new Date(epochSec * 1000).toLocaleDateString("en-US",
+    { month: "numeric", day: "numeric", ...tzOpt });
+  return `${md} ${clock}`;
+}

@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { fetchUsageDashboard, UsageDashboard } from "../lib/sidecar";
 import { shouldPoll, POLL_INTERVAL_MS } from "../lib/usagePoll";
-import { fmtUSD, fmtPct, fmtTokens, fmtClock } from "../lib/usageFormat";
+import { fmtUSD, fmtPct, fmtTokens, fmtClock, fmtDayClock } from "../lib/usageFormat";
 import { donutParts, blockEta } from "../lib/dashboardLogic";
 import "./Dashboard.css";
 
@@ -109,7 +109,9 @@ function WindowsPanel({ blocks, t }: { blocks: UsageDashboard["blocks"]; t: T })
           <div className="dash-win-meta">
             <span><b>{fmtTokens(a.total_tokens)}</b>{p90 ? ` / ${fmtTokens(p90)}` : ""}</span>
             {a.burn_rate_tpm != null && <span>{t("windows.burnRate", { rate: fmtTokens(Math.round(a.burn_rate_tpm)) })}</span>}
-            {eta != null && <span className="dash-eta">{t("windows.projectedLimit", { time: fmtClock(eta) })}</span>}
+            {/* projection 的 5min gate 同時約束 eta：block 開頭幾分鐘 burn rate 膨脹，
+                兩條件並列可避免危言聳聽外推與「資料不足」同時出現 */}
+            {a.projection != null && eta != null && <span className="dash-eta">{t("windows.projectedLimit", { time: fmtClock(eta) })}</span>}
             {a.projection == null && <span>{t("windows.insufficient")}</span>}
           </div>
         </>) : <div className="dash-win-meta">{t("state.empty")}</div>}
@@ -118,9 +120,9 @@ function WindowsPanel({ blocks, t }: { blocks: UsageDashboard["blocks"]; t: T })
         <div className="dash-win-title">{t("windows.codex")}{cx.plan_type ? <span className="dash-badge">{cx.plan_type}</span> : null}</div>
         {cx.primary ? (<>
           <Gauge label={t("windows.fiveHour")} pct={cx.primary.used_percent}
-                 resets={t("windows.resets", { time: fmtClock(cx.primary.resets_at) })} />
+                 resets={t("windows.resets", { time: fmtDayClock(cx.primary.resets_at, t("time.yesterday")) })} />
           {cx.secondary && <Gauge label={t("windows.weekly")} pct={cx.secondary.used_percent}
-                 resets={t("windows.resets", { time: fmtClock(cx.secondary.resets_at) })} />}
+                 resets={t("windows.resets", { time: fmtDayClock(cx.secondary.resets_at, t("time.yesterday")) })} />}
         </>) : <div className="dash-win-meta">{t("state.empty")}</div>}
       </div>
     </div>
@@ -147,6 +149,8 @@ function DailyChart({ daily, t }: { daily: UsageDashboard["daily"]; t: T }) {
     totals.set(m, (totals.get(m) ?? 0) + c)));
   const order = [...totals.entries()].sort((x, y) => y[1] - x[1]).map(([m]) => m);
   const colorOf = (m: string) => MODEL_COLORS[Math.min(order.indexOf(m), 4)] ?? "var(--faint)";
+  // 全域排序：以 30 天總量 rank 決定每日色段順序，同色段不跨日跳位
+  const rank = (m: string) => { const i = order.indexOf(m); return i < 0 ? 999 : i; };
   return (
     <div className="dash-panel">
       <div className="dash-panel-title">{t("daily.title", { days: 30 })}</div>
@@ -154,7 +158,7 @@ function DailyChart({ daily, t }: { daily: UsageDashboard["daily"]; t: T }) {
         {daily.map((d) => (
           <div key={d.date} className="dash-daily-col" title={`${d.date} ${fmtUSD(d.total)}`}
                style={{ height: `${Math.max(2, (d.total / max) * 100)}%` }}>
-            {Object.entries(d.by_model).sort((x, y) => y[1] - x[1]).map(([m, c]) => (
+            {Object.entries(d.by_model).sort((x, y) => rank(x[0]) - rank(y[0])).map(([m, c]) => (
               <i key={m} style={{ flex: c, background: colorOf(m) }} />
             ))}
           </div>
@@ -196,20 +200,22 @@ function ModelDonut({ models, t }: { models: UsageDashboard["models"]; t: T }) {
 
 function HourlyHeatmap({ hourly, t }: { hourly: number[][]; t: T }) {
   const max = Math.max(0.0001, ...hourly.flat());
-  const dows = ["一", "二", "三", "四", "五", "六", "日"]; // 後端 weekday() 0=Monday
+  // dow 標籤從 catalog 讀取（後端 weekday() 0=Monday）
+  const dows = t("hourly.dow").split(",");
   return (
     <div className="dash-panel">
       <div className="dash-panel-title">{t("hourly.title")}</div>
       <div className="dash-heatmap">
         {hourly.map((row, d) => (
-          <>{/* React.Fragment 包列——key 在 Fragment 上，避免 TS 對直接回陣列的 key 警告 */}
-            <span key={`l${d}`} className="dash-heatmap-dow">{dows[d]}</span>
+          <Fragment key={d}>
+            <span className="dash-heatmap-dow">{dows[d]}</span>
             {row.map((v, h) => (
               <b key={`${d}-${h}`} style={{ opacity: v === 0 ? 0.06 : 0.25 + 0.75 * (v / max) }} />
             ))}
-          </>
+          </Fragment>
         ))}
       </div>
+      <div className="dash-hm-axis"><span /><span>00</span><span>06</span><span>12</span><span>18</span></div>
     </div>
   );
 }
@@ -219,9 +225,9 @@ function ProjectsTable({ projects, t }: { projects: UsageDashboard["projects"]; 
     <div className="dash-panel">
       <div className="dash-panel-title">{t("projects.title")}</div>
       <table className="dash-table">
-        <thead><tr><th>{t("projects.project")}</th><th>{t("projects.claude")}</th>
-          <th>{t("projects.codex")}</th><th>{t("projects.total")}</th>
-          <th>{t("projects.lastActive")}</th></tr></thead>
+        <thead><tr><th>{t("projects.project")}</th><th className="dash-th-num">{t("projects.claude")}</th>
+          <th className="dash-th-num">{t("projects.codex")}</th><th className="dash-th-num">{t("projects.total")}</th>
+          <th className="dash-th-num">{t("projects.lastActive")}</th></tr></thead>
         <tbody>
           {projects.slice(0, 30).map((p) => (
             <tr key={p.path}>
@@ -232,7 +238,7 @@ function ProjectsTable({ projects, t }: { projects: UsageDashboard["projects"]; 
               <td>{fmtUSD(p.claude_cost)}</td>
               <td>{p.codex_cost > 0 ? fmtUSD(p.codex_cost) : "—"}</td>
               <td className="dash-td-total">{fmtUSD(p.total)}</td>
-              <td>{p.last_active ? fmtClock(p.last_active) : "—"}</td>
+              <td>{p.last_active ? fmtDayClock(p.last_active, t("time.yesterday")) : "—"}</td>
             </tr>
           ))}
         </tbody>

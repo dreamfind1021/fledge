@@ -1,6 +1,7 @@
 {
   "tabTitle": "觀測",
   "entry": "觀測儀表板",
+  "time": { "yesterday": "昨天" },
   "kpi": { "month": "本月等價 API 價值", "week": "本週", "today": "今日",
            "cacheHit": "Cache 命中率", "netRoi": "Net ROI", "subs": "訂閱月費" },
   "windows": { "title": "用量窗口", "claude": "Claude 5 小時窗口（推算）",
@@ -9,7 +10,7 @@
                "resets": "{{time}} 重置", "weekly": "週窗口", "fiveHour": "5 小時" },
   "daily": { "title": "每日成本（{{days}} 天）" },
   "models": { "title": "模型分布" },
-  "hourly": { "title": "時段活動" },
+  "hourly": { "title": "時段活動", "dow": "一,二,三,四,五,六,日" },
   "projects": { "title": "專案用量", "project": "專案", "claude": "Claude",
                 "codex": "Codex", "total": "合計", "lastActive": "最後活動" },
   "state": { "loading": "掃描用量紀錄中…", "stale": "資料更新中（顯示上次結果）",
