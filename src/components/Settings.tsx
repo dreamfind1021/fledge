@@ -266,17 +266,17 @@ export function Settings({ onClose }: SettingsProps) {
                 setSubsError(null);
                 const result = validateSubscriptions(subsRows);
                 if (!result.ok) {
-                  setSubsError(result.error === "name" ? t("settings.name") + " 不可空白" : t("settings.monthlyCost") + " 需為非負數字");
+                  setSubsError(result.error === "name" ? t("settings.errName") : t("settings.errCost"));
                   return;
                 }
                 try {
                   await saveSubscriptions(result.value);
                 } catch (e) {
-                  setSubsError(`儲存失敗：${e instanceof Error ? e.message : String(e)}`);
+                  setSubsError(t("settings.errSave", { msg: e instanceof Error ? e.message : String(e) }));
                 }
               }}
             >
-              儲存
+              {t("settings.save")}
             </button>
           </div>
 
