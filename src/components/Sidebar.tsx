@@ -25,20 +25,27 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
 
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; path: string } | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // 「已接觸」溢出（surfacedMore）展開狀態，per 帳號群組（與自動發現 expanded 分開）
+  const [surfacedExpanded, setSurfacedExpanded] = useState<Record<string, boolean>>({});
   // 底部「開啟其他資料夾」：選完新資料夾後彈帳號選單選類型
   const [accountPicker, setAccountPicker] = useState<{ x: number; y: number; dir: string } | null>(null);
   const openFolderBtn = useRef<HTMLButtonElement>(null);
 
   const accountKeys = config ? Object.keys(config.accounts) : [];
-  const openTabKeys = new Set(tabs.map((t) => tabKey(t.projectPath, t.account)));
+  const openTabKeys = new Set(
+    tabs.filter((t) => t.kind === "claude").map((t) => tabKey(t.projectPath, t.account)),
+  );
   const activeTab = tabs.find((t) => t.id === activeTabId);
-  const activeKey = activeTab ? tabKey(activeTab.projectPath, activeTab.account) : null;
+  const activeKey =
+    activeTab && activeTab.kind === "claude" ? tabKey(activeTab.projectPath, activeTab.account) : null;
   const groups = groupProjectsByAccount(projects, openTabKeys, config?.accounts ?? {});
 
   const openMenu = (e: React.MouseEvent, p: Project) => {
     e.preventDefault();
     const others = accountKeys.filter((a) => a !== p.account);
     const items: MenuItem[] = [];
+    // 最上方：用純終端機開啟（進專案路徑、不進 claude；可開多個）
+    items.push({ label: "使用終端機開啟", onClick: () => openTab(p, p.account, "terminal") });
     // 額度臨時切換：這次用別帳號開，不搬組
     for (const a of others) items.push({ label: `改用「${a}」開啟（這次）`, onClick: () => openTab(p, a) });
     // 重新分類：持久搬到別的類型群組
@@ -188,6 +195,15 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
             </div>
             {g.open.map((p) => renderRow(p, true))}
             {g.surfaced.map((p) => renderRow(p, false))}
+            {g.surfacedMore.length > 0 && (
+              <button
+                className="sidebar-band"
+                onClick={() => setSurfacedExpanded((s) => ({ ...s, [g.key]: !s[g.key] }))}
+              >
+                {surfacedExpanded[g.key] ? "▾ 收合" : `▸ 還有 ${g.surfacedMore.length} 個最近接觸`}
+              </button>
+            )}
+            {surfacedExpanded[g.key] && g.surfacedMore.map((p) => renderRow(p, false))}
             {g.discovered.length > 0 && (
               <button
                 className="sidebar-band"
