@@ -7,7 +7,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from fledge_sidecar import auth
-from fledge_sidecar.routes import config, health, projects, sessions
+from fledge_sidecar.routes import config, health, projects, sessions, usage
 
 logger = logging.getLogger(__name__)
 
@@ -56,4 +56,5 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(sessions.router)
     app.include_router(config.router)
+    app.include_router(usage.router)
     return app

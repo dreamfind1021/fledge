@@ -20,6 +20,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "manual_projects": [],
     "project_overrides": {},
     "ui": {"theme": "dark"},
+    "subscriptions": [],
 }
 
 
@@ -51,6 +52,7 @@ class AppConfig:
     manual_projects: list[dict[str, str]] = field(default_factory=list)
     project_overrides: dict[str, dict[str, str]] = field(default_factory=dict)
     ui: dict[str, Any] = field(default_factory=dict)
+    subscriptions: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path | None = None) -> AppConfig:
@@ -92,6 +94,7 @@ class AppConfig:
             manual_projects=migrated_manual,
             project_overrides=migrated_overrides,
             ui=data.get("ui", DEFAULT_CONFIG["ui"]),
+            subscriptions=data.get("subscriptions", []),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -102,6 +105,7 @@ class AppConfig:
             "manual_projects": self.manual_projects,
             "project_overrides": self.project_overrides,
             "ui": self.ui,
+            "subscriptions": self.subscriptions,
         }
 
     def save(self) -> None:

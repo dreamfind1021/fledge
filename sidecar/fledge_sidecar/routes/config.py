@@ -259,3 +259,26 @@ def delete_account(key: str, body: AccountDeleteBody):
 def check_dir(body: CheckDirBody):
     """查 config_dir 狀態（給前端 config_dir 警告用；不改任何狀態）。"""
     return {"status": probe_dir(body.path)}
+
+
+class SubscriptionsBody(BaseModel):
+    subscriptions: list[dict]
+
+
+@router.put("/api/config/subscriptions")
+def put_subscriptions(body: SubscriptionsBody):
+    cleaned = []
+    for s in body.subscriptions:
+        name = str(s.get("name") or "").strip()
+        try:
+            cost = float(s.get("monthly_cost"))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="monthly_cost 須為數字")
+        if not name or cost < 0:
+            raise HTTPException(status_code=400, detail="name 不可為空、monthly_cost 不可為負")
+        cleaned.append({"name": name, "monthly_cost": cost})
+    with _config_lock:
+        config = AppConfig.load()
+        config.subscriptions = cleaned
+        config.save()
+        return config.to_dict()
