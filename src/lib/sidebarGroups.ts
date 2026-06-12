@@ -7,7 +7,7 @@ export function tabKey(path: string, account: string): string {
   return `${path}${SEP}${account}`;
 }
 
-// 每個帳號群組「已接觸」band 直接顯示的最近專案上限；溢出收進「顯示全部」展開器（spec §2.4）。
+// 每個帳號群組「已接觸」band 直接顯示的最近專案上限；超出者併入「自動發現」收合區（不單獨列）。
 export const RECENT_BAND_LIMIT = 3;
 
 export interface AccountGroup {
@@ -16,9 +16,8 @@ export interface AccountGroup {
   configDir: string; // accounts[key].config_dir；dangling 帳號為 ""
   total: number; // 本群組專案總數（三 band 相加）
   open: Project[]; // band 1：openInType 為真
-  surfaced: Project[]; // 直接顯示：前 N 個 recent + 所有 manual（manual 不佔名額）
-  surfacedMore: Project[]; // 溢出：第 N+1 個起的 recent，藏在「顯示全部」展開器
-  discovered: Project[]; // band 3：非 open，且 source==="root" 且 recent==null
+  surfaced: Project[]; // band 2：最近 N 個 recent + 所有 manual（manual 不佔名額）
+  discovered: Project[]; // band 3：自動發現收合（未接觸 root + 超出上限的 recent；recent 在前）
 }
 
 type AccountMeta = Record<string, { config_dir: string; label: string }>;
@@ -70,14 +69,16 @@ export function groupProjectsByAccount(
     }
     open.sort(byName);
     surfaced.sort(byRecentDescThenName);
-    discovered.sort(byName);
-    // 上限切分：manual（釘選）永遠顯示、不佔名額；非 manual 的 recent 取前 N、其餘溢出（spec §2.4）
+    // 上限切分：manual（釘選）永遠顯示、不佔名額；非 manual 的 recent 取前 N，其餘併入「自動發現」
     const manualItems = surfaced.filter((p) => p.source === "manual");
     const recentItems = surfaced.filter((p) => p.source !== "manual"); // recent != null
     const surfacedTop = [...recentItems.slice(0, RECENT_BAND_LIMIT), ...manualItems].sort(
       byRecentDescThenName,
     );
-    const surfacedMore = recentItems.slice(RECENT_BAND_LIMIT);
+    // 自動發現＝未接觸 root + 超出上限的 recent；recent 降冪在前、未接觸依 name 殿後
+    const discoveredAll = [...discovered, ...recentItems.slice(RECENT_BAND_LIMIT)].sort(
+      byRecentDescThenName,
+    );
     const meta = accounts[key];
     groups.push({
       key,
@@ -86,8 +87,7 @@ export function groupProjectsByAccount(
       total: items.length,
       open,
       surfaced: surfacedTop,
-      surfacedMore,
-      discovered,
+      discovered: discoveredAll,
     });
   }
   return groups;

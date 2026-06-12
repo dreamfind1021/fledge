@@ -98,14 +98,19 @@
   padding: 10px 0 14px;
   border-top: 1px solid var(--divider);
 }
+/* 固定 32×32 方框 + 內容置中：確保窄軌每顆 icon 與品牌羽毛同軸對齊（不受 icon 尺寸差影響） */
 .sidebar-rail-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: var(--faint);
   cursor: pointer;
-  display: flex;
   border: none;
   background: transparent;
   border-radius: 8px;
-  padding: 6px;
+  padding: 0;
 }
 .sidebar-rail-btn:hover {
   background: var(--hover);
@@ -118,6 +123,14 @@
 .sidebar-rail-btn:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
+}
+/* 開啟其他資料夾：窄軌也用 primary 橘，與展開時的主要按鈕同色（置於 base :hover 後以贏得 specificity） */
+.sidebar-rail-btn--accent {
+  color: var(--primary);
+}
+.sidebar-rail-btn--accent:hover {
+  color: var(--primary);
+  background: var(--hover);
 }
 
 /* === 搜尋 pill === */

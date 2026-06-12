@@ -94,7 +94,7 @@ describe("groupProjectsByAccount", () => {
     expect(g.surfaced.map((p) => p.name)).toEqual(["t-a", "t-b"]);
   });
 
-  it("recent 超過 RECENT_BAND_LIMIT：前 3 留 surfaced、其餘進 surfacedMore（不污染 discovered）", () => {
+  it("recent 超過 RECENT_BAND_LIMIT：前 3 留 surfaced、其餘併入 discovered（recent 在前）", () => {
     const projects = [
       mk({ name: "r1", account: "work", recent: 50 }),
       mk({ name: "r2", account: "work", recent: 40 }),
@@ -106,11 +106,11 @@ describe("groupProjectsByAccount", () => {
     const [g] = groupProjectsByAccount(projects, new Set(), ACCOUNTS);
     expect(g.surfaced.length).toBe(RECENT_BAND_LIMIT); // 直顯上限
     expect(g.surfaced.map((p) => p.name)).toEqual(["r1", "r2", "r3"]);
-    expect(g.surfacedMore.map((p) => p.name)).toEqual(["r4", "r5"]);
-    expect(g.discovered.map((p) => p.name)).toEqual(["d1"]);
+    // 溢出 r4/r5 併入自動發現，recent 降冪在前、未接觸 d1 殿後
+    expect(g.discovered.map((p) => p.name)).toEqual(["r4", "r5", "d1"]);
   });
 
-  it("manual 不佔 RECENT_BAND_LIMIT 名額、永遠在 surfaced", () => {
+  it("manual 不佔 RECENT_BAND_LIMIT 名額、永遠在 surfaced；溢出 recent 落 discovered", () => {
     const projects = [
       mk({ name: "r1", account: "work", recent: 50 }),
       mk({ name: "r2", account: "work", recent: 40 }),
@@ -120,6 +120,6 @@ describe("groupProjectsByAccount", () => {
     ];
     const [g] = groupProjectsByAccount(projects, new Set(), ACCOUNTS);
     expect(g.surfaced.map((p) => p.name)).toEqual(["r1", "r2", "r3", "mn"]);
-    expect(g.surfacedMore.map((p) => p.name)).toEqual(["r4"]);
+    expect(g.discovered.map((p) => p.name)).toEqual(["r4"]);
   });
 });

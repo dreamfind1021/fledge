@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useAppStore } from "../store/useAppStore";
 import type { Project } from "../lib/sidecar";
@@ -25,8 +25,6 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
 
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; path: string } | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  // 「已接觸」溢出（surfacedMore）展開狀態，per 帳號群組（與自動發現 expanded 分開）
-  const [surfacedExpanded, setSurfacedExpanded] = useState<Record<string, boolean>>({});
   // 側欄收合：localStorage 開機讀回、toggle 時寫入（純前端 UI 狀態，spec §3.1）
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
@@ -179,7 +177,7 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
             aria-label="展開側欄"
             title="展開側欄"
           >
-            <PanelLeftOpen size={16} strokeWidth={1.75} />
+            <ChevronsRight size={18} strokeWidth={2} />
           </button>
           <button
             className="sidebar-rail-btn"
@@ -187,7 +185,7 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
             aria-label="設定"
             title="設定"
           >
-            <Settings size={16} strokeWidth={1.75} />
+            <Settings size={18} strokeWidth={1.75} />
           </button>
         </div>
         {/* 中段：未來儀表板 icon 放這，現在留空 spacer（不寫任何程式碼，spec §3.3） */}
@@ -195,13 +193,13 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
         <div className="sidebar-rail-foot">
           <button
             ref={openFolderBtn}
-            className="sidebar-rail-btn"
+            className="sidebar-rail-btn sidebar-rail-btn--accent"
             onClick={onOpenFolder}
             disabled={accountKeys.length === 0}
             aria-label="開啟其他資料夾"
             title="開啟其他資料夾"
           >
-            <FolderPlus size={16} strokeWidth={2} />
+            <FolderPlus size={18} strokeWidth={2} />
           </button>
         </div>
         {accountPickerMenu}
@@ -229,7 +227,7 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           aria-label="收合側欄"
           title="收合側欄"
         >
-          <PanelLeftClose size={16} strokeWidth={1.75} />
+          <ChevronsLeft size={18} strokeWidth={2} />
         </button>
       </div>
 
@@ -276,15 +274,6 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
             </div>
             {g.open.map((p) => renderRow(p, true))}
             {g.surfaced.map((p) => renderRow(p, false))}
-            {g.surfacedMore.length > 0 && (
-              <button
-                className="sidebar-band"
-                onClick={() => setSurfacedExpanded((s) => ({ ...s, [g.key]: !s[g.key] }))}
-              >
-                {surfacedExpanded[g.key] ? "▾ 收合" : `▸ 還有 ${g.surfacedMore.length} 個最近接觸`}
-              </button>
-            )}
-            {surfacedExpanded[g.key] && g.surfacedMore.map((p) => renderRow(p, false))}
             {g.discovered.length > 0 && (
               <button
                 className="sidebar-band"
