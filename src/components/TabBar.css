@@ -185,3 +185,11 @@
   .tab-dot.is-connecting { opacity: 0.8; }
   .tab-dot.is-offline { opacity: 0.85; }
 }
+
+/* terminal 分頁圖示（取代狀態點，與 claude 分頁一眼可分） */
+.tabbar-term-ico {
+  display: flex;
+  align-items: center;
+  color: var(--faint);
+  flex-shrink: 0;
+}

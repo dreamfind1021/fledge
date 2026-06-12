@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { X, SquareTerminal } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { accountColor } from "../lib/accountColor";
 import { tabDotState } from "../lib/tabDotState";
@@ -20,7 +20,13 @@ export function TabBar() {
             onClick={() => setActive(t.id)}
             className={`tabbar-tab${isActive ? " is-active" : ""}`}
           >
-            <span className={`tab-dot is-${tabDotState(t)}`} />
+            {t.kind === "terminal" ? (
+              <span className="tabbar-term-ico" aria-label="終端機">
+                <SquareTerminal size={13} strokeWidth={1.75} />
+              </span>
+            ) : (
+              <span className={`tab-dot is-${tabDotState(t)}`} />
+            )}
             <span className="tabbar-tab-title">{t.title}</span>
             <span
               className="tabbar-chip"
