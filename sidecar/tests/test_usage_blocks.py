@@ -28,6 +28,7 @@ def test_floor_to_hour_and_dual_break_conditions():
 
 
 def test_is_active_requires_recent_entry_and_within_window():
+    # recency 子句為 ccusage 防衛性對齊——本演算法產出的 block 中其實不可能獨立觸發（last+5h ≥ end_ts）
     entries = [_e(BASE + 60)]
     # 距末條 <5h 且 now < end → active
     assert build_blocks(entries, now=BASE + 2 * H).blocks[0].is_active is True
@@ -56,4 +57,11 @@ def test_p90_from_closed_blocks():
     for i in range(6):  # 6 個 closed blocks（彼此相隔 >5h），tokens 100..600
         entries.append(_e(BASE + i * 6 * H, (i + 1) * 100))
     r = build_blocks(entries, now=BASE + 6 * 6 * H + 10 * H)  # 全部 closed
-    assert r.limit_p90 is not None and 500 <= r.limit_p90 <= 600
+    assert r.limit_p90 == 600.0   # ceil 法確定值（鎖定文件化語義，插值/floor 變體過不了）
+
+
+def test_p90_excludes_zero_token_blocks():
+    entries = [_e(BASE + i * 6 * H, 0) for i in range(5)]          # 5 個零 block（孤立 synthetic）
+    entries.append(_e(BASE + 5 * 6 * H, 100))                      # 1 個有量 block
+    r = build_blocks(entries, now=BASE + 5 * 6 * H + 10 * H)
+    assert r.limit_p90 is None    # 有效樣本僅 1 個 <5 → 不出 P90（零值不得佔名額）

@@ -49,7 +49,9 @@ def build_blocks(entries: list[UsageEntry], now: float) -> BlocksResult:
     for e in items:
         if cur is not None and (e.ts >= cur.end_ts or e.ts - cur.last_entry_ts >= SESSION_SECONDS):
             if e.ts - cur.last_entry_ts >= SESSION_SECONDS:  # 插 gap block（僅視覺化）
-                result.blocks.append(Block(start_ts=cur.last_entry_ts, end_ts=e.ts, is_gap=True))
+                # gap block 起點＝前窗口理論到期點（ccusage 對齊），不與前 block 重疊
+                result.blocks.append(Block(start_ts=cur.last_entry_ts + SESSION_SECONDS,
+                                           end_ts=e.ts, is_gap=True))
             cur = None
         if cur is None:
             start = _floor_hour(e.ts)
@@ -66,7 +68,8 @@ def build_blocks(entries: list[UsageEntry], now: float) -> BlocksResult:
             continue
         # is_active 雙條件 AND（design §8.4）
         b.is_active = (now - b.last_entry_ts < SESSION_SECONDS) and (now < b.end_ts)
-        if not b.is_active:
+        if not b.is_active and b.total_tokens > 0:
+            # 0-token block（孤立 synthetic 等）不進 P90 樣本——會把限額估計拉成垃圾值
             closed_tokens.append(b.total_tokens)
         elapsed_min = max(1.0, (b.last_entry_ts - b.first_entry_ts) / 60.0)  # 防除零（design §8.5）
         b.burn_rate_tpm = b.total_tokens / elapsed_min
