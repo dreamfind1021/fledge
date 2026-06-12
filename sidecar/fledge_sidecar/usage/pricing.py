@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-PRICING_VERSION = "2026-06-12.1"
+PRICING_VERSION = "2026-06-12.2"
 
 _MTOK = 1_000_000
 
@@ -34,8 +34,18 @@ CODEX_PRICING: dict[str, tuple[float, float, float]] = {
     "gpt-5.2": (1.75, 0.175, 14.0),
     "gpt-5.1": (1.25, 0.125, 10.0),
     "gpt-5": (1.25, 0.125, 10.0),
+    # 尺寸變體（LiteLLM 2026-06-12 釘價）——與全尺寸版本不同價格帶
+    "gpt-5.1-codex-mini": (0.25, 0.025, 2.0),
+    "gpt-5-mini": (0.25, 0.025, 2.0),
+    "gpt-5-nano": (0.05, 0.005, 0.4),
+    "gpt-5.4-mini": (0.75, 0.075, 4.5),
+    "gpt-5.4-nano": (0.2, 0.02, 1.25),
 }
 _CODEX_DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+# 尺寸後綴是不同價格帶而非同系列變體——prefix walk 不得跨越，
+# 否則未知 mini/nano 會被默默用全尺寸價計（nano 差 25×），
+# 違反 design §7 寧可標示不完整不默默算錯
+_CODEX_SIZE_SEGMENTS = {"mini", "nano"}
 
 
 def normalize_claude_model(raw: str) -> str | None:
@@ -48,7 +58,10 @@ def normalize_claude_model(raw: str) -> str | None:
 
 
 def normalize_codex_model(raw: str) -> str:
-    """去 ISO 日期後綴；再逐段去尾比對表 key（gpt-5.1-codex-max → gpt-5.1）。"""
+    """去 ISO 日期後綴；再逐段去尾比對表 key（gpt-5.1-codex-max → gpt-5.1）。
+
+    去尾段若是尺寸後綴（mini/nano）則停止——未知尺寸款走 missing 而非錯價。
+    """
     name = _CODEX_DATE_SUFFIX.sub("", raw)
     probe = name
     while probe:
@@ -56,7 +69,9 @@ def normalize_codex_model(raw: str) -> str:
             return probe
         if "-" not in probe:
             break
-        probe = probe.rsplit("-", 1)[0]
+        probe, dropped = probe.rsplit("-", 1)
+        if dropped in _CODEX_SIZE_SEGMENTS:
+            break  # 不跨尺寸帶：未知 mini/nano 款回 missing 而非走全尺寸價
     return name  # 查無 → 保留原名，計價層回 missing
 
 
@@ -80,6 +95,7 @@ def codex_cost(model: str, input_tokens: int, cached_input: int,
     if price is None:
         return 0.0, True
     p_in, p_cached, p_out = price
-    cost = ((input_tokens - cached_input) * p_in + cached_input * p_cached
+    # max(0, ...) — cached ⊆ input 是觀察到的不變量，防上游壞行造成負成本污染聚合
+    cost = (max(0, input_tokens - cached_input) * p_in + cached_input * p_cached
             + output_tokens * p_out) / _MTOK
     return cost, False

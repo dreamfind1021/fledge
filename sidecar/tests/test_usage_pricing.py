@@ -39,3 +39,11 @@ def test_codex_cost_cached_subset_of_input():
 
 def test_pricing_version_exists():
     assert isinstance(pricing.PRICING_VERSION, str) and pricing.PRICING_VERSION
+
+
+def test_normalize_codex_size_variants_never_get_fullsize_price():
+    # 已知 mini/nano → 自己的價格帶；未知 mini/nano → missing（不得 walk 到全尺寸價）
+    assert pricing.normalize_codex_model("gpt-5.1-codex-mini") == "gpt-5.1-codex-mini"
+    assert pricing.normalize_codex_model("gpt-5-nano") == "gpt-5-nano"
+    name = pricing.normalize_codex_model("gpt-5.5-mini")   # 表中無此款
+    assert pricing.codex_cost(name, 1000, 0, 0) == (0.0, True)
