@@ -1,6 +1,7 @@
 """專案掃描：根目錄 depth=1 掃描 + Claude Code 用過記錄合併。spec §5。"""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -8,8 +9,10 @@ from fledge_sidecar.app_config import AppConfig
 
 
 def encode_cc_project_dir(abs_path: str) -> str:
-    """Claude Code 把專案絕對路徑編碼成 ~/.claude/projects/ 下的目錄名：/ → -。"""
-    return abs_path.replace("/", "-")
+    """Claude Code 把專案絕對路徑編碼成 ~/.claude/projects/ 下的目錄名：
+    所有非英數字元（/、_、.、空白、CJK 等）一律換成 -（與 Claude Code 一致；
+    已對使用者 19 個真實專案 round-trip 驗證，spec §2.2）。此編碼有損、碰撞可接受。"""
+    return re.sub(r"[^a-zA-Z0-9]", "-", abs_path)
 
 
 def scan_root(root: Path, account: str) -> list[dict[str, Any]]:

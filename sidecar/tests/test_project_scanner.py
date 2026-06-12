@@ -28,8 +28,15 @@ def test_scan_root_excludes_hidden(tmp_path: Path):
 
 
 def test_encode_cc_project_dir():
-    # Claude Code 把專案路徑編碼成目錄名：/ 換成 -
+    # Claude Code 把專案路徑編碼成目錄名：所有非英數字元一律 → -（已對 19 個真實專案 round-trip 驗證）
     assert encode_cc_project_dir("/Users/tc/NAS/work/foo") == "-Users-tc-NAS-work-foo"
+    assert encode_cc_project_dir("/a/b_c") == "-a-b-c"          # 底線
+    assert encode_cc_project_dir("/a/foo.bar") == "-a-foo-bar"  # 點
+    assert encode_cc_project_dir("/a/with space") == "-a-with-space"  # 空白
+    assert encode_cc_project_dir("/a/網拍") == "-a---"          # CJK 各 1 dash、不收合
+    assert encode_cc_project_dir("/a/.x/y") == "-a--x-y"        # 連續分隔不收合
+    # 有損碰撞：底線/dash/空白編出同一目錄（接受、不報錯，spec §2.2 Known Limitations）
+    assert encode_cc_project_dir("/a/foo_b") == encode_cc_project_dir("/a/foo-b")
 
 
 def _accounts_cfg(tmp_path: Path) -> AppConfig:
