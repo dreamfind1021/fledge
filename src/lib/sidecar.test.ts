@@ -71,3 +71,21 @@ describe("auth token", () => {
     setAuthToken(null);
   });
 });
+
+describe("createSession kind", () => {
+  it("request body 帶 kind：預設 claude、可指定 terminal", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(JSON.parse(init!.body as string));
+        return { ok: true, json: async () => ({ session_id: "s" }) } as unknown as Response;
+      }),
+    );
+    const m = await import("./sidecar");
+    await m.createSession(1234, "/x", "work");
+    await m.createSession(1234, "/x", "work", "terminal");
+    expect(bodies[0]).toEqual({ path: "/x", account: "work", kind: "claude" });
+    expect(bodies[1]).toEqual({ path: "/x", account: "work", kind: "terminal" });
+  });
+});

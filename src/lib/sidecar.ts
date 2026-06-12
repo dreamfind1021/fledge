@@ -125,11 +125,12 @@ export async function createSession(
   port: number,
   path: string,
   account: string,
+  kind: "claude" | "terminal" = "claude",
 ): Promise<string> {
   const resp = await fetch(`${base(port)}/api/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ path, account }),
+    body: JSON.stringify({ path, account, kind }),
   });
   if (!resp.ok) throw new Error(`createSession failed: ${resp.status}`);
   return (await resp.json()).session_id;
