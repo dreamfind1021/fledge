@@ -119,3 +119,29 @@ def test_scan_all_recent_permission_error_keeps_proj(tmp_path, monkeypatch):
     assert permission_error is True
     proj = next(p for p in projects if p["name"] == "proj")
     assert proj["recent"] is None  # recent 讀失敗但 proj 仍保留
+
+
+def test_scan_all_recent_union_across_accounts(tmp_path, monkeypatch):
+    """recent 取所有帳號 config_dir 的最新 mtime（跨帳號 union，spec §2.3）。"""
+    from fledge_sidecar import project_scanner
+
+    root = tmp_path / "r"
+    (root / "proj").mkdir(parents=True)
+    proj_path = str((root / "proj").resolve())
+    cfg = AppConfig(
+        path=tmp_path / "config.json",
+        roots=[{"path": str(root), "default_account": "work"}],
+        accounts={
+            "work": {"config_dir": "/cd/work", "label": "工作"},
+            "personal": {"config_dir": "/cd/personal", "label": "私人"},
+        },
+    )
+
+    def fake_recent(config_dir, project_path):
+        # work 較舊、personal 較新 → union 應取 personal
+        return {"/cd/work": 100.0, "/cd/personal": 200.0}[str(config_dir)]
+
+    monkeypatch.setattr(project_scanner, "_recent_mtime", fake_recent)
+    projects, _ = project_scanner.scan_all(cfg)
+    proj = next(p for p in projects if p["path"] == proj_path)
+    assert proj["recent"] == 200.0

@@ -70,15 +70,22 @@ def scan_all(config: AppConfig) -> tuple[list[dict[str, Any]], bool]:
         if override:
             proj["account"] = override["account"]
 
-    # 優先級 2：補 recent 標籤（讀 config_dir 也可能撞 TCC）
+    # 優先級 2：補 recent 標籤——跨帳號 union：取所有帳號 config_dir 的最新 mtime（spec §2.3）。
+    # recent 語意＝專案層「任一帳號最近使用」（account-agnostic），解「實際用過但歸錯帳號被埋沒」。
+    config_dirs = [
+        a["config_dir"] for a in config.accounts.values() if a.get("config_dir")
+    ]
     for proj in by_path.values():
-        account = config.accounts.get(proj["account"], {})
-        config_dir = account.get("config_dir")
-        if config_dir:
+        best: float | None = None
+        for cd in config_dirs:
             try:
-                proj["recent"] = _recent_mtime(Path(config_dir), proj["path"])
+                mt = _recent_mtime(Path(cd), proj["path"])
             except PermissionError:
-                permission_error = True
+                permission_error = True  # 任一 config_dir 撞 TCC → 標記、續算其餘
+                continue
+            if mt is not None and (best is None or mt > best):
+                best = mt
+        proj["recent"] = best
 
     # 優先級 3：手動加入（獨立分組；也套 override，否則對 manual 設預設帳號會無效）
     manual: list[dict[str, Any]] = []
