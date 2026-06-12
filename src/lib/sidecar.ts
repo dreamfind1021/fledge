@@ -263,3 +263,78 @@ export async function checkDir(port: number, path: string): Promise<DirStatus> {
   if (!resp.ok) throw new Error(`checkDir failed: ${resp.status}`);
   return (await resp.json()).status as DirStatus;
 }
+
+// --- usage dashboard（design §10）---
+export interface UsageBlock {
+  start_ts: number;
+  end_ts: number;
+  is_gap: boolean;
+  is_active: boolean;
+  total_tokens: number;
+  cost: number;
+  burn_rate_tpm: number | null;
+  projection: number | null;
+}
+
+export interface UsageDashboard {
+  kpi: {
+    month_value: number;
+    week_value: number;
+    today_value: number;
+    cache_hit_rate: number;
+    net_roi: number;
+    subscriptions_total: number;
+  };
+  blocks: {
+    claude: { active: UsageBlock | null; recent: UsageBlock[]; limit_p90: number | null };
+    codex: {
+      primary?: { used_percent: number; window_minutes: number; resets_at: number };
+      secondary?: { used_percent: number; window_minutes: number; resets_at: number };
+      plan_type?: string;
+    };
+  };
+  daily: { date: string; by_model: Record<string, number>; total: number }[];
+  models: {
+    model: string;
+    source: string;
+    input: number;
+    output: number;
+    cache_read: number;
+    cache_create: number;
+    cost: number;
+  }[];
+  projects: {
+    path: string;
+    claude_cost: number;
+    codex_cost: number;
+    total: number;
+    last_active: number;
+  }[];
+  hourly: number[][];
+  scan_meta: {
+    state: "ok" | "scanning" | "error";
+    generation?: number;
+    missing_pricing: string[];
+    error?: string | null;
+    cold_scan_ms?: number;
+    days?: number;
+    sources?: Record<string, string>;
+  };
+}
+
+/** 202（首掃）回 null；200 但無 kpi（冷啟掃描失敗的 error-only 形狀）throw 帶後端訊息；
+ *  其餘錯誤 throw（呼叫端保留舊資料顯示 stale）。 */
+export async function fetchUsageDashboard(
+  port: number,
+  days = 30,
+): Promise<UsageDashboard | null> {
+  const resp = await fetch(`${base(port)}/usage/dashboard?days=${days}`, {
+    headers: authHeaders(),
+  });
+  if (resp.status === 202) return null;
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const j = await resp.json();
+  // 防 error-only 200 炸 React 樹（後端掃描失敗仍回 200 但無 kpi）
+  if (!j.kpi) throw new Error(j?.scan_meta?.error ?? "scan failed");
+  return j;
+}

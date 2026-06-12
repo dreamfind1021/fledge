@@ -1,7 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 // sidecar.ts 頂部 import @tauri-apps/api/core 的 invoke；node 環境下 mock 掉以免載入失敗
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
-import { scanPreview, checkDir, addRoot, authHeaders, wsUrl, setAuthToken } from "./sidecar";
+import {
+  scanPreview,
+  checkDir,
+  addRoot,
+  authHeaders,
+  wsUrl,
+  setAuthToken,
+  fetchUsageDashboard,
+} from "./sidecar";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -87,5 +95,31 @@ describe("createSession kind", () => {
     await m.createSession(1234, "/x", "work", "terminal");
     expect(bodies[0]).toEqual({ path: "/x", account: "work", kind: "claude" });
     expect(bodies[1]).toEqual({ path: "/x", account: "work", kind: "terminal" });
+  });
+});
+
+describe("fetchUsageDashboard", () => {
+  it("202 回 null、200 回 payload、500 throw、error-only 200 throw、帶 X-Fledge-Token 與 days", async () => {
+    const calls: { url: string; headers: Record<string, string> }[] = [];
+    setAuthToken("tok");
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url, headers: init.headers as Record<string, string> });
+      if (url.includes("days=7")) return new Response(null, { status: 202 });
+      if (url.includes("days=9")) return new Response(null, { status: 500 });
+      if (url.includes("days=11"))
+        return new Response(
+          JSON.stringify({ scan_meta: { state: "error", error: "cold boom", missing_pricing: [] } }),
+          { status: 200 },
+        );
+      return new Response(JSON.stringify({ kpi: {} }), { status: 200 });
+    }));
+    expect(await fetchUsageDashboard(1234, 7)).toBeNull();
+    await expect(fetchUsageDashboard(1234, 9)).rejects.toThrow("HTTP 500");
+    await expect(fetchUsageDashboard(1234, 11)).rejects.toThrow("cold boom");
+    expect((await fetchUsageDashboard(1234))?.kpi).toEqual({});
+    expect(calls[0].url).toContain("/usage/dashboard?days=7");
+    expect(calls[0].headers["X-Fledge-Token"]).toBe("tok");
+    vi.unstubAllGlobals();
+    setAuthToken(null);
   });
 });
