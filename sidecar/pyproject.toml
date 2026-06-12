@@ -20,6 +20,7 @@ dev = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["slow: 效能煙囪"]
 
 [build-system]
 requires = ["setuptools>=68"]

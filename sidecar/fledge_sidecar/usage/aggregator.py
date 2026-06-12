@@ -44,6 +44,20 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
         hour=0, minute=0, second=0, microsecond=0).timestamp()
     month_start = local_now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
 
+    # 900s bucket memo：datetime.fromtimestamp/strftime 在 200k 條時佔 66% CPU；
+    # 真實 tz offset 皆 15 分鐘倍數，900s bucket 語義等價
+    local_parts_cache: dict[int, tuple[str, int, int]] = {}
+
+    def _local_parts(ts: float) -> tuple[str, int, int]:
+        """(date_str, weekday, hour)；以 900s bucket memoize——tz offset 皆 15min 倍數，語義等價。"""
+        bucket = int(ts // 900)
+        hit = local_parts_cache.get(bucket)
+        if hit is None:
+            local = datetime.fromtimestamp(bucket * 900).astimezone()
+            hit = (local.strftime("%Y-%m-%d"), local.weekday(), local.hour)
+            local_parts_cache[bucket] = hit
+        return hit
+
     month = week = today = 0.0
     claude_hit_num = claude_hit_den = codex_hit_num = codex_hit_den = 0
     daily: dict[str, dict] = defaultdict(lambda: {"by_model": defaultdict(float), "total": 0.0})
@@ -56,6 +70,10 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
     horizon = now - days * 86400
 
     for e in entries:
+        # synthetic 不是 API 呼叫（0 成本但帶 token 數＝表格噪音）；
+        # missing_pricing 警示本就排除它，面板聚合也一併跳過
+        if e.model == "<synthetic>":
+            continue
         if e.ts >= month_start:
             month += e.cost
         if e.ts >= week_start:
@@ -64,6 +82,10 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
             today += e.cost
         if e.missing_pricing and e.model != "<synthetic>":
             missing.add(e.model)   # synthetic 是「排除計價」非「查無定價」，不進使用者警示
+        if e.ts < horizon:
+            # horizon cut 後才累加 cache 命中率——與 daily/models 同視窗；
+            # 全史命中率會漸近凍結、與月視窗 KPI 並列誤導（design §12 / NF-1）
+            continue
         # cache 命中率分源分母（design §12 / NF-1）
         if e.source == "claude":
             claude_hit_num += e.cache_read_tokens
@@ -71,10 +93,8 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
         else:
             codex_hit_num += e.cache_read_tokens
             codex_hit_den += e.input_tokens
-        if e.ts < horizon:
-            continue
-        local = datetime.fromtimestamp(e.ts).astimezone()
-        day = daily[local.strftime("%Y-%m-%d")]
+        date_str, weekday, hour = _local_parts(e.ts)
+        day = daily[date_str]
         day["by_model"][e.model] += e.cost
         day["total"] += e.cost
         m = models[(e.model, e.source)]
@@ -93,9 +113,14 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
             p = projects[key]
             p["claude_cost" if e.source == "claude" else "codex_cost"] += e.cost
             p["last_active"] = max(p["last_active"], e.ts)
-        hourly[local.weekday()][local.hour] += e.cost
+        hourly[weekday][hour] += e.cost
 
-    subs_total = sum(float(s.get("monthly_cost") or 0) for s in subscriptions)
+    subs_total = 0.0
+    for s in subscriptions:
+        try:
+            subs_total += float(s.get("monthly_cost") or 0)
+        except (TypeError, ValueError, AttributeError):
+            continue   # 壞項目跳過——route 驗證擋正路，這裡擋手改 config
     hit_den = claude_hit_den + codex_hit_den
     # 全量建 block、後濾時間窗（ccusage 語義）——先切 7 天會截斷跨界 block（起點重 floor、
     # tokens 偏低）並以截斷值污染 P90 樣本；P90 用全史 closed blocks 估更穩

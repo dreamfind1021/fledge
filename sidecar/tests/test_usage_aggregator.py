@@ -76,3 +76,30 @@ def test_synthetic_not_in_missing_pricing_warning():
     d = build_dashboard([_e(model="<synthetic>", missing=True, cost=0.0)],
                         codex_rate_limits=None, subscriptions=[], now=NOW)
     assert d["scan_meta"]["missing_pricing"] == []
+
+
+def test_horizon_excludes_old_entries_from_panels_but_not_kpi():
+    old = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc).timestamp()  # 月內但 >days=7
+    d = build_dashboard([_e(ts=NOW - 60, cost=1.0), _e(ts=old, cost=2.0, dedup="o:k")],
+                        codex_rate_limits=None, subscriptions=[], now=NOW, days=7)
+    assert d["kpi"]["month_value"] == 3.0          # KPI 視窗不受 horizon 限制
+    assert all(day["total"] != 2.0 for day in d["daily"]) or len(d["daily"]) == 1  # 舊條目不進 daily
+
+
+def test_week_value_counts_recent_entry():
+    d = build_dashboard([_e(ts=NOW - 60, cost=1.5)], codex_rate_limits=None,
+                        subscriptions=[], now=NOW)
+    assert d["kpi"]["week_value"] == 1.5
+
+
+def test_synthetic_not_in_models_table():
+    d = build_dashboard([_e(model="<synthetic>", missing=True, cost=0.0, input_tokens=999)],
+                        codex_rate_limits=None, subscriptions=[], now=NOW)
+    assert all(m["model"] != "<synthetic>" for m in d["models"])
+
+
+def test_bad_subscription_items_skipped():
+    d = build_dashboard([_e(cost=1.0)], codex_rate_limits=None,
+                        subscriptions=[{"name": "X", "monthly_cost": "abc"}, {"name": "Y", "monthly_cost": 5}],
+                        now=NOW)
+    assert d["kpi"]["subscriptions_total"] == 5.0   # 壞項目跳過不炸

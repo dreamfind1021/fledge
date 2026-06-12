@@ -1,6 +1,7 @@
 """設定讀寫路由：細粒度寫入，每個操作在鎖內 load→驗證→改→save→回 updated config。spec §6.3 §7。"""
 from __future__ import annotations
 
+import math
 import re
 import threading
 
@@ -274,8 +275,8 @@ def put_subscriptions(body: SubscriptionsBody):
             cost = float(s.get("monthly_cost"))
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="monthly_cost 須為數字")
-        if not name or cost < 0:
-            raise HTTPException(status_code=400, detail="name 不可為空、monthly_cost 不可為負")
+        if not name or cost < 0 or not math.isfinite(cost):
+            raise HTTPException(status_code=400, detail="name 不可為空、monthly_cost 不可為負或非有限值")
         cleaned.append({"name": name, "monthly_cost": cost})
     with _config_lock:
         config = AppConfig.load()

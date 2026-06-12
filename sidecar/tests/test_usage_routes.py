@@ -81,3 +81,47 @@ def test_put_subscriptions_validates(tmp_path: Path, monkeypatch):
         bad = client.put("/api/config/subscriptions",
                          json={"subscriptions": [{"name": "", "monthly_cost": -1}]})
         assert bad.status_code == 400
+
+
+def test_steady_state_second_poll_reports_ok(tmp_path: Path, monkeypatch):
+    # 穩態：snapshot 存在、本請求自己觸發的 rescan 不得標 scanning（design §10）
+    _env(tmp_path, monkeypatch)
+    with TestClient(create_app()) as client:
+        _poll_ok(client)
+        usage_route._state["scanned_at"] = 0.0      # 強制 stale → 下一請求觸發 rescan
+        resp = client.get("/usage/dashboard")
+        assert resp.status_code == 200
+        assert resp.json()["scan_meta"]["state"] == "ok"   # 抵達當下無 in-flight → ok
+
+
+def test_error_keeps_snapshot_and_reports_state(tmp_path: Path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    with TestClient(create_app()) as client:
+        _poll_ok(client)
+        monkeypatch.setattr(usage_route, "_scan_sync", lambda days: (_ for _ in ()).throw(RuntimeError("boom")))
+        usage_route._state["scanned_at"] = 0.0
+        client.get("/usage/dashboard")              # 觸發失敗掃描
+        for _ in range(50):
+            j = client.get("/usage/dashboard").json()
+            if j["scan_meta"]["state"] == "error":
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("error state 未出現")
+        assert j["kpi"]["subscriptions_total"] == 100.0    # snapshot 保留（200＋舊資料）
+        assert "boom" in j["scan_meta"]["error"]
+
+
+def test_cold_error_shape_has_missing_pricing(tmp_path: Path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    monkeypatch.setattr(usage_route, "_scan_sync", lambda days: (_ for _ in ()).throw(RuntimeError("cold boom")))
+    with TestClient(create_app()) as client:
+        for _ in range(50):
+            resp = client.get("/usage/dashboard")
+            if resp.status_code == 200 and resp.json()["scan_meta"]["state"] == "error":
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError("cold error 未出現")
+        j = resp.json()
+        assert j["scan_meta"]["missing_pricing"] == []     # error-only 形狀必含空欄（防前端炸）

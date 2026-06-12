@@ -43,7 +43,9 @@ def _l2_path() -> Path:
 
 def _scan_sync(days: int) -> dict:
     config = AppConfig.load()
-    cache: UsageCache = _state.setdefault("cache", UsageCache(l2_path=_l2_path()))
+    cache: UsageCache | None = _state.get("cache")
+    if cache is None:   # 不用 setdefault——其 default 是 eager 求值，會每輪重建並整份重讀 L2
+        cache = _state["cache"] = UsageCache(l2_path=_l2_path())
     t0 = time.monotonic()
     cl = claude_files(config)
     cx = codex_files(_codex_home())
@@ -95,18 +97,22 @@ async def usage_dashboard(days: int = 30):
     或 202（無 snapshot）；days 變更會把狀態視為 stale，於下一輪掃描收斂。
     v1 前端固定 days=30，此邊界僅為 contract 完備。"""
     days = max(1, min(365, days))
+    # 請求抵達當下是否已有 in-flight 掃描——design §10 原意：「抵達時已有」才算 scanning；
+    # 否則 STALE_AFTER(25s) < 輪詢(30s)，每輪自觸發 rescan、第二輪起永遠標 scanning
+    was_scanning = bool(_state.get("scanning"))
     await _ensure_scan(days)
     snap = _state.get("snapshot")
     if snap is None:
         if _state.get("error"):
-            return JSONResponse({"scan_meta": {"state": "error", "error": _state["error"]}},
+            return JSONResponse({"scan_meta": {"state": "error", "error": _state["error"],
+                                               "missing_pricing": []}},
                                 status_code=200)
         return JSONResponse({"scan_meta": {"state": "scanning"}}, status_code=202,
                             headers={"Retry-After": "2"})
     out = dict(snap)
     meta = dict(out["scan_meta"])
-    if _state.get("scanning"):
-        meta["state"] = "scanning"     # last-good＋stale 指示（design §10）
+    if was_scanning:
+        meta["state"] = "scanning"     # 抵達當下已有 in-flight 掃描（design §10）
     if _state.get("error"):
         meta["state"] = "error"
         meta["error"] = _state["error"]
