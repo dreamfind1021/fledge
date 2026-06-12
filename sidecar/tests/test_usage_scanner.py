@@ -58,3 +58,27 @@ def test_codex_canonical_selection_prefers_active_then_mtime(tmp_path: Path):
 
 def test_codex_missing_home_is_empty(tmp_path: Path):
     assert codex_files(tmp_path / "no-codex") == []
+
+
+def test_codex_same_bucket_mtime_then_size_tiers(tmp_path: Path):
+    home = tmp_path / ".codex"
+    t = time.time()
+    # 同在 sessions/：mtime 新者勝
+    _rollout(home / "sessions" / "a", "rollout-old.jsonl", "M", 5, t - 50)
+    f_new = _rollout(home / "sessions" / "b", "rollout-new.jsonl", "M", 2, t)
+    # 同 mtime：size 大者勝
+    f_big = _rollout(home / "sessions" / "c", "rollout-big.jsonl", "Z", 9, t)
+    f_small = _rollout(home / "sessions" / "d", "rollout-small.jsonl", "Z", 2, t)
+    os.utime(f_big, (t, t)); os.utime(f_small, (t, t))
+    names = sorted(p.name for p in codex_files(home))
+    assert "rollout-new.jsonl" in names and "rollout-old.jsonl" not in names
+    assert "rollout-big.jsonl" in names and "rollout-small.jsonl" not in names
+
+
+def test_codex_unreadable_meta_still_listed_as_own_group(tmp_path: Path):
+    home = tmp_path / ".codex"
+    d = home / "sessions" / "x"
+    d.mkdir(parents=True)
+    f = d / "rollout-broken.jsonl"
+    f.write_text("not-json-first-line\n", encoding="utf-8")  # 無 session_meta → realpath 自成一組
+    assert [p.name for p in codex_files(home)] == ["rollout-broken.jsonl"]
