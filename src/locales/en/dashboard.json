@@ -1,0 +1,20 @@
+{
+  "tabTitle": "Dashboard",
+  "entry": "Usage Dashboard",
+  "kpi": { "month": "Month API value", "week": "This week", "today": "Today",
+           "cacheHit": "Cache hit rate", "netRoi": "Net ROI", "subs": "Subscriptions" },
+  "windows": { "title": "Usage windows", "claude": "Claude 5-hour window (estimated)",
+               "codex": "Codex (official)", "burnRate": "{{rate}} tok/min",
+               "projectedLimit": "Limit at {{time}} (est.)", "insufficient": "Not enough data",
+               "resets": "Resets {{time}}", "weekly": "Weekly window", "fiveHour": "5-hour" },
+  "daily": { "title": "Daily cost ({{days}} days)" },
+  "models": { "title": "Model breakdown" },
+  "hourly": { "title": "Activity by hour" },
+  "projects": { "title": "Project usage", "project": "Project", "claude": "Claude",
+                "codex": "Codex", "total": "Total", "lastActive": "Last active" },
+  "state": { "loading": "Scanning usage logs…", "stale": "Updating (showing last results)",
+             "error": "Scan failed: {{msg}} (will retry)", "empty": "No usage data yet",
+             "missingPricing": "{{count}} model(s) missing pricing — costs are underestimated" },
+  "settings": { "subsTitle": "Subscriptions", "subsHint": "Used for Net ROI (API value − subscription fees)",
+                "name": "Name", "monthlyCost": "Monthly cost (USD)", "add": "Add subscription", "remove": "Remove" }
+}

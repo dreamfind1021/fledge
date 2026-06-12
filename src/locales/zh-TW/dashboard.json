@@ -1,0 +1,20 @@
+{
+  "tabTitle": "觀測",
+  "entry": "觀測儀表板",
+  "kpi": { "month": "本月等價 API 價值", "week": "本週", "today": "今日",
+           "cacheHit": "Cache 命中率", "netRoi": "Net ROI", "subs": "訂閱月費" },
+  "windows": { "title": "用量窗口", "claude": "Claude 5 小時窗口（推算）",
+               "codex": "Codex（官方）", "burnRate": "{{rate}} tok/min",
+               "projectedLimit": "預計 {{time}} 達限額（估計）", "insufficient": "資料不足",
+               "resets": "{{time}} 重置", "weekly": "週窗口", "fiveHour": "5 小時" },
+  "daily": { "title": "每日成本（{{days}} 天）" },
+  "models": { "title": "模型分布" },
+  "hourly": { "title": "時段活動" },
+  "projects": { "title": "專案用量", "project": "專案", "claude": "Claude",
+                "codex": "Codex", "total": "合計", "lastActive": "最後活動" },
+  "state": { "loading": "掃描用量紀錄中…", "stale": "資料更新中（顯示上次結果）",
+             "error": "掃描失敗：{{msg}}（將自動重試）", "empty": "尚無用量紀錄",
+             "missingPricing": "{{count}} 個模型查無定價，成本為低估" },
+  "settings": { "subsTitle": "訂閱費用", "subsHint": "用於 Net ROI 計算（等價 API 價值−訂閱月費）",
+                "name": "名稱", "monthlyCost": "月費（USD）", "add": "新增訂閱", "remove": "移除" }
+}
