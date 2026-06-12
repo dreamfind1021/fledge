@@ -60,25 +60,33 @@ class UsageCache:
 
     # ---- L2 ----
     def _load_l2(self) -> None:
+        """快取定義上可重建——任何讀取/結構例外（含斷電半寫的二進位垃圾、合法 JSON 但
+        結構壞）一律走重建，寬 catch 在此是正確設計而非偷懶。先組 locals 再賦值，
+        避免半載入狀態。"""
         try:
             data = json.loads(self._l2_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return
-        if data.get("version") != SCHEMA_VERSION:
-            logger.warning("usage L2 schema 不符，重建")
-            return
-        self._generation = int(data.get("generation") or 0)
-        reprice = data.get("pricing_version") != pricing.PRICING_VERSION
-        for rp, fc in (data.get("files") or {}).items():
-            entries = [UsageEntry(**e) for e in fc.get("entries", [])]
+            if data.get("version") != SCHEMA_VERSION:
+                logger.warning("usage L2 schema 不符，重建")
+                return
+            generation = int(data.get("generation") or 0)
+            reprice = data.get("pricing_version") != pricing.PRICING_VERSION
+            files: dict[str, FileCacheEntry] = {}
+            for rp, fc in (data.get("files") or {}).items():
+                entries = [UsageEntry(**e) for e in fc.get("entries", [])]
+                if reprice:
+                    entries = [self._reprice(e) for e in entries]
+                files[rp] = FileCacheEntry(
+                    size=fc["size"], mtime_ns=fc["mtime_ns"], source=fc["source"],
+                    entries=entries, skipped=fc.get("skipped", 0),
+                    rate_limits=fc.get("rate_limits"), rate_limits_ts=fc.get("rate_limits_ts", 0.0))
+            self._generation = generation
+            self._files = files
             if reprice:
-                entries = [self._reprice(e) for e in entries]
-            self._files[rp] = FileCacheEntry(
-                size=fc["size"], mtime_ns=fc["mtime_ns"], source=fc["source"],
-                entries=entries, skipped=fc.get("skipped", 0),
-                rate_limits=fc.get("rate_limits"), rate_limits_ts=fc.get("rate_limits_ts", 0.0))
-        if reprice:
-            logger.info("pricing_version 更新 → 已重算 %d 檔 cost（未重 parse）", len(self._files))
+                logger.info("pricing_version 更新 → 已重算 %d 檔 cost（未重 parse）", len(self._files))
+        except Exception:  # noqa: BLE001 —— design §9：損壞 → 重建不擋啟動
+            logger.warning("usage L2 載入失敗，重建", exc_info=True)
+            self._files = {}
+            self._generation = 0
 
     @staticmethod
     def _reprice(e: UsageEntry) -> UsageEntry:
@@ -98,13 +106,16 @@ class UsageCache:
         return dataclasses.replace(e, cost=cost, missing_pricing=missing)
 
     def _save_l2(self) -> None:
-        # 防舊蓋新（design §9）：磁碟上 generation 較大（如另一 sidecar 實例已寫入）→ 跳過
+        # 防舊蓋新（design §9）：磁碟上 generation 較大（如另一 sidecar 實例已寫入）→ 跳過。
+        # 只比對同 schema 代——跨代 generation 不可比，否則 schema 升版後老 generation
+        # 會永遠擋死新 schema 落盤（升版死鎖）
         try:
             disk = json.loads(self._l2_path.read_text(encoding="utf-8"))
-            if int(disk.get("generation") or 0) >= self._generation:
+            if (disk.get("version") == SCHEMA_VERSION
+                    and int(disk.get("generation") or 0) >= self._generation):
                 logger.warning("usage L2 磁碟 generation 較新，跳過落盤")
                 return
-        except (OSError, json.JSONDecodeError, ValueError):
+        except Exception:  # noqa: BLE001 —— guard 讀不懂磁碟（損壞/結構壞）→ 逕行覆寫重建
             pass
         payload = {
             "version": SCHEMA_VERSION,
@@ -130,6 +141,7 @@ class UsageCache:
     def _refresh_locked(self, claude: list[Path], codex: list[Path]) -> RefreshResult:
         wanted: set[str] = set()
         to_parse: list[tuple[str, str, Path]] = []   # (source, realpath, path)
+        ghost_removed = False
         for source, paths in (("claude", claude), ("codex", codex)):
             for p in paths:
                 rp = str(p)
@@ -137,7 +149,8 @@ class UsageCache:
                 try:
                     st = os.stat(p)
                 except OSError:
-                    self._files.pop(rp, None)
+                    if self._files.pop(rp, None) is not None:
+                        ghost_removed = True   # 消失檔要觸發落盤，免得 L2 殘留 ghost
                     continue
                 cached = self._files.get(rp)
                 if cached and cached.size == st.st_size and cached.mtime_ns == st.st_mtime_ns:
@@ -153,7 +166,7 @@ class UsageCache:
         removed = [k for k in self._files if k not in wanted]   # 檔案消失/落選 canonical
         for rp in removed:
             del self._files[rp]
-        changed = bool(to_parse) or bool(removed)
+        changed = bool(to_parse) or bool(removed) or ghost_removed
         if changed:   # 無變動輪詢不落盤、不前進 generation（debounce 等效，design §9）
             self._generation += 1
             self._save_l2()

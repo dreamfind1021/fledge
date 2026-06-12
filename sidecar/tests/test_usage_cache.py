@@ -109,3 +109,60 @@ def test_concurrent_refresh_is_serialized(tmp_path: Path):
         list(pool.map(lambda _: c.refresh(claude=[f], codex=[]), range(2)))
     g2 = json.loads(l2.read_text(encoding="utf-8"))["generation"]
     assert g2 == g1 + 1                          # 後到者見無變動、不重複 bump
+
+
+def test_corrupt_l2_binary_garbage_rebuilds(tmp_path: Path):
+    # 斷電半寫情境：write_text 後無 fsync 即 os.replace，可能留下二進位垃圾
+    f = _write_claude(tmp_path, "a.jsonl")
+    l2 = tmp_path / "usage-v1.json"
+    l2.write_bytes(b"\x00\xff\xfe garbage")
+    c = UsageCache(l2_path=l2)                        # 不得拋例外（design §9 不擋啟動）
+    r = c.refresh(claude=[f], codex=[])
+    assert r.parsed_files == 1
+    assert json.loads(l2.read_text(encoding="utf-8"))["version"] == 1  # 已重建
+
+
+def test_corrupt_l2_structural_rebuilds_and_save_guard_survives(tmp_path: Path):
+    f = _write_claude(tmp_path, "a.jsonl")
+    l2 = tmp_path / "usage-v1.json"
+    l2.write_text("[]", encoding="utf-8")             # 合法 JSON、結構錯
+    c = UsageCache(l2_path=l2)
+    r = c.refresh(claude=[f], codex=[])               # _save_l2 guard 也不得炸
+    assert r.parsed_files == 1
+    assert json.loads(l2.read_text(encoding="utf-8"))["version"] == 1
+
+
+def test_schema_mismatch_rebuild_actually_persists(tmp_path: Path):
+    # 升版情境：舊 schema 帶高 generation——guard 不採信跨代 generation，否則永久落不了盤
+    f = _write_claude(tmp_path, "a.jsonl")
+    l2 = tmp_path / "usage-v1.json"
+    l2.write_text(json.dumps({"version": 999, "generation": 50, "files": {}}), encoding="utf-8")
+    c = UsageCache(l2_path=l2)
+    c.refresh(claude=[f], codex=[])
+    disk = json.loads(l2.read_text(encoding="utf-8"))
+    assert disk["version"] == 1 and disk["generation"] >= 1
+
+
+def test_removed_file_and_codex_rate_limits_passthrough(tmp_path: Path):
+    # removed/ghost 路徑：檔案消失 → 條目消失且觸發落盤；codex rate_limits 經 cache 傳遞
+    f = _write_claude(tmp_path, "a.jsonl")
+    cx = tmp_path / "rollout-1.jsonl"
+    cx.write_text("\n".join([
+        json.dumps({"type": "session_meta", "payload": {"id": "s1", "cwd": "/p"}}),
+        json.dumps({"type": "turn_context", "payload": {"model": "gpt-5.5", "cwd": "/p"}}),
+        json.dumps({"timestamp": "2026-06-10T02:00:00Z", "type": "event_msg", "payload": {
+            "type": "token_count",
+            "info": {"last_token_usage": {"input_tokens": 10, "cached_input_tokens": 0,
+                                          "output_tokens": 1, "total_tokens": 11},
+                     "total_token_usage": {"input_tokens": 10, "cached_input_tokens": 0,
+                                           "output_tokens": 1, "total_tokens": 11}},
+            "rate_limits": {"plan_type": "plus"}}}),
+    ]), encoding="utf-8")
+    l2 = tmp_path / "usage-v1.json"
+    c = UsageCache(l2_path=l2)
+    r1 = c.refresh(claude=[f], codex=[cx])
+    assert r1.codex_rate_limits == {"plan_type": "plus"}
+    f.unlink()
+    r2 = c.refresh(claude=[f], codex=[cx])            # 已消失仍在掃描清單 → ghost pop＋落盤
+    assert all(e.source == "codex" for e in r2.entries)
+    assert r2.generation == r1.generation + 1         # ghost 移除觸發 bump
