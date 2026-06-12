@@ -117,3 +117,42 @@ def test_codex_missing_session_meta_uses_realpath_key(tmp_path: Path):
     f.write_text(lines, encoding="utf-8")
     result = parse_codex_file(f)
     assert result.session_id == str(f.resolve())  # design §5.2 fallback
+
+
+def test_codex_rate_limits_last_one_wins(tmp_path: Path):
+    f = tmp_path / "rollout-x.jsonl"
+    f.write_text(_codex_lines(), encoding="utf-8")
+    result = parse_codex_file(f)
+    assert result.rate_limits["primary"]["used_percent"] == 5.0  # 第二筆（最後）贏
+
+
+def test_codex_cumulative_diff_clamps_negative(tmp_path: Path):
+    # 後筆累計缺鍵 → 差分不得為負（金流入口 clamp）
+    lines = _codex_lines().splitlines()
+    bad = json.loads(lines[3])
+    bad["payload"]["info"]["total_token_usage"] = {"input_tokens": 1500}  # 缺 cached/output
+    bad["payload"]["info"].pop("last_token_usage", None)
+    lines[3] = json.dumps(bad)
+    f = tmp_path / "rollout-neg.jsonl"
+    f.write_text("\n".join(lines), encoding="utf-8")
+    result = parse_codex_file(f)
+    e2 = result.entries[1]
+    assert e2.cache_read_tokens == 0 and e2.output_tokens == 0  # clamp 而非 -400/-30
+
+
+def test_codex_bad_timestamp_skipped_not_epoch0(tmp_path: Path):
+    lines = _codex_lines().splitlines()
+    bad = json.loads(lines[2])
+    bad["timestamp"] = "garbage"
+    lines[2] = json.dumps(bad)
+    f = tmp_path / "rollout-badts.jsonl"
+    f.write_text("\n".join(lines), encoding="utf-8")
+    result = parse_codex_file(f)
+    assert len(result.entries) == 1 and result.skipped == 1  # 壞 ts 跳過計數、不產 1970 條目
+
+
+def test_claude_chinese_cwd_preserved(tmp_path: Path):
+    f = tmp_path / "a.jsonl"
+    f.write_text(_claude_line(cwd="/Users/tc/NAS/work/創意發想"), encoding="utf-8")
+    entries, _ = parse_claude_file(f)
+    assert entries[0].project == "/Users/tc/NAS/work/創意發想"  # 中文路徑原樣保留（spec §15）
