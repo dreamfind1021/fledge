@@ -166,3 +166,11 @@ def test_removed_file_and_codex_rate_limits_passthrough(tmp_path: Path):
     r2 = c.refresh(claude=[f], codex=[cx])            # 已消失仍在掃描清單 → ghost pop＋落盤
     assert all(e.source == "codex" for e in r2.entries)
     assert r2.generation == r1.generation + 1         # ghost 移除觸發 bump
+
+
+def test_l2_file_mode_owner_only(tmp_path: Path):
+    # 階段 10 守門 BLOCKER：L2 含成本與絕對路徑，預設 umask 會落 0644 → 必須 0600
+    f = _write_claude(tmp_path, "a.jsonl")
+    l2 = tmp_path / "usage-v1.json"
+    UsageCache(l2_path=l2).refresh(claude=[f], codex=[])
+    assert (l2.stat().st_mode & 0o777) == 0o600

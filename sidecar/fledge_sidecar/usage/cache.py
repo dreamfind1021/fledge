@@ -131,6 +131,9 @@ class UsageCache:
         self._l2_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._l2_path.with_name(self._l2_path.name + ".tmp")
         tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        # L2 含成本與專案絕對路徑——僅 owner 可讀；os.replace 保留 tmp 的 mode，
+        # 不能依賴預設 umask（022 會落成 0644 對同機其他帳號可讀）
+        tmp.chmod(0o600)
         os.replace(tmp, self._l2_path)
 
     # ---- refresh ----
