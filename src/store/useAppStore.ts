@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { nextBackendState, type BackendStatus } from "../lib/backendStatus";
+import { isLiveClaudeTab } from "../lib/liveTab";
 import {
   Project,
   AppConfigData,
@@ -32,6 +33,7 @@ export interface Tab {
   title: string;
   sessionId: string | null; // null = 建立中
   status: "creating" | "ready" | "error" | "offline" | "ended";
+  kind: "claude" | "terminal"; // 分頁種類：claude session 或純終端機 shell
   error?: string;
   activity?: "working" | "idle"; // 就緒後忙碌態（best-effort，只在 status==="ready" 有意義）
 }
@@ -52,7 +54,7 @@ interface AppState {
   setClaudeFound: (found: boolean) => void;
   setPort: (port: number) => void;
   loadProjects: () => Promise<void>;
-  openTab: (project: Project, accountOverride?: string) => Promise<void>;
+  openTab: (project: Project, accountOverride?: string, kind?: "claude" | "terminal") => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
   requestCloseTab: (tabId: string) => void;
   setPendingCloseTab: (tabId: string | null) => void;
@@ -101,17 +103,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (seq === loadProjectsSeq) set({ projects, permissionError }); // 只套用最新一次（防並發 stale）
   },
 
-  openTab: async (project, accountOverride) => {
+  openTab: async (project, accountOverride, kind = "claude") => {
     const { port, tabs } = get();
     if (port == null) return;
     const account = accountOverride ?? project.account;
-    // 已開比對用 (path, account)：同專案不同帳號 = 不同 tab
-    const existing = tabs.find(
-      (t) => t.projectPath === project.path && t.account === account,
-    );
-    if (existing) {
-      set({ activeTabId: existing.id });
-      return;
+    // claude 去重（同專案同帳號聚焦既有）；terminal 不去重、每次都開新分頁（spec §1.3/1.4）
+    if (kind === "claude") {
+      const existing = tabs.find(
+        (t) => t.kind === "claude" && t.projectPath === project.path && t.account === account,
+      );
+      if (existing) {
+        set({ activeTabId: existing.id });
+        return;
+      }
     }
     const id = crypto.randomUUID();
     const tab: Tab = {
@@ -121,10 +125,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       title: project.name,
       sessionId: null,
       status: "creating",
+      kind,
     };
     set((s) => ({ tabs: [...s.tabs, tab], activeTabId: id }));
     try {
-      const sessionId = await createSession(port, project.path, account);
+      const sessionId = await createSession(port, project.path, account, kind);
       // 若 tab 在建立期間已被關閉，補清這個剛建好的 session（防 orphan，審查 round 1 HIGH）
       if (!get().tabs.some((t) => t.id === id)) {
         await closeSession(port, sessionId);
@@ -250,7 +255,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // 在它眼中都是 idle、分不出來；要分得解析 claude TUI 畫面＝脆弱且違背套殼架構，故改成「ready 一律確認」。
   requestCloseTab: (tabId) => {
     const tab = get().tabs.find((t) => t.id === tabId);
-    if (tab && tab.status === "ready" && tab.sessionId) {
+    if (tab && isLiveClaudeTab(tab)) {
       set({ pendingCloseTabId: tabId });
     } else {
       get().closeTab(tabId);
@@ -282,7 +287,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const project = get().projects.find((p) => p.path === tab.projectPath);
     if (!project) return; // 專案已不在清單（root/manual 被移除）→ 不動，避免無聲銷毀 ended tab
     await get().closeTab(tabId);
-    await get().openTab(project, tab.account);
+    await get().openTab(project, tab.account, tab.kind);
   },
 
   // sidecar 重啟：舊 session 全沒了，所有 tab 標 ended、清 sessionId（前端原子轉移用）

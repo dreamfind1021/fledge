@@ -107,7 +107,7 @@ describe("useAppStore", () => {
   it("openTab 帶 accountOverride 用指定帳號（臨時、不寫 config）", async () => {
     vi.mocked(sidecar.createSession).mockResolvedValue("sess-ov");
     await useAppStore.getState().openTab(proj("/p/x"), "personal");
-    expect(sidecar.createSession).toHaveBeenCalledWith(1234, "/p/x", "personal");
+    expect(sidecar.createSession).toHaveBeenCalledWith(1234, "/p/x", "personal", "claude");
     expect(useAppStore.getState().tabs[0].account).toBe("personal");
     expect(sidecar.setProjectOverride).not.toHaveBeenCalled();
   });
@@ -163,6 +163,35 @@ describe("useAppStore", () => {
     expect(useAppStore.getState().config).toEqual(cfg);
   });
 
+  it("openTab kind=terminal 不去重：同專案開兩個 terminal 分頁", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValueOnce("term1").mockResolvedValueOnce("term2");
+    await useAppStore.getState().openTab(proj("/p/t"), undefined, "terminal");
+    await useAppStore.getState().openTab(proj("/p/t"), undefined, "terminal");
+    expect(useAppStore.getState().tabs).toHaveLength(2);
+    expect(useAppStore.getState().tabs.every((t) => t.kind === "terminal")).toBe(true);
+    expect(sidecar.createSession).toHaveBeenLastCalledWith(1234, "/p/t", "work", "terminal");
+  });
+
+  it("requestCloseTab：terminal 分頁直接關、不跳確認框（即使 ready+sessionId）", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValue("term-x");
+    vi.mocked(sidecar.closeSession).mockResolvedValue();
+    await useAppStore.getState().openTab(proj("/p/tt"), undefined, "terminal");
+    const id = useAppStore.getState().tabs[0].id;
+    expect(useAppStore.getState().tabs[0].status).toBe("ready");
+    useAppStore.getState().requestCloseTab(id);
+    expect(useAppStore.getState().pendingCloseTabId).toBeNull();
+    expect(useAppStore.getState().tabs).toHaveLength(0);
+  });
+
+  it("terminal 與 claude 並存：claude 仍去重、terminal 不影響", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValue("s");
+    await useAppStore.getState().openTab(proj("/p/c"), undefined, "terminal"); // terminal
+    await useAppStore.getState().openTab(proj("/p/c")); // claude
+    await useAppStore.getState().openTab(proj("/p/c")); // claude 第二次→聚焦既有
+    expect(useAppStore.getState().tabs.filter((t) => t.kind === "claude")).toHaveLength(1);
+    expect(useAppStore.getState().tabs).toHaveLength(2);
+  });
+
   it("removeAccount 帶 reassignTo 呼叫後重掃", async () => {
     const cfg = {
       version: 1, roots: [], accounts: { work: { config_dir: "~/.claude", label: "工作" } },
@@ -193,7 +222,7 @@ describe("useAppStore", () => {
 
   it("setTabActivity 更新指定 tab 的 activity（working/idle/undefined 重置）", () => {
     useAppStore.setState({
-      tabs: [{ id: "t1", projectPath: "/p", account: "work", title: "p", sessionId: "s1", status: "ready" }],
+      tabs: [{ id: "t1", projectPath: "/p", account: "work", title: "p", sessionId: "s1", status: "ready", kind: "claude" }],
     });
     useAppStore.getState().setTabActivity("t1", "working");
     expect(useAppStore.getState().tabs[0].activity).toBe("working");
@@ -206,8 +235,8 @@ describe("useAppStore", () => {
   it("setTabStatus 改某 tab 狀態；markAllTabsEnded 把所有 tab 標 ended、清 sessionId", () => {
     useAppStore.setState({
       tabs: [
-        { id: "t1", projectPath: "/a", account: "work", title: "a", sessionId: "s1", status: "ready" },
-        { id: "t2", projectPath: "/b", account: "work", title: "b", sessionId: "s2", status: "ready" },
+        { id: "t1", projectPath: "/a", account: "work", title: "a", sessionId: "s1", status: "ready", kind: "claude" },
+        { id: "t2", projectPath: "/b", account: "work", title: "b", sessionId: "s2", status: "ready", kind: "claude" },
       ],
     });
     useAppStore.getState().setTabStatus("t1", "offline");

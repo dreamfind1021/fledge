@@ -3,7 +3,7 @@ import { tabDotState } from "./tabDotState";
 import type { Tab } from "../store/useAppStore";
 
 const tab = (over: Partial<Tab>): Tab => ({
-  id: "t", projectPath: "/p", account: "work", title: "p", sessionId: "s", status: "ready", ...over,
+  id: "t", projectPath: "/p", account: "work", title: "p", sessionId: "s", status: "ready", kind: "claude", ...over,
 });
 
 describe("tabDotState", () => {
