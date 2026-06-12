@@ -1,10 +1,12 @@
-import { X, SquareTerminal } from "lucide-react";
+import { X, SquareTerminal, ChartColumn } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useAppStore } from "../store/useAppStore";
 import { accountColor } from "../lib/accountColor";
 import { tabDotState } from "../lib/tabDotState";
 import "./TabBar.css";
 
 export function TabBar() {
+  const { t: tDash } = useTranslation("dashboard");
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const setActive = useAppStore((s) => s.setActive);
@@ -24,10 +26,16 @@ export function TabBar() {
               <span className="tabbar-term-ico" aria-label="終端機">
                 <SquareTerminal size={13} strokeWidth={1.75} />
               </span>
+            ) : t.kind === "dashboard" ? (
+              <span className="tabbar-term-ico" aria-label={tDash("tabTitle")}>
+                <ChartColumn size={13} strokeWidth={1.75} />
+              </span>
             ) : (
               <span className={`tab-dot is-${tabDotState(t)}`} />
             )}
-            <span className="tabbar-tab-title">{t.title}</span>
+            <span className="tabbar-tab-title">
+              {t.kind === "dashboard" ? tDash("tabTitle") : t.title}
+            </span>
             <span
               className="tabbar-chip"
               style={{ background: accountColor(t.account) }}

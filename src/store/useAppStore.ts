@@ -33,7 +33,7 @@ export interface Tab {
   title: string;
   sessionId: string | null; // null = 建立中
   status: "creating" | "ready" | "error" | "offline" | "ended";
-  kind: "claude" | "terminal"; // 分頁種類：claude session 或純終端機 shell
+  kind: "claude" | "terminal" | "dashboard"; // 分頁種類：claude session、純終端機 shell 或觀測儀表板
   error?: string;
   activity?: "working" | "idle"; // 就緒後忙碌態（best-effort，只在 status==="ready" 有意義）
 }
@@ -55,6 +55,7 @@ interface AppState {
   setPort: (port: number) => void;
   loadProjects: () => Promise<void>;
   openTab: (project: Project, accountOverride?: string, kind?: "claude" | "terminal") => Promise<void>;
+  openDashboard: () => void;
   closeTab: (tabId: string) => Promise<void>;
   requestCloseTab: (tabId: string) => void;
   setPendingCloseTab: (tabId: string | null) => void;
@@ -152,6 +153,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  openDashboard: () => {
+    // 單例：已開啟則 focus（與 claude tab 同專案去重同精神）
+    const existing = get().tabs.find((t) => t.kind === "dashboard");
+    if (existing) { set({ activeTabId: existing.id }); return; }
+    const id = `dash-${Date.now()}`;
+    set((s) => ({
+      tabs: [...s.tabs, { id, projectPath: "", account: "", title: "", sessionId: null,
+                          status: "ready", kind: "dashboard" } as Tab],
+      activeTabId: id,
+    }));
+  },
+
   loadConfig: async () => {
     const port = get().port;
     if (port == null) return;
@@ -240,6 +253,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeTabId === tabId
         ? (remaining[remaining.length - 1]?.id ?? null)
         : activeTabId;
+    if (tab.kind === "dashboard") {
+      // 純前端 tab：不打 closeSession，直接移除＋沿用既有的下一個 tab 選擇邏輯
+      set({ tabs: remaining, activeTabId: newActive });
+      return;
+    }
     set({ tabs: remaining, activeTabId: newActive });
     // async 關 session（claude 子進程）；creating 中的 tab 由 openTab resolve 後補清
     if (port != null && tab.sessionId) {
@@ -284,6 +302,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   restartTab: async (tabId) => {
     const tab = get().tabs.find((t) => t.id === tabId);
     if (!tab) return;
+    if (tab.kind === "dashboard") return; // dashboard 純前端 tab，無 session 無法重啟
     const project = get().projects.find((p) => p.path === tab.projectPath);
     if (!project) return; // 專案已不在清單（root/manual 被移除）→ 不動，避免無聲銷毀 ended tab
     await get().closeTab(tabId);

@@ -192,6 +192,22 @@ describe("useAppStore", () => {
     expect(useAppStore.getState().tabs).toHaveLength(2);
   });
 
+  it("openDashboard 單例：第二次只 focus 不重開", () => {
+    useAppStore.getState().openDashboard();
+    useAppStore.getState().openDashboard();
+    const tabs = useAppStore.getState().tabs.filter((t) => t.kind === "dashboard");
+    expect(tabs).toHaveLength(1);
+    expect(useAppStore.getState().activeTabId).toBe(tabs[0].id);
+  });
+
+  it("closeTab 對 dashboard tab 不打 closeSession", async () => {
+    useAppStore.getState().openDashboard();
+    const id = useAppStore.getState().tabs[0].id;
+    await useAppStore.getState().closeTab(id);
+    expect(sidecar.closeSession).not.toHaveBeenCalled();
+    expect(useAppStore.getState().tabs).toHaveLength(0);
+  });
+
   it("removeAccount 帶 reassignTo 呼叫後重掃", async () => {
     const cfg = {
       version: 1, roots: [], accounts: { work: { config_dir: "~/.claude", label: "工作" } },
