@@ -7,13 +7,17 @@ export function tabKey(path: string, account: string): string {
   return `${path}${SEP}${account}`;
 }
 
+// 每個帳號群組「已接觸」band 直接顯示的最近專案上限；溢出收進「顯示全部」展開器（spec §2.4）。
+export const RECENT_BAND_LIMIT = 3;
+
 export interface AccountGroup {
   key: string; // 帳號代號（＝專案類型）
   label: string; // 顯示名（accounts[key].label，缺則退回 key）
   configDir: string; // accounts[key].config_dir；dangling 帳號為 ""
   total: number; // 本群組專案總數（三 band 相加）
   open: Project[]; // band 1：openInType 為真
-  surfaced: Project[]; // band 2：非 open，且 recent≠null 或 source==="manual"
+  surfaced: Project[]; // 直接顯示：前 N 個 recent + 所有 manual（manual 不佔名額）
+  surfacedMore: Project[]; // 溢出：第 N+1 個起的 recent，藏在「顯示全部」展開器
   discovered: Project[]; // band 3：非 open，且 source==="root" 且 recent==null
 }
 
@@ -67,6 +71,13 @@ export function groupProjectsByAccount(
     open.sort(byName);
     surfaced.sort(byRecentDescThenName);
     discovered.sort(byName);
+    // 上限切分：manual（釘選）永遠顯示、不佔名額；非 manual 的 recent 取前 N、其餘溢出（spec §2.4）
+    const manualItems = surfaced.filter((p) => p.source === "manual");
+    const recentItems = surfaced.filter((p) => p.source !== "manual"); // recent != null
+    const surfacedTop = [...recentItems.slice(0, RECENT_BAND_LIMIT), ...manualItems].sort(
+      byRecentDescThenName,
+    );
+    const surfacedMore = recentItems.slice(RECENT_BAND_LIMIT);
     const meta = accounts[key];
     groups.push({
       key,
@@ -74,7 +85,8 @@ export function groupProjectsByAccount(
       configDir: meta?.config_dir ?? "",
       total: items.length,
       open,
-      surfaced,
+      surfaced: surfacedTop,
+      surfacedMore,
       discovered,
     });
   }

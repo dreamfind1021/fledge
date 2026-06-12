@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { groupProjectsByAccount, tabKey } from "./sidebarGroups";
+import { groupProjectsByAccount, tabKey, RECENT_BAND_LIMIT } from "./sidebarGroups";
 import type { Project } from "./sidecar";
 
 // 測試用 Project 工廠：預設 source=root、recent=null、path=/r/<name>
@@ -92,5 +92,34 @@ describe("groupProjectsByAccount", () => {
     const ta = mk({ name: "t-a", account: "work", recent: 50 });
     const [g] = groupProjectsByAccount([tb, ta], new Set(), ACCOUNTS);
     expect(g.surfaced.map((p) => p.name)).toEqual(["t-a", "t-b"]);
+  });
+
+  it("recent 超過 RECENT_BAND_LIMIT：前 3 留 surfaced、其餘進 surfacedMore（不污染 discovered）", () => {
+    const projects = [
+      mk({ name: "r1", account: "work", recent: 50 }),
+      mk({ name: "r2", account: "work", recent: 40 }),
+      mk({ name: "r3", account: "work", recent: 30 }),
+      mk({ name: "r4", account: "work", recent: 20 }),
+      mk({ name: "r5", account: "work", recent: 10 }),
+      mk({ name: "d1", account: "work" }), // 未接觸
+    ];
+    const [g] = groupProjectsByAccount(projects, new Set(), ACCOUNTS);
+    expect(g.surfaced.length).toBe(RECENT_BAND_LIMIT); // 直顯上限
+    expect(g.surfaced.map((p) => p.name)).toEqual(["r1", "r2", "r3"]);
+    expect(g.surfacedMore.map((p) => p.name)).toEqual(["r4", "r5"]);
+    expect(g.discovered.map((p) => p.name)).toEqual(["d1"]);
+  });
+
+  it("manual 不佔 RECENT_BAND_LIMIT 名額、永遠在 surfaced", () => {
+    const projects = [
+      mk({ name: "r1", account: "work", recent: 50 }),
+      mk({ name: "r2", account: "work", recent: 40 }),
+      mk({ name: "r3", account: "work", recent: 30 }),
+      mk({ name: "r4", account: "work", recent: 20 }),
+      mk({ name: "mn", account: "work", source: "manual" }),
+    ];
+    const [g] = groupProjectsByAccount(projects, new Set(), ACCOUNTS);
+    expect(g.surfaced.map((p) => p.name)).toEqual(["r1", "r2", "r3", "mn"]);
+    expect(g.surfacedMore.map((p) => p.name)).toEqual(["r4"]);
   });
 });
