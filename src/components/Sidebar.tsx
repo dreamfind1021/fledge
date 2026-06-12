@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, ChevronsLeft, ChevronsRight, ChartColumn } from "lucide-react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useAppStore } from "../store/useAppStore";
 import type { Project } from "../lib/sidecar";
@@ -12,6 +13,7 @@ import { FeatherMark } from "./Logo";
 import "./Sidebar.css";
 
 export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => void; onOpenSettings: () => void }) {
+  const { t: tDash } = useTranslation("dashboard");
   const projects = useAppStore((s) => s.projects);
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
@@ -188,8 +190,16 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
             <Settings size={18} strokeWidth={1.75} />
           </button>
         </div>
-        {/* 中段：未來儀表板 icon 放這，現在留空 spacer（不寫任何程式碼，spec §3.3） */}
-        <div className="sidebar-rail-mid" />
+        {/* 中段：儀表板入口 icon */}
+        <div className="sidebar-rail-mid">
+          <button
+            className="sidebar-rail-btn"
+            title={tDash("entry")}
+            onClick={() => useAppStore.getState().openDashboard()}
+          >
+            <ChartColumn size={18} strokeWidth={1.75} />
+          </button>
+        </div>
         <div className="sidebar-rail-foot">
           <button
             ref={openFolderBtn}
@@ -287,8 +297,15 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
         ))}
       </div>
 
-      {/* === 底部：開啟其他資料夾 === */}
+      {/* === 底部：儀表板入口 + 開啟其他資料夾 === */}
       <div className="sidebar-foot">
+        <button
+          className="sidebar-openbtn sidebar-openbtn--ghost"
+          onClick={() => useAppStore.getState().openDashboard()}
+        >
+          <ChartColumn size={15} strokeWidth={2} />
+          {tDash("entry")}
+        </button>
         <button
           ref={openFolderBtn}
           className="sidebar-openbtn"

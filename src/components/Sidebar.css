@@ -93,6 +93,11 @@
 }
 .sidebar-rail-mid {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 8px;
+  gap: 6px;
 }
 .sidebar-rail-foot {
   padding: 10px 0 14px;
@@ -398,11 +403,14 @@
   outline-offset: 1px;
 }
 
-/* === 底部「開啟其他資料夾」=== */
+/* === 底部「儀表板入口 + 開啟其他資料夾」=== */
 .sidebar-foot {
   padding: 10px 14px 14px;
   border-top: 1px solid var(--divider);
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .sidebar-openbtn {
@@ -434,6 +442,25 @@
 }
 
 .sidebar-openbtn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* 儀表板入口：ghost 風格（透明底、dim 文字、hover 帶底色）*/
+.sidebar-openbtn--ghost {
+  background: transparent;
+  color: var(--dim);
+  border: 1px solid var(--border);
+  box-shadow: none;
+}
+
+.sidebar-openbtn--ghost:hover {
+  filter: none;
+  background: var(--hover);
+  color: var(--text);
+}
+
+.sidebar-openbtn--ghost:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
 }

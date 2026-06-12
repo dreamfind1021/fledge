@@ -173,6 +173,11 @@ export async function resizeSession(
   }
 }
 
+export interface SubscriptionItem {
+  name: string;
+  monthly_cost: number;
+}
+
 export interface AppConfigData {
   version: number;
   roots: { path: string; default_account: string }[];
@@ -180,6 +185,7 @@ export interface AppConfigData {
   manual_projects: { path: string; account: string }[];
   project_overrides: Record<string, { account: string }>;
   ui: { theme: string };
+  subscriptions?: SubscriptionItem[];  // 後端 to_dict 總是回傳此欄；舊前端快取若無此欄視為空陣列
   // startup-only metadata：僅 GET /api/config 與 onboard 回應帶（設定檔不存在為 true）。
   // 其他 config write 不帶 → 寫入後此欄位為 undefined 屬正常；只在 App 啟動讀一次決定是否進
   // onboarding，之後改用獨立的 showOnboarding state，勿用於 render gate（Codex F-7）。
@@ -243,6 +249,13 @@ export async function onboard(
   });
   if (!resp.ok) throw new Error(`onboard failed: ${resp.status}`);
   return resp.json();
+}
+
+export async function putSubscriptions(
+  port: number,
+  subs: SubscriptionItem[],
+): Promise<AppConfigData> {
+  return configWrite(port, "/api/config/subscriptions", "PUT", { subscriptions: subs });
 }
 
 export const addAccount = (port: number, key: string, config_dir: string, label: string) =>

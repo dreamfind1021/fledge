@@ -325,3 +325,21 @@
   font-size: 13.5px;
   border-radius: 9px;
 }
+
+/* ── 訂閱費用 section ── */
+.settings-subs-hint {
+  font-size: 12px;
+  color: var(--faint);
+  margin-bottom: 8px;
+  margin-top: -4px;
+}
+
+/* 名稱欄較寬，費用欄固定 110px */
+.settings-subs-name {
+  flex: 1;
+}
+
+.settings-subs-cost {
+  flex: 0 0 110px;
+  font-family: var(--font-ui);
+}

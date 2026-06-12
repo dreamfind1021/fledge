@@ -4,6 +4,7 @@ import { isLiveClaudeTab } from "../lib/liveTab";
 import {
   Project,
   AppConfigData,
+  SubscriptionItem,
   createSession,
   closeSession,
   fetchProjects,
@@ -20,6 +21,7 @@ import {
   setAccountConfigDir,
   setAccountLabel,
   removeAccount,
+  putSubscriptions,
 } from "../lib/sidecar";
 
 // loadProjects 的 request-id：只套用最新一次 loadProjects 的結果，
@@ -79,6 +81,7 @@ interface AppState {
   setAccountConfigDir: (key: string, configDir: string) => Promise<void>;
   setAccountLabel: (key: string, label: string) => Promise<void>;
   removeAccount: (key: string, reassignTo?: string) => Promise<void>;
+  saveSubscriptions: (subs: SubscriptionItem[]) => Promise<void>;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -241,6 +244,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (port == null) return;
     set({ config: await removeAccount(port, key, reassignTo) });
     await get().loadProjects(); // 級聯 reassign 改了 account 分組
+  },
+  saveSubscriptions: async (subs) => {
+    const port = get().port;
+    if (port == null) return;
+    set({ config: await putSubscriptions(port, subs) });
   },
 
   closeTab: async (tabId) => {

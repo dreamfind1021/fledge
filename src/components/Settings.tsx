@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { Settings as SettingsIcon, X, Folder, FolderPlus, Users, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { Settings as SettingsIcon, X, Folder, FolderPlus, Users, Trash2, ChartColumn } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { pickDirectory } from "../lib/dialog";
 import { AccountsEditor } from "./AccountsEditor";
+import { validateSubscriptions } from "../lib/subscriptionsForm";
 import "./Settings.css";
 
 interface SettingsProps {
@@ -10,6 +12,7 @@ interface SettingsProps {
 }
 
 export function Settings({ onClose }: SettingsProps) {
+  const { t } = useTranslation("dashboard");
   const config = useAppStore((s) => s.config);
   const loadConfig = useAppStore((s) => s.loadConfig);
   const addRoot = useAppStore((s) => s.addRoot);
@@ -17,6 +20,7 @@ export function Settings({ onClose }: SettingsProps) {
   const setRootAccount = useAppStore((s) => s.setRootAccount);
   const addManual = useAppStore((s) => s.addManual);
   const removeManual = useAppStore((s) => s.removeManual);
+  const saveSubscriptions = useAppStore((s) => s.saveSubscriptions);
 
   const [newRootPath, setNewRootPath] = useState("");
   const [newRootAccount, setNewRootAccount] = useState("work");
@@ -24,9 +28,24 @@ export function Settings({ onClose }: SettingsProps) {
   const [newManualAccount, setNewManualAccount] = useState("work");
   const [error, setError] = useState<string | null>(null);
 
+  // 訂閱費編輯 state（以字串保留輸入中的值，存檔時才 parse；?? [] 兼容後端未回傳舊快取）
+  const [subsRows, setSubsRows] = useState<{ name: string; monthly_cost: string }[]>(() =>
+    (config?.subscriptions ?? []).map((s) => ({ name: s.name, monthly_cost: String(s.monthly_cost) })),
+  );
+  const [subsError, setSubsError] = useState<string | null>(null);
+
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
+
+  // config 初次載入後同步 subsRows（Settings 打開時 config 可能尚未就緒）
+  const [subsInitialized, setSubsInitialized] = useState(false);
+  useEffect(() => {
+    if (!subsInitialized && config != null) {
+      setSubsRows((config.subscriptions ?? []).map((s) => ({ name: s.name, monthly_cost: String(s.monthly_cost) })));
+      setSubsInitialized(true);
+    }
+  }, [config, subsInitialized]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -191,6 +210,75 @@ export function Settings({ onClose }: SettingsProps) {
             帳號
           </div>
           <AccountsEditor />
+
+          {/* 訂閱費用 */}
+          <div className="settings-sec-title">
+            <ChartColumn size={14} strokeWidth={2} />
+            {t("settings.subsTitle")}
+          </div>
+          <div className="settings-subs-hint">{t("settings.subsHint")}</div>
+          {subsRows.map((row, i) => (
+            <div key={i} className="settings-rrow">
+              <input
+                className="settings-input settings-subs-name"
+                placeholder={t("settings.name")}
+                value={row.name}
+                onChange={(e) => {
+                  setSubsError(null);
+                  setSubsRows((rows) => rows.map((r, j) => j === i ? { ...r, name: e.target.value } : r));
+                }}
+              />
+              <input
+                className="settings-input settings-subs-cost"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder={t("settings.monthlyCost")}
+                value={row.monthly_cost}
+                onChange={(e) => {
+                  setSubsError(null);
+                  setSubsRows((rows) => rows.map((r, j) => j === i ? { ...r, monthly_cost: e.target.value } : r));
+                }}
+              />
+              <button
+                className="settings-del"
+                aria-label={t("settings.remove")}
+                onClick={() => {
+                  setSubsError(null);
+                  setSubsRows((rows) => rows.filter((_, j) => j !== i));
+                }}
+              >
+                <Trash2 size={15} strokeWidth={1.75} />
+              </button>
+            </div>
+          ))}
+          {subsError && <div className="settings-error">{subsError}</div>}
+          <div className="settings-add-row">
+            <button
+              className="settings-btn-ghost"
+              onClick={() => setSubsRows((rows) => [...rows, { name: "", monthly_cost: "" }])}
+            >
+              {t("settings.add")}
+            </button>
+            <button
+              className="settings-btn-primary"
+              onClick={async () => {
+                setSubsError(null);
+                const result = validateSubscriptions(subsRows);
+                if (!result.ok) {
+                  setSubsError(result.error === "name" ? t("settings.name") + " 不可空白" : t("settings.monthlyCost") + " 需為非負數字");
+                  return;
+                }
+                try {
+                  await saveSubscriptions(result.value);
+                } catch (e) {
+                  setSubsError(`儲存失敗：${e instanceof Error ? e.message : String(e)}`);
+                }
+              }}
+            >
+              儲存
+            </button>
+          </div>
 
         </div>
 
