@@ -1,5 +1,5 @@
 {
-  "tabTitle": "Dashboard",
+  "tabTitle": "Data Panel",
   "entry": "Usage Dashboard",
   "time": { "yesterday": "Yesterday" },
   "kpi": { "month": "Month API value", "week": "This week", "today": "Today",

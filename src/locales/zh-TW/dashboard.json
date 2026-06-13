@@ -1,5 +1,5 @@
 {
-  "tabTitle": "觀測",
+  "tabTitle": "數據面板",
   "entry": "觀測儀表板",
   "time": { "yesterday": "昨天" },
   "kpi": { "month": "本月等價 API 價值", "week": "本週", "today": "今日",
