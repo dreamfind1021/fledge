@@ -14,5 +14,17 @@
     "browse": "瀏覽…",
     "save": "儲存",
     "saveError": "儲存失敗：{{msg}}"
+  },
+  "detail": {
+    "empty": "選擇左側任一記憶以閱讀全文",
+    "related": "相關專案",
+    "suggested": "建議 topic",
+    "openErr": "讀取失敗"
+  },
+  "a11y": {
+    "expand": "展開",
+    "collapse": "收合",
+    "confirmSuggest": "確認建議",
+    "dismissSuggest": "忽略建議"
   }
 }

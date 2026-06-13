@@ -14,5 +14,17 @@
     "browse": "Browse…",
     "save": "Save",
     "saveError": "Failed to save: {{msg}}"
+  },
+  "detail": {
+    "empty": "Select a memory on the left to read it",
+    "related": "Related projects",
+    "suggested": "Suggested topics",
+    "openErr": "Failed to load"
+  },
+  "a11y": {
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "confirmSuggest": "Confirm suggestion",
+    "dismissSuggest": "Dismiss suggestion"
   }
 }
