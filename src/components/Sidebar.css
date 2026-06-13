@@ -91,13 +91,9 @@
 .sidebar-rail-top {
   padding: 16px 0 12px;
 }
-.sidebar-rail-mid {
+/* 純彈性 spacer：把 foot 推到底（儀表板 icon 已併入 rail-top） */
+.sidebar-rail-spacer {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding-top: 8px;
-  gap: 6px;
 }
 .sidebar-rail-foot {
   padding: 10px 0 14px;
@@ -138,9 +134,20 @@
   background: var(--hover);
 }
 
+/* === 搜尋 + 儀表板並排列 === */
+/* 列容器：承接原本 search 的左右 margin；align stretch 讓方形鈕高度對齊搜尋 pill */
+.sidebar-topbar {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin: 0 14px 8px;
+  flex-shrink: 0;
+}
+
 /* === 搜尋 pill === */
 .sidebar-search {
-  margin: 0 14px 8px;
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -152,7 +159,6 @@
   font-size: 13px;
   font-family: var(--font-ui);
   cursor: pointer;
-  flex-shrink: 0;
   text-align: left;
 }
 
@@ -167,6 +173,9 @@
 
 .sidebar-search-text {
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-search .kbd {
@@ -461,6 +470,29 @@
 }
 
 .sidebar-openbtn--ghost:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* 儀表板入口：搜尋列右側方形 icon 鈕，高度隨列 align stretch 對齊搜尋 pill */
+.sidebar-dash-btn {
+  flex-shrink: 0;
+  width: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 0;
+}
+.sidebar-dash-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+.sidebar-dash-btn:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
 }

@@ -167,7 +167,8 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
     />
   );
 
-  // 收合：窄軌（寬度對齊品牌圖示）。三段式 flex——上(品牌/展開/設定)、中(nav 留空、未來儀表板)、下(開資料夾)。
+  // 收合：窄軌（寬度對齊品牌圖示）。三段式 flex——上(品牌/展開/設定/儀表板)、中(彈性 spacer)、下(開資料夾)。
+  // 儀表板 icon 併入頂部群組，與展開／設定 icon 等距（6px），避免擺中段 flex:1 撐出過大間距（實機視覺回饋）。
   if (collapsed) {
     return (
       <div className="sidebar is-collapsed">
@@ -189,9 +190,6 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           >
             <Settings size={18} strokeWidth={1.75} />
           </button>
-        </div>
-        {/* 中段：儀表板入口 icon */}
-        <div className="sidebar-rail-mid">
           <button
             className="sidebar-rail-btn"
             title={tDash("entry")}
@@ -200,6 +198,8 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
             <ChartColumn size={18} strokeWidth={1.75} />
           </button>
         </div>
+        {/* 彈性 spacer：把開資料夾鈕推到底 */}
+        <div className="sidebar-rail-spacer" />
         <div className="sidebar-rail-foot">
           <button
             ref={openFolderBtn}
@@ -241,16 +241,26 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
         </button>
       </div>
 
-      {/* === 搜尋 pill === */}
-      <button
-        className="sidebar-search"
-        onClick={onOpenPicker}
-        aria-label="搜尋專案"
-      >
-        <Search size={14} strokeWidth={1.75} />
-        <span className="sidebar-search-text">搜尋專案…</span>
-        <kbd className="kbd">⌘T</kbd>
-      </button>
+      {/* === 搜尋 + 儀表板（並排一行，省垂直空間）=== */}
+      <div className="sidebar-topbar">
+        <button
+          className="sidebar-search"
+          onClick={onOpenPicker}
+          aria-label="搜尋專案"
+        >
+          <Search size={14} strokeWidth={1.75} />
+          <span className="sidebar-search-text">搜尋專案…</span>
+          <kbd className="kbd">⌘T</kbd>
+        </button>
+        <button
+          className="sidebar-dash-btn"
+          onClick={() => useAppStore.getState().openDashboard()}
+          aria-label={tDash("entry")}
+          title={tDash("entry")}
+        >
+          <ChartColumn size={16} strokeWidth={1.75} />
+        </button>
+      </div>
 
       {/* === 捲動群組清單 === */}
       <div className="sidebar-scroll">
@@ -297,15 +307,8 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
         ))}
       </div>
 
-      {/* === 底部：儀表板入口 + 開啟其他資料夾 === */}
+      {/* === 底部：開啟其他資料夾 === */}
       <div className="sidebar-foot">
-        <button
-          className="sidebar-openbtn sidebar-openbtn--ghost"
-          onClick={() => useAppStore.getState().openDashboard()}
-        >
-          <ChartColumn size={15} strokeWidth={2} />
-          {tDash("entry")}
-        </button>
         <button
           ref={openFolderBtn}
           className="sidebar-openbtn"
