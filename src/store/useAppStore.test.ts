@@ -208,6 +208,13 @@ describe("useAppStore", () => {
     expect(useAppStore.getState().tabs).toHaveLength(0);
   });
 
+  it("openMemory 單例：重複呼叫只一個 memory tab", () => {
+    const s = useAppStore.getState();
+    s.openMemory(); s.openMemory();
+    const mem = useAppStore.getState().tabs.filter((t) => t.kind === "memory");
+    expect(mem.length).toBe(1);
+  });
+
   it("removeAccount 帶 reassignTo 呼叫後重掃", async () => {
     const cfg = {
       version: 1, roots: [], accounts: { work: { config_dir: "~/.claude", label: "工作" } },

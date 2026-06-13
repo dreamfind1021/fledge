@@ -35,7 +35,7 @@ export interface Tab {
   title: string;
   sessionId: string | null; // null = 建立中
   status: "creating" | "ready" | "error" | "offline" | "ended";
-  kind: "claude" | "terminal" | "dashboard"; // 分頁種類：claude session、純終端機 shell 或觀測儀表板
+  kind: "claude" | "terminal" | "dashboard" | "memory"; // 分頁種類：claude session、純終端機 shell、觀測儀表板或記憶面板
   error?: string;
   activity?: "working" | "idle"; // 就緒後忙碌態（best-effort，只在 status==="ready" 有意義）
 }
@@ -58,6 +58,7 @@ interface AppState {
   loadProjects: () => Promise<void>;
   openTab: (project: Project, accountOverride?: string, kind?: "claude" | "terminal") => Promise<void>;
   openDashboard: () => void;
+  openMemory: () => void;
   closeTab: (tabId: string) => Promise<void>;
   requestCloseTab: (tabId: string) => void;
   setPendingCloseTab: (tabId: string | null) => void;
@@ -168,6 +169,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
 
+  openMemory: () => {
+    // 單例：已開啟則 focus（鏡像 openDashboard，純前端 tab、無 session）
+    const existing = get().tabs.find((t) => t.kind === "memory");
+    if (existing) { set({ activeTabId: existing.id }); return; }
+    const id = `mem-${Date.now()}`;
+    set((s) => ({
+      tabs: [...s.tabs, { id, projectPath: "", account: "", title: "", sessionId: null,
+                          status: "ready", kind: "memory" } as Tab],
+      activeTabId: id,
+    }));
+  },
+
   loadConfig: async () => {
     const port = get().port;
     if (port == null) return;
@@ -263,7 +276,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         : activeTabId;
     // 先移 tab（UI 即時）；兩類 tab 均需此 set，故提前執行後再依種類決定後續
     set({ tabs: remaining, activeTabId: newActive });
-    if (tab.kind === "dashboard") {
+    if (tab.kind === "dashboard" || tab.kind === "memory") {
       // 純前端 tab：不打 closeSession，移除後直接結束
       return;
     }
@@ -310,7 +323,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   restartTab: async (tabId) => {
     const tab = get().tabs.find((t) => t.id === tabId);
     if (!tab) return;
-    if (tab.kind === "dashboard") return; // dashboard 純前端 tab，無 session 無法重啟
+    if (tab.kind === "dashboard" || tab.kind === "memory") return; // 純前端 tab，無 session 無法重啟
     const project = get().projects.find((p) => p.path === tab.projectPath);
     if (!project) return; // 專案已不在清單（root/manual 被移除）→ 不動，避免無聲銷毀 ended tab
     await get().closeTab(tabId);
@@ -318,11 +331,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // sidecar 重啟：舊 session 全沒了，所有 tab 標 ended、清 sessionId（前端原子轉移用）。
-  // dashboard tab 純前端、無 session，不標 ended（否則會出現重啟按鈕、但 dashboard 無法重啟）。
+  // dashboard／memory tab 純前端、無 session，不標 ended（否則會出現重啟按鈕、但純前端 tab 無法重啟）。
   markAllTabsEnded: () =>
     set((s) => ({
       tabs: s.tabs.map((t) =>
-        t.kind === "dashboard" ? t : { ...t, status: "ended" as const, sessionId: null },
+        t.kind === "dashboard" || t.kind === "memory" ? t : { ...t, status: "ended" as const, sessionId: null },
       ),
     })),
 }));
