@@ -351,3 +351,49 @@ export async function fetchUsageDashboard(
   if (!j.kpi) throw new Error(j?.scan_meta?.error ?? "scan failed");
   return j;
 }
+
+// ── 記憶層 ──
+export interface MemoryItem {
+  source: "native" | "kms";
+  scope: "global" | "project" | "kb" | "unknown";
+  path: string; title: string; type: string; summary: string;
+  tags: string[]; status: string; links: string[]; mtime: number;
+  account?: string; project?: string; attribution?: string; domain?: string;
+  topic?: string; snippet?: string;        // topic folder（kms）/ 搜尋命中片段
+}
+export interface MemorySuggestion { project: string; topic: string; project_name?: string; topic_name?: string; }
+export interface MemoryProject { project: string; items: MemoryItem[]; related: string[]; suggestions: MemorySuggestion[]; }
+export interface MemoryOverview {
+  global: MemoryItem[]; projects: MemoryProject[]; kb: MemoryItem[];
+  unattributed: MemoryItem[]; unknown: MemoryItem[];           // 三態/unknown 可見
+  scan_meta: { total: number; unknown_count: number; unattributed_count: number };
+}
+export interface MemoryRelated { project: string; related: string[]; suggestions: MemorySuggestion[]; }
+
+// auth 用法沿用既有：authHeaders() 回 Record<string,string>，GET 放在 { headers }，
+// JSON write 放在 headers 內展開；URL 走既有 base(port) 而非硬編。
+export async function fetchMemoryOverview(port: number, q: string): Promise<MemoryOverview> {
+  const r = await fetch(`${base(port)}/memory/overview?q=${encodeURIComponent(q)}`, { headers: authHeaders() });
+  const j = await r.json();
+  if (!Array.isArray(j.projects)) throw new Error("bad memory overview");
+  return j as MemoryOverview;
+}
+export async function fetchMemoryRelated(port: number, project: string): Promise<MemoryRelated> {
+  const r = await fetch(`${base(port)}/memory/related?project=${encodeURIComponent(project)}`, { headers: authHeaders() });
+  return (await r.json()) as MemoryRelated;
+}
+export async function fetchMemoryItem(port: number, path: string): Promise<{ path: string; title: string; body: string }> {
+  const r = await fetch(`${base(port)}/memory/item?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
+  return await r.json();
+}
+async function memoryJson(port: number, route: string, method: "POST" | "DELETE", body: object): Promise<void> {
+  await fetch(`${base(port)}/memory/${route}`, {
+    method,
+    headers: { "Content-Type": "application/json", ...authHeaders() },   // token 在 headers 內
+    body: JSON.stringify(body),
+  });
+}
+export const confirmSuggestion = (p: number, project: string, topic: string) => memoryJson(p, "links/confirm", "POST", { project, topic });
+export const dismissSuggestion = (p: number, project: string, topic: string) => memoryJson(p, "links/dismiss", "POST", { project, topic });
+export const addMemoryLink = (p: number, from: string, to: string, note = "") => memoryJson(p, "links", "POST", { from, to, note });
+export const removeMemoryLink = (p: number, from: string, to: string) => memoryJson(p, "links", "DELETE", { from, to });

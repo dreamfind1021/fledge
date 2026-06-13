@@ -75,7 +75,14 @@ describe("auth token", () => {
     await m.onboard(1, []);
     await m.checkDir(1, "/x");
     await m.fetchUsageDashboard(1);
-    expect(seen.length).toBeGreaterThanOrEqual(12);
+    await m.fetchMemoryOverview(1, "");
+    await m.fetchMemoryRelated(1, "/p");
+    await m.fetchMemoryItem(1, "/p/x.md");
+    await m.confirmSuggestion(1, "/p", "topic");
+    await m.dismissSuggestion(1, "/p", "topic");
+    await m.addMemoryLink(1, "/a", "/b");
+    await m.removeMemoryLink(1, "/a", "/b");
+    expect(seen.length).toBeGreaterThanOrEqual(19);
     for (const h of seen) expect(h["X-Fledge-Token"]).toBe("tok");
     setAuthToken(null);
   });
