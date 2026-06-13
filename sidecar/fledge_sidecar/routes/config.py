@@ -283,3 +283,18 @@ def put_subscriptions(body: SubscriptionsBody):
         config.subscriptions = cleaned
         config.save()
         return config.to_dict()
+
+
+class KmsRootBody(BaseModel):
+    path: str = ""
+
+
+@router.put("/api/config/kms-root")
+def put_kms_root(body: KmsRootBody):
+    """設 KMS（Obsidian 知識庫）根目錄。存 raw（含 ~，掃描時才展開）；空字串＝清除。
+    不驗目錄存在——掃描器查無目錄回 [] 即可（spec：保持簡單）。"""
+    with _config_lock:
+        config = AppConfig.load()
+        config.set_kms_root(body.path)
+        config.save()
+        return {"ok": True, "kms_root": config.kms_root}

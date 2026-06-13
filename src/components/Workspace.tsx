@@ -1,6 +1,8 @@
 import { TabBar } from "./TabBar";
 import { Terminal } from "./Terminal";
 import Dashboard from "./Dashboard";
+import { Memory } from "./Memory";
+import { RelatedFloat } from "./RelatedFloat";
 import { useAppStore } from "../store/useAppStore";
 import "./Workspace.css";
 
@@ -39,7 +41,9 @@ export function Workspace({ connError }: { connError: string | null }) {
                   padding: 4,
                 }}
               >
-                {t.kind === "dashboard" ? (
+                {t.kind === "memory" ? (
+                  <Memory port={port} isActive={t.id === activeTabId} />
+                ) : t.kind === "dashboard" ? (
                   <Dashboard port={port} isActive={t.id === activeTabId} />
                 ) : (t.status === "ready" || t.status === "offline") && t.sessionId ? (
                   // 左側 inset 12px 讓終端機文字不貼著 sidebar——縫隙露出 ws-term-area 的 --term-bg。
@@ -52,6 +56,11 @@ export function Workspace({ connError }: { connError: string | null }) {
                       tabId={t.id}
                       isActive={t.id === activeTabId}
                     />
+                    {/* 右下懸浮「相關」：只給有 projectPath 的 session 分頁（claude／terminal）；
+                        此 div 已是 position:absolute（即定位包覆塊），float 以它為錨點、不改終端機尺寸 */}
+                    {(t.kind === "claude" || t.kind === "terminal") && t.projectPath && (
+                      <RelatedFloat port={port} projectPath={t.projectPath} />
+                    )}
                     {t.status === "offline" && (
                       /* offline badge：連線中斷 warning pill（§5 offline — --dim + 標記）*/
                       <div className="ws-offline-badge">

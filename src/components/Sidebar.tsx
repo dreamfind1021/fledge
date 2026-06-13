@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, ChevronsLeft, ChevronsRight, ChartColumn } from "lucide-react";
+import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, ChevronsLeft, ChevronsRight, ChartColumn, Brain } from "lucide-react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useAppStore } from "../store/useAppStore";
 import type { Project } from "../lib/sidecar";
@@ -14,6 +14,7 @@ import "./Sidebar.css";
 
 export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => void; onOpenSettings: () => void }) {
   const { t: tDash } = useTranslation("dashboard");
+  const { t: tMem } = useTranslation("memory");
   const projects = useAppStore((s) => s.projects);
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
@@ -197,6 +198,14 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           >
             <ChartColumn size={18} strokeWidth={1.75} />
           </button>
+          <button
+            className="sidebar-rail-btn"
+            aria-label={tMem("entry")}
+            title={tMem("entry")}
+            onClick={() => useAppStore.getState().openMemory()}
+          >
+            <Brain size={18} strokeWidth={1.75} />
+          </button>
         </div>
         {/* 彈性 spacer：把開資料夾鈕推到底 */}
         <div className="sidebar-rail-spacer" />
@@ -259,6 +268,14 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           title={tDash("entry")}
         >
           <ChartColumn size={16} strokeWidth={1.75} />
+        </button>
+        <button
+          className="sidebar-dash-btn"
+          onClick={() => useAppStore.getState().openMemory()}
+          aria-label={tMem("entry")}
+          title={tMem("entry")}
+        >
+          <Brain size={16} strokeWidth={1.75} />
         </button>
       </div>
 

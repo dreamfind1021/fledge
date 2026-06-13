@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Settings as SettingsIcon, X, Folder, FolderPlus, Users, Trash2, ChartColumn } from "lucide-react";
+import { Settings as SettingsIcon, X, Folder, FolderPlus, Users, Trash2, ChartColumn, Brain } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { pickDirectory } from "../lib/dialog";
+import { putKmsRoot } from "../lib/sidecar";
 import { AccountsEditor } from "./AccountsEditor";
 import { validateSubscriptions } from "../lib/subscriptionsForm";
 import "./Settings.css";
@@ -13,7 +14,9 @@ interface SettingsProps {
 
 export function Settings({ onClose }: SettingsProps) {
   const { t } = useTranslation("dashboard");
+  const { t: tMem } = useTranslation("memory");
   const config = useAppStore((s) => s.config);
+  const port = useAppStore((s) => s.port);
   const loadConfig = useAppStore((s) => s.loadConfig);
   const addRoot = useAppStore((s) => s.addRoot);
   const removeRoot = useAppStore((s) => s.removeRoot);
@@ -34,15 +37,20 @@ export function Settings({ onClose }: SettingsProps) {
   );
   const [subsError, setSubsError] = useState<string | null>(null);
 
+  // KMS 根目錄編輯 state（字串輸入，存檔時才送；初值在 config 載入後同步）
+  const [kmsRoot, setKmsRoot] = useState("");
+  const [kmsError, setKmsError] = useState<string | null>(null);
+
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
 
-  // config 初次載入後同步 subsRows（Settings 打開時 config 可能尚未就緒）
+  // config 初次載入後同步 subsRows / kmsRoot（Settings 打開時 config 可能尚未就緒）
   const [subsInitialized, setSubsInitialized] = useState(false);
   useEffect(() => {
     if (!subsInitialized && config != null) {
       setSubsRows((config.subscriptions ?? []).map((s) => ({ name: s.name, monthly_cost: String(s.monthly_cost) })));
+      setKmsRoot(config.kms_root ?? "");
       setSubsInitialized(true);
     }
   }, [config, subsInitialized]);
@@ -277,6 +285,50 @@ export function Settings({ onClose }: SettingsProps) {
               }}
             >
               {t("settings.save")}
+            </button>
+          </div>
+
+          {/* 記憶層 KMS 根目錄 */}
+          <div className="settings-sec-title">
+            <Brain size={14} strokeWidth={2} />
+            {tMem("settings.kmsRoot")}
+          </div>
+          <div className="settings-subs-hint">{tMem("settings.kmsRootHint")}</div>
+          {kmsError && <div className="settings-error">{kmsError}</div>}
+          <div className="settings-add-row">
+            <input
+              className="settings-input"
+              placeholder={tMem("settings.kmsRootPlaceholder")}
+              value={kmsRoot}
+              onChange={(e) => {
+                setKmsError(null);
+                setKmsRoot(e.target.value);
+              }}
+            />
+            <button
+              onClick={async () => {
+                const p = await pickDirectory();
+                if (p) {
+                  setKmsError(null);
+                  setKmsRoot(p);
+                }
+              }}
+              className="settings-btn-ghost"
+            >{tMem("settings.browse")}</button>
+            <button
+              className="settings-btn-primary"
+              onClick={async () => {
+                if (port == null) return;
+                setKmsError(null);
+                try {
+                  await putKmsRoot(port, kmsRoot.trim());
+                  await loadConfig(); // 回讀讓 config.kms_root 與其他面板同步
+                } catch (e) {
+                  setKmsError(tMem("settings.saveError", { msg: e instanceof Error ? e.message : String(e) }));
+                }
+              }}
+            >
+              {tMem("settings.save")}
             </button>
           </div>
 

@@ -313,6 +313,23 @@ def test_remove_nonexistent_path_ok(tmp_path: Path, monkeypatch):
     assert resp.status_code == 200
 
 
+def test_put_kms_root(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.put("/api/config/kms-root", json={"path": "~/vault"})
+    assert resp.status_code == 200
+    assert resp.json()["kms_root"] == "~/vault"  # raw（含 ~）原樣存，不展開
+
+
+def test_put_kms_root_clears(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    client.put("/api/config/kms-root", json={"path": "~/vault"})
+    resp = client.put("/api/config/kms-root", json={"path": ""})
+    assert resp.status_code == 200
+    assert resp.json()["kms_root"] == ""  # 空字串清除
+
+
 def test_check_dir_status(tmp_path: Path, monkeypatch):
     _write_config(tmp_path, monkeypatch)
     client = TestClient(create_app())

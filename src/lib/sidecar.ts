@@ -185,6 +185,8 @@ export interface AppConfigData {
   manual_projects: { path: string; account: string }[];
   project_overrides: Record<string, { account: string }>;
   ui: { theme: string };
+  // 後端 to_dict 總是回傳；標選用是為相容舊前端快取（無此欄視為未設），讀取端一律 ?? "" 兜底
+  kms_root?: string;  // KMS（Obsidian 知識庫）根目錄，raw 含 ~；未設為空字串
   subscriptions?: SubscriptionItem[];  // 後端 to_dict 總是回傳此欄；舊前端快取若無此欄視為空陣列
   // startup-only metadata：僅 GET /api/config 與 onboard 回應帶（設定檔不存在為 true）。
   // 其他 config write 不帶 → 寫入後此欄位為 undefined 屬正常；只在 App 啟動讀一次決定是否進
@@ -256,6 +258,27 @@ export async function putSubscriptions(
   subs: SubscriptionItem[],
 ): Promise<AppConfigData> {
   return configWrite(port, "/api/config/subscriptions", "PUT", { subscriptions: subs });
+}
+
+// 設 KMS 根目錄：後端回 {ok, kms_root}（非 full config），故不走 configWrite；
+// 沿用相同 auth headers / base(port) / JSON，並抽出 FastAPI detail 當錯誤訊息。
+export async function putKmsRoot(port: number, path: string): Promise<{ ok: boolean; kms_root: string }> {
+  const resp = await fetch(`${base(port)}/api/config/kms-root`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ path }),
+  });
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try {
+      const j = await resp.json();
+      if (j?.detail) detail = j.detail;
+    } catch {
+      /* 非 JSON body → 用 HTTP 狀態碼 */
+    }
+    throw new Error(detail);
+  }
+  return resp.json();
 }
 
 export const addAccount = (port: number, key: string, config_dir: string, label: string) =>
@@ -351,3 +374,51 @@ export async function fetchUsageDashboard(
   if (!j.kpi) throw new Error(j?.scan_meta?.error ?? "scan failed");
   return j;
 }
+
+// ── 記憶層 ──
+export interface MemoryItem {
+  source: "native" | "kms";
+  scope: "global" | "project" | "kb" | "unknown";
+  path: string; title: string; type: string; summary: string;
+  tags: string[]; status: string; links: string[]; mtime: number;
+  account?: string; project?: string; attribution?: string; domain?: string;
+  topic?: string; snippet?: string;        // topic folder（kms）/ 搜尋命中片段
+}
+export interface MemorySuggestion { project: string; topic: string; project_name?: string; topic_name?: string; }
+export interface MemoryProject { project: string; items: MemoryItem[]; related: string[]; suggestions: MemorySuggestion[]; }
+export interface MemoryOverview {
+  global: MemoryItem[]; projects: MemoryProject[]; kb: MemoryItem[];
+  unattributed: MemoryItem[]; unknown: MemoryItem[];           // 三態/unknown 可見
+  scan_meta: { total: number; unknown_count: number; unattributed_count: number };
+}
+export interface MemoryRelated { project: string; related: string[]; suggestions: MemorySuggestion[]; }
+
+// auth 用法沿用既有：authHeaders() 回 Record<string,string>，GET 放在 { headers }，
+// JSON write 放在 headers 內展開；URL 走既有 base(port) 而非硬編。
+export async function fetchMemoryOverview(port: number, q: string): Promise<MemoryOverview> {
+  const r = await fetch(`${base(port)}/memory/overview?q=${encodeURIComponent(q)}`, { headers: authHeaders() });
+  const j = await r.json();
+  if (!Array.isArray(j.projects)) throw new Error("bad memory overview");
+  return j as MemoryOverview;
+}
+export async function fetchMemoryRelated(port: number, project: string): Promise<MemoryRelated> {
+  const r = await fetch(`${base(port)}/memory/related?project=${encodeURIComponent(project)}`, { headers: authHeaders() });
+  return (await r.json()) as MemoryRelated;
+}
+export async function fetchMemoryItem(port: number, path: string): Promise<{ path: string; title: string; body: string }> {
+  const r = await fetch(`${base(port)}/memory/item?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(`memory item ${r.status}`);   // 讓詳情面板能顯示載入失敗
+  return await r.json();
+}
+async function memoryJson(port: number, route: string, method: "POST" | "DELETE", body: object): Promise<void> {
+  const r = await fetch(`${base(port)}/memory/${route}`, {
+    method,
+    headers: { "Content-Type": "application/json", ...authHeaders() },   // token 在 headers 內
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`memory ${route} ${r.status}`);   // 寫入失敗 throw 讓右欄 chip 顯示錯誤
+}
+export const confirmSuggestion = (p: number, project: string, topic: string) => memoryJson(p, "links/confirm", "POST", { project, topic });
+export const dismissSuggestion = (p: number, project: string, topic: string) => memoryJson(p, "links/dismiss", "POST", { project, topic });
+export const addMemoryLink = (p: number, from: string, to: string, note = "") => memoryJson(p, "links", "POST", { from, to, note });
+export const removeMemoryLink = (p: number, from: string, to: string) => memoryJson(p, "links", "DELETE", { from, to });

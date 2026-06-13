@@ -53,6 +53,7 @@ class AppConfig:
     project_overrides: dict[str, dict[str, str]] = field(default_factory=dict)
     ui: dict[str, Any] = field(default_factory=dict)
     subscriptions: list[dict[str, Any]] = field(default_factory=list)
+    kms_root: str = ""  # KMS 根目錄，raw 含 ~，runtime 才 expanduser
 
     @classmethod
     def load(cls, path: Path | None = None) -> AppConfig:
@@ -95,6 +96,7 @@ class AppConfig:
             project_overrides=migrated_overrides,
             ui=data.get("ui", DEFAULT_CONFIG["ui"]),
             subscriptions=data.get("subscriptions", []),
+            kms_root=data.get("kms_root", "") or "",
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -106,6 +108,7 @@ class AppConfig:
             "project_overrides": self.project_overrides,
             "ui": self.ui,
             "subscriptions": self.subscriptions,
+            "kms_root": self.kms_root,
         }
 
     def save(self) -> None:
@@ -173,3 +176,7 @@ class AppConfig:
                 if o["account"] == key:
                     o["account"] = reassign_to
         self.accounts.pop(key, None)
+
+    def set_kms_root(self, path: str) -> None:
+        """存 raw（含 ~，trim 在路由層 expanduser）；空字串＝未設。"""
+        self.kms_root = (path or "").strip()
