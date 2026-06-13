@@ -1,6 +1,7 @@
 import { TabBar } from "./TabBar";
 import { Terminal } from "./Terminal";
 import Dashboard from "./Dashboard";
+import { Memory } from "./Memory";
 import { useAppStore } from "../store/useAppStore";
 import "./Workspace.css";
 
@@ -39,7 +40,9 @@ export function Workspace({ connError }: { connError: string | null }) {
                   padding: 4,
                 }}
               >
-                {t.kind === "dashboard" ? (
+                {t.kind === "memory" ? (
+                  <Memory port={port} isActive={t.id === activeTabId} />
+                ) : t.kind === "dashboard" ? (
                   <Dashboard port={port} isActive={t.id === activeTabId} />
                 ) : (t.status === "ready" || t.status === "offline") && t.sessionId ? (
                   // 左側 inset 12px 讓終端機文字不貼著 sidebar——縫隙露出 ws-term-area 的 --term-bg。

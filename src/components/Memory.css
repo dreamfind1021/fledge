@@ -1,0 +1,238 @@
+/* ── 記憶面板樣式（Nightfall token 直接沿用 var(--…)，從 demo HTML 移植）── */
+
+/* ── 根容器：單頁長滾動，寬度自動填滿視窗（扣側欄後的 Workspace 區）── */
+.mem-root {
+  height: 100%;
+  overflow-y: auto;
+  padding: 20px 24px 50px;
+  background: var(--bg);
+  box-sizing: border-box;
+}
+
+.mem-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  font-size: 13px;
+  min-height: 200px;
+}
+
+/* ── 頂列：標題 + 統計 ── */
+.mem-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.mem-head h1 {
+  font-size: 20px;
+  font-weight: 800;
+  margin: 0;
+}
+.mem-stat {
+  font-size: 12px;
+  color: var(--faint);
+  font-family: var(--font-mono);
+}
+
+/* ── 搜尋輸入 ── */
+.mem-search {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 13px;
+  color: var(--text);
+  font-size: 13.5px;
+  font-family: var(--font-ui);
+  margin-bottom: 18px;
+  box-sizing: border-box;
+}
+.mem-search::placeholder {
+  color: var(--faint);
+}
+.mem-search:focus {
+  outline: none;
+  border-color: var(--focus);
+}
+
+/* ── section 標題（全域 / 知識庫 / 未歸屬 / 未分類）── */
+.mem-sec-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  margin: 6px 0 10px;
+  letter-spacing: .01em;
+}
+/* 全域層用 session（青）作冷色資訊強調——index.css 無 demo 的 --global 藍 token，
+   不另造 palette，沿用既有 token；kb 用 ai（紫）、warn 用 warning（琥珀）對齊既有語義色 */
+.mem-sec-h.global { color: var(--session); }
+.mem-sec-h.kb { color: var(--ai); }
+.mem-sec-h.warn { color: var(--warning); }
+
+/* ── 全域層容器（冷色描邊強調，比照 demo global-box）── */
+.mem-global {
+  background: color-mix(in srgb, var(--session) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--session) 25%, var(--border));
+  border-radius: var(--win-radius);
+  padding: 8px;
+  margin-bottom: 22px;
+}
+
+/* 知識庫 / 未歸屬 / 未分類：與全域層同間距節奏 */
+.mem-kb,
+.mem-unattr,
+.mem-unknown {
+  margin-top: 24px;
+  margin-bottom: 14px;
+}
+
+/* ── 專案 block（主角）── */
+.pblock {
+  border: 1px solid var(--border);
+  border-radius: var(--win-radius);
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.pb-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 15px;
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+.pb-head .fo {
+  color: var(--primary);
+  font-size: 15px;
+  flex-shrink: 0;
+}
+.pb-head .pn {
+  font-size: 15px;
+  font-weight: 700;
+}
+.pb-body {
+  padding: 4px 8px 8px;
+}
+
+/* ── 相關專案 / topic chips（含建議）── */
+.pb-rel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.relchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.relchip:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--ai) 35%, var(--border));
+}
+.relchip .sg {
+  font-size: 8.5px;
+  font-weight: 700;
+  color: var(--warning);
+}
+/* 建議 chip 上的確認/忽略小按鈕 */
+.relchip.sug button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--dim);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.relchip.sug button:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* ── 記憶 row（全域 / 專案 / 知識庫共用）── */
+.mrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--row-radius);
+  cursor: pointer;
+}
+.mrow:hover {
+  background: var(--surface);
+}
+.mem-global .mrow:hover,
+.pblock .mrow:hover {
+  /* 內含在淺底容器內時用更亮一級的 hover 表面以維持對比 */
+  background: var(--surface-2);
+}
+.mrow .badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  border-radius: 5px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.mrow .badge.b-native {
+  background: color-mix(in srgb, var(--session) 18%, transparent);
+  color: var(--session);
+}
+.mrow .badge.b-kms {
+  background: color-mix(in srgb, var(--ai) 18%, transparent);
+  color: var(--ai);
+}
+.mrow .tx {
+  flex: 1;
+  min-width: 0;
+}
+.mrow .tt {
+  font-size: 13.5px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.mrow .ds {
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* ── 點開後的全文（pre）── */
+.mrow-body {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--divider);
+  border-radius: var(--row-radius);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 360px;
+  overflow-y: auto;
+}
