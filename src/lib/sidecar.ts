@@ -407,14 +407,16 @@ export async function fetchMemoryRelated(port: number, project: string): Promise
 }
 export async function fetchMemoryItem(port: number, path: string): Promise<{ path: string; title: string; body: string }> {
   const r = await fetch(`${base(port)}/memory/item?path=${encodeURIComponent(path)}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(`memory item ${r.status}`);   // 讓詳情面板能顯示載入失敗
   return await r.json();
 }
 async function memoryJson(port: number, route: string, method: "POST" | "DELETE", body: object): Promise<void> {
-  await fetch(`${base(port)}/memory/${route}`, {
+  const r = await fetch(`${base(port)}/memory/${route}`, {
     method,
     headers: { "Content-Type": "application/json", ...authHeaders() },   // token 在 headers 內
     body: JSON.stringify(body),
   });
+  if (!r.ok) throw new Error(`memory ${route} ${r.status}`);   // 寫入失敗 throw 讓右欄 chip 顯示錯誤
 }
 export const confirmSuggestion = (p: number, project: string, topic: string) => memoryJson(p, "links/confirm", "POST", { project, topic });
 export const dismissSuggestion = (p: number, project: string, topic: string) => memoryJson(p, "links/dismiss", "POST", { project, topic });
