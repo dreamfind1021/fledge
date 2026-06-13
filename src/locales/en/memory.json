@@ -6,5 +6,13 @@
   "section": { "global": "Global", "kb": "Knowledge Base (unlinked)", "unattributed": "Unattributed (orphan/collision)", "unknown": "Unclassified" },
   "related": { "title": "Related", "projects": "Related projects", "topics": "Related topics", "suggest": "suggested", "none": "No links yet", "add": "Add link" },
   "attribution": { "orphan": "Orphan (project gone)", "ambiguous": "Ambiguous (path collision)" },
-  "empty": "No memory yet"
+  "empty": "No memory yet",
+  "settings": {
+    "kmsRoot": "KMS Root",
+    "kmsRootHint": "Path to your Obsidian knowledge base folder",
+    "kmsRootPlaceholder": "~/path/to/vault",
+    "browse": "Browse…",
+    "save": "Save",
+    "saveError": "Failed to save: {{msg}}"
+  }
 }

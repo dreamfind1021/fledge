@@ -6,5 +6,13 @@
   "section": { "global": "全域", "kb": "知識庫（未連結專案）", "unattributed": "未歸屬（孤立/碰撞）", "unknown": "未分類" },
   "related": { "title": "相關", "projects": "相關專案", "topics": "相關 topic", "suggest": "建議", "none": "尚無連結", "add": "新增連結" },
   "attribution": { "orphan": "孤立（專案已不存在）", "ambiguous": "歸屬不明（路徑碰撞）" },
-  "empty": "尚無記憶"
+  "empty": "尚無記憶",
+  "settings": {
+    "kmsRoot": "KMS 根目錄",
+    "kmsRootHint": "Obsidian 知識庫資料夾路徑",
+    "kmsRootPlaceholder": "~/path/to/vault",
+    "browse": "瀏覽…",
+    "save": "儲存",
+    "saveError": "儲存失敗：{{msg}}"
+  }
 }

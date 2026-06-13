@@ -185,6 +185,8 @@ export interface AppConfigData {
   manual_projects: { path: string; account: string }[];
   project_overrides: Record<string, { account: string }>;
   ui: { theme: string };
+  // 後端 to_dict 總是回傳；標選用是為相容舊前端快取（無此欄視為未設），讀取端一律 ?? "" 兜底
+  kms_root?: string;  // KMS（Obsidian 知識庫）根目錄，raw 含 ~；未設為空字串
   subscriptions?: SubscriptionItem[];  // 後端 to_dict 總是回傳此欄；舊前端快取若無此欄視為空陣列
   // startup-only metadata：僅 GET /api/config 與 onboard 回應帶（設定檔不存在為 true）。
   // 其他 config write 不帶 → 寫入後此欄位為 undefined 屬正常；只在 App 啟動讀一次決定是否進
@@ -256,6 +258,27 @@ export async function putSubscriptions(
   subs: SubscriptionItem[],
 ): Promise<AppConfigData> {
   return configWrite(port, "/api/config/subscriptions", "PUT", { subscriptions: subs });
+}
+
+// 設 KMS 根目錄：後端回 {ok, kms_root}（非 full config），故不走 configWrite；
+// 沿用相同 auth headers / base(port) / JSON，並抽出 FastAPI detail 當錯誤訊息。
+export async function putKmsRoot(port: number, path: string): Promise<{ ok: boolean; kms_root: string }> {
+  const resp = await fetch(`${base(port)}/api/config/kms-root`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ path }),
+  });
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try {
+      const j = await resp.json();
+      if (j?.detail) detail = j.detail;
+    } catch {
+      /* 非 JSON body → 用 HTTP 狀態碼 */
+    }
+    throw new Error(detail);
+  }
+  return resp.json();
 }
 
 export const addAccount = (port: number, key: string, config_dir: string, label: string) =>
