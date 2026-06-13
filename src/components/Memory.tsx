@@ -14,6 +14,7 @@ export function Memory({ port, isActive }: { port: number | null; isActive: bool
   const [selection, setSelection] = useState<Selection>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [body, setBody] = useState<string | null>(null);
+  const [bodyErr, setBodyErr] = useState(false);
   const bodyCache = useRef<Map<string, string>>(new Map());
   const initedExpand = useRef(false);
 
@@ -56,16 +57,16 @@ export function Memory({ port, isActive }: { port: number | null; isActive: bool
 
   // 選中 item → 取全文（快取 key = path@mtime；mtime 變即 cache miss）
   useEffect(() => {
-    if (!selItem || port == null) { setBody(null); return; }
+    if (!selItem || port == null) { setBody(null); setBodyErr(false); return; }
     const key = `${selItem.path}@${selItem.mtime}`;
     const cached = bodyCache.current.get(key);
-    if (cached !== undefined) { setBody(cached); return; }
-    setBody(null);
+    if (cached !== undefined) { setBody(cached); setBodyErr(false); return; }
+    setBody(null); setBodyErr(false);
     let cancelled = false;
     fetchMemoryItem(port, selItem.path).then((d) => {
       bodyCache.current.set(key, d.body);
       if (!cancelled) setBody(d.body);
-    }).catch(() => { if (!cancelled) setBody(""); });
+    }).catch(() => { if (!cancelled) setBodyErr(true); });   // 失敗顯錯誤態，不留空白
     return () => { cancelled = true; };
   }, [selItem, port]);
 
@@ -80,7 +81,7 @@ export function Memory({ port, isActive }: { port: number | null; isActive: bool
         onSelectItem={(path, groupKey) => setSelection({ kind: "item", path, groupKey })}
         onSelectProject={(projectKey) => setSelection({ kind: "project", projectKey })} />
       <div className="mem-detail">
-        <MemoryDetail port={port} selItem={selItem} selBody={body} selProject={selProject} onAfterWrite={load} />
+        <MemoryDetail port={port} selItem={selItem} selBody={body} selBodyErr={bodyErr} selProject={selProject} onAfterWrite={load} />
       </div>
     </div>
   );

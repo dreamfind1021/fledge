@@ -33,7 +33,7 @@ export function MemoryIndex({ data, groups, q, setQ, facet, setFacet, expanded, 
       <div className="mi-head">
         {/* header stat = scan_meta（掃描/搜尋總數，後端 q 已在算 total 前過濾，故反映搜尋結果）；
             各 group 的計數則是 facet 後的可見列數（MemoryGroup 顯示 group.items.length，items 已被 applyFacet 過濾）——兩者語意不同 */}
-        <h1>{t("tabTitle")} <span className="mi-stat">{data.scan_meta.total} · unknown {data.scan_meta.unknown_count}</span></h1>
+        <h1>{t("tabTitle")} <span className="mi-stat">{data.scan_meta.total} · {t("section.unknown")} {data.scan_meta.unknown_count}</span></h1>
         <input className="mi-search" placeholder={t("search")} value={q}
           onChange={(e) => setQ(e.target.value)} aria-label={t("search")} />
         <div className="mi-facets">

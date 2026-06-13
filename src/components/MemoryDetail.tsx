@@ -3,9 +3,9 @@ import { SuggestionChip } from "./SuggestionChip";
 import type { MemoryItem, MemoryProject } from "../lib/sidecar";
 
 // 右欄三態：空 / item 全文 / 專案脈絡。容器負責由 selection+data 解出 selItem/selBody/selProject。
-export function MemoryDetail({ port, selItem, selBody, selProject, onAfterWrite }: {
+export function MemoryDetail({ port, selItem, selBody, selBodyErr, selProject, onAfterWrite }: {
   port: number | null;
-  selItem: MemoryItem | null; selBody: string | null;
+  selItem: MemoryItem | null; selBody: string | null; selBodyErr: boolean;
   selProject: MemoryProject | null; onAfterWrite: () => void;
 }) {
   const { t } = useTranslation("memory");
@@ -44,7 +44,7 @@ export function MemoryDetail({ port, selItem, selBody, selProject, onAfterWrite 
         </div>
         <div className="md-title">{selItem.title}</div>
         <div className="md-meta">{selItem.summary}</div>
-        <pre className="md-body">{selBody ?? "…"}</pre>
+        <pre className="md-body">{selBodyErr ? t("detail.openErr") : (selBody ?? "…")}</pre>
       </div>
     );
   }
