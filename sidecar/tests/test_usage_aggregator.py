@@ -71,6 +71,30 @@ def test_projects_models_daily_hourly_shapes():
     assert any(m["model"] == "gpt-5.5" for m in d["models"])
 
 
+def test_project_rollup_collapses_worktrees_and_subdirs():
+    # 專案表收斂到「側欄層級專案」＝root 第一層子目錄；worktree/子目錄/深層 topics 全歸母專案
+    root = "/work"
+    entries = [
+        _e(project="/work/fledge", cost=1.0),
+        _e(project="/work/fledge/.claude/worktrees/feat-x", dedup="a:1", cost=2.0),
+        _e(project="/work/fledge/sidecar", dedup="b:2", cost=0.5),
+        _e(project="/work/fledge/node_modules/@xterm/xterm", dedup="c:3", cost=0.25),
+        _e(source="codex", model="gpt-5.5", dedup="", project="/work/創意發想/topics/x/slides", cost=4.0),
+    ]
+    d = build_dashboard(entries, codex_rate_limits=None, subscriptions=[], now=NOW, roots=[root])
+    by_path = {p["path"]: p for p in d["projects"]}
+    assert set(by_path) == {"/work/fledge", "/work/創意發想"}
+    assert by_path["/work/fledge"]["claude_cost"] == 3.75   # 1 + 2 + 0.5 + 0.25
+    assert by_path["/work/創意發想"]["codex_cost"] == 4.0
+
+
+def test_project_no_roots_keeps_raw_cwd():
+    # 未傳 roots（或路徑在 root 外）→ 維持原 cwd 分組，不誤收斂
+    d = build_dashboard([_e(project="/elsewhere/proj/sub", cost=1.0)],
+                        codex_rate_limits=None, subscriptions=[], now=NOW, roots=["/work"])
+    assert [p["path"] for p in d["projects"]] == ["/elsewhere/proj/sub"]
+
+
 def test_synthetic_not_in_missing_pricing_warning():
     # synthetic 是「排除計價」非「查無定價」，不得進使用者警示清單
     d = build_dashboard([_e(model="<synthetic>", missing=True, cost=0.0)],

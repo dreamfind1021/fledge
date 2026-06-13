@@ -17,6 +17,24 @@ def _total_tokens(e: UsageEntry) -> int:
             + e.cache_create_5m + e.cache_create_1h)
 
 
+def _project_root(path: str, roots: list[str]) -> str:
+    """把 cwd 收斂到「側欄層級專案」＝設定 root 下第一層子目錄（與 project_scanner.scan_root 同義）。
+    worktree（.claude/worktrees/x）、子目錄（sidecar、node_modules/...）、深層 topics 全部歸該專案根，
+    避免一個專案被切成多列（實機回饋：專案分支用量被另計）。
+    不在任何 root 下 → 原樣返回（best-effort；如拋棄式 /tmp sidecar、root 外的專案）。"""
+    best = ""
+    for r in roots:
+        # 取最長（最深）的命中 root，支援巢狀 root
+        if (path == r or path.startswith(r + "/")) and len(r) > len(best):
+            best = r
+    if not best:
+        return path
+    rest = path[len(best):].lstrip("/")
+    if not rest:
+        return best  # cwd 正好是 root 本身
+    return best + "/" + rest.split("/", 1)[0]
+
+
 def _dedup(entries: list[UsageEntry]) -> list[UsageEntry]:
     """claude 同 key 替換規則（design §6）：parent（非 sidechain）勝 sidechain；同類取 token 多者。"""
     keyed: dict[str, UsageEntry] = {}
@@ -36,8 +54,13 @@ def _dedup(entries: list[UsageEntry]) -> list[UsageEntry]:
 
 
 def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
-                    subscriptions: list[dict], now: float, days: int = 30) -> dict:
+                    subscriptions: list[dict], now: float, days: int = 30,
+                    roots: list[str] | None = None) -> dict:
     entries = _dedup(entries)
+    # 專案根收斂用：roots canonicalize 一次（與 e.project 同款 resolve，前綴比對才對得上）。
+    # 收斂結果依 roots 而定、roots 可在 runtime 變動，故 proj_root memo 用 call-local（見下方迴圈）
+    canon_roots = [resolve_best_effort(r) for r in (roots or [])]
+    proj_root_cache: dict[str, str] = {}
     local_now = datetime.fromtimestamp(now).astimezone()
     today_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     week_start = (local_now - timedelta(days=local_now.weekday())).replace(
@@ -108,10 +131,15 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
         if e.project:
             # 與側欄專案清單對齊（design §5.3）：路徑 memoized 正規化（resolve symlink）。
             # 在聚合端做而非 parser 端——條目存原始事實、政策在讀取端，免 syscall 風暴
-            key = _canon_cache.get(e.project)
+            canon = _canon_cache.get(e.project)
+            if canon is None:
+                canon = resolve_best_effort(e.project)
+                _canon_cache[e.project] = canon
+            # 再收斂到側欄層級專案根（worktree/子目錄歸母專案）；call-local memo（依 roots）
+            key = proj_root_cache.get(canon)
             if key is None:
-                key = resolve_best_effort(e.project)
-                _canon_cache[e.project] = key
+                key = _project_root(canon, canon_roots)
+                proj_root_cache[canon] = key
             p = projects[key]
             p["claude_cost" if e.source == "claude" else "codex_cost"] += e.cost
             p["last_active"] = max(p["last_active"], e.ts)

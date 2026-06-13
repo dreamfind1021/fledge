@@ -52,7 +52,8 @@ def _scan_sync(days: int) -> dict:
     r = cache.refresh(claude=cl, codex=cx)
     now = time.time()
     payload = build_dashboard(r.entries, r.codex_rate_limits,
-                              config.subscriptions, now=now, days=days)
+                              config.subscriptions, now=now, days=days,
+                              roots=[r["path"] for r in config.roots])
     payload["scan_meta"].update({
         "state": "ok", "generation": r.generation, "files": r.total_files,
         "skipped_lines": r.skipped_lines, "scanned_at": now, "error": None,
