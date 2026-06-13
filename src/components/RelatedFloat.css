@@ -1,0 +1,110 @@
+/* ── 終端機右下懸浮「相關」浮現（從 demo .fab / .fab-panel 移植，token 沿用 var(--…)）── */
+/* 收合與展開共用右下錨點；z-index 蓋在 xterm 之上，但因 absolute 出流不奪終端機尺寸／滾動。
+   bottom:48px 讓 pill 落在 Claude TUI 底部固定列附近、不擋輸入區。 */
+
+/* ── 收合 FAB（小 pill）── */
+.rf-fab {
+  position: absolute;
+  bottom: 48px;
+  right: 16px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--ai) 35%, var(--border));
+  border-radius: 20px;
+  padding: 7px 13px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ai);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+.rf-fab:hover {
+  border-color: color-mix(in srgb, var(--ai) 55%, var(--border));
+}
+/* 數量徽章 */
+.rf-n {
+  background: var(--ai);
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 800;
+  border-radius: 10px;
+  padding: 0 6px;
+}
+
+/* ── 展開 popover（右下角錨定）── */
+.rf-panel {
+  position: absolute;
+  bottom: 48px;
+  right: 16px;
+  z-index: 5;
+  width: 288px;
+  max-height: 380px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--ai) 30%, var(--border));
+  border-radius: var(--win-radius);
+  box-shadow: var(--shadow);
+  padding: 14px;
+}
+
+/* 表頭 + 關閉鈕 */
+.rf-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--ai);
+  margin-bottom: 10px;
+}
+.rf-x {
+  margin-left: auto;
+  color: var(--faint);
+  cursor: pointer;
+  font-size: 14px;
+}
+.rf-x:hover {
+  color: var(--text);
+}
+
+/* section 標籤（相關專案 / 相關 topic）*/
+.rf-sec {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 12px 0 6px;
+}
+
+/* 連結列 */
+.rf-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--row-radius);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* 建議標籤 */
+.rf-sug {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
