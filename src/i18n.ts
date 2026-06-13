@@ -4,13 +4,18 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import zhTW from "./locales/zh-TW/dashboard.json";
 import en from "./locales/en/dashboard.json";
+import memoryZhTW from "./locales/zh-TW/memory.json";
+import memoryEn from "./locales/en/memory.json";
 
 const stored = typeof localStorage !== "undefined" ? localStorage.getItem("fledge-lang") : null;
 const osLang = typeof navigator !== "undefined" && navigator.language.toLowerCase().startsWith("zh")
   ? "zh-TW" : "en";
 
 i18n.use(initReactI18next).init({
-  resources: { "zh-TW": { dashboard: zhTW }, en: { dashboard: en } },
+  resources: {
+    "zh-TW": { dashboard: zhTW, memory: memoryZhTW },
+    en: { dashboard: en, memory: memoryEn },
+  },
   lng: stored ?? osLang,
   fallbackLng: "en",
   defaultNS: "dashboard",

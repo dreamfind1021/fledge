@@ -1,0 +1,10 @@
+{
+  "tabTitle": "記憶",
+  "entry": "記憶層",
+  "search": "全文搜尋記憶與 KMS…",
+  "filter": { "all": "全部", "native": "native", "kms": "KMS", "library": "library", "topics": "topics" },
+  "section": { "global": "全域", "kb": "知識庫（未連結專案）", "unattributed": "未歸屬（孤立/碰撞）", "unknown": "未分類" },
+  "related": { "title": "相關", "projects": "相關專案", "topics": "相關 topic", "suggest": "建議", "none": "尚無連結", "add": "新增連結" },
+  "attribution": { "orphan": "孤立（專案已不存在）", "ambiguous": "歸屬不明（路徑碰撞）" },
+  "empty": "尚無記憶"
+}
