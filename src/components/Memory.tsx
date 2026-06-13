@@ -75,10 +75,11 @@ export function Memory({ port, isActive }: { port: number | null; isActive: bool
 
 // 點開列才呼叫 /memory/item 取全文（overview 只回摘要）
 function MemRow({ it, port }: { it: MemoryItem; port: number | null }) {
+  const { t } = useTranslation("memory");
   const [body, setBody] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const badge = it.source === "native" ? "b-native" : "b-kms";
-  const label = it.source === "native" ? `native·${it.type || "?"}` : `KMS·${it.domain || ""}`;
+  const label = it.source === "native" ? `${t("filter.native")}·${it.type || "?"}` : `${t("filter.kms")}·${it.domain || ""}`;
   const toggle = () => {
     if (!open && body === null && port != null) {
       fetchMemoryItem(port, it.path).then((d) => setBody(d.body)).catch(() => setBody(""));

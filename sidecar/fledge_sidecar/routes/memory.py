@@ -84,26 +84,35 @@ def related(project: str):
 
 @router.get("/item")
 def item(path: str):
-    """單筆全文。containment + allowlist：
-    native 限 projects/<e>/memory/*.md（非 MEMORY.md、regular、realpath 在帳號 projects 內）；
+    """單筆全文。containment + allowlist（驗證通過後一律讀 realpath，閉 symlink TOCTOU）：
+    native 限精確形狀 projects/<enc>/memory/*.md（rel 恰 3 段、中段 memory、非 MEMORY.md、regular、在帳號 projects 內）；
     kms 共用 scanner is_kms_file_allowed（*.md、regular、非 hidden/_*/CLAUDE.md、realpath 在 root 內、擋逃逸 symlink）。"""
     config = AppConfig.load()
     f = Path(path)
     real = resolve_best_effort(path)
     allowed = False
-    if (real.endswith(".md") and f.name != "MEMORY.md" and "/memory/" in real and Path(real).is_file()):
+    if (real.endswith(".md") and f.name != "MEMORY.md" and Path(real).is_file()):
         for acct in config.accounts.values():
             cd = acct.get("config_dir")
-            if cd and real.startswith(resolve_best_effort(str(Path(cd).expanduser() / "projects")) + "/"):
-                allowed = True
-                break
+            if not cd:
+                continue
+            base = resolve_best_effort(str(Path(cd).expanduser() / "projects"))
+            if real.startswith(base + "/"):
+                # 只放行精確形狀 projects/<enc>/memory/*.md：rel 恰 3 段、中段為 memory
+                # （scanner 只 surface 這一層；擋 projects/<enc>/sub/memory/x 與 memory/deep/x）
+                rel_parts = real[len(base) + 1:].split("/")
+                if len(rel_parts) == 3 and rel_parts[1] == "memory":
+                    allowed = True
+                    break
     if not allowed and config.kms_root:
         root = Path(resolve_best_effort(str(Path(config.kms_root).expanduser())))
-        if is_kms_file_allowed(f, root):
+        # 傳已解析的 real（非原始 f）：is_kms_file_allowed 內的再 resolve 對 realpath 冪等，
+        # 使「驗證」與下方「讀取」共用同一次 resolve（line 92），閉合 KMS 分支 check-vs-read 窗口
+        if is_kms_file_allowed(Path(real), root):
             allowed = True
     if not allowed:
         return JSONResponse({"error": "path not allowed"}, status_code=403)
-    doc = parse_doc(f)
+    doc = parse_doc(Path(real))
     if not doc:
         return JSONResponse({"error": "not found"}, status_code=404)
     return JSONResponse({"path": doc.path, "title": doc.title, "body": doc.body})

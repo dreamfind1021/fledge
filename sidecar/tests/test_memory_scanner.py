@@ -1,5 +1,5 @@
 from pathlib import Path
-from fledge_sidecar.memory.scanner import native_memory_files, kms_files
+from fledge_sidecar.memory.scanner import native_memory_files, kms_files, is_kms_file_allowed
 
 
 def test_native_three_states(tmp_path, monkeypatch):
@@ -56,6 +56,29 @@ def test_kms_containment_and_symlink_escape(tmp_path):
     assert "escape.md" not in names          # 不跟隨逃逸 symlink
     dom = {Path(r.path).name: r.domain for r in refs}
     assert dom["src.md"] == "library" and dom["t.md"] == "topics"
+
+
+def test_kms_excludes_hidden_and_underscore_dirs_at_any_depth(tmp_path):
+    """FIX 2：中間目錄為 hidden/`_前綴` 也要排除（不只 basename）。"""
+    root = tmp_path / "kms"
+    (root / "topics" / "_private").mkdir(parents=True)
+    (root / "topics" / "_private" / "secret.md").write_text("LEAK", encoding="utf-8")
+    (root / "library" / ".hidden").mkdir(parents=True)
+    (root / "library" / ".hidden" / "x.md").write_text("LEAK", encoding="utf-8")
+    (root / "topics" / "realfolder").mkdir(parents=True)
+    (root / "topics" / "realfolder" / "x.md").write_text("ok", encoding="utf-8")
+
+    refs = kms_files(str(root))
+    paths = {r.path for r in refs}
+    assert str(root / "topics" / "realfolder" / "x.md") in paths       # 正常巢狀仍收
+    assert str(root / "topics" / "_private" / "secret.md") not in paths  # _ 目錄排除
+    assert str(root / "library" / ".hidden" / "x.md") not in paths       # hidden 目錄排除
+
+    # is_kms_file_allowed 直接斷言（route /item 也走同一 predicate）
+    rootp = root.resolve()
+    assert is_kms_file_allowed(root / "topics" / "realfolder" / "x.md", rootp) is True
+    assert is_kms_file_allowed(root / "topics" / "_private" / "secret.md", rootp) is False
+    assert is_kms_file_allowed(root / "library" / ".hidden" / "x.md", rootp) is False
 
 
 def test_kms_none_root_returns_empty():

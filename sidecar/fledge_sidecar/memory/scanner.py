@@ -74,6 +74,11 @@ def is_kms_file_allowed(f: Path, root: Path) -> bool:
     bases = (str(root / "library"), str(root / "topics"))     # route 與 scanner 同一可讀集合
     if not any(real == b or real.startswith(b + "/") for b in bases):
         return False
+    # 任一層資料夾／檔名為 hidden 或 `_前綴` → 排除（與 _INDEX/_CONNECTIONS 管理慣例一致，含中間目錄）。
+    # library／topics 本身不以 _/. 開頭，故不受影響；只擋更深的 _x／.x 段。
+    rel = real[len(str(root)) + 1:].split("/") if real.startswith(str(root) + "/") else []
+    if any(part.startswith(_KMS_SKIP_PREFIX) for part in rel):
+        return False
     return Path(real).is_file()
 
 
