@@ -66,9 +66,10 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 |------|------|------|
 | `App.tsx` | 根元件：組裝 Sidebar+TabBar+多 Terminal、啟動連線（port→token→setAuthToken→health→setPort，token 先於受保護請求）、5s health poll→backendStatus、後端斷線 banner+重啟原子轉移、claude/權限 notice、快捷鍵（Cmd+W/1-9/,/T/R）、掛 Settings/Picker/Onboarding、關閉執行中分頁確認框（CloseConfirm）、useLayoutEffect 同步 `modalOpen`（任一 modal 開啟＝唯一寫入者，供拖檔 drop gate）；pendingTitle 用 `isLiveClaudeTab`（共用判定） | `App` |
 | `store/useAppStore.ts` | Zustand 單一真相源：tabs/activeTab/projects/config + session 生命週期（模式 A）+ config actions + 韌性（Tab.status offline/ended、backendStatus 狀態機、setTabStatus/restartTab/markAllTabsEnded/recordHealth）+ `Tab.activity`（working/idle 活動態）+ setTabActivity + 關閉守門（requestCloseTab：ready+sessionId 一律跳確認框〔含 idle〕、offline/ended 直接關、pendingCloseTabId）+ `modalOpen` 旗標（拖檔 drop gate 單一判定來源）；`Tab.kind`（claude/terminal/dashboard/memory）；openTab 以 (path,account) 識別（terminal 不去重）；`openMemory` 單例分頁（比照 openDashboard，純前端無 session；closeTab/restartTab/markAllTabsEnded 與 dashboard 同組免特判 session）；requestCloseTab 改用 `isLiveClaudeTab`；restartTab 沿用 `tab.kind` | `useAppStore`, `Tab` |
-| `lib/sidecar.ts` | 拿 port/token、HTTP client wrapper（所有 fetch 帶 `X-Fledge-Token`，`sidecar.test.ts` 列舉鎖定）；`scanPreview` 回 `{path,count,status}`、`checkDir` 回 `DirStatus`；`wsUrl` 附 `?token=`；`createSession` 第 4 參數 `kind`；記憶層 fetchers（`fetchMemoryOverview` 含 `Array.isArray(projects)` 守衛/`fetchMemoryRelated`/`fetchMemoryItem` + links 寫入 wrappers）+ `putKmsRoot`；`AppConfigData.kms_root?` | `…既有…`, `fetchMemoryOverview()`, `fetchMemoryRelated()`, `fetchMemoryItem()`, `confirmSuggestion()`, `dismissSuggestion()`, `addMemoryLink()`, `removeMemoryLink()`, `putKmsRoot()`, `MemoryOverview`, `MemoryItem`, `MemoryRelated`, `MemorySuggestion` |
+| `lib/sidecar.ts` | 拿 port/token、HTTP client wrapper（所有 fetch 帶 `X-Fledge-Token`，`sidecar.test.ts` 列舉鎖定）；`scanPreview` 回 `{path,count,status}`、`checkDir` 回 `DirStatus`；`wsUrl` 附 `?token=`；`createSession` 第 4 參數 `kind`；記憶層 fetchers（`fetchMemoryOverview` 含 `Array.isArray(projects)` 守衛/`fetchMemoryRelated`/`fetchMemoryItem`〔!ok throw〕+ links 寫入 wrappers `memoryJson`〔!ok throw，支援右欄錯誤 UX〕）+ `putKmsRoot`；`AppConfigData.kms_root?` | `…既有…`, `fetchMemoryOverview()`, `fetchMemoryRelated()`, `fetchMemoryItem()`, `confirmSuggestion()`, `dismissSuggestion()`, `addMemoryLink()`, `removeMemoryLink()`, `putKmsRoot()`, `MemoryOverview`, `MemoryItem`, `MemoryRelated`, `MemorySuggestion` |
 | `lib/dialog.ts` | Tauri plugin-dialog 封裝：開系統資料夾選擇器 | `pickDirectory()` |
 | `lib/liveTab.ts` | 純函式：live Claude session 判定（kind=claude + ready + sessionId），store/App 共用；terminal tab 永遠回 false | `isLiveClaudeTab()` |
+| `lib/memoryView.ts` | 純函式：記憶面板 overview→視圖（`buildGroups` 分組／`defaultExpanded` 專案展開／`matchesFacet`+`applyFacet` 前端過濾／`selectionValid` path-anywhere 含 fan-out）+ 型別 `MemoryGroupVM`/`Facet`/`Selection` | `buildGroups()`, `defaultExpanded()`, `matchesFacet()`, `applyFacet()`, `selectionValid()` |
 | `lib/sidebarGroups.ts` | 純函式：依帳號分組 + 三 band 分類/排序（開啟中/已接觸/自動發現）；每群組 recent band 最多 `RECENT_BAND_LIMIT`(=3) 筆（manual 豁免）、溢出存 `AccountGroup.surfacedMore`（Sidebar 呈現邏輯，可單元測試） | `groupProjectsByAccount()`, `tabKey()`, `AccountGroup`, `RECENT_BAND_LIMIT` |
 | `lib/wsReconnect.ts` | 純函式：WS 重連策略（4001/1008 不重連、其他 backoff 5 次） | `shouldReconnect()`, `nextDelay()`, `MAX_RECONNECT_ATTEMPTS` |
 | `lib/backendStatus.ts` | 純函式：backend health 狀態機（up/suspect/down/restarting + up-hysteresis） | `nextBackendState()`, `BackendStatus`, `BackendState` |
@@ -80,7 +81,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `lib/dropPath.ts` | 純函式：拖檔路徑智慧引號格式化（safe charset `[\p{L}\p{N}/._-]` 原樣、其餘 POSIX 單引號跳脫 `'`→`'\''`、含控制字元整項跳過、多檔空白 join+尾隨空白、全跳過回空字串），供 Terminal 拖檔接線 | `formatPathsForPaste()` |
 | `i18n.ts` | i18n 最小基建（react-i18next）：語言權威序 localStorage `fledge-lang` > OS zh 偵測 > en；defaultNS dashboard；註冊 namespace `dashboard` + `memory` | default `i18n` |
 | `locales/{zh-TW,en}/dashboard.json` | 觀測儀表板 locale catalog（兩檔 key 對齊，`i18nCatalog.test.ts` parity 鎖定）；既有元件字串遷移留後續 | — |
-| `locales/{zh-TW,en}/memory.json` | 記憶層 locale catalog（tabTitle/entry/search/section/related/attribution/settings…；`memory-parity.test.ts` 鎖兩語 key 一致） | — |
+| `locales/{zh-TW,en}/memory.json` | 記憶層 locale catalog（tabTitle/entry/search/section/related/attribution/settings/detail/a11y…；`memory-parity.test.ts` 鎖兩語 key 一致；type enum 值刻意顯示原值不翻譯〔§4.6.13 記錄例外〕）| — |
 | `lib/usageFormat.ts` | 純函式：儀表板數字格式化（fmtUSD 含負數/<$0.01、fmtPct、fmtTokens K/M、fmtClock HH:mm、fmtDayClock 今天/昨天/M/D） | `fmtUSD()`, `fmtPct()`, `fmtTokens()`, `fmtClock()`, `fmtDayClock()` |
 | `lib/usagePoll.ts` | 純函式：儀表板輪詢 gating（作用分頁＋頁面可見才打 API）＋30s 間隔常數 | `shouldPoll()`, `POLL_INTERVAL_MS` |
 | `lib/dashboardLogic.ts` | 純函式：面板邏輯（donutParts top4+rest 角度、blockEta 依 burn rate 外推達 P90 時刻含三 null gate） | `donutParts()`, `blockEta()` |
@@ -96,7 +97,12 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `components/AccountsEditor.tsx` | 設定頁帳號編輯區：加/改 config_dir/改 label/刪（級聯轉移面板）+ config_dir 警告依 DirStatus（不存在/不可讀/非資料夾） | `AccountsEditor` |
 | `components/Logo.tsx` | 品牌三色填色羽毛標（去背 PNG，與桌面 app icon 同源）共用元件；`<img>` 引用 `assets/fledge-feather.png`，接受 `size` prop（＝高度 px） | `FeatherMark` |
 | `components/Workspace.tsx` | TabBar+Terminal 合成一體面板（保留全 tab mount + display 切換）；tab 狀態矩陣與 ended/offline 子狀態；kind 分派加 `memory`→`<Memory>` 分支；Terminal 分支（claude/terminal + projectPath）內掛 `<RelatedFloat>`（既有 absolute wrapper 為定位包含塊，不改終端機尺寸） | `Workspace` |
-| `components/Memory.tsx` | 記憶面板（純前端單例分頁）：30s 輪詢 gating（active+!hidden 比照 dashboard）；全域/專案中心（related chips + 建議 ✓✕ confirm/dismiss）/知識庫/未歸屬/未分類分區；列點開才 `fetchMemoryItem` 取全文（overview 只回摘要）；字串全走 `t('memory')`、色全 `var(--*)` | `Memory` |
+| `components/Memory.tsx` | 記憶面板容器（**master-detail 雙欄**，純前端單例分頁）：持有 selection（複合 `{path,groupKey}`／`{projectKey}`）+ facet + group 展開 Set + body 快取（key=`path@mtime`）；30s 輪詢 gating（active+!hidden）；**q-guard**（q 非空時不清 selection、清搜尋後右欄復原 pin）；組 `<MemoryIndex>`（左）+ `<MemoryDetail>`（右）| `Memory` |
+| `components/MemoryIndex.tsx` | 左欄：標題+scan_meta（掃描/搜尋總數）、搜尋框（後端 q）、facet chips（前端在地過濾 source/type）、可收合 groups（`applyFacet` 後渲染、計數=可見數）| `MemoryIndex` |
+| `components/MemoryGroup.tsx` | 可收合 group：caret 獨立按鈕（stopPropagation 只收合、aria-expanded）+ 選取區（專案→選專案）+ 計數 + 建議 badge；專案展開預設、其餘收合 | `MemoryGroup` |
+| `components/MemoryRow.tsx` | 單行密集列（badge + 標題 + 截斷摘要 + 已連結 ◈）；`<button>` + aria-selected | `MemoryRow` |
+| `components/MemoryDetail.tsx` | 右欄三態：空狀態 / item 全文（badge+meta+`<pre>` body）/ 專案脈絡（相關 chips + `SuggestionChip`）| `MemoryDetail` |
+| `components/SuggestionChip.tsx` | 建議 chip（topic + ✓✕，aria-label 走 `t()`）：await 真成功（wrapper !ok 會 throw）才 `onAfterWrite`、失敗顯 error 不樂觀消失、pending 雙路徑 reset | `SuggestionChip` |
 | `components/RelatedFloat.tsx` | 終端機右下懸浮（claude/terminal 分頁）：`fetchMemoryRelated` 該專案相關連結+建議；收合 pill ↔ 展開 popover；count 0 回 `null`（無連結即隱形）；`position:absolute` 不奪終端機尺寸/scroll | `RelatedFloat` |
 | `styles/term-theme.ts` | 從 CSS 變數讀終端機色組，回傳 xterm `ITheme`；讀取時機：xterm 初始化 + 主題切換 | `readTermTheme` |
 | `index.css` | CSS 變數 token 層（`:root` 品牌色 + `[data-theme]` 語義/表面/終端機 token）；各 UI 元件 CSS 均從此繼承，末尾含 `prefers-reduced-motion` 全局重置 | — |
@@ -160,8 +166,9 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `src/locales/*/dashboard.json`（key 增刪） | 另一語言 catalog 同步（`i18nCatalog.test.ts` parity 會擋）、`Dashboard.tsx`/`Settings.tsx`/`Sidebar.tsx`/`TabBar.tsx` 的 t() 引用 |
 | `sidecar/.../memory/aggregator.py`（payload shape 變更） | `src/lib/sidecar.ts`（`MemoryOverview`/`MemoryItem` 型別）、`Memory.tsx`/`RelatedFloat.tsx`、`test_memory_aggregator.py` |
 | `sidecar/.../memory/scanner.py`（`is_kms_file_allowed`/掃描範圍變更） | `routes/memory.py`（`/item` containment 共用同一 allowlist）、`test_memory_scanner.py`、`test_memory_routes.py` |
-| `sidecar/.../routes/memory.py`（endpoint/payload 變更） | `src/lib/sidecar.ts` memory fetchers、`Memory.tsx`/`RelatedFloat.tsx`、`test_memory_routes.py` |
-| `src/locales/*/memory.json`（key 增刪） | 另一語言 catalog 同步（`memory-parity.test.ts` 會擋）、`Memory.tsx`/`RelatedFloat.tsx`/`Sidebar.tsx`/`TabBar.tsx`/`Settings.tsx` 的 t() 引用 |
+| `sidecar/.../routes/memory.py`（endpoint/payload 變更） | `src/lib/sidecar.ts` memory fetchers、`Memory.tsx`+左右欄元件（`MemoryIndex`/`MemoryGroup`/`MemoryRow`/`MemoryDetail`/`SuggestionChip`）/`RelatedFloat.tsx`、`test_memory_routes.py` |
+| `src/lib/memoryView.ts`（VM/facet/selection 邏輯變更） | `Memory.tsx`、`MemoryIndex`/`MemoryGroup`、`memoryView.test.ts` |
+| `src/locales/*/memory.json`（key 增刪） | 另一語言 catalog 同步（`memory-parity.test.ts` 會擋）、`Memory.tsx`+記憶元件群/`RelatedFloat.tsx`/`Sidebar.tsx`/`TabBar.tsx`/`Settings.tsx` 的 t() 引用 |
 
 ---
 
