@@ -1,13 +1,11 @@
 /* ── Dashboard 面板樣式（Nightfall token 直接沿用 var(--…)，從 demo HTML 移植）── */
 
-/* ── 根容器：單頁長滾動 ── */
+/* ── 根容器：單頁長滾動，寬度自動填滿視窗（扣側欄後的 Workspace 區）── */
 .dash-root {
   height: 100%;
   overflow-y: auto;
   padding: 22px 26px 60px;
   background: var(--bg);
-  max-width: 1060px;
-  margin: 0 auto;
   box-sizing: border-box;
 }
 
