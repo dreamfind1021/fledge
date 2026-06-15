@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, ChevronsLeft, ChevronsRight, ChartColumn, Brain } from "lucide-react";
+import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, ChevronsLeft, ChevronsRight, ChartColumn, Brain, ChevronRight, ChevronDown } from "lucide-react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useAppStore } from "../store/useAppStore";
 import type { Project } from "../lib/sidecar";
@@ -10,11 +10,13 @@ import { groupProjectsByAccount, tabKey } from "../lib/sidebarGroups";
 import { pickDirectory } from "../lib/dialog";
 import { scanPreview } from "../lib/sidecar";
 import { FeatherMark } from "./Logo";
+import { FileTree } from "./FileTree";
 import "./Sidebar.css";
 
 export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => void; onOpenSettings: () => void }) {
   const { t: tDash } = useTranslation("dashboard");
   const { t: tMem } = useTranslation("memory");
+  const { t: tSide } = useTranslation("sidebar");
   const projects = useAppStore((s) => s.projects);
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
@@ -25,9 +27,11 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
   // selector 只取 config（穩定 ref）；Object.keys 等衍生值在 render body 算
   // （Zustand v5：selector 回新 array 會無限 re-render，見 zustand-v5-selector-stable-ref memory）。
   const config = useAppStore((s) => s.config);
+  const port = useAppStore((s) => s.port);
 
   const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; path: string } | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [treeOpen, setTreeOpen] = useState<Set<string>>(new Set());
   // 側欄收合：localStorage 開機讀回、toggle 時寫入（純前端 UI 狀態，spec §3.1）
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
@@ -91,27 +95,30 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
       .join(" ");
 
     return (
-      <button
-        key={p.path}
-        onClick={() => openTab(p)}
-        onContextMenu={(e) => openMenu(e, p)}
-        className={itemClass}
-      >
-        {/* 左側 folder icon */}
-        <span className={`sidebar-item-ico${isDiscovered ? " is-discovered" : ""}`}>
-          <Folder size={16} strokeWidth={1.75} />
-        </span>
-        {/* 名稱（flex:1，ellipsis） */}
-        <span className="sidebar-item-name">{p.name}</span>
-        {/* trailing slot：live dot / Pin / 空 */}
-        <span className="sidebar-item-trail">
-          {isOpen ? (
-            <span className="sidebar-live" />
-          ) : p.source === "manual" ? (
-            <Pin size={12} strokeWidth={1.75} color="var(--faint)" />
-          ) : null}
-        </span>
-      </button>
+      <div key={p.path} className="sidebar-row-wrap">
+        <button onClick={() => openTab(p)} onContextMenu={(e) => openMenu(e, p)} className={itemClass}>
+          <span
+            className="sidebar-tree-caret"
+            onClick={(e) => {
+              e.stopPropagation();
+              setTreeOpen((s) => {
+                const next = new Set(s);
+                next.has(p.path) ? next.delete(p.path) : next.add(p.path);
+                return next;
+              });
+            }}
+            aria-label={treeOpen.has(p.path) ? tSide("tree.collapse") : tSide("tree.expand")}
+          >
+            {treeOpen.has(p.path) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          </span>
+          <span className={`sidebar-item-ico${isDiscovered ? " is-discovered" : ""}`}><Folder size={16} strokeWidth={1.75} /></span>
+          <span className="sidebar-item-name">{p.name}</span>
+          <span className="sidebar-item-trail">
+            {isOpen ? <span className="sidebar-live" /> : p.source === "manual" ? <Pin size={12} strokeWidth={1.75} color="var(--faint)" /> : null}
+          </span>
+        </button>
+        {treeOpen.has(p.path) && port != null && <FileTree port={port} rootPath={p.path} />}
+      </div>
     );
   };
 
