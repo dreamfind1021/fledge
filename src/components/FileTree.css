@@ -1,4 +1,4 @@
-.filetree { font-size: 12px; }
+.filetree { font-size: 12px; padding-left: 14px; } /* 整棵樹相對專案列縮排一級（bug 3） */
 .filetree-node {
   display: flex; align-items: center; gap: 4px;
   height: 22px; padding-right: 6px; cursor: default;

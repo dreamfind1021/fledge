@@ -35,7 +35,10 @@ export function Workspace({ connError }: { connError: string | null }) {
               )}
             </div>
           ) : (
-            tabs.map((t) => (
+            // 用穩定順序（by id）渲染、與 TabBar 顯示順序解耦：分頁拖曳排序（reorderTabs）只改
+            // tabs 陣列順序，不該重排這裡的 DOM——否則 React 會 move 含 xterm 的 subtree、破壞
+            // 終端機渲染（內容遺失）。display 控制 active 顯示，故 DOM 順序不影響視覺。
+            [...tabs].sort((a, b) => a.id.localeCompare(b.id)).map((t) => (
               <div
                 key={t.id}
                 style={{
