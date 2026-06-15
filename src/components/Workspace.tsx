@@ -1,3 +1,4 @@
+import { useDroppable } from "@dnd-kit/core";
 import { TabBar } from "./TabBar";
 import { Terminal } from "./Terminal";
 import Dashboard from "./Dashboard";
@@ -14,11 +15,14 @@ export function Workspace({ connError }: { connError: string | null }) {
   const activeTabId = useAppStore((s) => s.activeTabId);
   const port = useAppStore((s) => s.port);
 
+  // 終端機區 drop target（需求 4）；useDroppable 只標記區域、不綁 pointer listener，不影響 xterm
+  const { setNodeRef: setDropRef } = useDroppable({ id: "terminal-drop" });
+
   return (
     <div className="ws-main">
       <div className="workspace">
         <TabBar />
-        <div className="ws-term-area">
+        <div className="ws-term-area" ref={setDropRef}>
           {port == null ? (
             /* 連線中 / 連線失敗（backend 尚未就緒）*/
             <div className="ws-status">
