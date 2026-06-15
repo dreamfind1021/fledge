@@ -9,3 +9,16 @@ export function reorderTabs<T extends { id: string }>(tabs: T[], activeId: strin
   next.splice(to, 0, moved);
   return next;
 }
+
+// 需求 2：新 terminal 分頁插到「同 projectPath 分頁群的最後一個之後」，讓同專案分頁聚在一起。
+// 找不到同專案分頁 → push 末端（與舊行為一致）。
+export function insertTabAdjacent<T extends { projectPath: string }>(tabs: T[], newTab: T): T[] {
+  let lastIdx = -1;
+  for (let i = 0; i < tabs.length; i++) {
+    if (tabs[i].projectPath === newTab.projectPath) lastIdx = i;
+  }
+  if (lastIdx === -1) return [...tabs, newTab];
+  const next = tabs.slice();
+  next.splice(lastIdx + 1, 0, newTab);
+  return next;
+}
