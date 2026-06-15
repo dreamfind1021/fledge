@@ -1,0 +1,35 @@
+{
+  "search": "搜尋專案…",
+  "searchAria": "搜尋專案",
+  "settings": "設定",
+  "expandSidebar": "展開側欄",
+  "collapseSidebar": "收合側欄",
+  "openFolder": "開啟其他資料夾",
+  "discovered": "自動發現 {{count}} 個",
+  "menu": {
+    "openTerminal": "使用終端機開啟",
+    "openWithAccountOnce": "改用「{{account}}」開啟（這次）",
+    "setDefaultAccount": "設為預設帳號 → {{account}}",
+    "revealInFinder": "在 Finder 顯示",
+    "remove": "移除",
+    "openWithAccount": "用「{{label}}」開啟"
+  },
+  "empty": {
+    "title": "還沒有專案",
+    "hint": "開啟一個工作根目錄開始",
+    "action": "開啟資料夾"
+  },
+  "tree": {
+    "expand": "展開",
+    "collapse": "收合",
+    "openErr": "開啟失敗",
+    "denied": "無法讀取（權限）",
+    "missing": "已不存在",
+    "notDir": "不是資料夾",
+    "retry": "重試"
+  },
+  "tabBar": {
+    "terminal": "終端機",
+    "close": "關閉分頁"
+  }
+}

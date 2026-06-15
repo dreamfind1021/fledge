@@ -1,0 +1,35 @@
+{
+  "search": "Search projects…",
+  "searchAria": "Search projects",
+  "settings": "Settings",
+  "expandSidebar": "Expand sidebar",
+  "collapseSidebar": "Collapse sidebar",
+  "openFolder": "Open another folder",
+  "discovered": "{{count}} auto-discovered",
+  "menu": {
+    "openTerminal": "Open with terminal",
+    "openWithAccountOnce": "Open with \"{{account}}\" (this time)",
+    "setDefaultAccount": "Set default account → {{account}}",
+    "revealInFinder": "Reveal in Finder",
+    "remove": "Remove",
+    "openWithAccount": "Open with \"{{label}}\""
+  },
+  "empty": {
+    "title": "No projects yet",
+    "hint": "Open a working root to start",
+    "action": "Open folder"
+  },
+  "tree": {
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "openErr": "Open failed",
+    "denied": "Cannot read (permission)",
+    "missing": "No longer exists",
+    "notDir": "Not a directory",
+    "retry": "Retry"
+  },
+  "tabBar": {
+    "terminal": "Terminal",
+    "close": "Close tab"
+  }
+}
