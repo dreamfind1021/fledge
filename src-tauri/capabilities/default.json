@@ -9,7 +9,7 @@
     "core:default",
     "opener:default",
     "opener:allow-reveal-item-in-dir",
-    "opener:allow-open-path",
+    { "identifier": "opener:allow-open-path", "allow": [{ "path": "$HOME/**" }] },
     "dialog:allow-open"
   ]
 }

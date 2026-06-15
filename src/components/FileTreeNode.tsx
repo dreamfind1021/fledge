@@ -32,12 +32,8 @@ export function FileTreeNode({
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => { if (entry.is_dir) onToggle(); }}
         onDoubleClick={() => {
-          if (entry.is_dir) return;
-          // 暫時的診斷 log（bug 4）：確認雙擊是否觸發、openPath 成功或拋錯——查清後改回簡潔版
-          console.log("[FileTree] 雙擊開檔:", entry.path);
-          openPath(entry.path)
-            .then(() => console.log("[FileTree] openPath 成功"))
-            .catch((e) => console.error("[FileTree] openPath 失敗:", e));
+          // 雙擊檔案用系統預設程式開啟；失敗 log 不靜默吞（CLAUDE.md §3.2）
+          if (!entry.is_dir) openPath(entry.path).catch((e) => console.error("[FileTree] 開啟失敗:", e));
         }}
       >
         {entry.is_dir ? (
