@@ -8,6 +8,9 @@
   font-family: var(--font-ui);
   font-size: 13px;
   overflow-x: auto;
+  /* 明確鎖垂直：overflow-x:auto 會讓 overflow-y 隱含成 auto，tab 的 margin-bottom:-1px
+     造成微小垂直 overflow → 左右捲時上下晃；鎖 hidden 消除晃動（bug 2 殘留） */
+  overflow-y: hidden;
 }
 
 /* 單一 tab */

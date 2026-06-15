@@ -261,27 +261,14 @@ def test_tree_missing_parameter(tree_setup):
     assert r.status_code == 422
 
 
-def test_tree_forbidden_kms_nested_in_root(tree_setup):
+def test_tree_kms_root_as_project_is_browsable(tree_setup):
     client, root, cfg_path = tree_setup
-    # kms_root 實體位於 allowed root 之下：explicit deny 須先於 allowed roots（design §7.1 N1）
-    kms = root / "proj" / "vault"
-    kms.mkdir()
+    # kms_root 同時是 allowed root 下的專案（如「創意發想」既是 KMS vault 又是工作專案）：
+    # 應可正常瀏覽其檔案樹——containment（allowed roots）是唯一邊界（撤銷 PR review F1，見 spec §15）
+    kms = root / "proj"
     cfg = json.loads(cfg_path.read_text())
     cfg["kms_root"] = str(kms)
     cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
     r = client.post("/api/projects/tree", json={"path": str(kms)})
-    assert r.status_code == 403
-
-
-def test_tree_parent_listing_hides_kms_child(tree_setup):
-    client, root, cfg_path = tree_setup
-    # kms_root = root/proj/vault；列父層 root/proj 時，vault 不應出現在 entries
-    kms = root / "proj" / "vault"
-    kms.mkdir()
-    cfg = json.loads(cfg_path.read_text())
-    cfg["kms_root"] = str(kms)
-    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
-    r = client.post("/api/projects/tree", json={"path": str(root / "proj")})
     assert r.status_code == 200
-    names = [e["name"] for e in r.json()["entries"]]
-    assert "vault" not in names
+    assert r.json()["status"] == "ok"

@@ -31,7 +31,14 @@ export function FileTreeNode({
         className="filetree-node"
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => { if (entry.is_dir) onToggle(); }}
-        onDoubleClick={() => { if (!entry.is_dir) openPath(entry.path).catch(() => {}); }}
+        onDoubleClick={() => {
+          if (entry.is_dir) return;
+          // 暫時的診斷 log（bug 4）：確認雙擊是否觸發、openPath 成功或拋錯——查清後改回簡潔版
+          console.log("[FileTree] 雙擊開檔:", entry.path);
+          openPath(entry.path)
+            .then(() => console.log("[FileTree] openPath 成功"))
+            .catch((e) => console.error("[FileTree] openPath 失敗:", e));
+        }}
       >
         {entry.is_dir ? (
           <span className="filetree-caret" aria-label={expanded ? t("tree.collapse") : t("tree.expand")}>
