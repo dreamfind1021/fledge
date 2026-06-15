@@ -14,6 +14,7 @@ import { ImeDraftTracker } from "../lib/imeDraftTracker";
 import { FlowController, type FlowSignal } from "../lib/flowControl";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { formatPathsForPaste } from "../lib/dropPath";
+import { registerTerminal, unregisterTerminal } from "../lib/terminalRegistry";
 
 // WebGL kill switch：Tahoe WebKit 有破圖前例（xterm#5816），驗收若中獎改 false 一鍵退 DOM
 const ENABLE_WEBGL = true;
@@ -41,6 +42,8 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
   const forceRefreshRef = useRef<(() => void) | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // 該終端機是否正在 IME 組字（供 dnd drop 的 §8.4 gate；compositionstart/end 切換）
+  const composingRef = useRef(false);
 
   // drop gate 需要「無 gap」的 active 旗標：render body 同步賦值（每次 render 即時，早於任何 effect）。
   // 底部 isActive effect 只保留 focus／WebGL 副作用，不再負責更新此 ref（Codex 階段3 LOW）。
@@ -153,11 +156,13 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       imeGhost.style.display = "block";
     };
     const onImeCompStart = () => {
+      composingRef.current = true;
       imeGuard.compositionStart();
       imeDraft.compositionStart();
       syncImeGhost();
     };
     const onImeCompEnd = (e: Event) => {
+      composingRef.current = false;
       imeGuard.compositionEnd((e as CompositionEvent).data ?? "", performance.now());
       imeDraft.compositionEnd((e as CompositionEvent).data ?? "", performance.now());
       syncImeGhost();
@@ -290,6 +295,12 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
 
     connect();
 
+    // 註冊貼路徑 handle（需求 4）：dnd drop 命中終端機時由 App onDragEnd 呼叫。
+    registerTerminal(tabId, {
+      paste: (text: string) => { term.focus(); term.paste(text); },
+      isComposing: () => composingRef.current,
+    });
+
     // 拖檔貼路徑（包 4）：Finder 拖檔/資料夾進視窗任意位置 → 跳脫後路徑貼進 active terminal。
     // 整窗收 drop（決策 4-2，不做 hit-test／座標）；N 個 Terminal 各掛一份、isActive 閘控 → 同時恰一個動作。
     // onDragDropEvent 回傳 Promise<UnlistenFn>；cleanup 以 then(f => f()) unlisten（StrictMode 雙掛載不漏）。
@@ -389,6 +400,7 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       imeContainer.removeEventListener("focusout", onImeFocusOut, true);
       imeGhost.remove();
       window.removeEventListener("blur", onImeWinBlur);
+      unregisterTerminal(tabId);
       term.dispose();
       clearActivity(tabId);
       termRef.current = null;
