@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { nextBackendState, type BackendStatus } from "../lib/backendStatus";
 import { isLiveClaudeTab } from "../lib/liveTab";
-import { reorderTabs } from "../lib/tabOrder";
+import { reorderTabs, insertTabAdjacent } from "../lib/tabOrder";
 import {
   Project,
   AppConfigData,
@@ -134,7 +134,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       status: "creating",
       kind,
     };
-    set((s) => ({ tabs: [...s.tabs, tab], activeTabId: id }));
+    // terminal 分頁插到同專案分頁群尾端（需求 2）；其餘（claude）維持末端
+    set((s) => ({
+      tabs: kind === "terminal" ? insertTabAdjacent(s.tabs, tab) : [...s.tabs, tab],
+      activeTabId: id,
+    }));
     try {
       const sessionId = await createSession(port, project.path, account, kind);
       // 若 tab 在建立期間已被關閉，補清這個剛建好的 session（防 orphan，審查 round 1 HIGH）
