@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
+import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
 import { waitForSidecarPort, waitForSidecarToken, setAuthToken, fetchHealth, rawHealth, restartSidecar } from "./lib/sidecar";
 import { useAppStore } from "./store/useAppStore";
 import { isLiveClaudeTab } from "./lib/liveTab";
@@ -99,6 +100,31 @@ function App() {
   });
   const claudeFound = useAppStore((s) => s.claudeFound);
   const permissionError = useAppStore((s) => s.permissionError);
+
+  // 拖曳殘影用：記錄拖曳中的標的（tab 顯示用 title）。distance:5 隔離點擊/右鍵/xterm（design §4.2）。
+  const [dragLabel, setDragLabel] = useState<string | null>(null);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  const onDragStart = (e: DragStartEvent) => {
+    const d = e.active.data.current;
+    if (d?.type === "tab") {
+      const t = useAppStore.getState().tabs.find((x) => x.id === e.active.id);
+      setDragLabel(t?.title ?? null);
+    } else if (d?.type === "path") {
+      setDragLabel(typeof d.label === "string" ? d.label : null);
+    }
+  };
+
+  const onDragEnd = (e: DragEndEvent) => {
+    setDragLabel(null);
+    const { active, over } = e;
+    if (!over) return;
+    const type = active.data.current?.type;
+    if (type === "tab") {
+      if (active.id !== over.id) useAppStore.getState().reorderTabs(String(active.id), String(over.id));
+    }
+    // type === "path" 的終端機 drop 於後續 Task D4 填入
+  };
 
   // 啟動：拿 port → 等 server ready（health gate）→ 載入專案清單
   useEffect(() => {
@@ -260,8 +286,11 @@ function App() {
           <span className="app-banner-msg">無法讀取部分資料夾。請到「系統設定 → 隱私權與安全性 → 檔案與資料夾／App 管理」允許 Fledge。</span>
         </div>
       )}
-      <Sidebar onOpenPicker={() => setShowPicker(true)} onOpenSettings={() => setShowSettings(true)} />
-      <Workspace connError={connError} />
+      <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragStart={onDragStart} onDragEnd={onDragEnd}>
+        <Sidebar onOpenPicker={() => setShowPicker(true)} onOpenSettings={() => setShowSettings(true)} />
+        <Workspace connError={connError} />
+        <DragOverlay>{dragLabel ? <div className="drag-overlay-chip">{dragLabel}</div> : null}</DragOverlay>
+      </DndContext>
       {showOnboarding && <Onboarding onClose={() => setShowOnboarding(false)} />}
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}
       {showPicker && <ProjectPicker onClose={() => setShowPicker(false)} />}

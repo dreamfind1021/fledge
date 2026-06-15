@@ -258,3 +258,14 @@
   z-index: 300;
   white-space: nowrap;
 }
+
+.drag-overlay-chip {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  background: var(--surface-2, #2a2a33);
+  color: var(--text, #e8e8ea);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  white-space: nowrap;
+}
