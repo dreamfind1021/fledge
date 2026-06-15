@@ -1,9 +1,73 @@
 import { X, SquareTerminal, ChartColumn, Brain } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useAppStore } from "../store/useAppStore";
 import { accountColor } from "../lib/accountColor";
 import { tabDotState } from "../lib/tabDotState";
 import "./TabBar.css";
+
+function SortableTab({
+  t,
+  isActive,
+  onSelect,
+  onClose,
+  tDash,
+  tMem,
+}: {
+  t: ReturnType<typeof useAppStore.getState>["tabs"][number];
+  isActive: boolean;
+  onSelect: () => void;
+  onClose: () => void;
+  tDash: (k: string) => string;
+  tMem: (k: string) => string;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: t.id,
+    data: { type: "tab" },
+  });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      onClick={onSelect}
+      className={`tabbar-tab${isActive ? " is-active" : ""}`}
+    >
+      {t.kind === "terminal" ? (
+        <span className="tabbar-term-ico" aria-label="終端機"><SquareTerminal size={13} strokeWidth={1.75} /></span>
+      ) : t.kind === "dashboard" ? (
+        <span className="tabbar-term-ico" aria-label={tDash("tabTitle")}><ChartColumn size={13} strokeWidth={1.75} /></span>
+      ) : t.kind === "memory" ? (
+        <span className="tabbar-term-ico" aria-label={tMem("tabTitle")}><Brain size={13} strokeWidth={1.75} /></span>
+      ) : (
+        <span className={`tab-dot is-${tabDotState(t)}`} />
+      )}
+      <span className="tabbar-tab-title">
+        {t.kind === "dashboard" ? tDash("tabTitle") : t.kind === "memory" ? tMem("tabTitle") : t.title}
+      </span>
+      {t.account && (
+        <span className="tabbar-chip" style={{ background: accountColor(t.account) }}>{t.account}</span>
+      )}
+      <button
+        className="tabbar-close"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+      >
+        <X size={14} strokeWidth={1.75} />
+      </button>
+    </div>
+  );
+}
 
 export function TabBar() {
   const { t: tDash } = useTranslation("dashboard");
@@ -15,54 +79,19 @@ export function TabBar() {
 
   return (
     <div className="tabbar">
-      {tabs.map((t) => {
-        const isActive = t.id === activeTabId;
-        return (
-          <div
+      <SortableContext items={tabs.map((t) => t.id)} strategy={horizontalListSortingStrategy}>
+        {tabs.map((t) => (
+          <SortableTab
             key={t.id}
-            onClick={() => setActive(t.id)}
-            className={`tabbar-tab${isActive ? " is-active" : ""}`}
-          >
-            {t.kind === "terminal" ? (
-              <span className="tabbar-term-ico" aria-label="終端機">
-                <SquareTerminal size={13} strokeWidth={1.75} />
-              </span>
-            ) : t.kind === "dashboard" ? (
-              <span className="tabbar-term-ico" aria-label={tDash("tabTitle")}>
-                <ChartColumn size={13} strokeWidth={1.75} />
-              </span>
-            ) : t.kind === "memory" ? (
-              <span className="tabbar-term-ico" aria-label={tMem("tabTitle")}>
-                <Brain size={13} strokeWidth={1.75} />
-              </span>
-            ) : (
-              <span className={`tab-dot is-${tabDotState(t)}`} />
-            )}
-            <span className="tabbar-tab-title">
-              {t.kind === "dashboard" ? tDash("tabTitle") : t.kind === "memory" ? tMem("tabTitle") : t.title}
-            </span>
-            {t.account && (
-              <span
-                className="tabbar-chip"
-                style={{ background: accountColor(t.account) }}
-              >
-                {t.account}
-              </span>
-            )}
-            <button
-              className="tabbar-close"
-              onClick={(e) => {
-                e.stopPropagation();
-                // 經守門：AI 執行中會跳確認框（app 內 modal，非 window.confirm——後者在 Tauri webview 不彈），
-                // 其餘直接關。與 Cmd+W 走同一條 requestCloseTab。
-                requestCloseTab(t.id);
-              }}
-            >
-              <X size={14} strokeWidth={1.75} />
-            </button>
-          </div>
-        );
-      })}
+            t={t}
+            isActive={t.id === activeTabId}
+            onSelect={() => setActive(t.id)}
+            onClose={() => requestCloseTab(t.id)}
+            tDash={tDash}
+            tMem={tMem}
+          />
+        ))}
+      </SortableContext>
     </div>
   );
 }
