@@ -68,13 +68,13 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
     const others = accountKeys.filter((a) => a !== p.account);
     const items: MenuItem[] = [];
     // 最上方：用純終端機開啟（進專案路徑、不進 claude；可開多個）
-    items.push({ label: "使用終端機開啟", onClick: () => openTab(p, p.account, "terminal") });
+    items.push({ label: tSide("menu.openTerminal"), onClick: () => openTab(p, p.account, "terminal") });
     // 額度臨時切換：這次用別帳號開，不搬組
-    for (const a of others) items.push({ label: `改用「${a}」開啟（這次）`, onClick: () => openTab(p, a) });
+    for (const a of others) items.push({ label: tSide("menu.openWithAccountOnce", { account: a }), onClick: () => openTab(p, a) });
     // 重新分類：持久搬到別的類型群組
-    for (const a of others) items.push({ label: `設為預設帳號 → ${a}`, onClick: () => setProjectAccount(p.path, a) });
-    items.push({ label: "在 Finder 顯示", onClick: () => { revealItemInDir(p.path).catch(() => {}); } });
-    if (p.source === "manual") items.push({ label: "移除", onClick: () => removeManual(p.path), danger: true });
+    for (const a of others) items.push({ label: tSide("menu.setDefaultAccount", { account: a }), onClick: () => setProjectAccount(p.path, a) });
+    items.push({ label: tSide("menu.revealInFinder"), onClick: () => { revealItemInDir(p.path).catch(() => {}); } });
+    if (p.source === "manual") items.push({ label: tSide("menu.remove"), onClick: () => removeManual(p.path), danger: true });
     setMenu({ x: e.clientX, y: e.clientY, items, path: p.path });
   };
 
@@ -168,7 +168,7 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
       x={accountPicker.x}
       y={accountPicker.y}
       items={accountKeys.map((k) => ({
-        label: `用「${config?.accounts[k]?.label || k}」開啟`,
+        label: tSide("menu.openWithAccount", { label: config?.accounts[k]?.label || k }),
         onClick: () => chooseTypeForNewDir(accountPicker.dir, k),
       }))}
       onClose={() => setAccountPicker(null)}
@@ -185,16 +185,16 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           <button
             className="sidebar-rail-btn"
             onClick={toggleCollapsed}
-            aria-label="展開側欄"
-            title="展開側欄"
+            aria-label={tSide("expandSidebar")}
+            title={tSide("expandSidebar")}
           >
             <ChevronsRight size={18} strokeWidth={2} />
           </button>
           <button
             className="sidebar-rail-btn"
             onClick={onOpenSettings}
-            aria-label="設定"
-            title="設定"
+            aria-label={tSide("settings")}
+            title={tSide("settings")}
           >
             <Settings size={18} strokeWidth={1.75} />
           </button>
@@ -222,8 +222,8 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
             className="sidebar-rail-btn sidebar-rail-btn--accent"
             onClick={onOpenFolder}
             disabled={accountKeys.length === 0}
-            aria-label="開啟其他資料夾"
-            title="開啟其他資料夾"
+            aria-label={tSide("openFolder")}
+            title={tSide("openFolder")}
           >
             <FolderPlus size={18} strokeWidth={2} />
           </button>
@@ -242,16 +242,16 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
         <button
           className="sidebar-gear"
           onClick={onOpenSettings}
-          aria-label="設定"
-          title="設定"
+          aria-label={tSide("settings")}
+          title={tSide("settings")}
         >
           <Settings size={16} strokeWidth={1.75} />
         </button>
         <button
           className="sidebar-collapse-btn"
           onClick={toggleCollapsed}
-          aria-label="收合側欄"
-          title="收合側欄"
+          aria-label={tSide("collapseSidebar")}
+          title={tSide("collapseSidebar")}
         >
           <ChevronsLeft size={18} strokeWidth={2} />
         </button>
@@ -262,10 +262,10 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
         <button
           className="sidebar-search"
           onClick={onOpenPicker}
-          aria-label="搜尋專案"
+          aria-label={tSide("searchAria")}
         >
           <Search size={14} strokeWidth={1.75} />
-          <span className="sidebar-search-text">搜尋專案…</span>
+          <span className="sidebar-search-text">{tSide("search")}</span>
           <kbd className="kbd">⌘T</kbd>
         </button>
         <button
@@ -292,14 +292,14 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           /* 空狀態：尚無任何群組（無專案）→ 置中提示 + 主要動作 */
           <div className="sidebar-empty">
             <FolderOpen size={36} strokeWidth={1.5} className="sidebar-empty-ico" />
-            <div className="sidebar-empty-head">還沒有專案</div>
-            <div className="sidebar-empty-hint">開啟一個工作根目錄開始</div>
+            <div className="sidebar-empty-head">{tSide("empty.title")}</div>
+            <div className="sidebar-empty-hint">{tSide("empty.hint")}</div>
             <button
               className="sidebar-empty-btn"
               onClick={onOpenFolder}
               disabled={accountKeys.length === 0}
             >
-              開啟資料夾
+              {tSide("empty.action")}
             </button>
           </div>
         )}
@@ -323,7 +323,7 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
                 className="sidebar-band"
                 onClick={() => setExpanded((s) => ({ ...s, [g.key]: !s[g.key] }))}
               >
-                {expanded[g.key] ? "▾" : "▸"} 自動發現 {g.discovered.length} 個
+                {`${expanded[g.key] ? "▾" : "▸"} ${tSide("discovered", { count: g.discovered.length })}`}
               </button>
             )}
             {expanded[g.key] && g.discovered.map((p) => renderRow(p, false, true))}
@@ -341,7 +341,7 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           // config 未載入（啟動中）或無帳號時 disable，避免開出 items=[] 的空帳號選單（Codex plan F-2）
         >
           <FolderPlus size={15} strokeWidth={2} />
-          開啟其他資料夾
+          {tSide("openFolder")}
         </button>
       </div>
 

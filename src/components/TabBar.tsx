@@ -14,6 +14,7 @@ function SortableTab({
   onClose,
   tDash,
   tMem,
+  tSide,
 }: {
   t: ReturnType<typeof useAppStore.getState>["tabs"][number];
   isActive: boolean;
@@ -21,6 +22,7 @@ function SortableTab({
   onClose: () => void;
   tDash: (k: string) => string;
   tMem: (k: string) => string;
+  tSide: (k: string) => string;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: t.id,
@@ -41,7 +43,7 @@ function SortableTab({
       className={`tabbar-tab${isActive ? " is-active" : ""}`}
     >
       {t.kind === "terminal" ? (
-        <span className="tabbar-term-ico" aria-label="終端機"><SquareTerminal size={13} strokeWidth={1.75} /></span>
+        <span className="tabbar-term-ico" aria-label={tSide("tabBar.terminal")}><SquareTerminal size={13} strokeWidth={1.75} /></span>
       ) : t.kind === "dashboard" ? (
         <span className="tabbar-term-ico" aria-label={tDash("tabTitle")}><ChartColumn size={13} strokeWidth={1.75} /></span>
       ) : t.kind === "memory" ? (
@@ -57,6 +59,7 @@ function SortableTab({
       )}
       <button
         className="tabbar-close"
+        aria-label={tSide("tabBar.close")}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => {
           e.stopPropagation();
@@ -72,6 +75,7 @@ function SortableTab({
 export function TabBar() {
   const { t: tDash } = useTranslation("dashboard");
   const { t: tMem } = useTranslation("memory");
+  const { t: tSide } = useTranslation("sidebar");
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const setActive = useAppStore((s) => s.setActive);
@@ -89,6 +93,7 @@ export function TabBar() {
             onClose={() => requestCloseTab(t.id)}
             tDash={tDash}
             tMem={tMem}
+            tSide={tSide}
           />
         ))}
       </SortableContext>
