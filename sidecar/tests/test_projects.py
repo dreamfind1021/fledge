@@ -271,3 +271,17 @@ def test_tree_forbidden_kms_nested_in_root(tree_setup):
     cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
     r = client.post("/api/projects/tree", json={"path": str(kms)})
     assert r.status_code == 403
+
+
+def test_tree_parent_listing_hides_kms_child(tree_setup):
+    client, root, cfg_path = tree_setup
+    # kms_root = root/proj/vault；列父層 root/proj 時，vault 不應出現在 entries
+    kms = root / "proj" / "vault"
+    kms.mkdir()
+    cfg = json.loads(cfg_path.read_text())
+    cfg["kms_root"] = str(kms)
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    r = client.post("/api/projects/tree", json={"path": str(root / "proj")})
+    assert r.status_code == 200
+    names = [e["name"] for e in r.json()["entries"]]
+    assert "vault" not in names

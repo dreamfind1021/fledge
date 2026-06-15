@@ -25,7 +25,7 @@ function ProjectRow({
 }) {
   // 拖曳來源（需求 4）：整列可拖，data.type='path'
   const { attributes, listeners, setNodeRef } = useDraggable({
-    id: `path:${entry.path}`,
+    id: `project:${entry.path}`,
     data: { type: "path", paths: [entry.path], label: entry.name },
   });
   const itemClass = ["sidebar-item", isActive ? "is-active" : "", isMenuTarget ? "is-menu-target" : "", isOpen ? "is-open" : ""]

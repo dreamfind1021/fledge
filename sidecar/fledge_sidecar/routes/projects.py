@@ -66,10 +66,9 @@ def project_tree(body: TreeBody):
 
     # 1. explicit deny kms_root subtree（先於 allowed roots，fail-closed；§7.1 N1/R3-F1）
     kms = (config.kms_root or "").strip()
-    if kms:
-        kms_real = resolve_best_effort(str(Path(kms).expanduser()))
-        if is_within_root(real, kms_real):
-            raise HTTPException(status_code=403, detail={"status": "forbidden"})
+    kms_real = resolve_best_effort(str(Path(kms).expanduser())) if kms else None
+    if kms_real and is_within_root(real, kms_real):
+        raise HTTPException(status_code=403, detail={"status": "forbidden"})
 
     # 2. allowed roots = roots ∪ manual（config 已 canonical，再 resolve 一次保險）
     roots = [resolve_best_effort(r["path"]) for r in config.roots]
@@ -82,7 +81,11 @@ def project_tree(body: TreeBody):
     if st in ("missing", "not_dir", "denied"):
         return {"path": real, "entries": [], "status": st}
     try:
-        return {"path": real, "entries": list_dir_entries(Path(abs_)), "status": "ok"}
+        entries = list_dir_entries(Path(abs_))
+        if kms_real:
+            # 連 child metadata 也不外露 kms subtree（與 explicit deny 一致）
+            entries = [e for e in entries if not is_within_root(resolve_best_effort(e["path"]), kms_real)]
+        return {"path": real, "entries": entries, "status": "ok"}
     except PermissionError:
         return {"path": real, "entries": [], "status": "denied"}
     except OSError:

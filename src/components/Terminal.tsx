@@ -310,6 +310,7 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       if (!isActiveRef.current) return; // 僅 active tab 動作
       if (disposed) return; // unlisten 是 async，teardown 後到 unlisten 生效前的窗內不得動 disposed term
       if (useAppStore.getState().modalOpen) return; // modal 開啟 → no-op（design §5）
+      if (composingRef.current) return; // IME 組字中不貼，與 dnd path drop gate 對稱（PR review F2）
       // 此 tab 須為 ready：offline/ended/creating 安靜忽略，不得寫進死連線
       const tab = useAppStore.getState().tabs.find((t) => t.id === tabId);
       if (!tab || tab.status !== "ready") return;

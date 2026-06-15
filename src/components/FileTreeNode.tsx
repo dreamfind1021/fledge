@@ -19,7 +19,7 @@ export function FileTreeNode({
 }) {
   const { t } = useTranslation("sidebar");
   const { attributes, listeners, setNodeRef } = useDraggable({
-    id: `path:${entry.path}`,
+    id: `tree:${entry.path}`,
     data: { type: "path", paths: [entry.path], label: entry.name },
   });
   return (
