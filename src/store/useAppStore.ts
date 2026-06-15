@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { nextBackendState, type BackendStatus } from "../lib/backendStatus";
 import { isLiveClaudeTab } from "../lib/liveTab";
+import { reorderTabs } from "../lib/tabOrder";
 import {
   Project,
   AppConfigData,
@@ -65,6 +66,7 @@ interface AppState {
   recordHealth: (ok: boolean) => void;
   setBackendStatus: (status: BackendStatus) => void;
   setActive: (tabId: string) => void;
+  reorderTabs: (activeId: string, overId: string) => void;
   setTabStatus: (tabId: string, status: Tab["status"]) => void;
   setTabActivity: (tabId: string, activity: "working" | "idle" | undefined) => void;
   restartTab: (tabId: string) => Promise<void>;
@@ -312,6 +314,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setClaudeFound: (found) => set({ claudeFound: found }),
   setActive: (tabId) => set({ activeTabId: tabId }),
+  reorderTabs: (activeId, overId) =>
+    set((s) => ({ tabs: reorderTabs(s.tabs, activeId, overId) })),
 
   setTabStatus: (tabId, status) =>
     set((s) => ({ tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, status } : t)) })),
