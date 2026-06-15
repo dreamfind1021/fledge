@@ -96,6 +96,17 @@ export interface Project {
   recent: number | null;
 }
 
+export interface DirEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+}
+export interface DirTreeResult {
+  path: string;
+  entries: DirEntry[];
+  status: "ok" | "denied" | "missing" | "not_dir";
+}
+
 const base = (port: number) => `http://127.0.0.1:${port}`;
 
 export async function fetchProjects(port: number): Promise<{ projects: Project[]; permissionError: boolean }> {
@@ -298,6 +309,18 @@ export async function checkDir(port: number, path: string): Promise<DirStatus> {
   });
   if (!resp.ok) throw new Error(`checkDir failed: ${resp.status}`);
   return (await resp.json()).status as DirStatus;
+}
+
+// 列單層目錄（lazy 檔案樹）。HTTP !ok（400 invalid / 403 forbidden / 5xx）throw；
+// HTTP 200 即使 status ∈ {denied,missing,not_dir} 也不 throw、回 status 供節點就地提示（design §7.2 L2）。
+export async function fetchDirTree(port: number, path: string): Promise<DirTreeResult> {
+  const resp = await fetch(`${base(port)}/api/projects/tree`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ path }),
+  });
+  if (!resp.ok) throw new Error(`fetchDirTree failed: ${resp.status}`);
+  return (await resp.json()) as DirTreeResult;
 }
 
 // --- usage dashboard（design §10）---

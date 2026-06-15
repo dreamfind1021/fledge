@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // sidecar.ts 頂部 import @tauri-apps/api/core 的 invoke；node 環境下 mock 掉以免載入失敗
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 import {
@@ -9,6 +9,7 @@ import {
   wsUrl,
   setAuthToken,
   fetchUsageDashboard,
+  fetchDirTree,
 } from "./sidecar";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -82,7 +83,8 @@ describe("auth token", () => {
     await m.dismissSuggestion(1, "/p", "topic");
     await m.addMemoryLink(1, "/a", "/b");
     await m.removeMemoryLink(1, "/a", "/b");
-    expect(seen.length).toBeGreaterThanOrEqual(19);
+    await m.fetchDirTree(1, "/p");
+    expect(seen.length).toBeGreaterThanOrEqual(20);
     for (const h of seen) expect(h["X-Fledge-Token"]).toBe("tok");
     setAuthToken(null);
   });
@@ -129,5 +131,39 @@ describe("fetchUsageDashboard", () => {
     expect(calls[0].headers["X-Fledge-Token"]).toBe("tok");
     vi.unstubAllGlobals();
     setAuthToken(null);
+  });
+});
+
+describe("fetchDirTree", () => {
+  beforeEach(() => setAuthToken("tok"));
+
+  it("POST 帶 token、回 entries", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ path: "/p", entries: [{ name: "a", path: "/p/a", is_dir: false }], status: "ok" }), { status: 200 }),
+    );
+    const res = await fetchDirTree(1234, "/p");
+    expect(res.status).toBe("ok");
+    expect(res.entries[0].name).toBe("a");
+    const [, init] = spy.mock.calls[0];
+    expect((init as RequestInit).method).toBe("POST");
+    expect((init!.headers as Record<string, string>)["X-Fledge-Token"]).toBe("tok");
+    spy.mockRestore();
+  });
+
+  it("HTTP !ok（403 forbidden）→ throw", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: { status: "forbidden" } }), { status: 403 }),
+    );
+    await expect(fetchDirTree(1234, "/etc")).rejects.toThrow();
+    spy.mockRestore();
+  });
+
+  it("HTTP 200 帶 status=missing → 不 throw、回 status", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ path: "/p/x", entries: [], status: "missing" }), { status: 200 }),
+    );
+    const res = await fetchDirTree(1234, "/p/x");
+    expect(res.status).toBe("missing");
+    spy.mockRestore();
   });
 });
