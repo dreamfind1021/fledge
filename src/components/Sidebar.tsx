@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useDraggable } from "@dnd-kit/core";
 import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, ChevronsLeft, ChevronsRight, ChartColumn, Brain, ChevronRight, ChevronDown } from "lucide-react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useAppStore } from "../store/useAppStore";
@@ -12,6 +13,44 @@ import { scanPreview } from "../lib/sidecar";
 import { FeatherMark } from "./Logo";
 import { FileTree } from "./FileTree";
 import "./Sidebar.css";
+
+function ProjectRow({
+  entry, isOpen, isActive, isDiscovered, isMenuTarget, treeOpen, port,
+  onOpen, onContextMenu, onToggleTree, tSide,
+}: {
+  entry: Project; isOpen: boolean; isActive: boolean; isDiscovered: boolean;
+  isMenuTarget: boolean; treeOpen: boolean; port: number | null;
+  onOpen: () => void; onContextMenu: (e: React.MouseEvent) => void;
+  onToggleTree: () => void; tSide: (k: string, o?: Record<string, unknown>) => string;
+}) {
+  // 拖曳來源（需求 4）：整列可拖，data.type='path'
+  const { attributes, listeners, setNodeRef } = useDraggable({
+    id: `path:${entry.path}`,
+    data: { type: "path", paths: [entry.path], label: entry.name },
+  });
+  const itemClass = ["sidebar-item", isActive ? "is-active" : "", isMenuTarget ? "is-menu-target" : "", isOpen ? "is-open" : ""]
+    .filter(Boolean).join(" ");
+  return (
+    <div className="sidebar-row-wrap">
+      <button ref={setNodeRef} {...attributes} {...listeners} onClick={onOpen} onContextMenu={onContextMenu} className={itemClass}>
+        <span
+          className="sidebar-tree-caret"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onToggleTree(); }}
+          aria-label={treeOpen ? tSide("tree.collapse") : tSide("tree.expand")}
+        >
+          {treeOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </span>
+        <span className={`sidebar-item-ico${isDiscovered ? " is-discovered" : ""}`}><Folder size={16} strokeWidth={1.75} /></span>
+        <span className="sidebar-item-name">{entry.name}</span>
+        <span className="sidebar-item-trail">
+          {isOpen ? <span className="sidebar-live" /> : entry.source === "manual" ? <Pin size={12} strokeWidth={1.75} color="var(--faint)" /> : null}
+        </span>
+      </button>
+      {treeOpen && port != null && <FileTree port={port} rootPath={entry.path} />}
+    </div>
+  );
+}
 
 export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => void; onOpenSettings: () => void }) {
   const { t: tDash } = useTranslation("dashboard");
@@ -80,45 +119,31 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
 
   // 單列渲染：isOpen 來自所屬 band（band1 為 true）。trailing slot：綠點＝開啟中、Pin＝manual、否則留空對齊。
   // isDiscovered：在自動發現 band 內，folder icon 用 faint 色。
+  // path 比對即足夠：scanner 以 by_path dedup，一個 path 在 projects 只出現一列（其持久帳號群組），不會雙高亮
   const renderRow = (p: Project, isOpen: boolean, isDiscovered = false) => {
     const isActive = isOpen && tabKey(p.path, p.account) === activeKey;
-    // path 比對即足夠：scanner 以 by_path dedup，一個 path 在 projects 只出現一列（其持久帳號群組），不會雙高亮
     const isMenuTarget = menu?.path === p.path;
-
-    const itemClass = [
-      "sidebar-item",
-      isActive ? "is-active" : "",
-      isMenuTarget ? "is-menu-target" : "",
-      isOpen ? "is-open" : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-
     return (
-      <div key={p.path} className="sidebar-row-wrap">
-        <button onClick={() => openTab(p)} onContextMenu={(e) => openMenu(e, p)} className={itemClass}>
-          <span
-            className="sidebar-tree-caret"
-            onClick={(e) => {
-              e.stopPropagation();
-              setTreeOpen((s) => {
-                const next = new Set(s);
-                next.has(p.path) ? next.delete(p.path) : next.add(p.path);
-                return next;
-              });
-            }}
-            aria-label={treeOpen.has(p.path) ? tSide("tree.collapse") : tSide("tree.expand")}
-          >
-            {treeOpen.has(p.path) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          </span>
-          <span className={`sidebar-item-ico${isDiscovered ? " is-discovered" : ""}`}><Folder size={16} strokeWidth={1.75} /></span>
-          <span className="sidebar-item-name">{p.name}</span>
-          <span className="sidebar-item-trail">
-            {isOpen ? <span className="sidebar-live" /> : p.source === "manual" ? <Pin size={12} strokeWidth={1.75} color="var(--faint)" /> : null}
-          </span>
-        </button>
-        {treeOpen.has(p.path) && port != null && <FileTree port={port} rootPath={p.path} />}
-      </div>
+      <ProjectRow
+        key={p.path}
+        entry={p}
+        isOpen={isOpen}
+        isActive={isActive}
+        isDiscovered={isDiscovered}
+        isMenuTarget={isMenuTarget}
+        treeOpen={treeOpen.has(p.path)}
+        port={port}
+        onOpen={() => openTab(p)}
+        onContextMenu={(e) => openMenu(e, p)}
+        onToggleTree={() =>
+          setTreeOpen((s) => {
+            const n = new Set(s);
+            n.has(p.path) ? n.delete(p.path) : n.add(p.path);
+            return n;
+          })
+        }
+        tSide={tSide}
+      />
     );
   };
 

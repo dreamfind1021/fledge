@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
 import { waitForSidecarPort, waitForSidecarToken, setAuthToken, fetchHealth, rawHealth, restartSidecar } from "./lib/sidecar";
+import { getTerminal } from "./lib/terminalRegistry";
+import { formatPathsForPaste } from "./lib/dropPath";
 import { useAppStore } from "./store/useAppStore";
 import { isLiveClaudeTab } from "./lib/liveTab";
 import { Sidebar } from "./components/Sidebar";
@@ -67,6 +69,23 @@ function CloseConfirm({
   );
 }
 
+// 把拖曳路徑貼到 active 終端機（需求 4）；gate 對齊 design §8.4（與既有 OS drop 對稱）。
+function dropPathsToActiveTerminal(paths: string[]): void {
+  const st = useAppStore.getState();
+  if (st.modalOpen) return;                                       // modal 未開
+  const id = st.activeTabId;
+  const tab = st.tabs.find((t) => t.id === id);
+  if (!id || !tab) return;
+  if (tab.kind !== "claude" && tab.kind !== "terminal") return;   // 分頁種類
+  if (tab.status !== "ready") return;                             // ready
+  if (paths.length === 0) return;                                 // 有路徑
+  const handle = getTerminal(id);
+  if (!handle || handle.isComposing()) return;                    // IME 未組字
+  const text = formatPathsForPaste(paths);
+  if (!text) return;                                              // 格式化非空
+  handle.paste(text);
+}
+
 function App() {
   const [connError, setConnError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -122,8 +141,11 @@ function App() {
     const type = active.data.current?.type;
     if (type === "tab") {
       if (active.id !== over.id) useAppStore.getState().reorderTabs(String(active.id), String(over.id));
+    } else if (type === "path") {
+      if (over.id === "terminal-drop") {
+        dropPathsToActiveTerminal((active.data.current?.paths as string[]) ?? []);
+      }
     }
-    // type === "path" 的終端機 drop 於後續 Task D4 填入
   };
 
   // 啟動：拿 port → 等 server ready（health gate）→ 載入專案清單
