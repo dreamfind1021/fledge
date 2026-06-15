@@ -102,6 +102,15 @@ describe("ImeReplayGuard", () => {
     expect(g.shouldSwallowKeydown("a")).toBe(false);
     expect(g.shouldSwallowKeydown("Shift")).toBe(false);
   });
+  it("組字中 Unidentified keydown 該吞（CapsLock 中英切換的附隨事件、keyCode=0）", () => {
+    const g = new ImeReplayGuard();
+    g.compositionStart();
+    expect(g.shouldSwallowKeydown("Unidentified")).toBe(true);
+  });
+  it("非組字中 Unidentified 不吞", () => {
+    const g = new ImeReplayGuard();
+    expect(g.shouldSwallowKeydown("Unidentified")).toBe(false);
+  });
   it("組字結束後 Meta 不吞", () => {
     const g = new ImeReplayGuard();
     g.compositionStart();

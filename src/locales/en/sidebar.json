@@ -31,5 +31,10 @@
   "tabBar": {
     "terminal": "Terminal",
     "close": "Close tab"
+  },
+  "termMenu": {
+    "copy": "Copy",
+    "paste": "Paste",
+    "selectAll": "Select all"
   }
 }

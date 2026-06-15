@@ -5,6 +5,7 @@ export interface MenuItem {
   label: string;
   onClick: () => void;
   danger?: boolean;
+  disabled?: boolean; // 灰階且不可點（如無選取時的「複製」），但仍常駐顯示
 }
 
 interface ContextMenuProps {
@@ -43,10 +44,11 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
         <div
           key={i}
           onClick={() => {
+            if (item.disabled) return; // 灰階項：點擊不動作、也不關閉選單
             item.onClick();
             onClose();
           }}
-          className={`ctx-item${item.danger ? " is-danger" : ""}`}
+          className={`ctx-item${item.danger ? " is-danger" : ""}${item.disabled ? " is-disabled" : ""}`}
         >
           {item.label}
         </div>

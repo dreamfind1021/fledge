@@ -28,3 +28,12 @@
 .ctx-item.is-danger {
   color: var(--error);
 }
+
+/* 停用項（如無選取時的「複製」）：灰階、不可點、無 hover 高亮 */
+.ctx-item.is-disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.ctx-item.is-disabled:hover {
+  background: transparent;
+}

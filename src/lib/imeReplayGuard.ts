@@ -55,12 +55,17 @@ export class ImeReplayGuard {
     }
   }
 
-  /** 組字中的 Cmd（Meta）keydown 該被吞掉：xterm 的 CompositionHelper.keydown 看到非
-   *  229/16/17/18 的 keydown 會 _finalizeComposition(false) 提前送出半成品（重複的根源，
-   *  design §1.1）。吞掉讓 macOS 原生懸置→還原接手（真「留著」）；非組字中不吞，
-   *  Cmd 快捷鍵照常。 */
+  /** 組字中該吞掉的 keydown：xterm 的 CompositionHelper.keydown 看到非 20/229/16/17/18
+   *  （CapsLock/IME/Shift/Ctrl/Alt）的 keydown 會 _finalizeComposition(false) 提前送出半成品
+   *  （重複的根源，design §1.1）。兩個觸發鍵：
+   *  - Meta：組字中按 Cmd 切視窗（Cmd+Tab）。
+   *  - Unidentified：組字中按 CapsLock 切中英，macOS 在 commit 前多發一個 key="Unidentified"
+   *    ／keyCode=0 的附隨 keydown（CapsLock 本身 keyCode=20 被 xterm 豁免，但這個附隨事件
+   *    沒有）→ xterm 提前 finalize 送一次、隨後 compositionend 再送一次 ＝ 重複（log 實證）。
+   *  吞掉（stopPropagation 不 preventDefault）讓 macOS 原生 commit（compositionend）成為唯一
+   *  送出路徑；非組字中不吞，Cmd 快捷鍵與 CapsLock 照常。 */
   shouldSwallowKeydown(key: string): boolean {
-    return this.composing && key === "Meta";
+    return this.composing && (key === "Meta" || key === "Unidentified");
   }
 
   /** beforeinput 是否該攔（攔即消耗武裝 one-shot；不匹配不消耗） */

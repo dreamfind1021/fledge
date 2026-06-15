@@ -31,5 +31,10 @@
   "tabBar": {
     "terminal": "終端機",
     "close": "關閉分頁"
+  },
+  "termMenu": {
+    "copy": "複製",
+    "paste": "貼上",
+    "selectAll": "全選"
   }
 }

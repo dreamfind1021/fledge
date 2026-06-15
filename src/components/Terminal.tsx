@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -15,6 +16,7 @@ import { FlowController, type FlowSignal } from "../lib/flowControl";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { formatPathsForPaste } from "../lib/dropPath";
 import { registerTerminal, unregisterTerminal } from "../lib/terminalRegistry";
+import { ContextMenu, type MenuItem } from "./ContextMenu";
 
 // WebGL kill switch：Tahoe WebKit 有破圖前例（xterm#5816），驗收若中獎改 false 一鍵退 DOM
 const ENABLE_WEBGL = true;
@@ -27,6 +29,32 @@ let lossWindowStart = 0;
 let lossCountInWindow = 0;
 const LOSS_WINDOW_MS = 60_000;
 const LOSS_PERMANENT_THRESHOLD = 3;
+
+// 剪貼簿寫入：xterm 的選取是內部狀態（term.getSelection()），非 DOM Selection，
+// webview 原生 Cmd+C／右鍵 Copy 都抓不到 → 必須由我們主動寫入。WKWebView 在 secure
+// context 下 writeText 可用；失敗（權限/環境）只記 log 不擲回，避免中斷終端機操作。
+async function writeClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) {
+    console.warn("剪貼簿寫入失敗（複製）", err);
+  }
+}
+
+// 剪貼簿讀取（右鍵貼上）：navigator.clipboard 可能為 undefined（非 secure context）或 readText
+// 在某授權狀態同步 throw（WKWebView）。全程 try/catch 包住——含 navigator.clipboard 求值——
+// 確保呼叫端（選單 onClick）不擲回，否則 ContextMenu 的 onClose 不會執行、選單卡住（Codex 審查 #3）。
+async function pasteFromClipboard(term: XTerm): Promise<void> {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) {
+      term.focus();
+      term.paste(text); // 走既有 onData→ws guard
+    }
+  } catch (err) {
+    console.warn("剪貼簿讀取失敗（貼上）", err);
+  }
+}
 
 interface TerminalProps {
   port: number;
@@ -44,6 +72,9 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
   // 該終端機是否正在 IME 組字（供 dnd drop 的 §8.4 gate；compositionstart/end 切換）
   const composingRef = useRef(false);
+  const { t } = useTranslation("sidebar");
+  // 右鍵選單狀態（per-terminal）：座標 + 當下是否有選取（決定要不要放「複製」項）
+  const [menu, setMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null);
 
   // drop gate 需要「無 gap」的 active 旗標：render body 同步賦值（每次 render 即時，早於任何 effect）。
   // 底部 isActive effect 只保留 focus／WebGL 副作用，不再負責更新此 ref（Codex 階段3 LOW）。
@@ -218,6 +249,27 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       imeDraft.dismiss(); // in-app 焦點轉移（切 tab、點 sidebar）→ 不殘留 ghost；
       syncImeGhost();     // Cmd+Tab 切走不觸發 focusout（WKWebView 保持 activeElement）、ghost 正確保留
     };
+    // 問題 1：選取 → Cmd+C 複製。xterm 選取是內部狀態、非 DOM Selection，webview 原生
+    // Cmd+C 抓不到可複製內容 → NSBeep（警示音）＋無動作。capture 階段接管：preventDefault
+    // 消 beep、stopPropagation 讓 xterm 不誤當輸入；有選取才寫剪貼簿（選取保留，比照一般
+    // 終端機）。組字中（Cmd 罕見）讓 IME 自理、不攔。
+    const onClipboardKeydown = (e: Event) => {
+      const ke = e as KeyboardEvent;
+      if (ke.metaKey && !ke.ctrlKey && !ke.altKey && (ke.key === "c" || ke.code === "KeyC")) {
+        if (composingRef.current) return;
+        ke.preventDefault();
+        ke.stopPropagation();
+        if (term.hasSelection()) void writeClipboard(term.getSelection());
+      }
+    };
+    // 問題 2：右鍵自訂選單。WKWebView 原生選單的 Copy 抓 DOM Selection，與 xterm（WebGL
+    // 文字畫在 canvas、DOM 無對齊文字）視覺選取錯位 → 前移後移。preventDefault 擋原生選單，
+    // 改開以 term.getSelection() 為準的自訂選單；hasSelection 當下定格供 render 決定選單項。
+    const onContextMenuEvent = (e: Event) => {
+      const me = e as MouseEvent;
+      me.preventDefault();
+      setMenu({ x: me.clientX, y: me.clientY, hasSelection: term.hasSelection() });
+    };
     imeContainer.addEventListener("compositionstart", onImeCompStart, true);
     imeContainer.addEventListener("compositionend", onImeCompEnd, true);
     imeContainer.addEventListener("beforeinput", onImeBeforeInput, true);
@@ -226,6 +278,8 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
     imeContainer.addEventListener("compositionupdate", onImeCompUpdate, true);
     imeContainer.addEventListener("mousedown", onImePointerDown, true);
     imeContainer.addEventListener("focusout", onImeFocusOut, true);
+    imeContainer.addEventListener("keydown", onClipboardKeydown, true);
+    imeContainer.addEventListener("contextmenu", onContextMenuEvent);
     window.addEventListener("blur", onImeWinBlur);
 
     let ws: WebSocket | null = null;
@@ -399,6 +453,8 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       imeContainer.removeEventListener("compositionupdate", onImeCompUpdate, true);
       imeContainer.removeEventListener("mousedown", onImePointerDown, true);
       imeContainer.removeEventListener("focusout", onImeFocusOut, true);
+      imeContainer.removeEventListener("keydown", onClipboardKeydown, true);
+      imeContainer.removeEventListener("contextmenu", onContextMenuEvent);
       imeGhost.remove();
       window.removeEventListener("blur", onImeWinBlur);
       unregisterTerminal(tabId);
@@ -420,5 +476,34 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
     }
   }, [isActive]);
 
-  return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
+  // 右鍵選單項（render body 建，用 t() + termRef）：有選取才放「複製」；貼上/全選恆有。
+  // 複製/全選讀 xterm 內部選取（getSelection/selectAll）；貼上走 term.paste（既有 onData→ws）。
+  const menuItems: MenuItem[] = menu
+    ? [
+        {
+          label: t("termMenu.copy"),
+          disabled: !menu.hasSelection, // 無選取＝灰階常駐（符合終端機右鍵慣例，不再隱藏）
+          onClick: () => {
+            const term = termRef.current;
+            if (term?.hasSelection()) void writeClipboard(term.getSelection());
+          },
+        },
+        {
+          label: t("termMenu.paste"),
+          onClick: () => {
+            // 右鍵手勢；pasteFromClipboard 全程 try/catch，不擲回故不破壞選單關閉（Cmd+V 仍走 xterm 原生 paste）
+            const term = termRef.current;
+            if (term) void pasteFromClipboard(term);
+          },
+        },
+        { label: t("termMenu.selectAll"), onClick: () => termRef.current?.selectAll() },
+      ]
+    : [];
+
+  return (
+    <>
+      <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={() => setMenu(null)} />}
+    </>
+  );
 }
