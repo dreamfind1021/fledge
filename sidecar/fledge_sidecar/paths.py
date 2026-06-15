@@ -49,3 +49,14 @@ def probe_dir(raw: str) -> DirStatus:
     except OSError:
         return "missing"  # 其餘 OSError（如中段 ENOTDIR）視為 missing
     return "dir" if stat_module.S_ISDIR(st.st_mode) else "not_dir"
+
+
+def is_within_root(realpath: str, root: str) -> bool:
+    """realpath 是否等於 root 或在其下。以 `root + os.sep` 比對避免 prefix 偽命中
+    （/a/bc 不算落在 /a/b）。呼叫端須先各自 resolve（realpath）。"""
+    norm_root = root.rstrip(os.sep)
+    return realpath == norm_root or realpath.startswith(norm_root + os.sep)
+
+
+def is_within_any_root(realpath: str, roots: list[str]) -> bool:
+    return any(is_within_root(realpath, r) for r in roots)

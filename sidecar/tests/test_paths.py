@@ -75,3 +75,33 @@ def test_probe_dir_denied(monkeypatch, tmp_path):
         raise PermissionError("denied")
     monkeypatch.setattr(os, "stat", boom)
     assert paths.probe_dir(str(tmp_path)) == "denied"
+
+
+# --- is_within_root / is_within_any_root ---
+
+from fledge_sidecar.paths import is_within_root, is_within_any_root
+
+
+def test_within_equal_root():
+    assert is_within_root("/a/b", "/a/b")
+
+
+def test_within_child():
+    assert is_within_root("/a/b/c", "/a/b")
+
+
+def test_within_prefix_false_positive():
+    assert not is_within_root("/a/bc", "/a/b")  # /a/bc 不在 /a/b 下
+
+
+def test_within_outside():
+    assert not is_within_root("/x/y", "/a/b")
+
+
+def test_within_trailing_sep_root():
+    assert is_within_root("/a/b/c", "/a/b/")
+
+
+def test_within_any():
+    assert is_within_any_root("/a/b/c", ["/x", "/a/b"])
+    assert not is_within_any_root("/z", ["/x", "/a/b"])
