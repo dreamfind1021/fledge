@@ -1,10 +1,11 @@
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from fledge_sidecar.app_config import AppConfig
-from fledge_sidecar.paths import expand_and_validate, probe_dir, resolve_best_effort
+from fledge_sidecar.dir_tree import list_dir_entries
+from fledge_sidecar.paths import expand_and_validate, is_within_any_root, is_within_root, probe_dir, resolve_best_effort
 from fledge_sidecar.project_scanner import scan_all, scan_root
 
 router = APIRouter()
@@ -43,3 +44,46 @@ def scan_preview(body: PreviewBody):
         return {"path": canonical, "count": 0, "status": "denied"}
     except OSError:
         return {"path": canonical, "count": 0, "status": "missing"}
+
+
+class TreeBody(BaseModel):
+    path: str
+
+
+@router.post("/api/projects/tree")
+def project_tree(body: TreeBody):
+    """列單層目錄（lazy 檔案樹）。containment 順序固定：expand → realpath →
+    先 explicit deny kms_root subtree（fail-closed）→ 再限 allowed roots。
+    回 status：ok（200）/ invalid（400）/ forbidden（403）/ denied|missing|not_dir（200）。
+    設計見 docs/planning/sidebar-tree-and-tab-dnd-design.md §7.1。"""
+    try:
+        abs_ = expand_and_validate(body.path)
+    except ValueError:
+        raise HTTPException(status_code=400, detail={"status": "invalid"})
+
+    real = resolve_best_effort(abs_)  # 永不 raise；支援不存在 leaf（§7.1 R3-F2）
+    config = AppConfig.load()
+
+    # 1. explicit deny kms_root subtree（先於 allowed roots，fail-closed；§7.1 N1/R3-F1）
+    kms = (config.kms_root or "").strip()
+    if kms:
+        kms_real = resolve_best_effort(str(Path(kms).expanduser()))
+        if is_within_root(real, kms_real):
+            raise HTTPException(status_code=403, detail={"status": "forbidden"})
+
+    # 2. allowed roots = roots ∪ manual（config 已 canonical，再 resolve 一次保險）
+    roots = [resolve_best_effort(r["path"]) for r in config.roots]
+    roots += [resolve_best_effort(m["path"]) for m in config.manual_projects]
+    if not is_within_any_root(real, roots):
+        raise HTTPException(status_code=403, detail={"status": "forbidden"})
+
+    # 3. probe + 列出（內容層錯誤回 200 帶 status，§7.1 L2）
+    st = probe_dir(abs_)
+    if st in ("missing", "not_dir", "denied"):
+        return {"path": real, "entries": [], "status": st}
+    try:
+        return {"path": real, "entries": list_dir_entries(Path(abs_)), "status": "ok"}
+    except PermissionError:
+        return {"path": real, "entries": [], "status": "denied"}
+    except OSError:
+        return {"path": real, "entries": [], "status": "missing"}

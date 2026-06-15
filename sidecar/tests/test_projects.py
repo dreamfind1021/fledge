@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from fledge_sidecar.app import create_app
@@ -193,3 +194,80 @@ def test_scan_preview_status_denied(tmp_path: Path, monkeypatch):
     body = client.post("/api/projects/scan-preview", json={"path": str(tmp_path)}).json()
     assert body["status"] == "denied"
     assert body["count"] == 0
+
+
+# ── Task C3：POST /api/projects/tree ─────────────────────────────────────────
+
+
+@pytest.fixture
+def tree_setup(tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    (root / "proj" / "sub").mkdir(parents=True)
+    (root / "proj" / "a.txt").write_text("x")
+    (root / "proj" / ".hidden").write_text("x")
+    cfg = {
+        "version": 1,
+        "roots": [{"path": str(root), "default_account": "work"}],
+        "accounts": {"work": {"config_dir": str(tmp_path / "cfg"), "label": "工作"}},
+        "manual_projects": [],
+        "project_overrides": {},
+        "ui": {},
+        "subscriptions": [],
+        "kms_root": "",
+    }
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setenv("FLEDGE_TEST_UNAUTH", "1")
+    return TestClient(create_app()), root, cfg_path
+
+
+def test_tree_lists_one_level(tree_setup):
+    client, root, _ = tree_setup
+    r = client.post("/api/projects/tree", json={"path": str(root / "proj")})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    names = [(e["name"], e["is_dir"]) for e in body["entries"]]
+    assert names == [("sub", True), ("a.txt", False)]  # 資料夾在前、dotfile 排除
+
+
+def test_tree_forbidden_outside_roots(tree_setup):
+    client, _, _ = tree_setup
+    r = client.post("/api/projects/tree", json={"path": "/etc"})
+    assert r.status_code == 403
+    assert r.json()["detail"]["status"] == "forbidden"
+
+
+def test_tree_invalid_relative(tree_setup):
+    client, _, _ = tree_setup
+    r = client.post("/api/projects/tree", json={"path": "relative/x"})
+    assert r.status_code == 400
+    assert r.json()["detail"]["status"] == "invalid"
+
+
+def test_tree_missing_within_root(tree_setup):
+    client, root, _ = tree_setup
+    # allowed root 下不存在的子路徑 → 200 帶 status=missing（design §7.1 L2 刻意決定：
+    # 內容層錯誤回 200 讓前端就地提示，非 4xx）
+    r = client.post("/api/projects/tree", json={"path": str(root / "proj" / "nope")})
+    assert r.status_code == 200
+    assert r.json()["status"] == "missing"
+
+
+def test_tree_missing_parameter(tree_setup):
+    client, _, _ = tree_setup
+    r = client.post("/api/projects/tree", json={})  # 缺 path → FastAPI 422
+    assert r.status_code == 422
+
+
+def test_tree_forbidden_kms_nested_in_root(tree_setup):
+    client, root, cfg_path = tree_setup
+    # kms_root 實體位於 allowed root 之下：explicit deny 須先於 allowed roots（design §7.1 N1）
+    kms = root / "proj" / "vault"
+    kms.mkdir()
+    cfg = json.loads(cfg_path.read_text())
+    cfg["kms_root"] = str(kms)
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+    r = client.post("/api/projects/tree", json={"path": str(kms)})
+    assert r.status_code == 403
