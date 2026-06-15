@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-06-13
+- **最後更新：** 2026-06-15
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -105,7 +105,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `components/SuggestionChip.tsx` | 建議 chip（topic + ✓✕，aria-label 走 `t()`）：await 真成功（wrapper !ok 會 throw）才 `onAfterWrite`、失敗顯 error 不樂觀消失、pending 雙路徑 reset | `SuggestionChip` |
 | `components/RelatedFloat.tsx` | 終端機右下懸浮（claude/terminal 分頁）：`fetchMemoryRelated` 該專案相關連結+建議；收合 pill ↔ 展開 popover；count 0 回 `null`（無連結即隱形）；`position:absolute` 不奪終端機尺寸/scroll | `RelatedFloat` |
 | `styles/term-theme.ts` | 從 CSS 變數讀終端機色組，回傳 xterm `ITheme`；讀取時機：xterm 初始化 + 主題切換 | `readTermTheme` |
-| `index.css` | CSS 變數 token 層（`:root` 品牌色 + `[data-theme]` 語義/表面/終端機 token）；各 UI 元件 CSS 均從此繼承，末尾含 `prefers-reduced-motion` 全局重置 | — |
+| `index.css` | CSS 變數 token 層（`:root` 字型 + 終端機 ANSI 16 色〔深底兩主題共用〕、`[data-theme]` 語義/表面/終端機 token）；各 UI 元件 CSS 均從此繼承，末尾含 `prefers-reduced-motion` 全局重置 | — |
 
 > 各 UI 元件均有同名 `*.css` 兄弟檔（如 `Sidebar.tsx` ↔ `Sidebar.css`），品牌 token 均從 `index.css` 繼承，不重複定義色彩值。
 

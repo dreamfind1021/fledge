@@ -37,7 +37,15 @@ class PtyBridge:
         project_path: str = "",
         account: str = "",
     ) -> Session:
-        env = {**os.environ, **env_overrides}
+        # claude 等 TUI 用 supports-color 偵測顏色：pty 的 isatty 為真，但 TERM/COLORTERM
+        # 皆未設時仍判定為無色（GUI 啟動的 sidecar 不繼承 terminal 的 TERM，整個終端機會變全黑白）。
+        # 先鋪預設值讓 ANSI 全彩生效；放在 os.environ 之前，dev 從 terminal 起時的真實值仍能覆蓋。
+        env = {
+            "TERM": "xterm-256color",
+            "COLORTERM": "truecolor",
+            **os.environ,
+            **env_overrides,
+        }
         # 從最終合併 env 剔除 sidecar 自己的 auth secret 與內部協定變數，不灌進子進程
         # （claude 與使用者 terminal shell 都不該看到）。
         for _k in ("FLEDGE_TOKEN", "FLEDGE_TEST_UNAUTH", "FLEDGE_PORT"):

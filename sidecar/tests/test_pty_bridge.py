@@ -102,6 +102,9 @@ def test_create_session_strips_secrets_from_child_env(monkeypatch):
     monkeypatch.setenv("FLEDGE_TOKEN", "secret")
     monkeypatch.setenv("FLEDGE_TEST_UNAUTH", "1")
     monkeypatch.setenv("FLEDGE_PORT", "54321")
+    # 模擬 GUI 啟動（不繼承 terminal 的 TERM），才能驗證顏色能力預設真的被鋪進子進程
+    monkeypatch.delenv("TERM", raising=False)
+    monkeypatch.delenv("COLORTERM", raising=False)
 
     bridge = pty_bridge.PtyBridge()
     # 連 caller 若不慎在 overrides 傳入 secret 也要被剔除（最終 env 剔除）
@@ -112,3 +115,6 @@ def test_create_session_strips_secrets_from_child_env(monkeypatch):
     assert "FLEDGE_TEST_UNAUTH" not in env
     assert "FLEDGE_PORT" not in env  # 內部協定變數不洩進子進程（含使用者 terminal shell）
     assert env["CLAUDE_CONFIG_DIR"] == "/tmp/cc"  # 正常 override 仍在
+    # 顏色能力宣告必須鋪進子進程，否則 GUI 啟動下 claude 偵測為無色 → 終端機全黑白
+    assert env["TERM"] == "xterm-256color"
+    assert env["COLORTERM"] == "truecolor"

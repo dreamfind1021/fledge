@@ -4,6 +4,19 @@
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* ===== 終端機 ANSI 16 色 =====
+   覆蓋 xterm 標準 VGA palette——後者（紅 #cd3131 / 黃 #e5e510…）在終端機深藍底上偏生硬。
+   改用與 Nightfall 功能色同一套色語言：紅=error、黃=warning、青=session、紫=ai、藍=帳號 work，
+   normal 取 Tailwind 400 系、bright 取 300 系。兩種主題的終端機皆為深底（nightfall #080B12 /
+   daylight #1A1B1E），故共用一套放 :root，不在各主題塊重複。 */
+:root {
+  --term-black:#2B3650; --term-red:#EF4444; --term-green:#4ADE80; --term-yellow:#FBBF24;
+  --term-blue:#60A5FA; --term-magenta:#C084FC; --term-cyan:#67D5C0; --term-white:#C7CDD9;
+  --term-bright-black:#5E6981; --term-bright-red:#F87171; --term-bright-green:#86EFAC;
+  --term-bright-yellow:#FCD34D; --term-bright-blue:#93C5FD; --term-bright-magenta:#D8B4FE;
+  --term-bright-cyan:#99F6E4; --term-bright-white:#F1F4F9;
+}
+
 /* ===== Layer 2 + 表面/終端機（Nightfall：v1 實作）===== */
 [data-theme="nightfall"] {
   /* 語義/UI */
