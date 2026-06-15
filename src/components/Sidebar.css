@@ -496,3 +496,6 @@
   outline: 2px solid var(--focus);
   outline-offset: 1px;
 }
+
+.sidebar-tree-caret { width: 14px; display: inline-flex; flex: none; color: var(--faint); }
+.sidebar-row-wrap { display: flex; flex-direction: column; }
