@@ -76,21 +76,26 @@ def load_sessions(now: float, live_session_ids: set[str], retention_days: int = 
         line = line.strip()
         if not line:
             continue
+        # ts 強制轉型放進 try：合法 JSON 但 ts 非數字（如 "bad"）也視為壞行跳過、不拋
+        # （load_sessions 在 dashboard scan 路徑上，no-raise 契約必須涵蓋值層）
         try:
             ev = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            continue   # 殘缺尾行 / 壞行跳過（no-raise 契約）
-        sid = ev.get("session")
-        if not sid:
-            continue
-        if ev.get("event") == "open":
-            opens[sid] = ev
-        elif ev.get("event") == "close":
-            closes[sid] = float(ev.get("ts") or now)
+            sid = ev.get("session")
+            if not sid:
+                continue
+            etype = ev.get("event")
+            if etype == "open":
+                opens[sid] = {"ts": float(ev.get("ts") or 0.0),
+                              "project": str(ev.get("project") or ""),
+                              "account": str(ev.get("account") or "")}
+            elif etype == "close":
+                closes[sid] = float(ev.get("ts") or now)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            continue   # 殘缺尾行 / 壞行 / 壞 ts 值跳過（no-raise 契約）
     cutoff = now - retention_days * 86400
     spans: list[SessionSpan] = []
     for sid, ev in opens.items():
-        open_ts = float(ev.get("ts") or 0.0)
+        open_ts = ev["ts"]
         if sid in closes:
             close_ts: float | None = closes[sid]
         elif sid in live_session_ids:
@@ -102,8 +107,7 @@ def load_sessions(now: float, live_session_ids: set[str], retention_days: int = 
         if close_ts is not None and close_ts < cutoff:
             continue                              # 過舊
         spans.append(SessionSpan(
-            project=str(ev.get("project") or ""), account=str(ev.get("account") or ""),
-            open_ts=open_ts, close_ts=close_ts))
+            project=ev["project"], account=ev["account"], open_ts=open_ts, close_ts=close_ts))
     return spans
 
 

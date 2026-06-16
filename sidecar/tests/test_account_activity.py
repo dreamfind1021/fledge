@@ -138,3 +138,16 @@ def test_app_lifespan_calls_mark_process_start(tmp_path, monkeypatch):
     aa.mark_process_start(0.0)                      # 先歸零
     with TestClient(create_app()):
         assert aa._process_start_ts > 0.0           # lifespan startup 已 mark
+
+
+def test_load_skips_event_with_non_numeric_ts(store, tmp_path):
+    # 合法 JSON 但 ts 非數字 → 該事件跳過、不拋（no-raise；Codex r1 BLOCKER）
+    store.record_open("/proj/a", "work", "s1", now=1100.0)
+    with open(tmp_path / "activity.jsonl", "a") as f:
+        f.write('{"event":"close","session":"s1","ts":"bad"}\n')                         # 壞 close ts
+        f.write('{"event":"open","session":"s2","ts":"oops","project":"/p","account":"x"}\n')  # 壞 open ts
+    spans = store.load_sessions(now=1300.0, live_session_ids={"s1"})
+    # s1 的壞 close 被跳過 → s1 沒被誤關（仍 live）；s2 的壞 open 整筆跳過
+    s1 = [s for s in spans if s.account == "work"]
+    assert len(s1) == 1 and s1[0].close_ts is None
+    assert all(s.account != "x" for s in spans)
