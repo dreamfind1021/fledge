@@ -125,3 +125,37 @@ def test_cold_error_shape_has_missing_pricing(tmp_path: Path, monkeypatch):
             raise AssertionError("cold error 未出現")
         j = resp.json()
         assert j["scan_meta"]["missing_pricing"] == []     # error-only 形狀必含空欄（防前端炸）
+
+
+def _env_two_accounts(tmp_path: Path, monkeypatch):
+    """仿既有 _env，但建 work + personal 兩帳號、各自 projects/jsonl。"""
+    for acct in ("work", "personal"):
+        d = tmp_path / acct / "projects" / "-p"
+        d.mkdir(parents=True)
+        (d / "s.jsonl").write_text(json.dumps({
+            "type": "assistant", "timestamp": "2026-06-12T01:00:00Z", "cwd": "/p",
+            "sessionId": f"s-{acct}", "requestId": f"r-{acct}",
+            "message": {"id": f"m-{acct}", "model": "claude-opus-4-8",
+                        "usage": {"input_tokens": 1000, "output_tokens": 100}}}), encoding="utf-8")
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "version": 1, "roots": [], "manual_projects": [], "project_overrides": {},
+        "ui": {}, "subscriptions": [],
+        "accounts": {"work": {"config_dir": str(tmp_path / "work"), "label": "工作"},
+                     "personal": {"config_dir": str(tmp_path / "personal"), "label": "私人"}},
+    }), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.setenv("FLEDGE_CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("FLEDGE_USAGE_CACHE", str(tmp_path / "usage-v1.json"))
+    usage_route.reset_state_for_tests()
+
+
+def test_dashboard_payload_uses_per_account_blocks(tmp_path: Path, monkeypatch):
+    _env_two_accounts(tmp_path, monkeypatch)
+    with TestClient(create_app()) as client:
+        data = _poll_ok(client)
+        claude = data["blocks"]["claude"]
+        assert isinstance(claude["accounts"], list)
+        assert {a["account_key"] for a in claude["accounts"]} == {"work", "personal"}
+        assert all({"account_key", "label", "active", "recent", "limit_p90"} <= a.keys()
+                   for a in claude["accounts"])

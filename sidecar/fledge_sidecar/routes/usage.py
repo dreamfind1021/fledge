@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from fledge_sidecar.app_config import AppConfig, default_config_path
 from fledge_sidecar.usage.aggregator import build_dashboard
 from fledge_sidecar.usage.cache import UsageCache
-from fledge_sidecar.usage.scanner import claude_files, codex_files
+from fledge_sidecar.usage.scanner import _scan_claude, codex_files
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -47,13 +47,22 @@ def _scan_sync(days: int) -> dict:
     if cache is None:   # 不用 setdefault——其 default 是 eager 求值，會每輪重建並整份重讀 L2
         cache = _state["cache"] = UsageCache(l2_path=_l2_path())
     t0 = time.monotonic()
-    cl = claude_files(config)
+    cl, account_map = _scan_claude(config)
     cx = codex_files(_codex_home())
     r = cache.refresh(claude=cl, codex=cx)
     now = time.time()
+    # 用 cache 的 claude_by_file（檔案→條目）+ scanner 的 account_map（檔案→帳號）組 帳號→條目
+    by_account: dict[str, list] = {}
+    for rp, file_entries in r.claude_by_file.items():
+        key = account_map.get(rp)
+        if key is None:
+            continue   # account_map 涵蓋所有 claude 檔，理論上不發生
+        by_account.setdefault(key, []).extend(file_entries)
+    labels = {k: v.get("label", k) for k, v in config.accounts.items()}
     payload = build_dashboard(r.entries, r.codex_rate_limits,
                               config.subscriptions, now=now, days=days,
-                              roots=[r["path"] for r in config.roots])
+                              roots=[r["path"] for r in config.roots],
+                              claude_entries_by_account=by_account, account_labels=labels)
     payload["scan_meta"].update({
         "state": "ok", "generation": r.generation, "files": r.total_files,
         "skipped_lines": r.skipped_lines, "scanned_at": now, "error": None,
