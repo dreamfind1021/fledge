@@ -127,3 +127,14 @@ def test_attribute_reverts_to_live_earlier_span_after_other_closes(store):
              _span("/proj/a", "personal", 200.0, 250.0)]   # personal 已關
     assert store.attribute(spans, "/proj/a", 220.0) == "personal"  # personal 區間內
     assert store.attribute(spans, "/proj/a", 300.0) == "work"      # personal 關閉後 → 回 work
+
+
+def test_app_lifespan_calls_mark_process_start(tmp_path, monkeypatch):
+    # create_app 的 lifespan 啟動後，process_start_ts 應為非 0（被 mark）
+    monkeypatch.setenv("FLEDGE_TEST_UNAUTH", "1")
+    from fastapi.testclient import TestClient
+    from fledge_sidecar.app import create_app
+    from fledge_sidecar.usage import account_activity as aa
+    aa.mark_process_start(0.0)                      # 先歸零
+    with TestClient(create_app()):
+        assert aa._process_start_ts > 0.0           # lifespan startup 已 mark
