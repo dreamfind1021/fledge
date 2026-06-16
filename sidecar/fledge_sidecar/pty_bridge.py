@@ -10,6 +10,7 @@ import select
 import threading
 import uuid
 from dataclasses import dataclass, field
+from typing import Callable
 
 from ptyprocess import PtyProcess
 
@@ -28,6 +29,7 @@ class Session:
 class PtyBridge:
     sessions: dict[str, Session] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+    on_close: "Callable[[Session], None] | None" = None
 
     def create_session(
         self,
@@ -36,6 +38,7 @@ class PtyBridge:
         env_overrides: dict[str, str],
         project_path: str = "",
         account: str = "",
+        session_id: str | None = None,
     ) -> Session:
         # claude 等 TUI 用 supports-color 偵測顏色：pty 的 isatty 為真，但 TERM/COLORTERM
         # 皆未設時仍判定為無色（GUI 啟動的 sidecar 不繼承 terminal 的 TERM，整個終端機會變全黑白）。
@@ -51,7 +54,7 @@ class PtyBridge:
         for _k in ("FLEDGE_TOKEN", "FLEDGE_TEST_UNAUTH", "FLEDGE_PORT"):
             env.pop(_k, None)
         pty = PtyProcess.spawn(command, cwd=cwd, env=env)
-        session_id = uuid.uuid4().hex
+        session_id = session_id or uuid.uuid4().hex
         session = Session(
             session_id=session_id,
             pty=pty,
@@ -69,6 +72,10 @@ class PtyBridge:
     def has_session(self, session_id: str) -> bool:
         with self._lock:
             return session_id in self.sessions
+
+    def live_ids(self) -> set[str]:
+        with self._lock:
+            return set(self.sessions)
 
     def write(self, session_id: str, data: bytes) -> None:
         session = self._get(session_id)
@@ -121,6 +128,11 @@ class PtyBridge:
         with self._lock:
             session = self.sessions.pop(session_id, None)
         if session is not None:
+            if self.on_close is not None:
+                try:
+                    self.on_close(session)
+                except Exception as e:  # callback 不得阻斷關閉
+                    logger.debug("on_close callback failed for %s: %s", session_id, e)
             try:
                 # close() 關閉 PTY master fd 並終止子進程；只用 terminate() 不關 fd，
                 # 會每 session 洩漏一個 fd 直到 EMFILE（Codex 對抗式審查 HIGH）。
@@ -137,6 +149,11 @@ class PtyBridge:
             sessions = list(self.sessions.values())
             self.sessions.clear()
         for session in sessions:
+            if self.on_close is not None:
+                try:
+                    self.on_close(session)
+                except Exception as e:
+                    logger.debug("on_close callback failed for %s: %s", session.session_id, e)
             try:
                 session.pty.close(force=True)
             except Exception as e:

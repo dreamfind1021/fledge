@@ -118,3 +118,30 @@ def test_create_session_strips_secrets_from_child_env(monkeypatch):
     # 顏色能力宣告必須鋪進子進程，否則 GUI 啟動下 claude 偵測為無色 → 終端機全黑白
     assert env["TERM"] == "xterm-256color"
     assert env["COLORTERM"] == "truecolor"
+
+
+def test_create_session_uses_passed_session_id():
+    bridge = PtyBridge()
+    s = bridge.create_session(command=["true"], cwd=".", env_overrides={},
+                              project_path="/p", account="work", session_id="fixed-id")
+    assert s.session_id == "fixed-id"
+    assert bridge.has_session("fixed-id")
+    bridge.close_session("fixed-id")
+
+
+def test_live_ids_reflects_open_sessions():
+    bridge = PtyBridge()
+    bridge.create_session(command=["sleep", "5"], cwd=".", env_overrides={}, session_id="a")
+    bridge.create_session(command=["sleep", "5"], cwd=".", env_overrides={}, session_id="b")
+    assert bridge.live_ids() == {"a", "b"}
+    bridge.close_session("a")
+    assert bridge.live_ids() == {"b"}
+    bridge.close_session("b")
+
+
+def test_on_close_called_with_session():
+    closed = []
+    bridge = PtyBridge(on_close=lambda sess: closed.append(sess.session_id))
+    bridge.create_session(command=["sleep", "5"], cwd=".", env_overrides={}, session_id="x")
+    bridge.close_session("x")
+    assert closed == ["x"]
