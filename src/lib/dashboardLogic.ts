@@ -26,14 +26,16 @@ export interface ClaudeAccountRow {
   limit: number | null;
   burnRate: number | null;
   endTs: number | null;
+  partial: boolean;
 }
 
-// 單帳號 5hr 條的呈現值：有 limit_p90 才畫進度條；無則只給 used/burn/reset（設計 §3.3）
+// 單帳號 5hr 條的呈現值：有 limit_p90 才畫進度條；無則只給 used/burn/reset（設計 §3.3）。
+// partial=true 表該帳號含 fallback canonical 歸屬（活動 log 涵蓋不到）、標「部分推估」（§3.6）
 export function claudeAccountRow(acc: ClaudeAccountBlock, _now: number): ClaudeAccountRow {
   const a = acc.active;
   if (!a) {
     return { label: acc.label, empty: true, showBar: false, pct: null,
-             used: 0, limit: null, burnRate: null, endTs: null };
+             used: 0, limit: null, burnRate: null, endTs: null, partial: acc.partial };
   }
   const limit = acc.limit_p90;
   const showBar = limit != null;
@@ -41,5 +43,6 @@ export function claudeAccountRow(acc: ClaudeAccountBlock, _now: number): ClaudeA
     label: acc.label, empty: false, showBar,
     pct: showBar ? Math.min(1, a.total_tokens / (limit as number)) : null,
     used: a.total_tokens, limit, burnRate: a.burn_rate_tpm, endTs: a.end_ts,
+    partial: acc.partial,
   };
 }
