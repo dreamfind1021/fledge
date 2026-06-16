@@ -26,3 +26,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 uuid = { version = "1", features = ["v4"] }
 
+[features]
+# 偵錯打包用（scripts/build-app-devtools.sh 帶 --features devtools 啟用）：開啟打包版的
+# Web Inspector（devtools）。正式 build 不帶此 feature → 不外洩 devtools 給使用者。
+devtools = ["tauri/devtools"]
+
