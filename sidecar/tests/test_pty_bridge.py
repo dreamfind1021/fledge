@@ -145,3 +145,36 @@ def test_on_close_called_with_session():
     bridge.create_session(command=["sleep", "5"], cwd=".", env_overrides={}, session_id="x")
     bridge.close_session("x")
     assert closed == ["x"]
+
+
+class _FakePty:
+    fd = 0
+    def isalive(self): return True
+    def close(self, force=False): pass
+
+
+def test_create_session_seeds_lang_when_absent(monkeypatch):
+    # prod（GUI 啟動的 sidecar）os.environ 無 LANG → 應 seed UTF-8 預設給 claude（直接 exec、
+    # 無 login shell 設 locale）。修「缺 locale → claude 多行 bracketed paste 一閃就消」。
+    captured = {}
+    def fake_spawn(command, cwd, env):
+        captured["env"] = env
+        return _FakePty()
+    monkeypatch.setattr("fledge_sidecar.pty_bridge.PtyProcess.spawn", fake_spawn)
+    monkeypatch.delenv("LANG", raising=False)
+    monkeypatch.delenv("LC_CTYPE", raising=False)
+    monkeypatch.delenv("LC_ALL", raising=False)
+    PtyBridge().create_session(command=["true"], cwd=".", env_overrides={}, session_id="x")
+    assert captured["env"]["LANG"] == "en_US.UTF-8"
+
+
+def test_create_session_real_lang_overrides_seed(monkeypatch):
+    # dev：從 terminal 起、os.environ 有真實 LANG → 覆蓋 seed（放在 os.environ 之前）
+    captured = {}
+    def fake_spawn(command, cwd, env):
+        captured["env"] = env
+        return _FakePty()
+    monkeypatch.setattr("fledge_sidecar.pty_bridge.PtyProcess.spawn", fake_spawn)
+    monkeypatch.setenv("LANG", "zh_TW.UTF-8")
+    PtyBridge().create_session(command=["true"], cwd=".", env_overrides={}, session_id="y")
+    assert captured["env"]["LANG"] == "zh_TW.UTF-8"

@@ -42,10 +42,13 @@ class PtyBridge:
     ) -> Session:
         # claude 等 TUI 用 supports-color 偵測顏色：pty 的 isatty 為真，但 TERM/COLORTERM
         # 皆未設時仍判定為無色（GUI 啟動的 sidecar 不繼承 terminal 的 TERM，整個終端機會變全黑白）。
-        # 先鋪預設值讓 ANSI 全彩生效；放在 os.environ 之前，dev 從 terminal 起時的真實值仍能覆蓋。
+        # LANG 同理：GUI 啟動的 sidecar 無 locale，claude（直接 exec、非 login shell）在缺 UTF-8
+        # locale 下多行/bracketed paste 會壞（一閃就消）；terminal session 走 $SHELL -l 會自設 locale
+        # 故不受影響。先鋪 UTF-8 預設；放在 os.environ 之前，dev 從 terminal 起時的真實值仍能覆蓋。
         env = {
             "TERM": "xterm-256color",
             "COLORTERM": "truecolor",
+            "LANG": "en_US.UTF-8",
             **os.environ,
             **env_overrides,
         }
