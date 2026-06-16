@@ -159,3 +159,73 @@ def test_dashboard_payload_uses_per_account_blocks(tmp_path: Path, monkeypatch):
         assert {a["account_key"] for a in claude["accounts"]} == {"work", "personal"}
         assert all({"account_key", "label", "active", "recent", "limit_p90"} <= a.keys()
                    for a in claude["accounts"])
+
+
+def test_dashboard_attributes_by_activity_log(tmp_path: Path, monkeypatch):
+    # 一份 jsonl 含早(work span)、晚(personal span) 兩筆 usage；活動 log 有對應兩 span
+    # → work 只含早筆、personal 只含晚筆（逐訊息切開）
+    import time
+    now = time.time()
+    t_work = now - 3000      # work span 內
+    t_pers = now - 1000      # personal span 內
+    proj = tmp_path / "repo"
+    cdir = tmp_path / "work" / "projects" / "-repo"
+    cdir.mkdir(parents=True)
+    def line(ts, mid, tokens):
+        return json.dumps({"type": "assistant",
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)),
+            "cwd": str(proj), "sessionId": "conv1", "requestId": f"r{mid}",
+            "message": {"id": f"m{mid}", "model": "claude-opus-4-8",
+                        "usage": {"input_tokens": tokens, "output_tokens": 0}}})
+    (cdir / "conv1.jsonl").write_text(line(t_work, "w", 1000) + "\n" + line(t_pers, "p", 400) + "\n",
+                                      encoding="utf-8")
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "roots": [], "manual_projects": [],
+        "project_overrides": {}, "ui": {}, "subscriptions": [],
+        "accounts": {"work": {"config_dir": str(tmp_path / "work"), "label": "工作"},
+                     "personal": {"config_dir": str(tmp_path / "personal"), "label": "私人"}}}),
+        encoding="utf-8")
+    act = tmp_path / "activity.jsonl"
+    rp = str(proj.resolve())
+    act.write_text(
+        json.dumps({"ts": t_work - 60, "event": "open", "project": rp, "account": "work", "session": "s_w"}) + "\n" +
+        json.dumps({"ts": t_pers - 60, "event": "close", "session": "s_w"}) + "\n" +
+        json.dumps({"ts": t_pers - 60, "event": "open", "project": rp, "account": "personal", "session": "s_p"}) + "\n",
+        encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.setenv("FLEDGE_CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("FLEDGE_USAGE_CACHE", str(tmp_path / "usage-v1.json"))
+    monkeypatch.setenv("FLEDGE_ACCOUNT_ACTIVITY", str(act))
+    usage_route.reset_state_for_tests()
+    with TestClient(create_app()) as client:
+        data = _poll_ok(client)
+        accts = {a["account_key"]: a for a in data["blocks"]["claude"]["accounts"]}
+        assert set(accts) == {"work", "personal"}
+        assert accts["work"]["active"]["total_tokens"] == 1000      # 只早筆
+        assert accts["personal"]["active"]["total_tokens"] == 400   # 只晚筆
+
+
+def test_dashboard_falls_back_to_canonical_when_no_activity(tmp_path: Path, monkeypatch):
+    # 無 activity log → 全部 fallback canonical（single 帳號），該帳號 partial=true
+    import time
+    now = time.time()
+    cdir = tmp_path / "work" / "projects" / "-repo"
+    cdir.mkdir(parents=True)
+    (cdir / "c.jsonl").write_text(json.dumps({"type": "assistant",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 600)),
+        "cwd": str(tmp_path / "repo"), "sessionId": "c", "requestId": "r",
+        "message": {"id": "m", "model": "claude-opus-4-8",
+                    "usage": {"input_tokens": 500, "output_tokens": 0}}}) + "\n", encoding="utf-8")
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "roots": [], "manual_projects": [],
+        "project_overrides": {}, "ui": {}, "subscriptions": [],
+        "accounts": {"work": {"config_dir": str(tmp_path / "work"), "label": "工作"}}}), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.setenv("FLEDGE_CODEX_HOME", str(tmp_path / "codex"))
+    monkeypatch.setenv("FLEDGE_USAGE_CACHE", str(tmp_path / "usage-v1.json"))
+    monkeypatch.setenv("FLEDGE_ACCOUNT_ACTIVITY", str(tmp_path / "none.jsonl"))
+    usage_route.reset_state_for_tests()
+    with TestClient(create_app()) as client:
+        data = _poll_ok(client)
+        accts = {a["account_key"]: a for a in data["blocks"]["claude"]["accounts"]}
+        assert accts["work"]["partial"] is True
