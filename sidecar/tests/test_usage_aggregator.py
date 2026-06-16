@@ -138,3 +138,56 @@ def test_zero_token_unpriced_entry_not_in_warning():
               input_tokens=500)
     d = build_dashboard([zero, real], codex_rate_limits=None, subscriptions=[], now=NOW)
     assert d["scan_meta"]["missing_pricing"] == ["gpt-9-future"]
+
+
+def _claude_entry(ts, key_suffix, tokens, sidechain=False):
+    from fledge_sidecar.usage.parser import UsageEntry
+    return UsageEntry(ts=ts, source="claude", model="claude-opus-4-8",
+                      input_tokens=tokens, output_tokens=0, cache_read_tokens=0,
+                      cache_create_5m=0, cache_create_1h=0, cost=0.0, project="/p",
+                      session_id="s", dedup_key=f"m{key_suffix}:r{key_suffix}",
+                      sidechain=sidechain, missing_pricing=False)
+
+
+def test_build_dashboard_per_account_blocks():
+    from fledge_sidecar.usage.aggregator import build_dashboard
+    now = 1_800_000_000.0
+    ts = now - 600   # 10 分鐘前，落在 active block
+    by_account = {
+        "work": [_claude_entry(ts, "w", 1000)],
+        "personal": [_claude_entry(ts, "p", 400)],
+    }
+    labels = {"work": "工作", "personal": "私人"}
+    out = build_dashboard([], None, [], now=now, days=30,
+                          claude_entries_by_account=by_account, account_labels=labels)
+    accounts = out["blocks"]["claude"]["accounts"]
+    assert {a["account_key"] for a in accounts} == {"work", "personal"}
+    work = next(a for a in accounts if a["account_key"] == "work")
+    assert work["label"] == "工作"
+    assert work["active"]["total_tokens"] == 1000   # 只反映該帳號
+    # 樣本不足 → limit_p90 為 None（不足 5 個 closed block）
+    assert work["limit_p90"] is None
+
+
+def test_per_account_dedup_no_cross_account_cancellation():
+    # 兩帳號各有一筆「相同 dedup_key」的 entry → 不可互相消去
+    from fledge_sidecar.usage.aggregator import build_dashboard
+    now = 1_800_000_000.0
+    ts = now - 600
+    same = "dup"
+    by_account = {
+        "work": [_claude_entry(ts, same, 1000)],
+        "personal": [_claude_entry(ts, same, 700)],
+    }
+    out = build_dashboard([], None, [], now=now,
+                          claude_entries_by_account=by_account, account_labels={})
+    accounts = {a["account_key"]: a for a in out["blocks"]["claude"]["accounts"]}
+    assert accounts["work"]["active"]["total_tokens"] == 1000
+    assert accounts["personal"]["active"]["total_tokens"] == 700
+
+
+def test_build_dashboard_fallback_keeps_legacy_shape():
+    # 不帶 claude_entries_by_account → 舊 shape（既有測試相容）
+    from fledge_sidecar.usage.aggregator import build_dashboard
+    out = build_dashboard([], None, [], now=1_800_000_000.0)
+    assert set(out["blocks"]["claude"].keys()) == {"active", "recent", "limit_p90"}

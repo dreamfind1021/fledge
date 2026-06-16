@@ -19,24 +19,32 @@ from fledge_sidecar.app_config import AppConfig
 _PEEK_LIMIT = 1_048_576
 
 
-def claude_files(config: AppConfig) -> list[Path]:
-    seen: set[str] = set()
-    out: list[Path] = []
-    for acct in config.accounts.values():
-        projects = Path(acct.get("config_dir", "")).expanduser() / "projects"
+def _scan_claude(config: AppConfig) -> tuple[list[Path], dict[str, str]]:
+    """掃 claude 檔案 + realpath→account_key 對應。tie-break：按 account_key 排序遍歷，
+    第一個命中該 realpath 的帳號勝（deterministic、不依 dict 迭代順序，設計 §3.4）。"""
+    owner: dict[str, str] = {}   # realpath → account_key（先到先得；遍歷序＝key 排序）
+    for key in sorted(config.accounts):
+        projects = Path(config.accounts[key].get("config_dir", "")).expanduser() / "projects"
         if not projects.is_dir():
             continue
         for f in projects.rglob("*.jsonl"):
-            if not f.is_file():  # rglob 也會匹配 *.jsonl 結尾的目錄
+            if not f.is_file():   # rglob 也會匹配 *.jsonl 結尾的目錄
                 continue
             try:
                 rp = str(f.resolve())
             except OSError:
                 continue
-            if rp not in seen:
-                seen.add(rp)
-                out.append(Path(rp))
-    return sorted(out)
+            owner.setdefault(rp, key)   # 第一個（account_key 最小）勝
+    files = sorted(Path(rp) for rp in owner)
+    return files, dict(owner)
+
+
+def claude_files(config: AppConfig) -> list[Path]:
+    return _scan_claude(config)[0]
+
+
+def claude_account_map(config: AppConfig) -> dict[str, str]:
+    return _scan_claude(config)[1]
 
 
 def _peek_session_id(path: Path) -> str:
