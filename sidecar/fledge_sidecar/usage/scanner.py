@@ -24,15 +24,28 @@ def _scan_claude(config: AppConfig) -> tuple[list[Path], dict[str, str]]:
 
     同一 realpath 被多帳號命中時（兩帳號的 projects/ 經 symlink 共用同一份對話歷史，
     例：~/.claude-tc/projects symlink → ~/.claude/projects，為了切帳號 resume），歸屬規則：
-    **偏好「正規擁有者」**——以未經 symlink 直接抵達該檔的帳號（抵達路徑即 realpath）勝過經
-    symlink alias 抵達的帳號；同層級（皆 canonical 或皆 alias）按 account_key 排序取第一
+    **偏好「正規擁有者」**——projects/ 不是經 symlink 重導向到別處的帳號（真實目錄帳號）勝過
+    經 symlink alias 抵達的帳號；同層級（皆 canonical 或皆 alias）按 account_key 排序取第一
     （deterministic、不依 dict 迭代順序）。修正「symlink alias 帳號因字母序贏過真實目錄帳號」
-    的錯誤歸屬（真機驗收：工作用量被標成私人）。"""
-    best: dict[str, tuple[bool, str]] = {}   # realpath → (是否正規抵達, account_key)
+    的錯誤歸屬（真機驗收：工作用量被標成私人）。
+
+    canonical 判定在 **config_dir/projects 目錄層**做（非個別檔案層）：比較 `<anchor>/projects`
+    與 `projects.resolve()`，其中 anchor = config_dir 的 parent resolve 後再接 config_dir 名字。
+    先 resolve parent 是為了吸收祖先 symlink（如 macOS /var→/private/var、symlinked HOME），
+    避免真實目錄帳號被祖先 symlink 誤判成 alias；保留 config_dir 自己的名字（不 resolve）是為了
+    讓「config_dir 本身就是 symlink」的帳號仍正確判為 alias。"""
+    best: dict[str, tuple[bool, str]] = {}   # realpath → (是否正規擁有, account_key)
     for key in sorted(config.accounts):       # 升序遍歷 → 同層級下先到（account_key 最小）勝
-        projects = Path(config.accounts[key].get("config_dir", "")).expanduser() / "projects"
+        base = Path(config.accounts[key].get("config_dir", "")).expanduser()
+        projects = base / "projects"
         if not projects.is_dir():
             continue
+        # 此帳號是否「正規擁有」其 projects/（沒被 symlink 重導向到別的真實目錄）
+        try:
+            anchor = base.parent.resolve() / base.name
+            canonical = (anchor / "projects") == projects.resolve()
+        except OSError:
+            canonical = False
         for f in projects.rglob("*.jsonl"):
             if not f.is_file():   # rglob 也會匹配 *.jsonl 結尾的目錄
                 continue
@@ -40,9 +53,8 @@ def _scan_claude(config: AppConfig) -> tuple[list[Path], dict[str, str]]:
                 rp = str(f.resolve())
             except OSError:
                 continue
-            canonical = (str(f) == rp)   # 抵達路徑即 realpath＝正規擁有（沒走 symlink）
             cur = best.get(rp)
-            # 只在「本帳號正規抵達、現任非正規」時覆寫；其餘保留先到者（account_key 較小）
+            # 只在「本帳號正規擁有、現任非正規」時覆寫；其餘保留先到者（account_key 較小）
             if cur is None or (canonical and not cur[0]):
                 best[rp] = (canonical, key)
     files = sorted(Path(rp) for rp in best)

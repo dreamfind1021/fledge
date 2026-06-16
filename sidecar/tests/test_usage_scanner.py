@@ -161,3 +161,27 @@ def test_claude_account_map_tiebreak_by_key_when_no_canonical_owner(tmp_path):
     })
     m = claude_account_map(cfg)
     assert m[str((real / "x.jsonl").resolve())] == "a_acct"   # 皆 alias → key 最小勝
+
+
+def test_claude_account_map_canonical_robust_to_ancestor_symlink(tmp_path):
+    # 祖先路徑含 symlink（如 macOS /var→/private/var、symlinked HOME）不應讓真實目錄帳號
+    # 被誤判成 alias。canonical 判定須在 config_dir/projects 層比較（吸收祖先 symlink）。
+    from fledge_sidecar.app_config import AppConfig
+    from fledge_sidecar.usage.scanner import claude_account_map
+    real_root = tmp_path / "realroot"
+    work_proj = real_root / "claude" / "projects" / "-p"
+    work_proj.mkdir(parents=True)
+    (work_proj / "s.jsonl").write_text("{}\n")
+    personal_cfg = real_root / "claude-tc"
+    personal_cfg.mkdir()
+    (personal_cfg / "projects").symlink_to(real_root / "claude" / "projects")
+    # 透過 symlink 祖先存取 config_dir（模擬 /var symlink）
+    link_root = tmp_path / "linkroot"
+    link_root.symlink_to(real_root)
+    cfg = AppConfig(path=tmp_path / "config.json", accounts={
+        "work": {"config_dir": str(link_root / "claude"), "label": "工作"},
+        "personal": {"config_dir": str(link_root / "claude-tc"), "label": "私人"},
+    })
+    m = claude_account_map(cfg)
+    rp = str((work_proj / "s.jsonl").resolve())
+    assert m[rp] == "work"   # 祖先 symlink 不影響：work（真實 projects）仍勝
