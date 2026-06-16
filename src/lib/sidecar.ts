@@ -341,6 +341,7 @@ export interface ClaudeAccountBlock {
   active: UsageBlock | null;
   recent: UsageBlock[];
   limit_p90: number | null;
+  partial: boolean;
 }
 
 export interface UsageDashboard {

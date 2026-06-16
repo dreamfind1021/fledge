@@ -6,7 +6,7 @@
            "cacheHit": "Cache 命中率", "netRoi": "Net ROI", "subs": "訂閱月費" },
   "windows": { "title": "用量窗口", "claude": "Claude 5 小時窗口（推算 · 分帳號）",
                "codex": "Codex（官方）", "burnRate": "{{rate}} tok/min",
-               "claudeReset": "重置 {{time}}", "limitSampling": "限額樣本不足",
+               "claudeReset": "重置 {{time}}", "limitSampling": "限額樣本不足", "partialEstimate": "部分推估",
                "resets": "{{time}} 重置", "weekly": "週窗口", "fiveHour": "5 小時" },
   "daily": { "title": "每日成本（{{days}} 天）" },
   "models": { "title": "模型分布" },
