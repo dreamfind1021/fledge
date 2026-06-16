@@ -10,6 +10,7 @@
     "opener:default",
     "opener:allow-reveal-item-in-dir",
     { "identifier": "opener:allow-open-path", "allow": [{ "path": "$HOME/**" }] },
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "clipboard-manager:allow-read-text"
   ]
 }
