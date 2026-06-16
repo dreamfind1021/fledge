@@ -12,6 +12,9 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from fledge_sidecar.app_config import AppConfig, default_config_path
+from fledge_sidecar.paths import resolve_best_effort
+from fledge_sidecar.routes.sessions import live_session_ids
+from fledge_sidecar.usage import account_activity
 from fledge_sidecar.usage.aggregator import build_dashboard
 from fledge_sidecar.usage.cache import UsageCache
 from fledge_sidecar.usage.scanner import _scan_claude, codex_files
@@ -51,18 +54,30 @@ def _scan_sync(days: int) -> dict:
     cx = codex_files(_codex_home())
     r = cache.refresh(claude=cl, codex=cx)
     now = time.time()
-    # 用 cache 的 claude_by_file（檔案→條目）+ scanner 的 account_map（檔案→帳號）組 帳號→條目
+    # 逐 UsageEntry 按活動 log 區間歸屬（account_activity.attribute）；涵蓋不到 fallback
+    # 到 scanner canonical（account_map）並標 partial。
+    spans = account_activity.load_sessions(now, live_session_ids())
     by_account: dict[str, list] = {}
+    partial: dict[str, bool] = {}
     for rp, file_entries in r.claude_by_file.items():
-        key = account_map.get(rp)
-        if key is None:
-            continue   # account_map 涵蓋所有 claude 檔，理論上不發生
-        by_account.setdefault(key, []).extend(file_entries)
+        canon = account_map.get(rp)              # scanner canonical（fallback）
+        for e in file_entries:
+            proj = (e.project or "").strip()
+            acct = (account_activity.attribute(spans, resolve_best_effort(proj), e.ts)
+                    if os.path.isabs(proj) else None)   # 只對絕對 cwd attribute（防誤命中）
+            if acct is None:                     # 涵蓋不到 / 非絕對 cwd → fallback canonical
+                acct = canon
+                if acct is not None:
+                    partial[acct] = True
+            if acct is None:
+                continue
+            by_account.setdefault(acct, []).append(e)
     labels = {k: v.get("label", k) for k, v in config.accounts.items()}
     payload = build_dashboard(r.entries, r.codex_rate_limits,
                               config.subscriptions, now=now, days=days,
                               roots=[r["path"] for r in config.roots],
-                              claude_entries_by_account=by_account, account_labels=labels)
+                              claude_entries_by_account=by_account, account_labels=labels,
+                              account_partial=partial)
     payload["scan_meta"].update({
         "state": "ok", "generation": r.generation, "files": r.total_files,
         "skipped_lines": r.skipped_lines, "scanned_at": now, "error": None,

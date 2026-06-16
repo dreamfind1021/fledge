@@ -26,6 +26,10 @@ class TokenAuthMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    import time
+
+    from fledge_sidecar.usage import account_activity
+    account_activity.mark_process_start(time.time())   # 孤兒回收基準（read-time）
     yield
     # shutdown：關所有 PTY session，避免 claude 子進程 orphan
     sessions.close_all_sessions()

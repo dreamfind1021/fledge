@@ -57,7 +57,8 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
                     subscriptions: list[dict], now: float, days: int = 30,
                     roots: list[str] | None = None,
                     claude_entries_by_account: dict[str, list[UsageEntry]] | None = None,
-                    account_labels: dict[str, str] | None = None) -> dict:
+                    account_labels: dict[str, str] | None = None,
+                    account_partial: dict[str, bool] | None = None) -> dict:
     entries = _dedup(entries)
     # 專案根收斂用：roots canonicalize 一次（與 e.project 同款 resolve，前綴比對才對得上）。
     # 收斂結果依 roots 而定、roots 可在 runtime 變動，故 proj_root memo 用 call-local（見下方迴圈）
@@ -170,9 +171,11 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
 
     if claude_entries_by_account is not None:
         labels = account_labels or {}
+        partial = account_partial or {}
         # per 帳號各自 _dedup（dedup_key 不含帳號，不可走全域 dedup→跨帳號互消，設計 §3.1）
         claude_blocks = {"accounts": [
             {"account_key": key, "label": labels.get(key, key),
+             "partial": bool(partial.get(key, False)),
              **_claude_block_payload(_dedup(claude_entries_by_account[key]))}
             for key in sorted(claude_entries_by_account)
         ]}
