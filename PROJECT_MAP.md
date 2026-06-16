@@ -32,7 +32,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `src/lib.rs` | entry：註冊 plugin、manage state、setup（先 orphan reap、生 per-launch token 存 state、再啟 sidecar）、註冊 command（sidecar_port/restart_sidecar/sidecar_token）、exit 收 sidecar | `run()` |
 | `src/sidecar.rs` | sidecar 生命週期：spawn（dev/prod 統一 `std::process::Command`，dev=venv python、prod=`bundle.resources`/`resource_dir` 的 onedir exe，`.env(FLEDGE_TOKEN)`）、抓 `FLEDGE_PORT`、**統一持有當前 `std::process::Child`**、per-launch token（uuid v4、跨 restart 不變）、原子 pidfile、startup orphan reaper（pid-only 先禮後兵 `terminate_pid_gracefully`）、restart command（RestartGuard 互斥、kill 用 `try_wait` 收 zombie）、`sidecar_token` 查詢 | `SidecarState`, `generate_token()`, `spawn_sidecar()`, `sidecar_port()`, `sidecar_token()`, `restart_sidecar()`, `reap_orphan_sidecar()`, `kill_sidecar()` |
 | `tauri.conf.json` | Tauri 設定，`bundle.resources` map 打包 onedir sidecar 資料夾（prod 走 `std::process::Command` + `resource_dir`） | — |
-| `capabilities/default.json` | 權限：執行 sidecar、opener reveal、opener open-path（檔案樹雙擊開檔，scope `$HOME/**`）、dialog open（directory picker） | — |
+| `capabilities/default.json` | 權限：執行 sidecar、opener reveal、opener open-path（檔案樹雙擊開檔，scope `$HOME/**`）、dialog open（directory picker）、clipboard-manager read-text（終端機右鍵貼上走原生讀，繞 macOS Paste 膠囊） | — |
 
 ### sidecar/fledge_sidecar/ — Python sidecar
 | 檔案 | 職責 | 匯出 |
