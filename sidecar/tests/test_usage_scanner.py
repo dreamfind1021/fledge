@@ -104,9 +104,9 @@ def test_claude_account_map_maps_realpath_to_account_key(tmp_path):
                                         (personal / "b.jsonl").resolve()])
 
 
-def test_claude_account_map_tiebreak_is_deterministic_by_key(tmp_path):
-    # 兩帳號 config_dir 是同一真實目錄（symlink alias）→ 同一 realpath
-    # 歸屬須按 account_key 排序取第一（"a" < "z"），不依 dict 順序
+def test_claude_account_map_prefers_canonical_real_dir_over_symlink_alias(tmp_path):
+    # z_acct 的 config_dir 是真實目錄、a_acct 是 symlink alias → 同一 realpath。
+    # 歸屬須給「正規擁有者」z_acct（真實目錄），即使 a_acct 字母序較小。
     from fledge_sidecar.app_config import AppConfig
     from fledge_sidecar.usage.scanner import claude_account_map
     real = tmp_path / "real" / "projects" / "p"
@@ -119,4 +119,45 @@ def test_claude_account_map_tiebreak_is_deterministic_by_key(tmp_path):
         "a_acct": {"config_dir": str(alias), "label": "A"},
     })
     m = claude_account_map(cfg)
-    assert m[str((real / "x.jsonl").resolve())] == "a_acct"
+    assert m[str((real / "x.jsonl").resolve())] == "z_acct"   # 真實目錄帳號勝
+
+
+def test_claude_account_map_subdir_projects_symlink_attributes_to_real_dir(tmp_path):
+    # 重現使用者情境：work=~/.claude（真實目錄），personal=~/.claude-tc（真實目錄，但其
+    # projects/ 是 symlink → work 的 projects/，為了切帳號 resume 共用對話歷史）。
+    # 共享同一份 jsonl，歸屬須給真實目錄帳號 work，不是字母序較小的 personal。
+    from fledge_sidecar.app_config import AppConfig
+    from fledge_sidecar.usage.scanner import claude_account_map
+    work_cfg = tmp_path / "claude"
+    work_proj = work_cfg / "projects" / "-p"
+    work_proj.mkdir(parents=True)
+    (work_proj / "s.jsonl").write_text("{}\n")
+    personal_cfg = tmp_path / "claude-tc"
+    personal_cfg.mkdir()
+    (personal_cfg / "projects").symlink_to(work_cfg / "projects")   # 子目錄 symlink
+    cfg = AppConfig(path=tmp_path / "config.json", accounts={
+        "work": {"config_dir": str(work_cfg), "label": "工作"},
+        "personal": {"config_dir": str(personal_cfg), "label": "私人"},
+    })
+    m = claude_account_map(cfg)
+    assert m[str((work_proj / "s.jsonl").resolve())] == "work"   # 真實目錄帳號勝（修正前會錯給 personal）
+
+
+def test_claude_account_map_tiebreak_by_key_when_no_canonical_owner(tmp_path):
+    # 兩帳號的 config_dir 都是 symlink alias 指向同一真實目錄（無人正規擁有）
+    # → 退回 account_key 排序取第一（deterministic、不依 dict 序），a_acct 勝。
+    from fledge_sidecar.app_config import AppConfig
+    from fledge_sidecar.usage.scanner import claude_account_map
+    real = tmp_path / "real" / "projects" / "p"
+    real.mkdir(parents=True)
+    (real / "x.jsonl").write_text("{}\n")
+    alias_a = tmp_path / "alias_a"
+    alias_b = tmp_path / "alias_b"
+    alias_a.symlink_to(tmp_path / "real")
+    alias_b.symlink_to(tmp_path / "real")
+    cfg = AppConfig(path=tmp_path / "config.json", accounts={
+        "z_acct": {"config_dir": str(alias_b), "label": "Z"},
+        "a_acct": {"config_dir": str(alias_a), "label": "A"},
+    })
+    m = claude_account_map(cfg)
+    assert m[str((real / "x.jsonl").resolve())] == "a_acct"   # 皆 alias → key 最小勝
