@@ -191,3 +191,26 @@ def test_build_dashboard_fallback_keeps_legacy_shape():
     from fledge_sidecar.usage.aggregator import build_dashboard
     out = build_dashboard([], None, [], now=1_800_000_000.0)
     assert set(out["blocks"]["claude"].keys()) == {"active", "recent", "limit_p90"}
+
+
+def test_build_dashboard_account_partial_flag():
+    from fledge_sidecar.usage.aggregator import build_dashboard
+    now = 1_800_000_000.0
+    ts = now - 600
+    by_account = {"work": [_claude_entry(ts, "w", 1000)],
+                  "personal": [_claude_entry(ts, "p", 400)]}
+    out = build_dashboard([], None, [], now=now,
+                          claude_entries_by_account=by_account,
+                          account_labels={"work": "工作", "personal": "私人"},
+                          account_partial={"work": True})
+    accts = {a["account_key"]: a for a in out["blocks"]["claude"]["accounts"]}
+    assert accts["work"]["partial"] is True
+    assert accts["personal"]["partial"] is False     # 預設 False
+
+
+def test_build_dashboard_partial_defaults_false_when_not_given():
+    from fledge_sidecar.usage.aggregator import build_dashboard
+    now = 1_800_000_000.0
+    by_account = {"work": [_claude_entry(now - 600, "w", 1000)]}
+    out = build_dashboard([], None, [], now=now, claude_entries_by_account=by_account)
+    assert out["blocks"]["claude"]["accounts"][0]["partial"] is False
