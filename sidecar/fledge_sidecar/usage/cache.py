@@ -44,6 +44,7 @@ class RefreshResult:
     total_files: int
     codex_rate_limits: dict | None   # 全源最新一筆
     generation: int
+    claude_by_file: dict[str, list[UsageEntry]]   # realpath→entries shallow-copy（只含 claude）
 
 
 class UsageCache:
@@ -182,9 +183,12 @@ class UsageCache:
             skipped_lines += fc.skipped
             if fc.rate_limits is not None and fc.rate_limits_ts > rl_ts:
                 rl, rl_ts = fc.rate_limits, fc.rate_limits_ts
+        claude_by_file = {rp: list(fc.entries)
+                          for rp, fc in self._files.items() if fc.source == "claude"}
         return RefreshResult(entries=all_entries, skipped_lines=skipped_lines,
                              parsed_files=len(to_parse), total_files=len(self._files),
-                             codex_rate_limits=rl, generation=self._generation)
+                             codex_rate_limits=rl, generation=self._generation,
+                             claude_by_file=claude_by_file)
 
     def _parse_one(self, item: tuple[str, str, Path]) -> tuple[str, FileCacheEntry | None]:
         source, rp, p = item

@@ -174,3 +174,20 @@ def test_l2_file_mode_owner_only(tmp_path: Path):
     l2 = tmp_path / "usage-v1.json"
     UsageCache(l2_path=l2).refresh(claude=[f], codex=[])
     assert (l2.stat().st_mode & 0o777) == 0o600
+
+
+def test_refresh_exposes_claude_by_file_shallow_snapshot(tmp_path):
+    from fledge_sidecar.usage.cache import UsageCache
+    f = tmp_path / "p.jsonl"
+    f.write_text('{"timestamp":"2026-06-15T00:00:00Z","message":{"id":"m1",'
+                 '"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5}},'
+                 '"requestId":"r1","cwd":"/proj"}\n')
+    cache = UsageCache(l2_path=tmp_path / "l2.json")
+    r = cache.refresh(claude=[f.resolve()], codex=[])
+    rp = str(f.resolve())
+    assert rp in r.claude_by_file
+    assert len(r.claude_by_file[rp]) == 1
+    # snapshot：mutate 回傳的 list 不污染 cache 內部
+    r.claude_by_file[rp].clear()
+    r2 = cache.refresh(claude=[f.resolve()], codex=[])
+    assert len(r2.claude_by_file[rp]) == 1
