@@ -95,14 +95,16 @@ function KpiBar({ kpi, t }: { kpi: UsageDashboard["kpi"]; t: T }) {
 function WindowsPanel({ blocks, t }: { blocks: UsageDashboard["blocks"]; t: T }) {
   const cx = blocks.codex;
   const now = Date.now() / 1000;
+  // 防 schema skew/後端 regression 把 accounts 漏掉時整個 dashboard 白屏（type 雖保證、runtime 防衛）
+  const accounts = blocks.claude.accounts ?? [];
   return (
     <div className="dash-windows">
       <div className="dash-win-card">
         <div className="dash-win-title">{t("windows.claude")}</div>
-        {blocks.claude.accounts.length === 0 && (
+        {accounts.length === 0 && (
           <div className="dash-win-meta">{t("state.empty")}</div>
         )}
-        {blocks.claude.accounts.map((acc) => {
+        {accounts.map((acc) => {
           const r = claudeAccountRow(acc, now);
           return (
             <div className="dash-win-acct" key={acc.account_key}>
