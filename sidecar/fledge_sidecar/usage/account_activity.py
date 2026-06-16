@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fledge_sidecar.app_config import default_config_path
-from fledge_sidecar.paths import resolve_best_effort
+from fledge_sidecar.paths import is_within_root, resolve_best_effort
 
 logger = logging.getLogger(__name__)
 
@@ -105,3 +105,21 @@ def load_sessions(now: float, live_session_ids: set[str], retention_days: int = 
             project=str(ev.get("project") or ""), account=str(ev.get("account") or ""),
             open_ts=open_ts, close_ts=close_ts))
     return spans
+
+
+def attribute(spans: list[SessionSpan], cwd_realpath: str, ts: float) -> str | None:
+    """找 cwd 落在 span.project 下（含相等）、open_ts ≤ ts ≤ close_ts(或 live) 的 span；
+    tie-break：專案路徑最深（最長字串）優先，同深取 open_ts 最大者（設計 §3.3）。無則 None。"""
+    best: SessionSpan | None = None
+    for s in spans:
+        if s.open_ts > ts:
+            continue
+        if s.close_ts is not None and ts > s.close_ts:
+            continue
+        if not is_within_root(cwd_realpath, s.project):
+            continue
+        if (best is None
+                or len(s.project) > len(best.project)
+                or (len(s.project) == len(best.project) and s.open_ts > best.open_ts)):
+            best = s
+    return best.account if best else None
