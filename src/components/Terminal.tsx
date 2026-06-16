@@ -14,6 +14,7 @@ import { ImeReplayGuard } from "../lib/imeReplayGuard";
 import { ImeDraftTracker } from "../lib/imeDraftTracker";
 import { FlowController, type FlowSignal } from "../lib/flowControl";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { readText as tauriReadText } from "@tauri-apps/plugin-clipboard-manager";
 import { formatPathsForPaste } from "../lib/dropPath";
 import { registerTerminal, unregisterTerminal } from "../lib/terminalRegistry";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
@@ -41,12 +42,13 @@ async function writeClipboard(text: string): Promise<void> {
   }
 }
 
-// 剪貼簿讀取（右鍵貼上）：navigator.clipboard 可能為 undefined（非 secure context）或 readText
-// 在某授權狀態同步 throw（WKWebView）。全程 try/catch 包住——含 navigator.clipboard 求值——
-// 確保呼叫端（選單 onClick）不擲回，否則 ContextMenu 的 onClose 不會執行、選單卡住（Codex 審查 #3）。
+// 剪貼簿讀取（右鍵貼上）：改走 Tauri 原生 clipboard plugin（Rust/NSPasteboard）而非
+// navigator.clipboard.readText()——後者在打包版會觸發 macOS 15+ 的剪貼簿隱私「Paste 膠囊」
+// （程式化 web 讀取被攔）。實測是否能繞掉。全程 try/catch 包住確保選單 onClick 不擲回，
+// 否則 ContextMenu 的 onClose 不執行、選單卡住（Codex 審查 #3）。
 async function pasteFromClipboard(term: XTerm): Promise<void> {
   try {
-    const text = await navigator.clipboard.readText();
+    const text = await tauriReadText();
     if (text) {
       term.focus();
       term.paste(text); // 走既有 onData→ws guard
