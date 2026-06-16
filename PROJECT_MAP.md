@@ -147,6 +147,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | 檔案 | 用途 |
 |------|------|
 | `sidecar/build_binary.sh` | PyInstaller 打包 sidecar 成 onedir 資料夾 + nested ad-hoc 簽章，rsync 到 `binaries/` |
+| `scripts/build-app-devtools.sh` | 偵錯打包：sidecar + `tauri build --features devtools`（帶 Web Inspector，啟動自動開）；給「只有打包版重現、dev 正常」的 bug 蒐證用。`npm run build:app:devtools`。正式 build 不帶 feature、不外洩 devtools |
 | `sidecar/pyproject.toml` | Python 依賴與測試設定 |
 | `vitest.config.ts` | 前端 vitest 設定（store lifecycle 測試） |
 
