@@ -55,7 +55,9 @@ def _dedup(entries: list[UsageEntry]) -> list[UsageEntry]:
 
 def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
                     subscriptions: list[dict], now: float, days: int = 30,
-                    roots: list[str] | None = None) -> dict:
+                    roots: list[str] | None = None,
+                    claude_entries_by_account: dict[str, list[UsageEntry]] | None = None,
+                    account_labels: dict[str, str] | None = None) -> dict:
     entries = _dedup(entries)
     # 專案根收斂用：roots canonicalize 一次（與 e.project 同款 resolve，前綴比對才對得上）。
     # 收斂結果依 roots 而定、roots 可在 runtime 變動，故 proj_root memo 用 call-local（見下方迴圈）
@@ -152,25 +154,38 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
         except (TypeError, ValueError, AttributeError):
             continue   # 壞項目跳過——route 驗證擋正路，這裡擋手改 config
     hit_den = claude_hit_den + codex_hit_den
-    # 全量建 block、後濾時間窗（ccusage 語義）——先切 7 天會截斷跨界 block（起點重 floor、
-    # tokens 偏低）並以截斷值污染 P90 樣本；P90 用全史 closed blocks 估更穩
-    blocks = build_blocks([e for e in entries if e.source == "claude"], now=now)
-    recent_blocks = [b for b in blocks.blocks if b.end_ts >= now - 7 * 86400]
-    active = next((b for b in recent_blocks if b.is_active), None)
 
     def _block_dict(b):
         return {"start_ts": b.start_ts, "end_ts": b.end_ts, "is_gap": b.is_gap,
                 "is_active": b.is_active, "total_tokens": b.total_tokens, "cost": b.cost,
                 "burn_rate_tpm": b.burn_rate_tpm, "projection": b.projection}
 
+    def _claude_block_payload(claude_entries: list[UsageEntry]) -> dict:
+        # 全量建 block、後濾 7 天（ccusage 語義）——先切會截斷跨界 block 並污染 P90
+        blk = build_blocks([e for e in claude_entries if e.source == "claude"], now=now)
+        recent = [b for b in blk.blocks if b.end_ts >= now - 7 * 86400]
+        active = next((b for b in recent if b.is_active), None)
+        return {"active": _block_dict(active) if active else None,
+                "recent": [_block_dict(b) for b in recent], "limit_p90": blk.limit_p90}
+
+    if claude_entries_by_account is not None:
+        labels = account_labels or {}
+        # per 帳號各自 _dedup（dedup_key 不含帳號，不可走全域 dedup→跨帳號互消，設計 §3.1）
+        claude_blocks = {"accounts": [
+            {"account_key": key, "label": labels.get(key, key),
+             **_claude_block_payload(_dedup(claude_entries_by_account[key]))}
+            for key in sorted(claude_entries_by_account)
+        ]}
+    else:
+        # fallback（僅函式層相容）：舊 shape，吃入口已全域 dedup 的 entries
+        claude_blocks = _claude_block_payload(entries)
+
     return {
         "kpi": {"month_value": month, "week_value": week, "today_value": today,
                 "cache_hit_rate": (claude_hit_num + codex_hit_num) / hit_den if hit_den else 0.0,
                 "net_roi": month - subs_total, "subscriptions_total": subs_total},
         "blocks": {
-            "claude": {"active": _block_dict(active) if active else None,
-                       "recent": [_block_dict(b) for b in recent_blocks],
-                       "limit_p90": blocks.limit_p90},
+            "claude": claude_blocks,
             "codex": codex_rate_limits or {},
         },
         "daily": [{"date": d, "by_model": dict(v["by_model"]), "total": v["total"]}
