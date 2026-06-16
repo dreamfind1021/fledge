@@ -108,7 +108,10 @@ function WindowsPanel({ blocks, t }: { blocks: UsageDashboard["blocks"]; t: T })
           const r = claudeAccountRow(acc, now);
           return (
             <div className="dash-win-acct" key={acc.account_key}>
-              <div className="dash-win-acct-label">{r.label}</div>
+              <div className="dash-win-acct-label">
+                {r.label}
+                {r.partial && <span className="dash-est-badge">{t("windows.partialEstimate")}</span>}
+              </div>
               {r.empty ? (
                 <div className="dash-win-meta">{t("state.empty")}</div>
               ) : (<>

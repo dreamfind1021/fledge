@@ -133,6 +133,16 @@
   color: var(--text);
   margin-bottom: 4px;
 }
+.dash-est-badge {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--dim);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 0 5px;
+  vertical-align: middle;
+}
 .dash-win-meta {
   display: flex;
   flex-wrap: wrap;

@@ -6,7 +6,7 @@
            "cacheHit": "Cache hit rate", "netRoi": "Net ROI", "subs": "Subscriptions" },
   "windows": { "title": "Usage windows", "claude": "Claude 5-hour window (estimated · per account)",
                "codex": "Codex (official)", "burnRate": "{{rate}} tok/min",
-               "claudeReset": "resets {{time}}", "limitSampling": "limit sampling",
+               "claudeReset": "resets {{time}}", "limitSampling": "limit sampling", "partialEstimate": "partial estimate",
                "resets": "Resets {{time}}", "weekly": "Weekly window", "fiveHour": "5-hour" },
   "daily": { "title": "Daily cost ({{days}} days)" },
   "models": { "title": "Model breakdown" },
