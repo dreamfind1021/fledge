@@ -82,3 +82,41 @@ def test_codex_unreadable_meta_still_listed_as_own_group(tmp_path: Path):
     f = d / "rollout-broken.jsonl"
     f.write_text("not-json-first-line\n", encoding="utf-8")  # 無 session_meta → realpath 自成一組
     assert [p.name for p in codex_files(home)] == ["rollout-broken.jsonl"]
+
+
+def test_claude_account_map_maps_realpath_to_account_key(tmp_path):
+    from fledge_sidecar.app_config import AppConfig
+    from fledge_sidecar.usage.scanner import claude_account_map, claude_files
+    work = tmp_path / "work" / "projects" / "p"
+    personal = tmp_path / "personal" / "projects" / "p"
+    work.mkdir(parents=True); personal.mkdir(parents=True)
+    (work / "a.jsonl").write_text("{}\n")
+    (personal / "b.jsonl").write_text("{}\n")
+    cfg = AppConfig(path=tmp_path / "config.json", accounts={
+        "work": {"config_dir": str(tmp_path / "work"), "label": "工作"},
+        "personal": {"config_dir": str(tmp_path / "personal"), "label": "私人"},
+    })
+    m = claude_account_map(cfg)
+    assert m[str((work / "a.jsonl").resolve())] == "work"
+    assert m[str((personal / "b.jsonl").resolve())] == "personal"
+    # claude_files 仍回 sorted 去重清單
+    assert claude_files(cfg) == sorted([(work / "a.jsonl").resolve(),
+                                        (personal / "b.jsonl").resolve()])
+
+
+def test_claude_account_map_tiebreak_is_deterministic_by_key(tmp_path):
+    # 兩帳號 config_dir 是同一真實目錄（symlink alias）→ 同一 realpath
+    # 歸屬須按 account_key 排序取第一（"a" < "z"），不依 dict 順序
+    from fledge_sidecar.app_config import AppConfig
+    from fledge_sidecar.usage.scanner import claude_account_map
+    real = tmp_path / "real" / "projects" / "p"
+    real.mkdir(parents=True)
+    (real / "x.jsonl").write_text("{}\n")
+    alias = tmp_path / "alias"
+    alias.symlink_to(tmp_path / "real")
+    cfg = AppConfig(path=tmp_path / "config.json", accounts={
+        "z_acct": {"config_dir": str(tmp_path / "real"), "label": "Z"},
+        "a_acct": {"config_dir": str(alias), "label": "A"},
+    })
+    m = claude_account_map(cfg)
+    assert m[str((real / "x.jsonl").resolve())] == "a_acct"
