@@ -354,3 +354,88 @@ def test_create_session_defaults_to_claude_when_kind_omitted(tmp_path, monkeypat
     assert resp.status_code == 200
     assert captured["command"] == ["claude"]
     client.delete(f"/api/sessions/{resp.json()['session_id']}")
+
+
+def test_create_session_unknown_account_400(tmp_path, monkeypatch):
+    import json
+    from pathlib import Path
+    from fastapi.testclient import TestClient
+    from fledge_sidecar.app import create_app
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "roots": [], "manual_projects": [],
+        "project_overrides": {}, "ui": {}, "subscriptions": [],
+        "accounts": {"work": {"config_dir": str(tmp_path / "c"), "label": "工作"}}}), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.setenv("FLEDGE_TEST_UNAUTH", "1")
+    monkeypatch.setenv("FLEDGE_ACCOUNT_ACTIVITY", str(tmp_path / "activity.jsonl"))
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "true")
+    with TestClient(create_app()) as client:
+        r = client.post("/api/sessions", json={"path": str(tmp_path), "account": "nope", "kind": "claude"})
+        assert r.status_code == 400
+        assert not (tmp_path / "activity.jsonl").exists() or \
+               (tmp_path / "activity.jsonl").read_text() == ""
+
+
+def test_create_claude_session_records_open(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from fledge_sidecar.app import create_app
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "roots": [], "manual_projects": [],
+        "project_overrides": {}, "ui": {}, "subscriptions": [],
+        "accounts": {"work": {"config_dir": str(tmp_path / "c"), "label": "工作"}}}), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.setenv("FLEDGE_TEST_UNAUTH", "1")
+    monkeypatch.setenv("FLEDGE_ACCOUNT_ACTIVITY", str(tmp_path / "activity.jsonl"))
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "true")
+    with TestClient(create_app()) as client:
+        r = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work", "kind": "claude"})
+        assert r.status_code == 200
+        sid = r.json()["session_id"]
+    events = [json.loads(l) for l in (tmp_path / "activity.jsonl").read_text().splitlines() if l.strip()]
+    opens = [e for e in events if e["event"] == "open"]
+    assert len(opens) == 1
+    assert opens[0]["account"] == "work" and opens[0]["session"] == sid
+    from pathlib import Path
+    assert opens[0]["project"] == str(Path(tmp_path).resolve())
+
+
+def test_terminal_session_does_not_record(tmp_path, monkeypatch):
+    import json
+    from fastapi.testclient import TestClient
+    from fledge_sidecar.app import create_app
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "roots": [], "manual_projects": [],
+        "project_overrides": {}, "ui": {}, "subscriptions": [],
+        "accounts": {"work": {"config_dir": str(tmp_path / "c"), "label": "工作"}}}), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.setenv("FLEDGE_TEST_UNAUTH", "1")
+    monkeypatch.setenv("FLEDGE_ACCOUNT_ACTIVITY", str(tmp_path / "activity.jsonl"))
+    with TestClient(create_app()) as client:
+        r = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work", "kind": "terminal"})
+        assert r.status_code == 200
+    assert not (tmp_path / "activity.jsonl").exists() or \
+           (tmp_path / "activity.jsonl").read_text() == ""
+
+
+def test_spawn_failure_records_close(tmp_path, monkeypatch):
+    # SC6a：spawn 失敗 → open 後立即補 close（不留 phantom live span）
+    import json
+    from fastapi.testclient import TestClient
+    from fledge_sidecar.app import create_app
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "roots": [], "manual_projects": [],
+        "project_overrides": {}, "ui": {}, "subscriptions": [],
+        "accounts": {"work": {"config_dir": str(tmp_path / "c"), "label": "工作"}}}), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.setenv("FLEDGE_TEST_UNAUTH", "1")
+    monkeypatch.setenv("FLEDGE_ACCOUNT_ACTIVITY", str(tmp_path / "activity.jsonl"))
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "/nonexistent/binary/xyz")   # PtyProcess.spawn 拋 FileNotFoundError
+    with TestClient(create_app(), raise_server_exceptions=False) as client:
+        r = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work", "kind": "claude"})
+        assert r.status_code == 500   # spawn 失敗重拋 → 500
+    events = [json.loads(l) for l in (tmp_path / "activity.jsonl").read_text().splitlines() if l.strip()]
+    opens = [e for e in events if e["event"] == "open"]
+    closes = [e for e in events if e["event"] == "close"]
+    assert len(opens) == 1 and len(closes) == 1
+    assert closes[0]["session"] == opens[0]["session"]

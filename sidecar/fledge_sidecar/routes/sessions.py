@@ -5,22 +5,43 @@ import asyncio
 import json
 import logging
 import os
+import time
+import uuid
 from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from fledge_sidecar.app_config import AppConfig
 from fledge_sidecar.auth import require_ws_token
 from fledge_sidecar.pty_bridge import PtyBridge
+from fledge_sidecar.usage import account_activity
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 單一共用 bridge（spec：共用一個 sidecar 管理多 session）
-_bridge = PtyBridge()
+# 已 record_open 的 session id（僅 claude session）。terminal session 不歸屬、不在此集合，
+# 故 session 關閉時不會誤補 orphan close 事件（活動 log 只記被歸屬的 claude session）。
+_opened_session_ids: set[str] = set()
+
+
+def _on_close(sess) -> None:
+    """session 關閉 → 補 close 事件（live span 收尾），但僅限有 record_open 的 claude session。"""
+    if sess.session_id in _opened_session_ids:
+        _opened_session_ids.discard(sess.session_id)
+        account_activity.record_close(sess.session_id, time.time())
+
+
+# 單一共用 bridge（spec：共用一個 sidecar 管理多 session）；on_close wiring 收尾 live span。
+_bridge = PtyBridge(on_close=_on_close)
+
+
+def live_session_ids() -> set[str]:
+    """存活 session id 集合（給 usage route 取活躍歸屬的 live 集合）。"""
+    return _bridge.live_ids()
 
 
 def close_all_sessions() -> None:
@@ -77,17 +98,30 @@ def _apply_flow_control(text: str, flow_gate: asyncio.Event) -> None:
 @router.post("/api/sessions")
 def create_session(req: CreateSessionRequest):
     config = AppConfig.load()
-    account = config.accounts.get(req.account, {})
+    if req.account not in config.accounts:        # 驗證帳號合法（不 spawn 偽造/拼錯 key）
+        return JSONResponse(status_code=400, content={"error": "unknown_account"})
+    account = config.accounts[req.account]
     config_dir = account.get("config_dir", "~/.claude")
     env_overrides = {"CLAUDE_CONFIG_DIR": str(Path(config_dir).expanduser())}
 
-    session = _bridge.create_session(
-        command=_resolve_command(req.kind),
-        cwd=req.path,
-        env_overrides=env_overrides,
-        project_path=req.path,
-        account=req.account,
-    )
+    session_id = uuid.uuid4().hex
+    if req.kind == "claude":                       # spawn 前記 open（消除 claude 先吐 usage 的競態）
+        account_activity.record_open(req.path, req.account, session_id, time.time())
+        _opened_session_ids.add(session_id)        # 標記為被歸屬，on_close 才會補 close
+    try:
+        session = _bridge.create_session(
+            command=_resolve_command(req.kind),
+            cwd=req.path,
+            env_overrides=env_overrides,
+            project_path=req.path,
+            account=req.account,
+            session_id=session_id,
+        )
+    except Exception:                              # spawn 失敗 → 補 close（不留 phantom live span）
+        if req.kind == "claude":
+            _opened_session_ids.discard(session_id)
+            account_activity.record_close(session_id, time.time())
+        raise
     return {"session_id": session.session_id, "ws_url": f"/ws/{session.session_id}"}
 
 
