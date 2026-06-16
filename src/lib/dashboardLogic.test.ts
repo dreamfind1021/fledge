@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { donutParts, blockEta } from "./dashboardLogic";
+import { donutParts, claudeAccountRow } from "./dashboardLogic";
 
 describe("dashboardLogic", () => {
   it("donutParts：取前 4 名＋其餘合併為 rest，角度總和 360", () => {
@@ -12,15 +12,32 @@ describe("dashboardLogic", () => {
   it("donutParts：空清單回空", () => {
     expect(donutParts([])).toEqual([]);
   });
-  it("blockEta：依 burn rate 外推達 P90 的時刻；超限或無 rate 回 null", () => {
-    const now = 1_780_000_000;
-    expect(blockEta({ totalTokens: 1000, limitP90: 2200, burnRateTpm: 200,
-                      endTs: now + 3600, now })).toBeCloseTo(now + 360, 0);
-    expect(blockEta({ totalTokens: 3000, limitP90: 2200, burnRateTpm: 200,
-                      endTs: now + 3600, now })).toBeNull();   // 已超限
-    expect(blockEta({ totalTokens: 1000, limitP90: 2200, burnRateTpm: 0,
-                      endTs: now + 3600, now })).toBeNull();   // 無 rate
-    expect(blockEta({ totalTokens: 1000, limitP90: 2200, burnRateTpm: 1,
-                      endTs: now + 60, now })).toBeNull();     // 達限晚於 block 結束 → 不顯示
+});
+
+describe("claudeAccountRow", () => {
+  const base = { account_key: "work", label: "工作", recent: [],
+    active: { start_ts: 0, end_ts: 1000, is_gap: false, is_active: true,
+              total_tokens: 1000, cost: 0, burn_rate_tpm: 50, projection: null } };
+
+  it("有 limit_p90 → showBar + pct", () => {
+    const r = claudeAccountRow({ ...base, limit_p90: 4000 }, 500);
+    expect(r.showBar).toBe(true);
+    expect(r.pct).toBeCloseTo(0.25);
+    expect(r.used).toBe(1000);
+    expect(r.limit).toBe(4000);
+  });
+
+  it("limit_p90 null → 不畫條、仍有 used/burn/reset", () => {
+    const r = claudeAccountRow({ ...base, limit_p90: null }, 500);
+    expect(r.showBar).toBe(false);
+    expect(r.pct).toBeNull();
+    expect(r.used).toBe(1000);
+    expect(r.burnRate).toBe(50);
+    expect(r.endTs).toBe(1000);
+  });
+
+  it("無 active block → 空狀態", () => {
+    const r = claudeAccountRow({ ...base, active: null, limit_p90: null }, 500);
+    expect(r.empty).toBe(true);
   });
 });

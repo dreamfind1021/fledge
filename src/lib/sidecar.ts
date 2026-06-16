@@ -335,6 +335,14 @@ export interface UsageBlock {
   projection: number | null;
 }
 
+export interface ClaudeAccountBlock {
+  account_key: string;
+  label: string;
+  active: UsageBlock | null;
+  recent: UsageBlock[];
+  limit_p90: number | null;
+}
+
 export interface UsageDashboard {
   kpi: {
     month_value: number;
@@ -345,7 +353,7 @@ export interface UsageDashboard {
     subscriptions_total: number;
   };
   blocks: {
-    claude: { active: UsageBlock | null; recent: UsageBlock[]; limit_p90: number | null };
+    claude: { accounts: ClaudeAccountBlock[] };
     codex: {
       primary?: { used_percent: number; window_minutes: number; resets_at: number };
       secondary?: { used_percent: number; window_minutes: number; resets_at: number };

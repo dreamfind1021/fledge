@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { fetchUsageDashboard, UsageDashboard } from "../lib/sidecar";
 import { shouldPoll, POLL_INTERVAL_MS } from "../lib/usagePoll";
 import { fmtUSD, fmtPct, fmtTokens, fmtClock, fmtDayClock } from "../lib/usageFormat";
-import { donutParts, blockEta } from "../lib/dashboardLogic";
+import { donutParts, claudeAccountRow } from "../lib/dashboardLogic";
 import "./Dashboard.css";
 
 export default function Dashboard({ port, isActive }: { port: number; isActive: boolean }) {
@@ -93,28 +93,36 @@ function KpiBar({ kpi, t }: { kpi: UsageDashboard["kpi"]; t: T }) {
 }
 
 function WindowsPanel({ blocks, t }: { blocks: UsageDashboard["blocks"]; t: T }) {
-  const a = blocks.claude.active;
-  const p90 = blocks.claude.limit_p90;
-  const pct = a && p90 ? Math.min(1, a.total_tokens / p90) : null;
-  const eta = a ? blockEta({ totalTokens: a.total_tokens, limitP90: p90,
-                             burnRateTpm: a.burn_rate_tpm, endTs: a.end_ts,
-                             now: Date.now() / 1000 }) : null;
   const cx = blocks.codex;
+  const now = Date.now() / 1000;
   return (
     <div className="dash-windows">
       <div className="dash-win-card">
         <div className="dash-win-title">{t("windows.claude")}</div>
-        {a ? (<>
-          <div className="dash-bar"><i style={{ width: `${Math.round((pct ?? 0) * 100)}%` }} /></div>
-          <div className="dash-win-meta">
-            <span><b>{fmtTokens(a.total_tokens)}</b>{p90 ? ` / ${fmtTokens(p90)}` : ""}</span>
-            {a.burn_rate_tpm != null && <span>{t("windows.burnRate", { rate: fmtTokens(Math.round(a.burn_rate_tpm)) })}</span>}
-            {/* projection 的 5min gate 同時約束 eta：block 開頭幾分鐘 burn rate 膨脹，
-                兩條件並列可避免危言聳聽外推與「資料不足」同時出現 */}
-            {a.projection != null && eta != null && <span className="dash-eta">{t("windows.projectedLimit", { time: fmtClock(eta) })}</span>}
-            {a.projection == null && <span>{t("windows.insufficient")}</span>}
-          </div>
-        </>) : <div className="dash-win-meta">{t("state.empty")}</div>}
+        {blocks.claude.accounts.length === 0 && (
+          <div className="dash-win-meta">{t("state.empty")}</div>
+        )}
+        {blocks.claude.accounts.map((acc) => {
+          const r = claudeAccountRow(acc, now);
+          return (
+            <div className="dash-win-acct" key={acc.account_key}>
+              <div className="dash-win-acct-label">{r.label}</div>
+              {r.empty ? (
+                <div className="dash-win-meta">{t("state.empty")}</div>
+              ) : (<>
+                {r.showBar && (
+                  <div className="dash-bar"><i style={{ width: `${Math.round((r.pct ?? 0) * 100)}%` }} /></div>
+                )}
+                <div className="dash-win-meta">
+                  <span><b>{fmtTokens(r.used)}</b>{r.limit != null ? ` / ${fmtTokens(r.limit)}` : ""}</span>
+                  {r.burnRate != null && <span>{t("windows.burnRate", { rate: fmtTokens(Math.round(r.burnRate)) })}</span>}
+                  {r.endTs != null && <span>{t("windows.claudeReset", { time: fmtClock(r.endTs) })}</span>}
+                  {!r.showBar && <span>{t("windows.limitSampling")}</span>}
+                </div>
+              </>)}
+            </div>
+          );
+        })}
       </div>
       <div className="dash-win-card">
         <div className="dash-win-title">{t("windows.codex")}{cx.plan_type ? <span className="dash-badge">{cx.plan_type}</span> : null}</div>

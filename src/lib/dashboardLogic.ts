@@ -1,4 +1,6 @@
 // 面板邏輯純函式（design §11）——元件只負責渲染，邏輯在此測試
+import type { ClaudeAccountBlock } from "./sidecar";
+
 export interface DonutPart { label: string; cost: number; fromDeg: number; toDeg: number }
 
 export function donutParts(models: { model: string; cost: number }[]): DonutPart[] {
@@ -15,10 +17,29 @@ export function donutParts(models: { model: string; cost: number }[]): DonutPart
   });
 }
 
-export function blockEta(b: { totalTokens: number; limitP90: number | null;
-                              burnRateTpm: number | null; endTs: number; now: number }): number | null {
-  if (b.limitP90 == null || b.burnRateTpm == null || b.burnRateTpm <= 0) return null;
-  if (b.totalTokens >= b.limitP90) return null;
-  const eta = b.now + ((b.limitP90 - b.totalTokens) / b.burnRateTpm) * 60;
-  return eta < b.endTs ? eta : null;
+export interface ClaudeAccountRow {
+  label: string;
+  empty: boolean;
+  showBar: boolean;
+  pct: number | null;
+  used: number;
+  limit: number | null;
+  burnRate: number | null;
+  endTs: number | null;
+}
+
+// 單帳號 5hr 條的呈現值：有 limit_p90 才畫進度條；無則只給 used/burn/reset（設計 §3.3）
+export function claudeAccountRow(acc: ClaudeAccountBlock, _now: number): ClaudeAccountRow {
+  const a = acc.active;
+  if (!a) {
+    return { label: acc.label, empty: true, showBar: false, pct: null,
+             used: 0, limit: null, burnRate: null, endTs: null };
+  }
+  const limit = acc.limit_p90;
+  const showBar = limit != null;
+  return {
+    label: acc.label, empty: false, showBar,
+    pct: showBar ? Math.min(1, a.total_tokens / (limit as number)) : null,
+    used: a.total_tokens, limit, burnRate: a.burn_rate_tpm, endTs: a.end_ts,
+  };
 }
