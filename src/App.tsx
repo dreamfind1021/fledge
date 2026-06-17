@@ -6,6 +6,7 @@ import { getTerminal } from "./lib/terminalRegistry";
 import { formatPathsForPaste } from "./lib/dropPath";
 import { useAppStore } from "./store/useAppStore";
 import { isLiveClaudeTab } from "./lib/liveTab";
+import { displayTabTitle } from "./lib/tabTitle";
 import { Sidebar } from "./components/Sidebar";
 import { Workspace } from "./components/Workspace";
 import { Settings } from "./components/Settings";
@@ -115,7 +116,7 @@ function App() {
     const id = s.pendingCloseTabId;
     if (!id) return null;
     const t = s.tabs.find((x) => x.id === id);
-    return t && isLiveClaudeTab(t) ? t.title : null;
+    return t && isLiveClaudeTab(t) ? displayTabTitle(s.tabs, t) : null;
   });
   const claudeFound = useAppStore((s) => s.claudeFound);
   const permissionError = useAppStore((s) => s.permissionError);
@@ -127,8 +128,9 @@ function App() {
   const onDragStart = (e: DragStartEvent) => {
     const d = e.active.data.current;
     if (d?.type === "tab") {
-      const t = useAppStore.getState().tabs.find((x) => x.id === e.active.id);
-      setDragLabel(t?.title ?? null);
+      const tabs = useAppStore.getState().tabs;
+      const t = tabs.find((x) => x.id === e.active.id);
+      setDragLabel(t ? displayTabTitle(tabs, t) : null);
     } else if (d?.type === "path") {
       setDragLabel(typeof d.label === "string" ? d.label : null);
     }
