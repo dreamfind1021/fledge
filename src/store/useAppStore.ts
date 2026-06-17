@@ -57,7 +57,7 @@ interface AppState {
   setClaudeFound: (found: boolean) => void;
   setPort: (port: number) => void;
   loadProjects: () => Promise<void>;
-  openTab: (project: Project, accountOverride?: string, kind?: "claude" | "terminal") => Promise<void>;
+  openTab: (project: Project, accountOverride?: string, kind?: "claude" | "terminal", forceNew?: boolean) => Promise<void>;
   openDashboard: () => void;
   openMemory: () => void;
   closeTab: (tabId: string) => Promise<void>;
@@ -110,12 +110,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (seq === loadProjectsSeq) set({ projects, permissionError }); // 只套用最新一次（防並發 stale）
   },
 
-  openTab: async (project, accountOverride, kind = "claude") => {
+  openTab: async (project, accountOverride, kind = "claude", forceNew = false) => {
     const { port, tabs } = get();
     if (port == null) return;
     const account = accountOverride ?? project.account;
-    // claude 去重（同專案同帳號聚焦既有）；terminal 不去重、每次都開新分頁（spec §1.3/1.4）
-    if (kind === "claude") {
+    // claude 去重（同專案同帳號聚焦既有）；terminal 不去重、每次都開新分頁（spec §1.3/1.4）。
+    // forceNew（右鍵「開新 claude 視窗」/重啟）跳過去重，強制建新分頁與新 session。
+    if (kind === "claude" && !forceNew) {
       const existing = tabs.find(
         (t) => t.kind === "claude" && t.projectPath === project.path && t.account === account,
       );
@@ -335,7 +336,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const project = get().projects.find((p) => p.path === tab.projectPath);
     if (!project) return; // 專案已不在清單（root/manual 被移除）→ 不動，避免無聲銷毀 ended tab
     await get().closeTab(tabId);
-    await get().openTab(project, tab.account, tab.kind);
+    // forceNew=true：允許同專案多 claude 視窗後，重啟須建自己的新 session，
+    // 否則去重會誤聚焦到同專案兄弟分頁而非重開本分頁。
+    await get().openTab(project, tab.account, tab.kind, true);
   },
 
   // sidecar 重啟：舊 session 全沒了，所有 tab 標 ended、清 sessionId（前端原子轉移用）。

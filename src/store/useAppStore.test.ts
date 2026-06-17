@@ -192,6 +192,30 @@ describe("useAppStore", () => {
     expect(useAppStore.getState().tabs).toHaveLength(2);
   });
 
+  it("openTab forceNew=true：同專案同帳號強制開第二個 claude 分頁、不聚焦既有", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValueOnce("s1").mockResolvedValueOnce("s2");
+    await useAppStore.getState().openTab(proj("/p/m"));
+    await useAppStore.getState().openTab(proj("/p/m"), undefined, "claude", true);
+    expect(useAppStore.getState().tabs.filter((t) => t.kind === "claude")).toHaveLength(2);
+    expect(sidecar.createSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("restartTab：存在同專案兄弟 claude 分頁時，重啟建新 session、不誤聚焦兄弟", async () => {
+    vi.mocked(sidecar.createSession)
+      .mockResolvedValueOnce("s1")
+      .mockResolvedValueOnce("s2")
+      .mockResolvedValueOnce("s3");
+    vi.mocked(sidecar.closeSession).mockResolvedValue();
+    await useAppStore.getState().openTab(proj("/p/r"));
+    await useAppStore.getState().openTab(proj("/p/r"), undefined, "claude", true);
+    const second = useAppStore.getState().tabs[1];
+    // restartTab 需從 store.projects 找回 project
+    useAppStore.setState({ projects: [proj("/p/r")] });
+    await useAppStore.getState().restartTab(second.id);
+    expect(useAppStore.getState().tabs.filter((t) => t.kind === "claude")).toHaveLength(2);
+    expect(sidecar.createSession).toHaveBeenCalledTimes(3); // s1, s2, 重啟 s3
+  });
+
   it("openDashboard 單例：第二次只 focus 不重開", () => {
     useAppStore.getState().openDashboard();
     useAppStore.getState().openDashboard();
