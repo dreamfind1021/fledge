@@ -5,10 +5,12 @@ import { CSS } from "@dnd-kit/utilities";
 import { useAppStore } from "../store/useAppStore";
 import { accountColor } from "../lib/accountColor";
 import { tabDotState } from "../lib/tabDotState";
+import { displayTabTitle } from "../lib/tabTitle";
 import "./TabBar.css";
 
 function SortableTab({
   t,
+  title,
   isActive,
   onSelect,
   onClose,
@@ -17,6 +19,7 @@ function SortableTab({
   tSide,
 }: {
   t: ReturnType<typeof useAppStore.getState>["tabs"][number];
+  title: string;
   isActive: boolean;
   onSelect: () => void;
   onClose: () => void;
@@ -52,7 +55,7 @@ function SortableTab({
         <span className={`tab-dot is-${tabDotState(t)}`} />
       )}
       <span className="tabbar-tab-title">
-        {t.kind === "dashboard" ? tDash("tabTitle") : t.kind === "memory" ? tMem("tabTitle") : t.title}
+        {t.kind === "dashboard" ? tDash("tabTitle") : t.kind === "memory" ? tMem("tabTitle") : title}
       </span>
       {t.account && (
         <span className="tabbar-chip" style={{ background: accountColor(t.account) }}>{t.account}</span>
@@ -88,6 +91,7 @@ export function TabBar() {
           <SortableTab
             key={t.id}
             t={t}
+            title={displayTabTitle(tabs, t)}
             isActive={t.id === activeTabId}
             onSelect={() => setActive(t.id)}
             onClose={() => requestCloseTab(t.id)}
