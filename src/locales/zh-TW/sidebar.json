@@ -7,7 +7,7 @@
   "openFolder": "開啟其他資料夾",
   "discovered": "自動發現 {{count}} 個",
   "menu": {
-    "openClaudeWindow": "開新 claude 視窗",
+    "openClaudeWindow": "開新 Claude 視窗",
     "openTerminal": "使用終端機開啟",
     "openWithAccountOnce": "改用「{{account}}」開啟（這次）",
     "setDefaultAccount": "設為預設帳號 → {{account}}",
