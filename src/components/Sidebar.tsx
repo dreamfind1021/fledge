@@ -106,7 +106,9 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
     e.preventDefault();
     const others = accountKeys.filter((a) => a !== p.account);
     const items: MenuItem[] = [];
-    // 最上方：用純終端機開啟（進專案路徑、不進 claude；可開多個）
+    // 最上方：開新 claude 視窗（同專案同帳號強制開新 session，forceNew 跳過去重）
+    items.push({ label: tSide("menu.openClaudeWindow"), onClick: () => openTab(p, p.account, "claude", true) });
+    // 用純終端機開啟（進專案路徑、不進 claude；可開多個）
     items.push({ label: tSide("menu.openTerminal"), onClick: () => openTab(p, p.account, "terminal") });
     // 額度臨時切換：這次用別帳號開，不搬組
     for (const a of others) items.push({ label: tSide("menu.openWithAccountOnce", { account: a }), onClick: () => openTab(p, a) });
