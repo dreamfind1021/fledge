@@ -8,8 +8,10 @@ export function fmtUSD(n: number): string {
   return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/** 比例格式化：0.8234 → "82%"（四捨五入到整數）。 */
-export function fmtPct(ratio: number): string {
+/** 比例格式化：0.8234 → "82%"（四捨五入到整數）。
+ *  null（該源無資料、分母為 0）回 "—"，與真正的 0% 命中區分。 */
+export function fmtPct(ratio: number | null): string {
+  if (ratio == null) return "—";
   return `${Math.round(ratio * 100)}%`;
 }
 

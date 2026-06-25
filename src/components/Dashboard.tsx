@@ -71,23 +71,32 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
 type T = (key: string, opts?: Record<string, unknown>) => string;
 
 function KpiBar({ kpi, t }: { kpi: UsageDashboard["kpi"]; t: T }) {
-  const cards: [string, string, string?][] = [
-    [t("kpi.month"), fmtUSD(kpi.month_value)],
-    [t("kpi.week"), fmtUSD(kpi.week_value)],
-    [t("kpi.today"), fmtUSD(kpi.today_value)],
-    [t("kpi.cacheHit"), fmtPct(kpi.cache_hit_rate)],
-    [t("kpi.netRoi"), fmtUSD(kpi.net_roi),
-     `${t("kpi.subs")} ${fmtUSD(kpi.subscriptions_total)}`],
-  ];
+  // 單值卡共用渲染；cacheHit 因需卡內兩行（分源）另外手寫
+  const card = (label: string, value: string, extra?: string, isPos?: boolean) => (
+    <div key={label} className="dash-kpi-card">
+      <div className={`dash-kpi-value${isPos ? " is-pos" : ""}`}>{value}</div>
+      <div className="dash-kpi-label">{label}</div>
+      {extra && <div className="dash-kpi-extra">{extra}</div>}
+    </div>
+  );
   return (
     <div className="dash-kpi">
-      {cards.map(([label, value, extra], i) => (
-        <div key={label} className="dash-kpi-card">
-          <div className={`dash-kpi-value${i === 4 && kpi.net_roi > 0 ? " is-pos" : ""}`}>{value}</div>
-          <div className="dash-kpi-label">{label}</div>
-          {extra && <div className="dash-kpi-extra">{extra}</div>}
+      {card(t("kpi.month"), fmtUSD(kpi.month_value))}
+      {card(t("kpi.week"), fmtUSD(kpi.week_value))}
+      {card(t("kpi.today"), fmtUSD(kpi.today_value))}
+      <div className="dash-kpi-card">
+        <div className="dash-kpi-split">
+          <span className="dash-kpi-split-label">Claude</span>
+          <span className="dash-kpi-split-value">{fmtPct(kpi.claude_cache_hit_rate)}</span>
         </div>
-      ))}
+        <div className="dash-kpi-split">
+          <span className="dash-kpi-split-label">Codex</span>
+          <span className="dash-kpi-split-value">{fmtPct(kpi.codex_cache_hit_rate)}</span>
+        </div>
+        <div className="dash-kpi-label">{t("kpi.cacheHit")}</div>
+      </div>
+      {card(t("kpi.netRoi"), fmtUSD(kpi.net_roi),
+            `${t("kpi.subs")} ${fmtUSD(kpi.subscriptions_total)}`, kpi.net_roi > 0)}
     </div>
   );
 }

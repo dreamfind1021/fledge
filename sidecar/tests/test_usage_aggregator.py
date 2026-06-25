@@ -47,13 +47,22 @@ def test_kpi_windows_and_net_roi():
 
 
 def test_cache_hit_rate_per_source_denominators():
-    # Claude: read=80, input=20 → 分母 100；Codex: cached=50, input=100 → 分母 100（不再加 cached）
+    # Claude: read=80, input=20 → 分母 100 → 0.8；Codex: cached=50, input=100 → 分母 100 → 0.5（不再加 cached）
     entries = [
         _e(cache_read_tokens=80, input_tokens=20, output_tokens=0),
         _e(source="codex", model="gpt-5.5", dedup="", cache_read_tokens=50, input_tokens=100),
     ]
     d = build_dashboard(entries, codex_rate_limits=None, subscriptions=[], now=NOW)
-    assert abs(d["kpi"]["cache_hit_rate"] - (80 + 50) / (100 + 100)) < 1e-9
+    assert abs(d["kpi"]["claude_cache_hit_rate"] - 0.8) < 1e-9
+    assert abs(d["kpi"]["codex_cache_hit_rate"] - 0.5) < 1e-9
+
+
+def test_cache_hit_rate_none_when_source_absent():
+    # 只有 Claude 條目：Codex 分母為 0 → 回 None（前端顯示「—」而非誤導的 0%）
+    d = build_dashboard([_e(cache_read_tokens=80, input_tokens=20, output_tokens=0)],
+                        codex_rate_limits=None, subscriptions=[], now=NOW)
+    assert abs(d["kpi"]["claude_cache_hit_rate"] - 0.8) < 1e-9
+    assert d["kpi"]["codex_cache_hit_rate"] is None
 
 
 def test_projects_models_daily_hourly_shapes():

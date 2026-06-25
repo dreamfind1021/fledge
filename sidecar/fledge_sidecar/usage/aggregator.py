@@ -154,7 +154,9 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
             subs_total += float(s.get("monthly_cost") or 0)
         except (TypeError, ValueError, AttributeError):
             continue   # 壞項目跳過——route 驗證擋正路，這裡擋手改 config
-    hit_den = claude_hit_den + codex_hit_den
+    # 分源命中率：某源該視窗無輸入（den=0）回 None，讓前端顯示「—」而非誤導的 0%
+    claude_hit_rate = claude_hit_num / claude_hit_den if claude_hit_den else None
+    codex_hit_rate = codex_hit_num / codex_hit_den if codex_hit_den else None
 
     def _block_dict(b):
         return {"start_ts": b.start_ts, "end_ts": b.end_ts, "is_gap": b.is_gap,
@@ -185,7 +187,7 @@ def build_dashboard(entries: list[UsageEntry], codex_rate_limits: dict | None,
 
     return {
         "kpi": {"month_value": month, "week_value": week, "today_value": today,
-                "cache_hit_rate": (claude_hit_num + codex_hit_num) / hit_den if hit_den else 0.0,
+                "claude_cache_hit_rate": claude_hit_rate, "codex_cache_hit_rate": codex_hit_rate,
                 "net_roi": month - subs_total, "subscriptions_total": subs_total},
         "blocks": {
             "claude": claude_blocks,

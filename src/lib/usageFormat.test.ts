@@ -10,6 +10,7 @@ describe("usageFormat", () => {
   });
   it("fmtPct 與 fmtTokens", () => {
     expect(fmtPct(0.8234)).toBe("82%");
+    expect(fmtPct(null)).toBe("—");   // 該源無資料時回破折號
     expect(fmtTokens(1_234_567)).toBe("1.2M");
     expect(fmtTokens(12_345)).toBe("12.3K");
     expect(fmtTokens(999)).toBe("999");

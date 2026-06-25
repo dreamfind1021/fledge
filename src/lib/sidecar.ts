@@ -349,7 +349,8 @@ export interface UsageDashboard {
     month_value: number;
     week_value: number;
     today_value: number;
-    cache_hit_rate: number;
+    claude_cache_hit_rate: number | null;
+    codex_cache_hit_rate: number | null;
     net_roi: number;
     subscriptions_total: number;
   };
