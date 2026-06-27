@@ -62,6 +62,7 @@ export function Workspace({ connError }: { connError: string | null }) {
                       sessionId={t.sessionId}
                       tabId={t.id}
                       isActive={t.id === activeTabId}
+                      projectPath={t.projectPath}
                     />
                     {/* 右下懸浮「相關」：只給有 projectPath 的 session 分頁（claude／terminal）；
                         此 div 已是 position:absolute（即定位包覆塊），float 以它為錨點、不改終端機尺寸 */}
