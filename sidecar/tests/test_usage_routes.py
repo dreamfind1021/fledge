@@ -127,105 +127,71 @@ def test_cold_error_shape_has_missing_pricing(tmp_path: Path, monkeypatch):
         assert j["scan_meta"]["missing_pricing"] == []     # error-only 形狀必含空欄（防前端炸）
 
 
-def _env_two_accounts(tmp_path: Path, monkeypatch):
-    """仿既有 _env，但建 work + personal 兩帳號、各自 projects/jsonl。"""
-    for acct in ("work", "personal"):
-        d = tmp_path / acct / "projects" / "-p"
-        d.mkdir(parents=True)
-        (d / "s.jsonl").write_text(json.dumps({
-            "type": "assistant", "timestamp": "2026-06-12T01:00:00Z", "cwd": "/p",
-            "sessionId": f"s-{acct}", "requestId": f"r-{acct}",
-            "message": {"id": f"m-{acct}", "model": "claude-opus-4-8",
-                        "usage": {"input_tokens": 1000, "output_tokens": 100}}}), encoding="utf-8")
-    cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({
-        "version": 1, "roots": [], "manual_projects": [], "project_overrides": {},
-        "ui": {}, "subscriptions": [],
-        "accounts": {"work": {"config_dir": str(tmp_path / "work"), "label": "工作"},
-                     "personal": {"config_dir": str(tmp_path / "personal"), "label": "私人"}},
-    }), encoding="utf-8")
-    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
-    monkeypatch.setenv("FLEDGE_CODEX_HOME", str(tmp_path / "codex"))
-    monkeypatch.setenv("FLEDGE_USAGE_CACHE", str(tmp_path / "usage-v1.json"))
-    usage_route.reset_state_for_tests()
+def _codex_stub(calls):
+    def stub(codex_home, now, **kw):
+        calls["n"] += 1
+        return {"source": "live", "observed_at": now, "plan_type": "plus",
+                "primary": {"used_percent": float(calls["n"]), "window_minutes": 300, "resets_at": 1.0}}
+    return stub
 
 
-def test_dashboard_payload_uses_per_account_blocks(tmp_path: Path, monkeypatch):
-    _env_two_accounts(tmp_path, monkeypatch)
+def test_codex_usage_coalesces_within_floor(tmp_path: Path, monkeypatch):
+    # 60s floor 內第二次請求沿用快取、不再打 upstream（防多視窗/重掛狂打未公開端點）
+    _env(tmp_path, monkeypatch)
+    calls = {"n": 0}
+    monkeypatch.setattr(usage_route, "fetch_codex_usage", _codex_stub(calls))
     with TestClient(create_app()) as client:
-        data = _poll_ok(client)
-        claude = data["blocks"]["claude"]
-        assert isinstance(claude["accounts"], list)
-        assert {a["account_key"] for a in claude["accounts"]} == {"work", "personal"}
-        assert all({"account_key", "label", "active", "recent", "limit_p90"} <= a.keys()
-                   for a in claude["accounts"])
+        r1 = client.get("/usage/codex")
+        assert r1.status_code == 200 and r1.json()["source"] == "live"
+        first = r1.json()["primary"]["used_percent"]
+        r2 = client.get("/usage/codex")
+        assert r2.json()["primary"]["used_percent"] == first
+        assert calls["n"] == 1      # 只真打一次
 
 
-def test_dashboard_attributes_by_activity_log(tmp_path: Path, monkeypatch):
-    # 一份 jsonl 含早(work span)、晚(personal span) 兩筆 usage；活動 log 有對應兩 span
-    # → work 只含早筆、personal 只含晚筆（逐訊息切開）
-    import time
-    now = time.time()
-    t_work = now - 3000      # work span 內
-    t_pers = now - 1000      # personal span 內
-    proj = tmp_path / "repo"
-    cdir = tmp_path / "work" / "projects" / "-repo"
-    cdir.mkdir(parents=True)
-    def line(ts, mid, tokens):
-        return json.dumps({"type": "assistant",
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts)),
-            "cwd": str(proj), "sessionId": "conv1", "requestId": f"r{mid}",
-            "message": {"id": f"m{mid}", "model": "claude-opus-4-8",
-                        "usage": {"input_tokens": tokens, "output_tokens": 0}}})
-    (cdir / "conv1.jsonl").write_text(line(t_work, "w", 1000) + "\n" + line(t_pers, "p", 400) + "\n",
-                                      encoding="utf-8")
-    cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({"version": 1, "roots": [], "manual_projects": [],
-        "project_overrides": {}, "ui": {}, "subscriptions": [],
-        "accounts": {"work": {"config_dir": str(tmp_path / "work"), "label": "工作"},
-                     "personal": {"config_dir": str(tmp_path / "personal"), "label": "私人"}}}),
-        encoding="utf-8")
-    act = tmp_path / "activity.jsonl"
-    rp = str(proj.resolve())
-    act.write_text(
-        json.dumps({"ts": t_work - 60, "event": "open", "project": rp, "account": "work", "session": "s_w"}) + "\n" +
-        json.dumps({"ts": t_pers - 60, "event": "close", "session": "s_w"}) + "\n" +
-        json.dumps({"ts": t_pers - 60, "event": "open", "project": rp, "account": "personal", "session": "s_p"}) + "\n",
-        encoding="utf-8")
-    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
-    monkeypatch.setenv("FLEDGE_CODEX_HOME", str(tmp_path / "codex"))
-    monkeypatch.setenv("FLEDGE_USAGE_CACHE", str(tmp_path / "usage-v1.json"))
-    monkeypatch.setenv("FLEDGE_ACCOUNT_ACTIVITY", str(act))
-    usage_route.reset_state_for_tests()
+def test_codex_usage_refetches_after_floor(tmp_path: Path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    calls = {"n": 0}
+    monkeypatch.setattr(usage_route, "fetch_codex_usage", _codex_stub(calls))
     with TestClient(create_app()) as client:
-        data = _poll_ok(client)
-        accts = {a["account_key"]: a for a in data["blocks"]["claude"]["accounts"]}
-        assert set(accts) == {"work", "personal"}
-        assert accts["work"]["active"]["total_tokens"] == 1000      # 只早筆
-        assert accts["personal"]["active"]["total_tokens"] == 400   # 只晚筆
+        client.get("/usage/codex")
+        usage_route._codex_state["fetched_at"] = 0.0    # 強制過期 → force-on-open 重抓
+        client.get("/usage/codex")
+        assert calls["n"] == 2
 
 
-def test_dashboard_falls_back_to_canonical_when_no_activity(tmp_path: Path, monkeypatch):
-    # 無 activity log → 全部 fallback canonical（single 帳號），該帳號 partial=true
-    import time
-    now = time.time()
-    cdir = tmp_path / "work" / "projects" / "-repo"
-    cdir.mkdir(parents=True)
-    (cdir / "c.jsonl").write_text(json.dumps({"type": "assistant",
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 600)),
-        "cwd": str(tmp_path / "repo"), "sessionId": "c", "requestId": "r",
-        "message": {"id": "m", "model": "claude-opus-4-8",
-                    "usage": {"input_tokens": 500, "output_tokens": 0}}}) + "\n", encoding="utf-8")
-    cfg = tmp_path / "config.json"
-    cfg.write_text(json.dumps({"version": 1, "roots": [], "manual_projects": [],
-        "project_overrides": {}, "ui": {}, "subscriptions": [],
-        "accounts": {"work": {"config_dir": str(tmp_path / "work"), "label": "工作"}}}), encoding="utf-8")
-    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
-    monkeypatch.setenv("FLEDGE_CODEX_HOME", str(tmp_path / "codex"))
-    monkeypatch.setenv("FLEDGE_USAGE_CACHE", str(tmp_path / "usage-v1.json"))
-    monkeypatch.setenv("FLEDGE_ACCOUNT_ACTIVITY", str(tmp_path / "none.jsonl"))
-    usage_route.reset_state_for_tests()
+def test_codex_usage_failure_has_short_ttl(tmp_path: Path, monkeypatch):
+    # 失敗結果只快取極短時間——使用者登入 codex 後能很快恢復（Codex 審查 finding #2）
+    _env(tmp_path, monkeypatch)
+    calls = {"n": 0}
+    def stub(codex_home, now, **kw):
+        calls["n"] += 1
+        return {"source": "unavailable", "failure_reason": "no_auth", "observed_at": None}
+    monkeypatch.setattr(usage_route, "fetch_codex_usage", stub)
     with TestClient(create_app()) as client:
-        data = _poll_ok(client)
-        accts = {a["account_key"]: a for a in data["blocks"]["claude"]["accounts"]}
-        assert accts["work"]["partial"] is True
+        client.get("/usage/codex")
+        usage_route._codex_state["fetched_at"] = time.time() - (usage_route.CODEX_USAGE_FAIL_INTERVAL_SEC + 1)
+        client.get("/usage/codex")
+        assert calls["n"] == 2      # 失敗 TTL 已過 → 重抓
+
+
+def test_codex_usage_live_holds_full_floor(tmp_path: Path, monkeypatch):
+    # live 結果在「失敗 TTL 之後、成功 floor 之內」不得重抓（floor 依 source 區分）
+    _env(tmp_path, monkeypatch)
+    calls = {"n": 0}
+    monkeypatch.setattr(usage_route, "fetch_codex_usage", _codex_stub(calls))
+    with TestClient(create_app()) as client:
+        client.get("/usage/codex")
+        usage_route._codex_state["fetched_at"] = time.time() - (usage_route.CODEX_USAGE_FAIL_INTERVAL_SEC + 1)
+        client.get("/usage/codex")
+        assert calls["n"] == 1      # 仍在成功 floor 內
+
+
+def test_codex_usage_passes_through_unavailable(tmp_path: Path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    monkeypatch.setattr(usage_route, "fetch_codex_usage",
+                        lambda codex_home, now, **kw: {"source": "unavailable",
+                                                       "failure_reason": "no_auth", "observed_at": None})
+    with TestClient(create_app()) as client:
+        r = client.get("/usage/codex")
+        assert r.json() == {"source": "unavailable", "failure_reason": "no_auth", "observed_at": None}

@@ -76,6 +76,7 @@ describe("auth token", () => {
     await m.onboard(1, []);
     await m.checkDir(1, "/x");
     await m.fetchUsageDashboard(1);
+    await m.fetchCodexUsage(1);
     await m.fetchMemoryOverview(1, "");
     await m.fetchMemoryRelated(1, "/p");
     await m.fetchMemoryItem(1, "/p/x.md");

@@ -1,5 +1,4 @@
 // 面板邏輯純函式（design §11）——元件只負責渲染，邏輯在此測試
-import type { ClaudeAccountBlock } from "./sidecar";
 
 export interface DonutPart { label: string; cost: number; fromDeg: number; toDeg: number }
 
@@ -15,34 +14,4 @@ export function donutParts(models: { model: string; cost: number }[]): DonutPart
     acc += p.cost;
     return { ...p, fromDeg, toDeg: (acc / total) * 360 };
   });
-}
-
-export interface ClaudeAccountRow {
-  label: string;
-  empty: boolean;
-  showBar: boolean;
-  pct: number | null;
-  used: number;
-  limit: number | null;
-  burnRate: number | null;
-  endTs: number | null;
-  partial: boolean;
-}
-
-// 單帳號 5hr 條的呈現值：有 limit_p90 才畫進度條；無則只給 used/burn/reset（設計 §3.3）。
-// partial=true 表該帳號含 fallback canonical 歸屬（活動 log 涵蓋不到）、標「部分推估」（§3.6）
-export function claudeAccountRow(acc: ClaudeAccountBlock, _now: number): ClaudeAccountRow {
-  const a = acc.active;
-  if (!a) {
-    return { label: acc.label, empty: true, showBar: false, pct: null,
-             used: 0, limit: null, burnRate: null, endTs: null, partial: acc.partial };
-  }
-  const limit = acc.limit_p90;
-  const showBar = limit != null;
-  return {
-    label: acc.label, empty: false, showBar,
-    pct: showBar ? Math.min(1, a.total_tokens / (limit as number)) : null,
-    used: a.total_tokens, limit, burnRate: a.burn_rate_tpm, endTs: a.end_ts,
-    partial: acc.partial,
-  };
 }

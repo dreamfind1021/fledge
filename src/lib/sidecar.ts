@@ -324,26 +324,6 @@ export async function fetchDirTree(port: number, path: string): Promise<DirTreeR
 }
 
 // --- usage dashboard（design §10）---
-export interface UsageBlock {
-  start_ts: number;
-  end_ts: number;
-  is_gap: boolean;
-  is_active: boolean;
-  total_tokens: number;
-  cost: number;
-  burn_rate_tpm: number | null;
-  projection: number | null;
-}
-
-export interface ClaudeAccountBlock {
-  account_key: string;
-  label: string;
-  active: UsageBlock | null;
-  recent: UsageBlock[];
-  limit_p90: number | null;
-  partial: boolean;
-}
-
 export interface UsageDashboard {
   kpi: {
     month_value: number;
@@ -353,14 +333,6 @@ export interface UsageDashboard {
     codex_cache_hit_rate: number | null;
     net_roi: number;
     subscriptions_total: number;
-  };
-  blocks: {
-    claude: { accounts: ClaudeAccountBlock[] };
-    codex: {
-      primary?: { used_percent: number; window_minutes: number; resets_at: number };
-      secondary?: { used_percent: number; window_minutes: number; resets_at: number };
-      plan_type?: string;
-    };
   };
   daily: { date: string; by_model: Record<string, number>; total: number }[];
   models: {
@@ -406,6 +378,27 @@ export async function fetchUsageDashboard(
   // 防 error-only 200 炸 React 樹（後端掃描失敗仍回 200 但無 kpi）
   if (!j.kpi) throw new Error(j?.scan_meta?.error ?? "scan failed");
   return j;
+}
+
+// --- Codex 實時額度（獨立端點；節奏由前端控制，design：開啟即抓/15min/重開強制重抓）---
+export interface CodexUsageWindow {
+  used_percent: number;
+  window_minutes: number | null;
+  resets_at: number | null;
+}
+export interface CodexUsage {
+  source: "live" | "unavailable";
+  observed_at: number | null;
+  failure_reason?: "no_auth" | "unauthorized" | "network" | "bad_response";
+  plan_type?: string | null;
+  primary?: CodexUsageWindow;
+  secondary?: CodexUsageWindow;
+}
+
+export async function fetchCodexUsage(port: number): Promise<CodexUsage> {
+  const resp = await fetch(`${base(port)}/usage/codex`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()) as CodexUsage;
 }
 
 // ── 記憶層 ──
