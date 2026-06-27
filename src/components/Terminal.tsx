@@ -18,6 +18,9 @@ import { readText as tauriReadText } from "@tauri-apps/plugin-clipboard-manager"
 import { formatPathsForPaste } from "../lib/dropPath";
 import { registerTerminal, unregisterTerminal } from "../lib/terminalRegistry";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { homeDir } from "@tauri-apps/api/path";
+import { linksInLine, strIndexToColumn } from "../lib/terminalLinks";
 
 // WebGL kill switch：Tahoe WebKit 有破圖前例（xterm#5816），驗收若中獎改 false 一鍵退 DOM
 const ENABLE_WEBGL = true;
@@ -63,9 +66,10 @@ interface TerminalProps {
   sessionId: string;
   tabId: string;
   isActive: boolean;
+  projectPath?: string; // 用於把終端機輸出裡的相對路徑解析成絕對路徑（Cmd+click 開連結）
 }
 
-export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
+export function Terminal({ port, sessionId, tabId, isActive, projectPath }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const isActiveRef = useRef(isActive);
@@ -74,6 +78,11 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
   // 該終端機是否正在 IME 組字（供 dnd drop 的 §8.4 gate；compositionstart/end 切換）
   const composingRef = useRef(false);
+  // Cmd+click 開連結用：home（~/ 展開＋containment）、修飾鍵是否按住、專案根（相對路徑基準）
+  const homeRef = useRef<string | null>(null);
+  const linkModHeldRef = useRef(false);
+  const projectPathRef = useRef(projectPath);
+  projectPathRef.current = projectPath; // render body 同步（比照 isActiveRef，無 gap）
   const { t } = useTranslation("sidebar");
   // 右鍵選單狀態（per-terminal）：座標 + 當下是否有選取（決定要不要放「複製」項）
   const [menu, setMenu] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null);
@@ -141,6 +150,11 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
 
   const setTabStatus = useAppStore((s) => s.setTabStatus);
 
+  // home 目錄抓一次（連結偵測的 ~/ 展開與 containment 用）；失敗則 URL 仍可用、路徑連結略過
+  useEffect(() => {
+    homeDir().then((h) => { homeRef.current = h.replace(/\/+$/, ""); }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -160,6 +174,43 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(containerRef.current);
+
+    // ── Cmd+click 開連結（iTerm2 風格）──────────────────────────────
+    // 修飾鍵閘控：Mac 用 Meta(⌘)、其餘用 Ctrl。未按住時 provideLinks 回 undefined＝
+    // 不顯示底線、不奪點擊（選字照常）；按住才浮現底線+手指游標、點擊開啟。
+    const linkMod = navigator.platform.toLowerCase().includes("mac") ? "Meta" : "Control";
+    const onLinkModDown = (e: KeyboardEvent) => { if (e.key === linkMod) linkModHeldRef.current = true; };
+    const onLinkModUp = (e: KeyboardEvent) => { if (e.key === linkMod) linkModHeldRef.current = false; };
+    const onLinkModReset = () => { linkModHeldRef.current = false; }; // 失焦時鬆開保險
+    window.addEventListener("keydown", onLinkModDown);
+    window.addEventListener("keyup", onLinkModUp);
+    window.addEventListener("blur", onLinkModReset);
+
+    const linkProvider = term.registerLinkProvider({
+      provideLinks(y, callback) {
+        if (!linkModHeldRef.current) { callback(undefined); return; } // 未按修飾鍵＝不奪點擊
+        const line = term.buffer.active.getLine(y - 1);
+        const text = line?.translateToString();
+        if (!line || !text) { callback(undefined); return; }
+        // home 缺（homeDir 失敗）時 linksInLine 只回 URL、跳過檔案路徑
+        const found = linksInLine(text, { home: homeRef.current ?? undefined, projectPath: projectPathRef.current });
+        if (found.length === 0) { callback(undefined); return; }
+        callback(found.map((l) => ({
+          // 字串索引→欄位（全形字校正）；xterm range 1-based、含端點
+          range: {
+            start: { x: strIndexToColumn(line, l.start) + 1, y },
+            end: { x: strIndexToColumn(line, l.end - 1) + 1, y },
+          },
+          text: text.slice(l.start, l.end),
+          decorations: { underline: true, pointerCursor: true },
+          activate: (ev: MouseEvent) => {
+            // 二次確認修飾鍵（防 provide→click 之間鬆開）
+            if (linkMod === "Meta" ? !ev.metaKey : !ev.ctrlKey) return;
+            (l.kind === "url" ? openUrl(l.target) : revealItemInDir(l.target)).catch(() => {});
+          },
+        })));
+      },
+    });
 
     // 機制 A 重放攔截。listener 掛 container 的 capture phase（第三參數 true）是攔截成立的前提：
     // 同一 target 上的 listener 按註冊序執行、xterm 在 term.open() 已先在 textarea 註冊，
@@ -459,6 +510,10 @@ export function Terminal({ port, sessionId, tabId, isActive }: TerminalProps) {
       imeContainer.removeEventListener("contextmenu", onContextMenuEvent);
       imeGhost.remove();
       window.removeEventListener("blur", onImeWinBlur);
+      window.removeEventListener("keydown", onLinkModDown);
+      window.removeEventListener("keyup", onLinkModUp);
+      window.removeEventListener("blur", onLinkModReset);
+      linkProvider.dispose();
       unregisterTerminal(tabId);
       term.dispose();
       clearActivity(tabId);
