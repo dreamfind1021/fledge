@@ -113,7 +113,7 @@
 /* ── 窗口列 ── */
 .dash-windows {
   display: grid;
-  grid-template-columns: 1.25fr 1fr;
+  grid-template-columns: 1fr;
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -284,6 +284,13 @@
   margin-bottom: 14px;
 }
 .dash-row > .dash-panel {
+  margin-bottom: 0;
+}
+/* 每日成本（寬）+ Codex 額度（窄）同一行 */
+.dash-row-usage {
+  grid-template-columns: 1.5fr 1fr;
+}
+.dash-row-usage > .dash-windows {
   margin-bottom: 0;
 }
 

@@ -46,6 +46,6 @@ def test_cold_scan_synthetic_fixture(tmp_path: Path):
     from fledge_sidecar.usage.aggregator import build_dashboard
     now = max(e.ts for e in r.entries) + 60
     t0 = time.monotonic()
-    payload = build_dashboard(r.entries, None, [], now=now)
+    payload = build_dashboard(r.entries, [], now=now)
     assert time.monotonic() - t0 < 0.5, "build_dashboard 超標"
     assert payload["daily"], "fixture 條目應落在 horizon 內（計時才有效）"

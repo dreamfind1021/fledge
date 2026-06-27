@@ -1,16 +1,35 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { fetchUsageDashboard, UsageDashboard } from "../lib/sidecar";
-import { shouldPoll, POLL_INTERVAL_MS } from "../lib/usagePoll";
-import { fmtUSD, fmtPct, fmtTokens, fmtClock, fmtDayClock } from "../lib/usageFormat";
-import { donutParts, claudeAccountRow } from "../lib/dashboardLogic";
+import { fetchUsageDashboard, fetchCodexUsage, UsageDashboard, CodexUsage, CodexUsageWindow } from "../lib/sidecar";
+import { shouldPoll, POLL_INTERVAL_MS, CODEX_USAGE_INTERVAL_MS } from "../lib/usagePoll";
+import { fmtUSD, fmtPct, fmtDayClock } from "../lib/usageFormat";
+import { donutParts } from "../lib/dashboardLogic";
 import "./Dashboard.css";
 
 export default function Dashboard({ port, isActive }: { port: number; isActive: boolean }) {
   const { t } = useTranslation("dashboard");
   const [data, setData] = useState<UsageDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [codex, setCodex] = useState<CodexUsage | null>(null);
   const timer = useRef<number | null>(null);
+
+  // Codex 實時額度（獨立節奏，不隨 30s 檔案掃描）：開啟即抓、開著每 15 分鐘、
+  // 重開（isActive→true 重跑 effect）強制重抓、沒在看不抓。後端 60s floor 防爆量。
+  useEffect(() => {
+    if (!isActive) return;
+    let cancelled = false;
+    const load = async () => {
+      if (document.hidden) return;
+      try { const c = await fetchCodexUsage(port); if (!cancelled) setCodex(c); }
+      // sidecar 不可達（transport 失敗）→ 切 unavailable，不續顯陳舊 gauge（Codex 審查 finding #3）
+      catch { if (!cancelled) setCodex({ source: "unavailable", failure_reason: "network", observed_at: null }); }
+    };
+    load();
+    const id = window.setInterval(load, CODEX_USAGE_INTERVAL_MS);
+    const onVis = () => { if (!document.hidden) load(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { cancelled = true; clearInterval(id); document.removeEventListener("visibilitychange", onVis); };
+  }, [port, isActive]);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,8 +76,10 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
         <div className="dash-warn">{t("state.missingPricing", { count: data.scan_meta.missing_pricing.length })}</div>
       )}
       <KpiBar kpi={data.kpi} t={t} />
-      <WindowsPanel blocks={data.blocks} t={t} />
-      <DailyChart daily={data.daily} t={t} />
+      <div className="dash-row dash-row-usage">
+        <DailyChart daily={data.daily} t={t} />
+        <CodexPanel codex={codex} t={t} />
+      </div>
       <div className="dash-row">
         <ModelDonut models={data.models} t={t} />
         <HourlyHeatmap hourly={data.hourly} t={t} />
@@ -101,62 +122,38 @@ function KpiBar({ kpi, t }: { kpi: UsageDashboard["kpi"]; t: T }) {
   );
 }
 
-function WindowsPanel({ blocks, t }: { blocks: UsageDashboard["blocks"]; t: T }) {
-  const cx = blocks.codex;
-  const now = Date.now() / 1000;
-  // 防 schema skew/後端 regression 把 accounts 漏掉時整個 dashboard 白屏（type 雖保證、runtime 防衛）
-  const accounts = blocks.claude.accounts ?? [];
+function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
+  const live = codex?.source === "live" ? codex : null;
+  // 失敗不端陳舊數字（會重現原失準 bug）：依 failure_reason 誠實顯示「不可用／需重新登入」
+  const reauth = codex?.failure_reason === "unauthorized" || codex?.failure_reason === "no_auth";
   return (
     <div className="dash-windows">
       <div className="dash-win-card">
-        <div className="dash-win-title">{t("windows.claude")}</div>
-        {accounts.length === 0 && (
-          <div className="dash-win-meta">{t("state.empty")}</div>
+        <div className="dash-win-title">
+          {t("windows.codex")}
+          {live?.plan_type ? <span className="dash-badge">{live.plan_type}</span> : null}
+        </div>
+        {live?.primary ? (<>
+          <Gauge label={t("windows.fiveHour")} win={live.primary} t={t} />
+          {live.secondary && <Gauge label={t("windows.weekly")} win={live.secondary} t={t} />}
+        </>) : (
+          <div className="dash-win-meta">
+            {t(reauth ? "windows.codexReauth" : "windows.codexUnavailable")}
+          </div>
         )}
-        {accounts.map((acc) => {
-          const r = claudeAccountRow(acc, now);
-          return (
-            <div className="dash-win-acct" key={acc.account_key}>
-              <div className="dash-win-acct-label">
-                {r.label}
-                {r.partial && <span className="dash-est-badge">{t("windows.partialEstimate")}</span>}
-              </div>
-              {r.empty ? (
-                <div className="dash-win-meta">{t("state.empty")}</div>
-              ) : (<>
-                {r.showBar && (
-                  <div className="dash-bar"><i style={{ width: `${Math.round((r.pct ?? 0) * 100)}%` }} /></div>
-                )}
-                <div className="dash-win-meta">
-                  <span><b>{fmtTokens(r.used)}</b>{r.limit != null ? ` / ${fmtTokens(r.limit)}` : ""}</span>
-                  {r.burnRate != null && <span>{t("windows.burnRate", { rate: fmtTokens(Math.round(r.burnRate)) })}</span>}
-                  {r.endTs != null && <span>{t("windows.claudeReset", { time: fmtClock(r.endTs) })}</span>}
-                  {!r.showBar && <span>{t("windows.limitSampling")}</span>}
-                </div>
-              </>)}
-            </div>
-          );
-        })}
-      </div>
-      <div className="dash-win-card">
-        <div className="dash-win-title">{t("windows.codex")}{cx.plan_type ? <span className="dash-badge">{cx.plan_type}</span> : null}</div>
-        {cx.primary ? (<>
-          <Gauge label={t("windows.fiveHour")} pct={cx.primary.used_percent}
-                 resets={t("windows.resets", { time: fmtDayClock(cx.primary.resets_at, t("time.yesterday")) })} />
-          {cx.secondary && <Gauge label={t("windows.weekly")} pct={cx.secondary.used_percent}
-                 resets={t("windows.resets", { time: fmtDayClock(cx.secondary.resets_at, t("time.yesterday")) })} />}
-        </>) : <div className="dash-win-meta">{t("state.empty")}</div>}
       </div>
     </div>
   );
 }
 
-function Gauge({ label, pct, resets }: { label: string; pct: number; resets: string }) {
+function Gauge({ label, win, t }: { label: string; win: CodexUsageWindow; t: T }) {
+  const resets = win.resets_at != null
+    ? t("windows.resets", { time: fmtDayClock(win.resets_at, t("time.yesterday")) }) : "";
   return (
     <div className="dash-gauge">
       <span className="dash-gauge-label">{label}</span>
-      <div className="dash-bar is-codex"><i style={{ width: `${Math.min(100, pct)}%` }} /></div>
-      <span className="dash-gauge-meta">{Math.round(pct)}% · {resets}</span>
+      <div className="dash-bar is-codex"><i style={{ width: `${Math.min(100, win.used_percent)}%` }} /></div>
+      <span className="dash-gauge-meta">{Math.round(win.used_percent)}%{resets ? ` · ${resets}` : ""}</span>
     </div>
   );
 }

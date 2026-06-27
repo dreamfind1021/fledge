@@ -11,10 +11,8 @@ from pathlib import Path
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from fledge_sidecar.api.codex_usage import fetch_codex_usage
 from fledge_sidecar.app_config import AppConfig, default_config_path
-from fledge_sidecar.paths import resolve_best_effort
-from fledge_sidecar.routes.sessions import live_session_ids
-from fledge_sidecar.usage import account_activity
 from fledge_sidecar.usage.aggregator import build_dashboard
 from fledge_sidecar.usage.cache import UsageCache
 from fledge_sidecar.usage.scanner import _scan_claude, codex_files
@@ -24,13 +22,21 @@ router = APIRouter()
 
 SCAN_TIMEOUT = 120.0
 STALE_AFTER = 25.0   # 上次掃描超過此秒數才再觸發（30s 輪詢 → 每輪都新鮮）
+# Codex 實時額度後端合併 floor：前端 force-on-open 可能因多視窗/重掛短時間多次觸發，
+# 此 floor 內沿用快取、不重打未公開端點（Codex 對抗式審查 finding #1）
+CODEX_USAGE_MIN_INTERVAL_SEC = 60.0
+# 失敗結果用遠短的 TTL——使用者登入 codex 後能很快恢復（finding #2）
+CODEX_USAGE_FAIL_INTERVAL_SEC = 10.0
 
 _state: dict = {}
+_codex_state: dict = {}        # {result, fetched_at}——codex 實時額度的合併快取
+_codex_lock = asyncio.Lock()   # 序列化冷啟並發 miss：先進者填快取、後到者沿用（finding #1）
 
 
 def reset_state_for_tests() -> None:
     """測試隔離：清掉模組級 snapshot/lock。"""
     _state.clear()
+    _codex_state.clear()
 
 
 def _codex_home() -> Path:
@@ -50,34 +56,12 @@ def _scan_sync(days: int) -> dict:
     if cache is None:   # 不用 setdefault——其 default 是 eager 求值，會每輪重建並整份重讀 L2
         cache = _state["cache"] = UsageCache(l2_path=_l2_path())
     t0 = time.monotonic()
-    cl, account_map = _scan_claude(config)
+    cl, _ = _scan_claude(config)
     cx = codex_files(_codex_home())
     r = cache.refresh(claude=cl, codex=cx)
     now = time.time()
-    # 逐 UsageEntry 按活動 log 區間歸屬（account_activity.attribute）；涵蓋不到 fallback
-    # 到 scanner canonical（account_map）並標 partial。
-    spans = account_activity.load_sessions(now, live_session_ids())
-    by_account: dict[str, list] = {}
-    partial: dict[str, bool] = {}
-    for rp, file_entries in r.claude_by_file.items():
-        canon = account_map.get(rp)              # scanner canonical（fallback）
-        for e in file_entries:
-            proj = (e.project or "").strip()
-            acct = (account_activity.attribute(spans, resolve_best_effort(proj), e.ts)
-                    if os.path.isabs(proj) else None)   # 只對絕對 cwd attribute（防誤命中）
-            if acct is None:                     # 涵蓋不到 / 非絕對 cwd → fallback canonical
-                acct = canon
-                if acct is not None:
-                    partial[acct] = True
-            if acct is None:
-                continue
-            by_account.setdefault(acct, []).append(e)
-    labels = {k: v.get("label", k) for k, v in config.accounts.items()}
-    payload = build_dashboard(r.entries, r.codex_rate_limits,
-                              config.subscriptions, now=now, days=days,
-                              roots=[r["path"] for r in config.roots],
-                              claude_entries_by_account=by_account, account_labels=labels,
-                              account_partial=partial)
+    payload = build_dashboard(r.entries, config.subscriptions, now=now, days=days,
+                              roots=[r["path"] for r in config.roots])
     payload["scan_meta"].update({
         "state": "ok", "generation": r.generation, "files": r.total_files,
         "skipped_lines": r.skipped_lines, "scanned_at": now, "error": None,
@@ -143,3 +127,31 @@ async def usage_dashboard(days: int = 30):
         meta["error"] = _state["error"]
     out["scan_meta"] = meta
     return out
+
+
+def _codex_floor_fresh(now: float) -> bool:
+    """快取是否仍在 floor 內（live 用 60s、失敗用 10s——失敗快恢復）。"""
+    res = _codex_state.get("result")
+    if res is None:
+        return False
+    floor = (CODEX_USAGE_MIN_INTERVAL_SEC if res.get("source") == "live"
+             else CODEX_USAGE_FAIL_INTERVAL_SEC)
+    return now - _codex_state.get("fetched_at", 0.0) < floor
+
+
+@router.get("/usage/codex")
+async def usage_codex():
+    """Codex 實時額度（live）。節奏由前端控制（開啟即抓、開著每 15 分鐘、重開強制重抓）；
+    後端以 source-aware floor 合併爆量請求。失敗回 typed unavailable，**不 fallback 陳舊本地快照**
+    （會重現原失準 bug）——前端據 source/failure_reason 誠實呈現。"""
+    if _codex_floor_fresh(time.time()):
+        return _codex_state["result"]
+    # 取鎖後重檢——冷啟並發 miss 由先進者填快取、後到者直接沿用，不各打一次上游（finding #1）
+    async with _codex_lock:
+        if _codex_floor_fresh(time.time()):
+            return _codex_state["result"]
+        now = time.time()
+        result = await asyncio.to_thread(fetch_codex_usage, _codex_home(), now)
+        _codex_state["result"] = result
+        _codex_state["fetched_at"] = now
+        return result
