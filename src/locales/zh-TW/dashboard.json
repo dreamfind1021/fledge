@@ -1,6 +1,6 @@
 {
   "tabTitle": "數據儀表板",
-  "entry": "數據儀表板",
+  "entry": "數據使用情況",
   "time": { "yesterday": "昨天" },
   "kpi": { "month": "本月等價 API 價值", "week": "本週", "today": "今日",
            "cacheHit": "Cache 命中率", "netRoi": "Net ROI", "subs": "訂閱月費" },

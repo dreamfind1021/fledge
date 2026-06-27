@@ -1,6 +1,6 @@
 {
   "tabTitle": "Data Dashboard",
-  "entry": "Data Dashboard",
+  "entry": "Data Usage",
   "time": { "yesterday": "Yesterday" },
   "kpi": { "month": "Month API value", "week": "This week", "today": "Today",
            "cacheHit": "Cache hit rate", "netRoi": "Net ROI", "subs": "Subscriptions" },

@@ -76,8 +76,10 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
         <div className="dash-warn">{t("state.missingPricing", { count: data.scan_meta.missing_pricing.length })}</div>
       )}
       <KpiBar kpi={data.kpi} t={t} />
-      <CodexPanel codex={codex} t={t} />
-      <DailyChart daily={data.daily} t={t} />
+      <div className="dash-row dash-row-usage">
+        <DailyChart daily={data.daily} t={t} />
+        <CodexPanel codex={codex} t={t} />
+      </div>
       <div className="dash-row">
         <ModelDonut models={data.models} t={t} />
         <HourlyHeatmap hourly={data.hourly} t={t} />
