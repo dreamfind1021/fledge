@@ -3,9 +3,17 @@ from fledge_sidecar.usage import pricing
 
 def test_normalize_claude_alias_and_suffix():
     assert pricing.normalize_claude_model("opus") == "claude-opus-4-8"
+    assert pricing.normalize_claude_model("sonnet") == "claude-sonnet-5"  # 裸別名指向最新 sonnet
     assert pricing.normalize_claude_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5"
     assert pricing.normalize_claude_model("claude-fable-5") == "claude-fable-5"
     assert pricing.normalize_claude_model("<synthetic>") is None  # 不可計價
+
+
+def test_claude_sonnet_5_priced_at_standard_rate():
+    # sonnet-5 用標準價 $3/$15（非促銷 $2/$10）：1M in + 1M out = 3 + 15
+    cost, missing = pricing.claude_cost("claude-sonnet-5", 1_000_000, 1_000_000, 0, 0, 0)
+    assert missing is False
+    assert abs(cost - 18.0) < 1e-9
 
 
 def test_claude_cost_per_mtok_with_cache_tiers():
