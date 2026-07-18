@@ -122,7 +122,8 @@ function KpiBar({ kpi, t }: { kpi: UsageDashboard["kpi"]; t: T }) {
   );
 }
 
-function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
+// export 僅供 render test（Dashboard.test.tsx）——app 內只由 Dashboard 使用
+export function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
   const live = codex?.source === "live" ? codex : null;
   // 失敗不端陳舊數字（會重現原失準 bug）：依 failure_reason 誠實顯示「不可用／需重新登入」
   const reauth = codex?.failure_reason === "unauthorized" || codex?.failure_reason === "no_auth";
