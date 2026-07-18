@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-07-01
+- **最後更新：** 2026-07-18
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -152,6 +152,13 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `scripts/build-app-devtools.sh` | 偵錯打包：sidecar + `tauri build --features devtools`（帶 Web Inspector，啟動自動開）；給「只有打包版重現、dev 正常」的 bug 蒐證用。`npm run build:app:devtools`。正式 build 不帶 feature、不外洩 devtools |
 | `sidecar/pyproject.toml` | Python 依賴與測試設定 |
 | `vitest.config.ts` | 前端 vitest 設定（store lifecycle 測試） |
+
+### docs/agents/ — Agent skills 設定（mattpocock engineering skills 讀取）
+| 檔案 | 用途 |
+|------|------|
+| `issue-tracker.md` | Issue 追蹤方式：local markdown（`.scratch/<feature-slug>/`，已 gitignore），一張 ticket 一個檔、`Status:` 行記 triage 狀態 |
+| `triage-labels.md` | 五個 triage label 對應表（沿用預設字串） |
+| `domain.md` | Domain 文件讀取規則：single-context（根目錄 `CONTEXT.md` + `docs/adr/`，由 skills 惰性建立） |
 
 ---
 
