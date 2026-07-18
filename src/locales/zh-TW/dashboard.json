@@ -6,6 +6,7 @@
            "cacheHit": "Cache 命中率", "netRoi": "Net ROI", "subs": "訂閱月費" },
   "windows": { "title": "用量窗口", "codex": "Codex（官方）",
                "resets": "{{time}} 重置", "weekly": "週窗口", "fiveHour": "5 小時",
+               "days": "{{n}} 天", "hours": "{{n}} 小時", "minutes": "{{n}} 分鐘",
                "codexUnavailable": "實時額度暫時無法取得", "codexReauth": "需重新登入 Codex 才能顯示額度" },
   "daily": { "title": "每日成本（{{days}} 天）" },
   "models": { "title": "模型分布" },

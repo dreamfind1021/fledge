@@ -15,6 +15,22 @@ def _write_claude(tmp_path: Path, name: str, n: int = 1) -> Path:
     return f
 
 
+def _write_codex(tmp_path: Path, name: str, model: str) -> Path:
+    lines = [
+        json.dumps({"type": "session_meta", "payload": {"id": "cs", "cwd": "/p"}}),
+        json.dumps({"type": "turn_context", "payload": {"model": model, "cwd": "/p"}}),
+        json.dumps({"timestamp": "2026-07-10T02:00:00.000Z", "type": "event_msg", "payload": {
+            "type": "token_count",
+            "info": {"total_token_usage": {"input_tokens": 1000, "cached_input_tokens": 400,
+                                           "output_tokens": 50, "total_tokens": 1050},
+                     "last_token_usage": {"input_tokens": 1000, "cached_input_tokens": 400,
+                                          "output_tokens": 50, "total_tokens": 1050}}}}),
+    ]
+    f = tmp_path / name
+    f.write_text("\n".join(lines), encoding="utf-8")
+    return f
+
+
 def test_refresh_parses_then_hits_cache(tmp_path: Path):
     f = _write_claude(tmp_path, "a.jsonl")
     cache = UsageCache(l2_path=tmp_path / "usage-v1.json")
@@ -53,6 +69,21 @@ def test_pricing_version_mismatch_reprices_without_reparse(tmp_path: Path, monke
     r = cache2.refresh(claude=[f], codex=[])
     assert r.parsed_files == 0                      # 不重 parse（design §9）
     assert abs(r.entries[0].cost - old_cost * 2) < 1e-12   # cost 已按新價重算
+
+
+def test_new_codex_model_stale_l2_repriced_without_reparse(tmp_path: Path, monkeypatch):
+    # 情境＝2026-07 bug：舊定價表不含 gpt-5.6-sol → L2 存了 missing 條目；
+    # 表補上 + 版本 bump 後，重啟只重算不重 parse、missing 警示消失
+    f = _write_codex(tmp_path, "rollout-z.jsonl", "gpt-5.6-sol")
+    l2 = tmp_path / "usage-v1.json"
+    with monkeypatch.context() as m:
+        m.delitem(pricing.CODEX_PRICING, "gpt-5.6-sol")
+        m.setattr(pricing, "PRICING_VERSION", "test.stale")
+        r0 = UsageCache(l2_path=l2).refresh(claude=[], codex=[f])
+        assert r0.entries[0].missing_pricing is True and r0.entries[0].cost == 0.0
+    r1 = UsageCache(l2_path=l2).refresh(claude=[], codex=[f])  # 現行表已含 gpt-5.6-sol
+    assert r1.parsed_files == 0
+    assert r1.entries[0].missing_pricing is False and r1.entries[0].cost > 0
 
 
 def test_generation_monotonic_and_atomic_write(tmp_path: Path):

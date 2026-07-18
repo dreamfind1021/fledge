@@ -55,3 +55,24 @@ def test_normalize_codex_size_variants_never_get_fullsize_price():
     assert pricing.normalize_codex_model("gpt-5-nano") == "gpt-5-nano"
     name = pricing.normalize_codex_model("gpt-5.5-mini")   # 表中無此款
     assert pricing.codex_cost(name, 1000, 0, 0) == (0.0, True)
+
+
+def test_normalize_codex_gpt56_tiers_have_own_price_bands():
+    # gpt-5.6 以 sol/terra/luna tier 命名＝各自獨立價格帶（LiteLLM 2026-07-18 釘價）
+    assert pricing.normalize_codex_model("gpt-5.6-sol") == "gpt-5.6-sol"
+    assert pricing.normalize_codex_model("gpt-5.6-terra-2026-07-09") == "gpt-5.6-terra"
+    # 三欄全鎖（in/cached/out）：1M in 含 0.4M cached + 0.1M out
+    for model, (p_in, p_cached, p_out) in [("gpt-5.6-sol", (5.0, 0.5, 30.0)),
+                                           ("gpt-5.6-terra", (2.5, 0.25, 15.0)),
+                                           ("gpt-5.6-luna", (1.0, 0.1, 6.0))]:
+        cost, missing = pricing.codex_cost(model, 1_000_000, 400_000, 100_000)
+        assert missing is False, model
+        assert abs(cost - (0.6 * p_in + 0.4 * p_cached + 0.1 * p_out)) < 1e-9, model
+
+
+def test_normalize_codex_tier_suffix_never_crosses_band():
+    # 未知 tier 款（表中無）不得 walk 到其他價格帶（比照 mini/nano 護欄）
+    name = pricing.normalize_codex_model("gpt-5.5-sol")
+    assert pricing.codex_cost(name, 1000, 0, 0) == (0.0, True)
+    # spark 刻意沿用 walk 映射 gpt-5.3——三欄同價（$1.75/$0.175/$14，2026-07-18 查證）
+    assert pricing.normalize_codex_model("gpt-5.3-codex-spark") == "gpt-5.3"

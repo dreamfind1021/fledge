@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { fetchUsageDashboard, fetchCodexUsage, UsageDashboard, CodexUsage, CodexUsageWindow } from "../lib/sidecar";
 import { shouldPoll, POLL_INTERVAL_MS, CODEX_USAGE_INTERVAL_MS } from "../lib/usagePoll";
-import { fmtUSD, fmtPct, fmtDayClock } from "../lib/usageFormat";
+import { fmtUSD, fmtPct, fmtDayClock, codexWindowLabel } from "../lib/usageFormat";
 import { donutParts } from "../lib/dashboardLogic";
 import "./Dashboard.css";
 
@@ -134,8 +134,9 @@ function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
           {live?.plan_type ? <span className="dash-badge">{live.plan_type}</span> : null}
         </div>
         {live?.primary ? (<>
-          <Gauge label={t("windows.fiveHour")} win={live.primary} t={t} />
-          {live.secondary && <Gauge label={t("windows.weekly")} win={live.secondary} t={t} />}
+          <Gauge label={winLabel(live.primary, "fiveHour", t)} win={live.primary} t={t} />
+          {live.secondary &&
+            <Gauge label={winLabel(live.secondary, "weekly", t)} win={live.secondary} t={t} />}
         </>) : (
           <div className="dash-win-meta">
             {t(reauth ? "windows.codexReauth" : "windows.codexUnavailable")}
@@ -144,6 +145,12 @@ function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
       </div>
     </div>
   );
+}
+
+// 標籤依實際 window_minutes 判定（API 曾把週窗改放 primary），位置只當 fallback
+function winLabel(win: CodexUsageWindow, fallback: "fiveHour" | "weekly", t: T): string {
+  const l = codexWindowLabel(win.window_minutes, fallback);
+  return "n" in l ? t(`windows.${l.key}`, { n: l.n }) : t(`windows.${l.key}`);
 }
 
 function Gauge({ label, win, t }: { label: string; win: CodexUsageWindow; t: T }) {
