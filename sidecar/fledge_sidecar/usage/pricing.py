@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-PRICING_VERSION = "2026-07-01.1"
+PRICING_VERSION = "2026-07-18.1"
 
 _MTOK = 1_000_000
 
@@ -41,12 +41,17 @@ CODEX_PRICING: dict[str, tuple[float, float, float]] = {
     "gpt-5-nano": (0.05, 0.005, 0.4),
     "gpt-5.4-mini": (0.75, 0.075, 4.5),
     "gpt-5.4-nano": (0.2, 0.02, 1.25),
+    # gpt-5.6 改用 sol/terra/luna tier 命名（LiteLLM 2026-07-18 釘價）——tier＝獨立價格帶；
+    # 刻意不加裸 "gpt-5.6"（＝sol 同價），否則未知 tier 會 walk 到它默默用 sol 價計
+    "gpt-5.6-sol": (5.0, 0.5, 30.0),
+    "gpt-5.6-terra": (2.5, 0.25, 15.0),
+    "gpt-5.6-luna": (1.0, 0.1, 6.0),
 }
 _CODEX_DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
-# 尺寸後綴是不同價格帶而非同系列變體——prefix walk 不得跨越，
-# 否則未知 mini/nano 會被默默用全尺寸價計（nano 差 25×），
+# 獨立價格帶後綴（尺寸 mini/nano、tier sol/terra/luna）不是同系列變體——prefix walk
+# 不得跨越，否則未知變體會被默默用其他價格帶計（nano 差 25×），
 # 違反 design §7 寧可標示不完整不默默算錯
-_CODEX_SIZE_SEGMENTS = {"mini", "nano"}
+_CODEX_SIZE_SEGMENTS = {"mini", "nano", "sol", "terra", "luna"}
 
 
 def normalize_claude_model(raw: str) -> str | None:
@@ -61,7 +66,7 @@ def normalize_claude_model(raw: str) -> str | None:
 def normalize_codex_model(raw: str) -> str:
     """去 ISO 日期後綴；再逐段去尾比對表 key（gpt-5.1-codex-max → gpt-5.1）。
 
-    去尾段若是尺寸後綴（mini/nano）則停止——未知尺寸款走 missing 而非錯價。
+    去尾段若是獨立價格帶後綴（mini/nano/sol/terra/luna）則停止——未知變體走 missing 而非錯價。
     """
     name = _CODEX_DATE_SUFFIX.sub("", raw)
     probe = name
@@ -72,7 +77,7 @@ def normalize_codex_model(raw: str) -> str:
             break
         probe, dropped = probe.rsplit("-", 1)
         if dropped in _CODEX_SIZE_SEGMENTS:
-            break  # 不跨尺寸帶：未知 mini/nano 款回 missing 而非走全尺寸價
+            break  # 不跨價格帶：未知獨立價格帶款（mini/nano/sol/terra/luna）回 missing 而非錯價
     return name  # 查無 → 保留原名，計價層回 missing
 
 

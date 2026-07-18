@@ -6,6 +6,7 @@
            "cacheHit": "Cache hit rate", "netRoi": "Net ROI", "subs": "Subscriptions" },
   "windows": { "title": "Usage windows", "codex": "Codex (official)",
                "resets": "Resets {{time}}", "weekly": "Weekly window", "fiveHour": "5-hour",
+               "days": "{{n}}-day", "hours": "{{n}}-hour", "minutes": "{{n}}-min",
                "codexUnavailable": "Live quota unavailable", "codexReauth": "Sign in to Codex again to see quota" },
   "daily": { "title": "Daily cost ({{days}} days)" },
   "models": { "title": "Model breakdown" },

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUSD, fmtPct, fmtTokens, fmtClock, fmtDayClock } from "./usageFormat";
+import { fmtUSD, fmtPct, fmtTokens, fmtClock, fmtDayClock, codexWindowLabel } from "./usageFormat";
 
 describe("usageFormat", () => {
   it("fmtUSD：常規/小額/零/負數", () => {
@@ -24,5 +24,21 @@ describe("usageFormat", () => {
     expect(fmtDayClock(now - 3600, "昨天", now, "UTC")).toBe("08:05");
     expect(fmtDayClock(now - 86400, "昨天", now, "UTC")).toBe("昨天 09:05");
     expect(fmtDayClock(now - 3 * 86400, "昨天", now, "UTC")).toBe("5/29 09:05");
+  });
+  it("codexWindowLabel：依實際分鐘數判定角色，不按位置", () => {
+    // 症狀 2 regression：2026-07 API 改版後唯一 primary 就是週窗，不得標成 5 小時
+    expect(codexWindowLabel(10080, "fiveHour")).toEqual({ key: "weekly" });
+    expect(codexWindowLabel(300, "weekly")).toEqual({ key: "fiveHour" });
+  });
+  it("codexWindowLabel：非標準分鐘數依整除規則→天/小時/分鐘", () => {
+    expect(codexWindowLabel(2880, "fiveHour")).toEqual({ key: "days", n: 2 });
+    expect(codexWindowLabel(720, "fiveHour")).toEqual({ key: "hours", n: 12 });
+    expect(codexWindowLabel(90, "fiveHour")).toEqual({ key: "minutes", n: 90 });
+  });
+  it("codexWindowLabel：無效值退回 fallback 角色", () => {
+    expect(codexWindowLabel(null, "weekly")).toEqual({ key: "weekly" });
+    expect(codexWindowLabel(0, "fiveHour")).toEqual({ key: "fiveHour" });
+    expect(codexWindowLabel(-60, "weekly")).toEqual({ key: "weekly" });
+    expect(codexWindowLabel(NaN, "fiveHour")).toEqual({ key: "fiveHour" });
   });
 });

@@ -22,6 +22,25 @@ export function fmtTokens(n: number): string {
   return String(n);
 }
 
+/** Codex 額度窗口的標籤角色。fiveHour/weekly 是已知窗口的固定文案 key；
+ *  其餘回帶數值的動態 key（days/hours/minutes），由呼叫端插值 i18n。 */
+export type WindowLabel =
+  | { key: "fiveHour" | "weekly" }
+  | { key: "days" | "hours" | "minutes"; n: number };
+
+/** 依實際 window_minutes 判定窗口角色——2026-07 Codex API 把週窗改放 primary、
+ *  secondary 變 null，角色不能按位置推定。無效值（null/0/負/NaN）退回呼叫端
+ *  指定的 fallback 角色；非標準分鐘數整除 1440→天、整除 60→小時、否則→分鐘。 */
+export function codexWindowLabel(minutes: number | null,
+                                 fallback: "fiveHour" | "weekly"): WindowLabel {
+  if (minutes == null || !Number.isFinite(minutes) || minutes <= 0) return { key: fallback };
+  if (minutes === 300) return { key: "fiveHour" };
+  if (minutes === 10080) return { key: "weekly" };
+  if (minutes % 1440 === 0) return { key: "days", n: minutes / 1440 };
+  if (minutes % 60 === 0) return { key: "hours", n: minutes / 60 };
+  return { key: "minutes", n: minutes };
+}
+
 /** epoch 秒 → HH:mm；可注入 timeZone 讓測試結果不受本機時區影響。 */
 export function fmtClock(epochSec: number, timeZone?: string): string {
   return new Date(epochSec * 1000).toLocaleTimeString("en-GB", {
