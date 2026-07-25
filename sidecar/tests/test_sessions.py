@@ -439,3 +439,51 @@ def test_spawn_failure_records_close(tmp_path, monkeypatch):
     closes = [e for e in events if e["event"] == "close"]
     assert len(opens) == 1 and len(closes) == 1
     assert closes[0]["session"] == opens[0]["session"]
+
+
+def test_install_session_rejects_unknown_id(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.post("/api/sessions", json={
+        "path": str(tmp_path), "account": "work", "kind": "install",
+        "install_id": "rm-rf-slash",
+    })
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "unknown_install_id"
+
+
+def test_install_session_uses_allowlist_command_no_account_env(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    captured = {}
+
+    def _fake_create_session(**kwargs):
+        captured.update(kwargs)
+        class _S: session_id = "sess-install"
+        return _S()
+
+    from fledge_sidecar.routes import sessions as sr
+    monkeypatch.setattr(sr._bridge, "create_session", _fake_create_session)
+    # 用已知 id（node）；命令應來自 install_specs，而非請求帶入
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": str(tmp_path), "account": "work", "kind": "install", "install_id": "node",
+    })
+    assert resp.status_code == 200
+    # 命令是 [shell, "-lc", "brew install node"]，不是請求傳入的字串
+    assert captured["command"][-1] == "brew install node"
+    assert captured["command"][-2] == "-lc"
+    # 安裝 session：env_overrides 不含 CLAUDE_CONFIG_DIR，且要求移除它
+    assert "CLAUDE_CONFIG_DIR" not in captured["env_overrides"]
+    assert "CLAUDE_CONFIG_DIR" in (captured.get("env_remove") or [])
+    # 安裝跑在 home、不在專案目錄；不傳 account（不歸屬）（plan review #5）
+    assert captured["cwd"] == str(Path.home())
+    assert captured["project_path"] == str(tmp_path)
+    assert "account" not in captured
+
+
+def test_session_rejects_unknown_field_fail_closed(tmp_path: Path, monkeypatch):
+    # spec §9 驗收：注入 raw command 應被拒（extra="forbid" → 422），plan review #1
+    _write_config(tmp_path, monkeypatch)
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": str(tmp_path), "account": "work", "command": "rm -rf /",
+    })
+    assert resp.status_code == 422

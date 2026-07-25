@@ -12,11 +12,12 @@ from typing import Literal
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from fledge_sidecar.app_config import AppConfig
 from fledge_sidecar.auth import require_ws_token
 from fledge_sidecar.pty_bridge import PtyBridge
+from fledge_sidecar.setup.install_specs import get_install_command
 from fledge_sidecar.usage import account_activity
 
 logger = logging.getLogger(__name__)
@@ -50,14 +51,20 @@ def close_all_sessions() -> None:
 
 
 class CreateSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # 未知欄位（如注入 "command"）→ 422
     path: str
-    account: str
-    kind: Literal["claude", "terminal"] = "claude"
+    account: str = ""  # install kind 不需帳號；其餘 kind 會驗證
+    kind: Literal["claude", "terminal", "install"] = "claude"  # login 由 05 票加入
+    install_id: str | None = None   # kind=install 必填
 
 
 class ResizeRequest(BaseModel):
     rows: int
     cols: int
+
+
+def _login_shell() -> str:
+    return os.environ.get("SHELL") or "/bin/zsh"
 
 
 def _resolve_command(kind: str = "claude") -> list[str]:
@@ -98,6 +105,22 @@ def _apply_flow_control(text: str, flow_gate: asyncio.Event) -> None:
 @router.post("/api/sessions")
 def create_session(req: CreateSessionRequest):
     config = AppConfig.load()
+
+    # --- kind=install：allowlist 命令、最小 env（不帶 CLAUDE_CONFIG_DIR），不歸屬 ---
+    if req.kind == "install":
+        cmd = get_install_command(req.install_id)
+        if cmd is None:
+            return JSONResponse(status_code=400, content={"error": "unknown_install_id"})
+        session = _bridge.create_session(
+            command=[_login_shell(), "-lc", cmd],
+            cwd=str(Path.home()),
+            env_overrides={},                      # 不注入帳號 env
+            env_remove=["CLAUDE_CONFIG_DIR"],      # 即便 sidecar 自身環境有，也移除
+            project_path=req.path,
+        )
+        return {"session_id": session.session_id, "ws_url": f"/ws/{session.session_id}"}
+
+    # --- 其餘 kind 需要合法帳號 ---
     if req.account not in config.accounts:        # 驗證帳號合法（不 spawn 偽造/拼錯 key）
         return JSONResponse(status_code=400, content={"error": "unknown_account"})
     account = config.accounts[req.account]

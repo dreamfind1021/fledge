@@ -39,6 +39,7 @@ class PtyBridge:
         project_path: str = "",
         account: str = "",
         session_id: str | None = None,
+        env_remove: list[str] | None = None,
     ) -> Session:
         # claude 等 TUI 用 supports-color 偵測顏色：pty 的 isatty 為真，但 TERM/COLORTERM
         # 皆未設時仍判定為無色（GUI 啟動的 sidecar 不繼承 terminal 的 TERM，整個終端機會變全黑白）。
@@ -55,6 +56,9 @@ class PtyBridge:
         # 從最終合併 env 剔除 sidecar 自己的 auth secret 與內部協定變數，不灌進子進程
         # （claude 與使用者 terminal shell 都不該看到）。
         for _k in ("FLEDGE_TOKEN", "FLEDGE_TEST_UNAUTH", "FLEDGE_PORT"):
+            env.pop(_k, None)
+        # 呼叫端要求額外移除的 key（安裝 session 移除 CLAUDE_CONFIG_DIR，spec §6.2）
+        for _k in (env_remove or ()):
             env.pop(_k, None)
         pty = PtyProcess.spawn(command, cwd=cwd, env=env)
         session_id = session_id or uuid.uuid4().hex
