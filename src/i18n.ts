@@ -24,6 +24,9 @@ i18n.use(initReactI18next).init({
   fallbackLng: "en",
   defaultNS: "dashboard",
   interpolation: { escapeValue: false }, // React 已 escape
+  // <Trans> 直接還原的語意標籤（i18n-design §2.3：catalog 只放語意標記、樣式一律留在 CSS）。
+  // 預設清單是 br/strong/i/p，這裡多加 code——引導文案要標示路徑與指令字面值。
+  react: { transKeepBasicHtmlNodesFor: ["br", "strong", "i", "p", "code"] },
 });
 
 // `index.html` 的 lang 是靜態 en：這裡與切換時同步真實語言，字型／斷行／螢幕閱讀器才吃得到
