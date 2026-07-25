@@ -51,7 +51,8 @@ export function Onboarding({ onClose }: OnboardingProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
 
   const steps = wizardSteps(accountKeys.length);
-  // 帳號數改變會讓序列縮短，state 裡的舊索引可能超界 → 每次 render 都夾一次
+  // 夾取只為擋住兩端越界（首頁上一步、末頁下一步）。精靈內帳號數不變，序列不會中途縮短，
+  // 故不需要「索引 → step 語意」的重新定位，詳見 onboardingSteps.clampStepIndex 註解。
   const index = clampStepIndex(stepIndex, steps.length);
   const step = steps[index];
 
@@ -120,7 +121,13 @@ export function Onboarding({ onClose }: OnboardingProps) {
       setConfigCreated(true);
       next();
     } catch (e) {
-      setError(t("errors.onboard_failed", { reason: String(e) })); // onboard 409/400/連線錯誤要可見（Codex final review L2）
+      // completeOnboarding 是兩步：onboard 落檔 → 重載專案清單。後半失敗也會走到這裡，但設定檔
+      // 已經寫進去且不可逆——誤判成未落檔的話，使用者再按一次只會撞 409 死循環。用 store config
+      // 對帳：onboard 成功會把 config 換成帶 is_first_run:false 的回應，失敗則原封不動。
+      const saved = useAppStore.getState().config?.is_first_run !== true;
+      if (saved) setConfigCreated(true);
+      // onboard 409/400/連線錯誤要可見（Codex final review L2）；已落檔時不能謊稱寫入失敗
+      setError(t(saved ? "errors.projects_reload_failed" : "errors.onboard_failed", { reason: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -144,7 +151,9 @@ export function Onboarding({ onClose }: OnboardingProps) {
           </div>
         )}
 
-        {/* 品牌 header：每一頁都顯示 */}
+        {/* 品牌 header：每一頁都顯示。三段品牌字串刻意不進 catalog、兩語都顯示英文原文
+            （§4.6.13 記錄例外，比照 memory.json 的 type enum 與 LangSwitch 的語言 autonym）——
+            hi-fi demo 也沒給這兩句 data-t，等同視覺定案把它們當品牌識別而非介面文案。 */}
         <div className="ob-logo">
           <FeatherMark size={46} />
           <span className="ob-logo-name">Fledge</span>

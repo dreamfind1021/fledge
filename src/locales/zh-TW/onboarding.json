@@ -114,6 +114,7 @@
     "not_dir": "這不是資料夾",
     "denied": "部分資料夾無法讀取，請到系統設定授權",
     "scan_failed": "掃描失敗：{{reason}}",
-    "onboard_failed": "設定寫入失敗：{{reason}}"
+    "onboard_failed": "設定寫入失敗：{{reason}}",
+    "projects_reload_failed": "設定已建立，但專案清單載入失敗：{{reason}}"
   }
 }

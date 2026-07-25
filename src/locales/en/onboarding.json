@@ -114,6 +114,7 @@
     "not_dir": "That's not a folder",
     "denied": "Some folders couldn't be read — grant access in System Settings",
     "scan_failed": "Scan failed: {{reason}}",
-    "onboard_failed": "Couldn't save your settings: {{reason}}"
+    "onboard_failed": "Couldn't save your settings: {{reason}}",
+    "projects_reload_failed": "Your settings were saved, but the project list failed to load: {{reason}}"
   }
 }

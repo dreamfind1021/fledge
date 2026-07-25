@@ -76,6 +76,49 @@ describe("Onboarding 精靈外殼", () => {
     expect(onboardCalls).toBe(1);
   });
 
+  // store 的 completeOnboarding 是兩步：onboard 落檔（不可逆）→ loadProjects。後半失敗會讓整個
+  // await reject，但設定檔已經寫進去了——誤判成未落檔的話，使用者再按一次只會撞 409 死循環。
+  it("onboard 已落檔、專案重載才失敗：訊息據實以告，再按不重打 onboard", async () => {
+    useAppStore.setState({
+      completeOnboarding: async () => {
+        onboardCalls += 1;
+        useAppStore.setState({ config: { ...baseConfig, is_first_run: false } }); // 落檔已生效
+        throw new Error("fetchProjects failed: 500");
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachRootsWithDraft(ui);
+
+    ui.getByText(zh.roots.next).click();
+
+    // 停在根目錄頁但已認得落檔：錯誤文案不得說「設定寫入失敗」
+    await waitFor(() => expect(ui.getByText(zh.roots.created)).toBeTruthy());
+    expect(ui.container.textContent).toContain("fetchProjects failed: 500");
+    expect(ui.queryByText(/設定寫入失敗/)).toBeNull();
+
+    ui.getByText(zh.common.next).click(); // 主按鈕已轉為單純前進
+    await waitFor(() => expect(ui.getByText(zh.env.h)).toBeTruthy());
+    expect(onboardCalls).toBe(1);
+  });
+
+  it("onboard 本身失敗（config 未更新）：仍視為未落檔，可重試", async () => {
+    useAppStore.setState({
+      completeOnboarding: async () => {
+        onboardCalls += 1;
+        throw new Error("onboard failed: 400"); // config 未被 set，store 仍是 is_first_run:true
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachRootsWithDraft(ui);
+
+    ui.getByText(zh.roots.next).click();
+    await waitFor(() => expect(ui.getByText(/設定寫入失敗/)).toBeTruthy());
+    expect(ui.getByText(zh.roots.next)).toBeTruthy(); // 主按鈕仍是「建立設定並繼續」
+
+    ui.getByText(zh.roots.next).click(); // 重試會真的再打一次
+    await waitFor(() => expect(onboardCalls).toBe(2));
+  });
+
   it("單帳號少一頁：登入頁的下一步直接到系統設置，不經共通設置", async () => {
     useAppStore.setState({ config: { ...baseConfig, accounts: { work: account } } });
     const ui = render(<Onboarding onClose={onClose} />);

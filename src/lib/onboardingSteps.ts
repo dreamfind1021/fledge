@@ -26,8 +26,11 @@ export function wizardSteps(accountCount: number): WizardStep[] {
 }
 
 /**
- * 把索引夾進 [0, total-1]：兩端一律停住不繞回（首頁的上一步、末頁的下一步都是無效動作），
- * 同時吸收「序列長度改變後舊索引超界」的情況。
+ * 把索引夾進 [0, total-1]：兩端一律停住不繞回（首頁的上一步、末頁的下一步都是無效動作）。
+ *
+ * 只保證索引合法，不保證語意定位——序列若在導覽途中縮短，同一個索引會指到不同的頁。
+ * 精靈內帳號數不會變動（spec-b4 §1：帳號模式切換移出精靈、不提供刪帳號，精靈只寫 roots），
+ * 所以那條路徑目前不可達；哪天精靈真的能改帳號數，導覽 state 要改存 `WizardStep` 而非索引。
  */
 export function clampStepIndex(index: number, total: number): number {
   return Math.max(0, Math.min(index, total - 1));
