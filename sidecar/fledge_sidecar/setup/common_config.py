@@ -297,22 +297,30 @@ def _apply_one(op: Operation, source_dir: str, overwrite: set[tuple[str, str]]) 
 
     # apply-time revalidation（spec §6.5）：dry-run→確認→apply 之間 FS 可變，
     # 每個 mutation 前重探一次，與 plan 不符就停手，不依過時 plan 覆寫。
-    if probe_entry(source_dir, target_dir, spec) != op.state:
+    state = probe_entry(source_dir, target_dir, spec)
+    if state != op.state:
         return OpResult(op.account, op.entry, "stale")
 
+    # 動作與授權需求一律由剛驗過的真實狀態重算，不採信傳入 Plan 的欄位——否則宣稱
+    # needs_overwrite=False 的破壞性 op 會繞過授權閘。route 也會重算 plan（ADR-0002），
+    # 這是模組自己的第二道。重算後 action 可能是 skip（op 說要動、實況已無事可做）。
+    action, needs_overwrite = _action_for(state, spec.share)
+    if action == "skip":
+        return OpResult(op.account, op.entry, "skipped")
+
     # 授權以 (account, entry) 為單位：裸 entry 名會讓 A 帳號的授權連帶授權 B 帳號
-    if op.needs_overwrite and (op.account, op.entry) not in overwrite:
+    if needs_overwrite and (op.account, op.entry) not in overwrite:
         return OpResult(op.account, op.entry, "conflict")
 
     source_entry = os.path.join(source_dir, spec.name)
     backup: str | None = None      # 備份成功但後續失敗時，仍要把備份位置回報給呼叫端
     try:
-        if op.action == "create_link":
-            if op.state == "empty_dir":
+        if action == "create_link":
+            if state == "empty_dir":
                 os.rmdir(op.target_path)          # 只在空時成功，安全
             os.symlink(source_entry, op.target_path)
             return OpResult(op.account, op.entry, "created")
-        if op.action == "relink":
+        if action == "relink":
             # 重探測到 unlink 之間仍可能被換成實體檔，直接 unlink 會誤刪未授權資料
             # （relink 的 needs_overwrite=False）。改成先隔離改名再驗型別：不是預期的
             # symlink 就還回去；位置已被重新占用時保留兩份資料，不覆蓋任何一份。
@@ -328,9 +336,20 @@ def _apply_one(op: Operation, source_dir: str, overwrite: set[tuple[str, str]]) 
             os.symlink(source_entry, op.target_path)
             os.unlink(backup)                     # 確認是 symlink 才清掉隔離檔，不留垃圾
             return OpResult(op.account, op.entry, "relinked")
-        if op.action == "copy":
+        if action == "copy":
             _copy_file(source_entry, op.target_path)
             return OpResult(op.account, op.entry, "copied")
+        # 以下兩個是唯一「先毀後建」的動作（已過授權閘）。備份一律在 mutate 之前，
+        # 且 backup 指派到 try 外層變數——中途失敗時使用者的資料只剩備份那一份，
+        # 位置沒回報等於找不回來。備份用 rename 不跟隨 symlink，不會寫穿到外部檔案。
+        if action == "backup_and_link":
+            backup = _backup(op.target_path)
+            os.symlink(source_entry, op.target_path)
+            return OpResult(op.account, op.entry, "created", backup_path=backup)
+        if action == "backup_and_copy":
+            backup = _backup(op.target_path)
+            _copy_file(source_entry, op.target_path)
+            return OpResult(op.account, op.entry, "copied", backup_path=backup)
     except OSError as exc:
         return OpResult(op.account, op.entry, "failed", backup_path=backup, error=str(exc))
     return OpResult(op.account, op.entry, "failed", error="unsupported_action")

@@ -638,3 +638,144 @@ def test_apply_rechecks_containment_before_every_op(tmp_path: Path, monkeypatch)
     outcomes = [r.outcome for r in cc.apply(p, overwrite=[]).results]
     assert outcomes == ["created", "failed"]
     assert not (outside / "skills").exists()   # 沒寫出 account dir
+
+
+def test_apply_refuses_destructive_without_overwrite(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(tgt) / "commands").mkdir()
+    (Path(tgt) / "commands" / "mine.md").write_text("MINE", encoding="utf-8")
+    g = _graph(src, tgt)
+    res = cc.apply(cc.plan(g, ["commands"]), overwrite=[])
+    assert res.results[0].outcome == "conflict"
+    assert (Path(tgt) / "commands" / "mine.md").read_text(encoding="utf-8") == "MINE"
+
+
+def test_apply_backs_up_real_dir_then_links(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(tgt) / "commands").mkdir()
+    (Path(tgt) / "commands" / "mine.md").write_text("MINE", encoding="utf-8")
+    g = _graph(src, tgt)
+    res = cc.apply(cc.plan(g, ["commands"]), overwrite=[("personal", "commands")])
+    r = res.results[0]
+    assert r.outcome == "created"
+    assert r.backup_path is not None
+    backup = Path(r.backup_path)
+    assert backup.parent == Path(tgt).resolve()      # 就地改名，不跨目錄搬移
+    assert backup.name.startswith("commands.fledge-backup-")
+    assert (backup / "mine.md").read_text(encoding="utf-8") == "MINE"
+    assert (Path(tgt) / "commands").is_symlink()
+
+
+def test_apply_backs_up_conflicting_claude_md(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "CLAUDE.md").write_text("shared", encoding="utf-8")
+    (Path(tgt) / "CLAUDE.md").write_text("mine", encoding="utf-8")
+    g = _graph(src, tgt)
+    res = cc.apply(cc.plan(g, ["CLAUDE.md"]), overwrite=[("personal", "CLAUDE.md")])
+    r = res.results[0]
+    assert r.outcome == "copied"
+    assert Path(r.backup_path).read_text(encoding="utf-8") == "mine"
+    assert (Path(tgt) / "CLAUDE.md").read_text(encoding="utf-8") == "shared"
+
+
+def test_apply_backs_up_symlinked_copy_entry_without_following_it(tmp_path: Path):
+    # copy 項是 symlink 指到 source dir 外：備份用 rename（不跟隨），
+    # 再以 O_EXCL 建新檔——絕不能寫穿到那個外部檔案
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "CLAUDE.md").write_text("shared", encoding="utf-8")
+    outside = tmp_path / "outside.md"
+    outside.write_text("DO NOT TOUCH", encoding="utf-8")
+    (Path(tgt) / "CLAUDE.md").symlink_to(outside)
+    g = _graph(src, tgt)
+    p = cc.plan(g, ["CLAUDE.md"])
+    assert p.operations[0].state == "unexpected_type"
+    r = cc.apply(p, overwrite=[("personal", "CLAUDE.md")]).results[0]
+    assert r.outcome == "copied"
+    assert outside.read_text(encoding="utf-8") == "DO NOT TOUCH"   # 外部檔案毫髮無傷
+    assert (Path(tgt) / "CLAUDE.md").read_text(encoding="utf-8") == "shared"
+    assert not (Path(tgt) / "CLAUDE.md").is_symlink()
+    # 原本那條 symlink 是使用者的東西，必須以備份保留（不是被 unlink 丟掉）
+    assert r.backup_path is not None
+    assert Path(r.backup_path).is_symlink()
+    assert os.readlink(r.backup_path) == str(outside)
+
+
+def test_overwrite_for_one_account_does_not_authorize_another(tmp_path: Path):
+    # 授權以 (account, entry) 為單位：勾了 a 帳號的 commands，不得連帶炸掉 b 帳號的
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "commands").mkdir()
+    dirs = {}
+    for key in ("a", "b"):
+        d = tmp_path / key
+        d.mkdir()
+        (d / "commands").mkdir()
+        (d / "commands" / "mine.md").write_text(key, encoding="utf-8")
+        dirs[key] = d
+    accounts = {
+        "work": {"config_dir": str(src)},
+        "a": {"config_dir": str(dirs["a"])},
+        "b": {"config_dir": str(dirs["b"])},
+    }
+    g = cc.build_account_graph(accounts, "work", ["a", "b"])
+    res = cc.apply(cc.plan(g, ["commands"]), overwrite=[("a", "commands")])
+    by_account = {r.account: r.outcome for r in res.results}
+    assert by_account == {"a": "created", "b": "conflict"}
+    assert (dirs["b"] / "commands" / "mine.md").read_text(encoding="utf-8") == "b"
+
+
+def test_failed_replacement_still_reports_backup_path(tmp_path: Path, monkeypatch):
+    # 備份成功但建連結失敗：使用者的資料在備份裡，結果必須告訴他備份在哪
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(tgt) / "commands").mkdir()
+    (Path(tgt) / "commands" / "mine.md").write_text("MINE", encoding="utf-8")
+
+    def _boom(source, target, **kw):
+        raise PermissionError("nope")
+
+    monkeypatch.setattr(cc.os, "symlink", _boom)
+    g = _graph(src, tgt)
+    res = cc.apply(cc.plan(g, ["commands"]), overwrite=[("personal", "commands")])
+    r = res.results[0]
+    assert r.outcome == "failed"
+    assert r.backup_path is not None
+    assert (Path(r.backup_path) / "mine.md").read_text(encoding="utf-8") == "MINE"
+
+
+def test_apply_recomputes_authorization_from_probed_state(tmp_path: Path):
+    # 授權需求不得採信傳入的 Plan：手工 Plan 宣稱 needs_overwrite=False 卻帶破壞性
+    # 動作時，模組在前一步才剛重探並確認 state，應據此重算而非讀 op 欄位。
+    # ADR-0002 由 route 重算 plan 擋第一道，這是模組自己的第二道。
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(tgt) / "commands").mkdir()
+    (Path(tgt) / "commands" / "mine.md").write_text("MINE", encoding="utf-8")
+    lying_op = cc.Operation("personal", "commands", str(Path(tgt).resolve() / "commands"),
+                            "real_dir", "backup_and_link", False)
+    p = cc.Plan(source_dir=str(Path(src).resolve()),
+                targets={"personal": str(Path(tgt).resolve())}, operations=[lying_op])
+    res = cc.apply(p, overwrite=[])
+    assert res.results[0].outcome == "conflict"
+    assert (Path(tgt) / "commands" / "mine.md").read_text(encoding="utf-8") == "MINE"
+    assert not (Path(tgt) / "commands").is_symlink()
+
+
+def test_failed_copy_replacement_still_reports_backup_path(tmp_path: Path, monkeypatch):
+    # backup_and_copy 的復原性：備份成功但複製失敗時，備份位置一樣要回報
+    # （既有測試只涵蓋 backup_and_link 那半邊）
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "CLAUDE.md").write_text("shared", encoding="utf-8")
+    (Path(tgt) / "CLAUDE.md").write_text("mine", encoding="utf-8")
+
+    def _boom(source_entry: str, target_path: str) -> None:
+        raise PermissionError("nope")
+
+    monkeypatch.setattr(cc, "_copy_file", _boom)
+    g = _graph(src, tgt)
+    r = cc.apply(cc.plan(g, ["CLAUDE.md"]), overwrite=[("personal", "CLAUDE.md")]).results[0]
+    assert r.outcome == "failed"
+    assert r.backup_path is not None
+    assert Path(r.backup_path).read_text(encoding="utf-8") == "mine"
