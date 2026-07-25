@@ -105,3 +105,28 @@ def test_within_trailing_sep_root():
 def test_within_any():
     assert is_within_any_root("/a/b/c", ["/x", "/a/b"])
     assert not is_within_any_root("/z", ["/x", "/a/b"])
+
+
+def test_same_dir_sees_through_case_alias(tmp_path):
+    # APFS 預設不分大小寫：resolve() 不做大小寫正規化，字串比對判不出同一個目錄
+    real = tmp_path / "claude"
+    (real / "sub").mkdir(parents=True)
+    alias = tmp_path / "CLAUDE"
+    if not os.path.exists(alias):
+        pytest.skip("此檔案系統區分大小寫，無此別名情境")
+    assert paths.same_dir(str(real), str(alias))
+    assert paths.is_same_or_within(str(alias / "sub"), str(real))
+
+
+def test_same_dir_and_within_on_plain_paths(tmp_path):
+    a = tmp_path / "a"
+    (a / "deep" / "deeper").mkdir(parents=True)
+    b = tmp_path / "b"
+    b.mkdir()
+    assert paths.same_dir(str(a), str(a))
+    assert not paths.same_dir(str(a), str(b))
+    assert paths.is_same_or_within(str(a / "deep" / "deeper"), str(a))
+    assert not paths.is_same_or_within(str(b), str(a))
+    # 尚不存在的目錄：只有字串比對可用，不得拋例外
+    assert paths.same_dir(str(tmp_path / "ghost"), str(tmp_path / "ghost"))
+    assert paths.dir_identity(str(tmp_path / "ghost")) is None
