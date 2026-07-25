@@ -73,17 +73,83 @@ jobs:
           kill -TERM "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true
           [ -n "$OK" ] || { echo "::error::sidecar /api/health 無回應（啟動後崩潰？）"; cat /tmp/side.log; exit 1; }
 
-      - name: Package tarball + checksums
+      - name: Verify + package (驗證失敗就沒有可上傳的檔案)
         run: |
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Fledge.app"
+          STAGE="$APP/Contents/Resources/fledge-sidecar/_internal/templates"
+
+          # ① 範本子樹逐檔對帳（缺 manifest／缺目錄／驗證器 import 失敗都會非 0 退出）
+          test -d "$STAGE" || { echo "::error::.app 內找不到範本目錄 $STAGE"; exit 1; }
+          test -f "$STAGE/artifact-manifest.json" || { echo "::error::缺 artifact manifest（檢查缺席視為失敗）"; exit 1; }
+          python3 scripts/verify_templates_artifact.py \
+            --staged-root "$STAGE" --manifest "$STAGE/artifact-manifest.json"
+
+          # ② 收斂 build 來源。**注意這裡能保證什麼、不能保證什麼**：
+          #    能保證——private staging 沒被帶入（env 未設 + 未帶 flag），
+          #             public seed 的頂層目錄名都在 allowlist 且分類為 public。
+          #    **不能保證**——public seed 的某個合法範本目錄「底下」放了不該公開的檔案。
+          #             `project-starter/private-rules.md` 的頂層 id 完全合法，
+          #             staging 會照收、manifest 會照登記、雜湊會照驗過。
+          #             內容是不是私有是**人的分類**，CI 無從判斷。
+          #    真正的控制是下面 ③ 的 drift 檢查：public seed 多一個檔案就必須連同
+          #    manifest 一起提交，在 PR diff 裡顯形，由人審。
+          #
+          # 內嵌 python 必須與本 block 的其他行同縮排：literal block（`run: |`）的內容
+          # 不得比第一行更淺，否則 scalar 在此結束、整份 workflow 變成無效 YAML。
+          # YAML 會剝掉這層共同縮排，python 收到的仍是第 0 欄。
+          [ -z "${FLEDGE_PRIVATE_TEMPLATES_DIR:-}" ] || {
+            echo "::error::release 環境不得設定 FLEDGE_PRIVATE_TEMPLATES_DIR"; exit 1; }
+          python3 -c "
+          import sys; sys.path.insert(0, 'sidecar')
+          from pathlib import Path
+          from fledge_sidecar.setup.templates import TEMPLATE_SPECS
+          private = {s.id for s in TEMPLATE_SPECS if s.source_class == 'private'}
+          known = {s.id for s in TEMPLATE_SPECS}
+          seed = Path('sidecar/resources/templates-public')
+          present = {p.name for p in seed.iterdir() if p.is_dir()} if seed.is_dir() else set()
+          assert not (present & private), f'public seed 內出現私有範本目錄：{present & private}'
+          assert not (present - known), f'public seed 內有不在 allowlist 的目錄：{present - known}'
+          print('public seed 頂層分類正確')
+          "
+
+          # ③ public seed 的 manifest drift：committed manifest 必須與實際內容逐項相符。
+          #    這是「seed 裡多了一個檔案」唯一會被機械偵測到的地方——多的檔案若沒同步
+          #    進 manifest 就在這裡失敗；同步了就會出現在 PR diff 裡讓人看見。
+          python3 -c "
+          import json, sys; sys.path.insert(0, 'sidecar')
+          from pathlib import Path
+          from fledge_sidecar.setup.templates import build_manifest_entries, MANIFEST_FILENAME
+          for seed_dir in sorted(Path('sidecar/resources/templates-public').iterdir()):
+              if not seed_dir.is_dir(): continue
+              committed = json.loads((seed_dir / MANIFEST_FILENAME).read_text(encoding='utf-8'))
+              generated = [{'path': e.path, 'type': e.type} for e in build_manifest_entries(str(seed_dir))]
+              assert committed['entries'] == generated, f'{seed_dir.name}：manifest 與內容不符（drift）'
+          print('public seed manifest 無 drift')
+          "
+
+          # ④ 額外保險：私有 id 的原名不該出現在 .app 任何路徑上（擋不住改名，但零成本）
+          python3 -c "
+          import sys; sys.path.insert(0, 'sidecar')
+          from fledge_sidecar.setup.templates import TEMPLATE_SPECS
+          print('\n'.join(s.id for s in TEMPLATE_SPECS if s.source_class == 'private'))
+          " | while read -r id; do
+            [ -n "$id" ] || continue
+            if find "$APP" -name "*${id}*" -print -quit | grep -q .; then
+              echo "::error::.app 內出現私有範本痕跡：$id"; exit 1
+            fi
+          done
+
           B="src-tauri/target/aarch64-apple-darwin/release/bundle"
           tar -czf Fledge_aarch64.app.tar.gz -C "$B/macos" Fledge.app
           # 確認剛好一個 dmg；用實際 basename（tauri-action 命名 Fledge_<ver>_aarch64.dmg）
           DMG_PATH=$(ls "$B"/dmg/*.dmg)
           [ "$(printf '%s\n' "$DMG_PATH" | wc -l)" -eq 1 ] || { echo "::error::dmg 不是剛好一個"; exit 1; }
           DMG=$(basename "$DMG_PATH")
+          cp "$STAGE/artifact-manifest.json" ./templates-artifact-manifest.json
           shasum -a 256 Fledge_aarch64.app.tar.gz > checksums.txt
           ( cd "$B/dmg" && shasum -a 256 "$DMG" ) >> checksums.txt
-          gh release upload "${GITHUB_REF_NAME}" "$DMG_PATH" Fledge_aarch64.app.tar.gz checksums.txt --clobber
+          gh release upload "${GITHUB_REF_NAME}" "$DMG_PATH" Fledge_aarch64.app.tar.gz \
+            templates-artifact-manifest.json checksums.txt --clobber
 
       - name: Publish release (rc → prerelease)
         run: |
