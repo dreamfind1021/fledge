@@ -178,3 +178,28 @@ def test_create_session_real_lang_overrides_seed(monkeypatch):
     monkeypatch.setenv("LANG", "zh_TW.UTF-8")
     PtyBridge().create_session(command=["true"], cwd=".", env_overrides={}, session_id="y")
     assert captured["env"]["LANG"] == "zh_TW.UTF-8"
+
+
+def test_create_session_env_remove_pops_key(monkeypatch):
+    # 比照既有 test_create_session_strips_secrets_from_child_env：monkeypatch spawn 直接檢查
+    # env，不真起 bash（避免 shell/PTY timing flaky，plan review #3）。
+    from fledge_sidecar import pty_bridge
+
+    captured = {}
+
+    class _FakePty:
+        def isalive(self):
+            return True
+
+    def _fake_spawn(command, cwd, env):
+        captured["env"] = env
+        return _FakePty()
+
+    monkeypatch.setattr(pty_bridge.PtyProcess, "spawn", staticmethod(_fake_spawn))
+    bridge = pty_bridge.PtyBridge()
+    bridge.create_session(
+        command=["x"], cwd=".",
+        env_overrides={"CLAUDE_CONFIG_DIR": "/should/be/removed"},
+        env_remove=["CLAUDE_CONFIG_DIR"],
+    )
+    assert "CLAUDE_CONFIG_DIR" not in captured["env"]

@@ -12,11 +12,12 @@ from typing import Literal
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from fledge_sidecar.app_config import AppConfig
 from fledge_sidecar.auth import require_ws_token
 from fledge_sidecar.pty_bridge import PtyBridge
+from fledge_sidecar.setup.install_specs import get_install_command
 from fledge_sidecar.usage import account_activity
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,12 @@ def close_all_sessions() -> None:
 
 
 class CreateSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # 未知欄位（如注入 "command"）→ 422
     path: str
-    account: str
-    kind: Literal["claude", "terminal"] = "claude"
+    account: str = ""  # install kind 不需帳號；其餘 kind 會驗證
+    kind: Literal["claude", "terminal", "install", "login"] = "claude"
+    install_id: str | None = None   # kind=install 必填
+    login_target: Literal["claude", "codex"] = "claude"  # kind=login 用
 
 
 class ResizeRequest(BaseModel):
@@ -60,12 +64,18 @@ class ResizeRequest(BaseModel):
     cols: int
 
 
-def _resolve_command(kind: str = "claude") -> list[str]:
+def _login_shell() -> str:
+    return os.environ.get("SHELL") or "/bin/zsh"
+
+
+def _resolve_command(kind: str = "claude", login_target: str = "claude") -> list[str]:
     """claude session 跑 claude（測試模式用 FLEDGE_TEST_COMMAND 替代）；
-    terminal session 跑使用者登入 shell（不進 claude），spec §1.2。"""
+    terminal session 跑使用者登入 shell（不進 claude），spec §1.2；
+    login session 跑 claude（觸發 OAuth）或 codex login。"""
     if kind == "terminal":
-        shell = os.environ.get("SHELL") or "/bin/zsh"
-        return [shell, "-l"]
+        return [_login_shell(), "-l"]
+    if kind == "login":
+        return ["codex", "login"] if login_target == "codex" else ["claude"]
     test_cmd = os.environ.get("FLEDGE_TEST_COMMAND")
     if test_cmd:
         return test_cmd.split()
@@ -98,6 +108,22 @@ def _apply_flow_control(text: str, flow_gate: asyncio.Event) -> None:
 @router.post("/api/sessions")
 def create_session(req: CreateSessionRequest):
     config = AppConfig.load()
+
+    # --- kind=install：allowlist 命令、最小 env（不帶 CLAUDE_CONFIG_DIR），不歸屬 ---
+    if req.kind == "install":
+        cmd = get_install_command(req.install_id)
+        if cmd is None:
+            return JSONResponse(status_code=400, content={"error": "unknown_install_id"})
+        session = _bridge.create_session(
+            command=[_login_shell(), "-lc", cmd],
+            cwd=str(Path.home()),
+            env_overrides={},                      # 不注入帳號 env
+            env_remove=["CLAUDE_CONFIG_DIR"],      # 即便 sidecar 自身環境有，也移除
+            project_path=req.path,
+        )
+        return {"session_id": session.session_id, "ws_url": f"/ws/{session.session_id}"}
+
+    # --- 其餘 kind 需要合法帳號 ---
     if req.account not in config.accounts:        # 驗證帳號合法（不 spawn 偽造/拼錯 key）
         return JSONResponse(status_code=400, content={"error": "unknown_account"})
     account = config.accounts[req.account]
@@ -110,7 +136,7 @@ def create_session(req: CreateSessionRequest):
         _opened_session_ids.add(session_id)        # 標記為被歸屬，on_close 才會補 close
     try:
         session = _bridge.create_session(
-            command=_resolve_command(req.kind),
+            command=_resolve_command(req.kind, req.login_target),
             cwd=req.path,
             env_overrides=env_overrides,
             project_path=req.path,

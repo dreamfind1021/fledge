@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-07-18
+- **最後更新：** 2026-07-25
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -44,10 +44,10 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `app_config.py` | `~/.fledge/config.json` 讀寫（原子寫）+ root/manual/override/account 寫入 helpers（含 account_references + remove_account 級聯 reassign）+ `kms_root`（KMS 根目錄，raw 含 ~、runtime 才 expanduser、不過 _migrate_path）+ `set_kms_root`；load 時自我遷移既有路徑成 canonical（resolve）+ 依 canonical 去重 | `AppConfig`, `default_config_path()` |
 | `project_scanner.py` | 根目錄 depth=1 掃描（標所屬 root、套 project_overrides）+ CC 用過記錄合併；逐 root best-effort 容權限（`scan_all` 回 `(projects, permission_error)`）；`encode_cc_project_dir` 編碼對齊 Claude Code（非英數→`-`）；`scan_all` recent 跨帳號 union | `scan_all()`, `scan_root()`, `encode_cc_project_dir()` |
 | `dir_tree.py` | 列一層目錄純函式：`list_dir_entries`（排除 dotfiles、資料夾在前+名稱 casefold 升冪、內容層 no-raise，I/O 例外由呼叫端 wrap） | `list_dir_entries()` |
-| `pty_bridge.py` | PTY 橋接、Session 管理（threading.Lock）、env 切帳號、resize；`create_session` 接受選填 `session_id`（route 先生成以記活動 log）、`on_close` callback（關閉通知→記 close 事件）、`live_ids()`（當前存活集合，給歸屬判 liveness）；child env 剔除 `FLEDGE_TOKEN`/`FLEDGE_TEST_UNAUTH`/`FLEDGE_PORT`（不灌 secret 進 claude，也不灌 sidecar 內部 port 進子進程） | `PtyBridge`, `Session` |
+| `pty_bridge.py` | PTY 橋接、Session 管理（threading.Lock）、env 切帳號、resize；`create_session` 接受選填 `session_id`（route 先生成以記活動 log）、`on_close` callback（關閉通知→記 close 事件）、`live_ids()`（當前存活集合，給歸屬判 liveness）、`env_remove`（呼叫端指定額外剔除的 env key，install session 用）；child env 剔除 `FLEDGE_TOKEN`/`FLEDGE_TEST_UNAUTH`/`FLEDGE_PORT`（不灌 secret 進 claude，也不灌 sidecar 內部 port 進子進程） | `PtyBridge`, `Session` |
 | `routes/health.py` | `GET /api/health`（附 `claude_found`：shutil.which 判 claude 是否安裝） | `router` |
 | `routes/projects.py` | `GET /api/projects`（回 `permission_error`）+ `POST .../scan-preview`（onboarding 試掃計數、不落檔；回 `status` 判別碼 ok/denied/missing/not_dir/invalid，讓 wizard 預先擋無效 draft）+ `POST /api/projects/tree`（lazy 檔案樹；containment 順序：expand→realpath→先 explicit deny kms_root subtree〔含 child metadata 過濾〕→再限 allowed roots〔roots∪manual〕；error contract ok/invalid 400/forbidden 403/denied|missing|not_dir 200） | `router` |
-| `routes/sessions.py` | `POST/DELETE /api/sessions` + `POST .../resize` + WS `/ws/{id}`（accept 前 `require_ws_token` 驗 `?token=`；模式 A：WS 斷不關 session；PTY EOF→close 4001+清 session、tie-break 以 is_alive 為準）+ flow control gate（connection-scoped `asyncio.Event`：WS text frame `{"type":"pause"/"resume"}` 經 `_apply_flow_control` 閘住 PTY→WS 方向；binary=PTY bytes、text 永不入 PTY；pump 1s timeout 仍可察覺 paused 中 EOF）；`CreateSessionRequest.kind`（claude/terminal）→`_resolve_command`：terminal 跑 `$SHELL -l`；建立時驗 `req.account` 合法（未知→400）、claude session **spawn 前** `account_activity.record_open`（spawn 失敗補 close）、`on_close` wiring 記 close（僅有 record_open 的 claude session，`_opened_session_ids` gating）、暴露 `live_session_ids()` 給歸屬判 liveness | `router`, `live_session_ids()` |
+| `routes/sessions.py` | `POST/DELETE /api/sessions` + `POST .../resize` + WS `/ws/{id}`（accept 前 `require_ws_token` 驗 `?token=`；模式 A：WS 斷不關 session；PTY EOF→close 4001+清 session、tie-break 以 is_alive 為準）+ flow control gate（connection-scoped `asyncio.Event`：WS text frame `{"type":"pause"/"resume"}` 經 `_apply_flow_control` 閘住 PTY→WS 方向；binary=PTY bytes、text 永不入 PTY；pump 1s timeout 仍可察覺 paused 中 EOF）；`CreateSessionRequest.kind`（claude/terminal/install/login，`extra="forbid"` 擋未知欄位注入）→`_resolve_command`：terminal 跑 `$SHELL -l`、login 跑 `claude`（OAuth）或 `codex login`（`login_target`）；install 走獨立分支：`get_install_command(install_id)` allowlist 查表（未知→400）、空 env_overrides + `env_remove=["CLAUDE_CONFIG_DIR"]`（最小 env、不歸屬帳號）；其餘 kind 建立時驗 `req.account` 合法（未知→400）、login 注入帳號 env、claude session **spawn 前** `account_activity.record_open`（spawn 失敗補 close）、`on_close` wiring 記 close（僅有 record_open 的 claude session，`_opened_session_ids` gating）、暴露 `live_session_ids()` 給歸屬判 liveness | `router`, `live_session_ids()` |
 | `routes/config.py` | `GET /api/config`（附 is_first_run）+ 細粒度寫入（roots/manual/overrides/accounts；add 類 canonicalize+驗存在、移除/改帳號類只 canonicalize）+ `POST .../onboard` + `POST .../check-dir`（回 `status` 判別碼）+ `PUT .../subscriptions`（訂閱費清單，name 非空/cost 有限非負）+ `PUT .../kms-root`（KmsRootBody Pydantic、`_config_lock`、回 `{ok,kms_root}`、不驗目錄存在）；account CRUD（級聯 reassign、key grammar、至少留1），鎖 + 驗證 | `router` |
 | `routes/usage.py` | `GET /usage/dashboard?days=`（數據儀表板成本面板）：single-flight 掃描（25s stale gate、error 立即 retry、days 變更視為 stale）＋`asyncio.to_thread` 不卡 event loop＋last-good 語義（掃描中回舊資料標 scanning、冷掃 202+Retry-After、冷掃失敗 error-only 200）；模組級 `_state`（snapshot/cache/scanning）。另 `GET /usage/codex`：Codex 實時額度（呼 `api/codex_usage`）＋ `CODEX_USAGE_MIN_INTERVAL_SEC`(60s) 合併 floor（`_codex_state`），失敗回 typed unavailable 不 fallback 舊快照 | `router`, `reset_state_for_tests()` |
 | `api/codex_usage.py` | Codex 實時額度抓取（api/ 層唯一對外出口）：讀 `~/.codex/auth.json` 的 `access_token`+`account_id`→GET `chatgpt.com/backend-api/codex/usage`（Bearer+`chatgpt-account-id`，8s timeout）→正規化 `primary/secondary_window`→`{used_percent,window_minutes,resets_at}`；**token 只進 header 絕不 log/回傳**，任何例外 redaction 成 typed 失敗（no_auth/unauthorized/network/bad_response），不外洩 raw exception | `fetch_codex_usage()`, `normalize_usage()`, `USAGE_URL` |
@@ -62,6 +62,9 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `memory/scanner.py` | 找檔（對來源永遠唯讀）：`native_memory_files` 三態歸屬（encoded 反查：1 命中 matched／≥2 ambiguous／0 orphan，跳 MEMORY.md）+ `kms_files` 只掃 `library/`+`topics/`、`is_kms_file_allowed` realpath containment（擋 hidden/`_*`/CLAUDE.md/逃逸 symlink，與 route 共用） | `NativeRef`, `KmsRef`, `native_memory_files()`, `kms_files()`, `is_kms_file_allowed()` |
 | `memory/links.py` | Fledge-owned `memory-links.json`（唯讀源外唯一寫入）：`LinksStore` 無向 (min,max) 去重 + dismissed 綁 pair + module-level lock 序列化並寫（read-modify-write 重讀）+ atomic write（tmp→rename）0600；`suggest_links` topic 名/tags 正規化⊇專案名（長度<4 只手動） | `LinksStore`, `suggest_links()`, `_norm()` |
 | `memory/aggregator.py` | 組面板 payload：scope 分層（native user/feedback→global、project/reference→project、其餘→unknown；kms→kb）、專案中心分組（已連 topic 掛 project、unattributed/unknown 皆可見不靜默丟）、in-memory 搜尋（含 body、回 snippet）；**overview 只回摘要不含 body** | `MemoryItem`, `to_item()`, `build_overview()`, `build_related()` |
+| `routes/setup.py` | `GET /api/setup/status`（開發環境偵測：回 `{tools:[ToolStatus…]}`；安裝／登入不在此——走 `POST /api/sessions` kind=install/login） | `router` |
+| `setup/install_specs.py` | 開發工具資料表＋allowlist 安裝命令：`ToolSpec`（id/label/tier/binary/version_argv/install_command/docs_url）常數表（macOS/Homebrew 生態，core＋recommended 兩級）；**安全不變式：安裝命令只能來自本檔常數、route 以 install_id 查表**，Homebrew 本體 install_command=None（僅手動複製指令） | `ToolSpec`, `TOOL_SPECS`, `get_spec()`, `get_install_command()` |
+| `setup/env_detect.py` | 開發工具偵測純函式：which 命中才探版本（`_VERSION_TIMEOUT` 2s＋ThreadPool 平行、保序）；which/run 參數注入便於測試；版本探測失敗→version=None 不中斷 | `ToolStatus`, `detect_tool()`, `detect_all()` |
 
 ### src/ — React 前端
 | 檔案 | 職責 | 匯出 |
@@ -128,8 +131,8 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `test_dir_tree.py` | `list_dir_entries`（dotfiles 排除/資料夾在前+名稱排序/空目錄/path 欄位） |
 | `test_paths.py` | containment helper（等於 root/子路徑/prefix 偽命中/root 外/trailing sep）＋既有 path 正規化 |
 | `test_config_routes.py` | config 寫入 endpoints（鎖/驗證/防呆/持久化） |
-| `test_pty_bridge.py` | PTY round-trip、env override、並發 |
-| `test_sessions.py` | session 建立 + WS echo + resize + 模式 A + flow control（`_apply_flow_control` 單測 + pause 真閘住 PTY→WS/roundtrip/text 不入 PTY/壞 frame 不斷線/paused EOF→4001） |
+| `test_pty_bridge.py` | PTY round-trip、env override、env_remove 剔除、並發 |
+| `test_sessions.py` | session 建立 + WS echo + resize + 模式 A + flow control（`_apply_flow_control` 單測 + pause 真閘住 PTY→WS/roundtrip/text 不入 PTY/壞 frame 不斷線/paused EOF→4001）+ kind=install/login（allowlist 命令/未知 install_id 400/不注入帳號 env/login 注入帳號 env/codex login/未知帳號 400/未知欄位 422） |
 | `test_usage_pricing.py` | 定價正規化（別名/後綴/synthetic/尺寸帶）＋兩源計價公式 |
 | `test_usage_parser.py` | 兩格式解析（容錯/cache precedence/差分 clamp/壞 ts/中文 cwd/rate_limits 末筆） |
 | `test_usage_scanner.py` | realpath 去重（symlink 帳號）＋codex canonical 三層 tier＋fallback |
@@ -144,6 +147,9 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `test_memory_aggregator.py` | scope mapping/global·projects·kb 分組/orphan·ambiguous 可見/已連 topic 掛 project/overview 不含 body/body 命中回 snippet |
 | `test_memory_config.py` | kms_root round-trip（raw 含 ~）/清空 |
 | `test_memory_routes.py` | overview shape/links CRUD+dismiss/item 擋 traversal（403） |
+| `test_install_specs.py` | 資料表覆蓋 core 工具/欄位齊全/`get_spec`/`get_install_command` allowlist（未知 id、僅手動→None） |
+| `test_env_detect.py` | 偵測純函式（裝了探版本/沒裝跳過/探測失敗與 timeout 容忍/`detect_all` 一 spec 一 status） |
+| `test_setup_routes.py` | `/api/setup/status`（monkeypatch detect_all 注入假資料、回傳 shape） |
 
 ### build / 環境
 | 檔案 | 用途 |
@@ -193,6 +199,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `sidecar/.../dir_tree.py`（列目錄邏輯變更） | `routes/projects.py`、`test_dir_tree.py` |
 | `sidecar/.../paths.py`（containment helper 變更） | `routes/projects.py`、`test_paths.py` |
 | `sidecar/.../routes/projects.py`（tree endpoint 變更） | `src/lib/sidecar.ts`、`Sidebar.tsx`/`FileTree*.tsx`、`test_projects.py` |
+| `sidecar/.../routes/setup.py`／`setup/*.py`（偵測 payload/資料表變更） | `src/lib/sidecar.ts`（B-4 加 fetcher 後）、`test_setup_routes.py`、`test_env_detect.py`、`test_install_specs.py` |
 | `src/lib/tabOrder.ts`（排序/插入邏輯變更） | `store/useAppStore.ts`、`tabOrder.test.ts` |
 | `src/lib/terminalRegistry.ts`（handle contract 變更） | `Terminal.tsx`、`App.tsx`（onDragEnd 貼路徑） |
 | `src/locales/*/sidebar.json`（key 增刪） | 另一語言 catalog 同步（`sidebar-parity.test.ts` 會擋）、`Sidebar.tsx`/`TabBar.tsx`/`FileTree*.tsx`/`Terminal.tsx` 的 t() 引用 |
