@@ -6,7 +6,8 @@
     "browse": "Browse…",
     "copy": "Copy",
     "cancel": "Cancel",
-    "skip": "Skip"
+    "skip": "Skip",
+    "progress": "Setup progress"
   },
   "welcome": {
     "h": "Welcome to Fledge",
@@ -19,7 +20,8 @@
     "note": "<strong>Your settings file is created when you finish this step.</strong> Everything after this is optional — close the window whenever you like and the root folders you added are kept. Pick up the rest from Settings.",
     "placeholder": "/absolute/path/to/root/folder",
     "add": "Add root",
-    "next": "Save and continue"
+    "next": "Save and continue",
+    "created": "Your settings file has been created. Root folders can be adjusted in Settings from now on."
   },
   "env": {
     "h": "Development environment",
@@ -105,5 +107,14 @@
     "tplDesc": "{{name}} · bundled",
     "deployTo": "Deploy to…",
     "rerunHint": "Environment checks and sign-in are one-off steps — <rerun>rerun setup</rerun> whenever you need them."
+  },
+  "errors": {
+    "invalid": "Enter a valid absolute path",
+    "missing": "That folder doesn't exist",
+    "not_dir": "That's not a folder",
+    "denied": "Some folders couldn't be read — grant access in System Settings",
+    "scan_failed": "Scan failed: {{reason}}",
+    "onboard_failed": "Couldn't save your settings: {{reason}}",
+    "projects_reload_failed": "Your settings were saved, but the project list failed to load: {{reason}}"
   }
 }
