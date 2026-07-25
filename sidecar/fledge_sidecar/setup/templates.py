@@ -9,19 +9,26 @@
 """
 from __future__ import annotations
 
+import contextlib
 import json
+import logging
 import os
 import stat as stat_module
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from fledge_sidecar.paths import (
+    dir_identity,
     expand_and_validate,
     is_same_or_within,
     resolve_best_effort,
 )
+from fledge_sidecar.setup import safe_fs
+
+logger = logging.getLogger(__name__)
 
 SourceClass = Literal["public", "private"]
 EntryType = Literal["file", "dir"]
@@ -278,3 +285,153 @@ def plan(template_id: str, destination_raw: str) -> TemplatePlan:
         state=_aggregate([o.state for o in operations]),
         operations=operations,
     )
+
+
+FileOutcome = Literal["created", "skipped", "conflict", "stale", "failed"]
+
+
+@dataclass(frozen=True)
+class FileResult:
+    path: str
+    outcome: FileOutcome
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class DeployResult:
+    template: str
+    destination: str
+    results: list[FileResult]
+
+
+def _open_child_dir(name: str, parent_fd: int) -> int:
+    """從 parent_fd 開一個子目錄。O_NOFOLLOW：若該名稱是 symlink 直接 ELOOP，
+    不會沿它走出去。回傳的 fd 由呼叫端負責關閉。"""
+    return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+
+
+def _probe_at(parent_fd: int, name: str, entry_type: EntryType) -> FileState:
+    """以目錄描述子相對探測單一名稱（不經路徑解析）。deploy 專用；`plan` 的
+    路徑版 `probe_entry` 只是預覽，真正決定寫不寫的是這一支。"""
+    try:
+        st = os.lstat(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "conflict"
+    if stat_module.S_ISLNK(st.st_mode):
+        return "conflict"          # 既有 symlink 一律不接受
+    if entry_type == "dir":
+        return "present" if stat_module.S_ISDIR(st.st_mode) else "conflict"
+    return "present" if stat_module.S_ISREG(st.st_mode) else "conflict"
+
+
+def deploy(template_id: str, destination_raw: str) -> DeployResult:
+    """依 manifest 部署，逐項盡力——單項失敗不阻斷其餘項目。
+
+    plan 由本函式**重算**（不接受呼叫端傳入的 plan：預覽後檔案系統可能已變）。
+
+    **目的地之下**的寫入一律走釘住的目錄描述子：取得 root fd 後，每一層子目錄都以
+    `O_DIRECTORY|O_NOFOLLOW` 從父 fd 開出來，檔案以 `dir_fd` 相對建立。root 以下的
+    名稱解析只發生在我們持有描述子的那一刻，之後綁的是 inode 不是路徑。
+
+    **已知殘餘窗口（root 取得本身）**：`os.open(destination)` 仍會由 kernel 重新解析
+    `destination` 的**祖先路徑**——`O_NOFOLLOW` 只保護最後一個元件。若在 `resolve_destination`
+    之後、這裡之前，某個祖先被 rename 成指向別處的 symlink，我們會釘到錯的 root。
+    目的地原本就存在時，下方的身分比對擋得住；目的地是新建的則無從比對。
+    判定為可接受：祖先在毫秒級窗口內被抽換不是「意外」（本模組威脅模型只防意外，
+    見 Global Constraints），且因為永不覆蓋，最壞結果是「檔案建在錯的目錄」而非資料遺失。
+    要完全消除需從可信起點逐元件 `openat` 走完整條路徑，代價與風險不成比例。"""
+    computed = plan(template_id, destination_raw)
+    destination = computed.destination
+    entries = {e.path: e for e in load_manifest(template_id)}
+    seed_root = os.path.join(templates_root(), template_id)
+    logger.info("範本部署開始：template=%s destination=%s ops=%d",
+                template_id, destination, len(computed.operations))
+
+    # plan 之後、開 root 之前取樣的目的地身分（不存在則為 None）——用來偵測祖先被抽換
+    approved_identity = dir_identity(destination)
+
+    results: list[FileResult] = []
+    # 目的地只建最後一層：父目錄不存在多半是路徑打錯，遞建會在錯的地方留一串垃圾目錄
+    try:
+        Path(destination).mkdir(parents=False, exist_ok=True)
+        root_fd = os.open(destination, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        logger.error("範本部署無法建立或開啟目的地：destination=%s", destination, exc_info=True)
+        return DeployResult(template_id, destination,
+                            [FileResult(o.path, "failed", safe_fs.error_code(exc))
+                             for o in computed.operations])
+
+    # 開到的 root 必須仍是 plan 當時核准的那個目錄。祖先被換掉的話會開到另一棵樹，
+    # 這裡就對不上——擋掉「目的地原本存在」的那一半殘餘窗口。
+    if approved_identity is not None:
+        st = os.fstat(root_fd)
+        if (st.st_dev, st.st_ino) != approved_identity:
+            os.close(root_fd)
+            logger.error("範本部署中止：目的地身分在 plan 之後改變 destination=%s", destination)
+            return DeployResult(template_id, destination,
+                                [FileResult(o.path, "failed", "destination_moved")
+                                 for o in computed.operations])
+
+    open_dirs: dict[str, int] = {"": root_fd}     # 相對目錄路徑 → 已開啟的 fd
+    blocked: set[str] = set()
+    try:
+        for op in computed.operations:
+            entry = entries[op.path]
+            parent_rel = os.path.dirname(op.path)
+            if _has_blocked_ancestor(op.path, blocked) or parent_rel not in open_dirs:
+                # 祖先 conflict／沒建成 → 其下一律不試（父 fd 根本不存在）
+                results.append(FileResult(op.path, "conflict"))
+                continue
+            parent_fd = open_dirs[parent_rel]
+            name = os.path.basename(op.path)
+
+            # 寫入前重探（fd 相對）：plan 到現在之間目的地可能已變
+            state = _probe_at(parent_fd, name, entry.type)
+            if state == "conflict":
+                if entry.type == "dir":
+                    blocked.add(op.path)
+                results.append(FileResult(op.path, "conflict"))
+                continue
+            if state == "present":
+                results.append(FileResult(op.path, "skipped"))   # 永不覆蓋
+                if entry.type == "dir":
+                    # 已存在的目錄仍要開 fd 才能處理其下項目；開不出來就擋掉整個 subtree
+                    try:
+                        open_dirs[op.path] = _open_child_dir(name, parent_fd)
+                    except OSError:
+                        blocked.add(op.path)
+                continue
+            if state != op.state:
+                results.append(FileResult(op.path, "stale"))     # 與重算結果不符，不動
+                if entry.type == "dir":
+                    blocked.add(op.path)
+                continue
+
+            try:
+                if entry.type == "dir":
+                    os.mkdir(name, dir_fd=parent_fd)
+                    open_dirs[op.path] = _open_child_dir(name, parent_fd)
+                else:
+                    safe_fs.copy_file_no_clobber(
+                        os.path.join(seed_root, entry.path), name, dir_fd=parent_fd)
+                results.append(FileResult(op.path, "created"))
+            except OSError as exc:
+                logger.error("範本部署檔案操作失敗：template=%s path=%s",
+                             template_id, op.path, exc_info=True)
+                if entry.type == "dir":
+                    blocked.add(op.path)                          # 目錄沒建成，其下不用試
+                results.append(FileResult(op.path, "failed", safe_fs.error_code(exc)))
+    finally:
+        for fd in open_dirs.values():
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+    for r in results:
+        if r.outcome in {"conflict", "stale", "failed"}:
+            logger.warning("範本部署 %s：template=%s path=%s error=%s",
+                           r.outcome, template_id, r.path, r.error)
+    logger.info("範本部署完成：template=%s %s",
+                template_id, dict(Counter(r.outcome for r in results)))
+    return DeployResult(template_id, destination, results)
