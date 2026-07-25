@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import anyio
 import pytest
@@ -35,6 +36,19 @@ def _write_config(tmp_path: Path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg_path))
+
+
+def _capture_bridge_create(monkeypatch, session_id: str) -> dict:
+    """monkeypatch 共用 bridge 的 create_session（不真的開 PTY），回傳捕捉 kwargs 的 dict。"""
+    captured = {}
+
+    def _fake_create_session(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(session_id=session_id)
+
+    from fledge_sidecar.routes import sessions as sr
+    monkeypatch.setattr(sr._bridge, "create_session", _fake_create_session)
+    return captured
 
 
 def _try_recv_message(ws, timeout: float):
@@ -454,15 +468,7 @@ def test_install_session_rejects_unknown_id(tmp_path: Path, monkeypatch):
 
 def test_install_session_uses_allowlist_command_no_account_env(tmp_path: Path, monkeypatch):
     _write_config(tmp_path, monkeypatch)
-    captured = {}
-
-    def _fake_create_session(**kwargs):
-        captured.update(kwargs)
-        class _S: session_id = "sess-install"
-        return _S()
-
-    from fledge_sidecar.routes import sessions as sr
-    monkeypatch.setattr(sr._bridge, "create_session", _fake_create_session)
+    captured = _capture_bridge_create(monkeypatch, "sess-install")
     # 用已知 id（node）；命令應來自 install_specs，而非請求帶入
     resp = TestClient(create_app()).post("/api/sessions", json={
         "path": str(tmp_path), "account": "work", "kind": "install", "install_id": "node",
@@ -491,15 +497,8 @@ def test_session_rejects_unknown_field_fail_closed(tmp_path: Path, monkeypatch):
 
 def test_login_session_injects_account_env_claude(tmp_path: Path, monkeypatch):
     _write_config(tmp_path, monkeypatch)
-    captured = {}
-
-    def _fake_create_session(**kwargs):
-        captured.update(kwargs)
-        class _S: session_id = "sess-login"
-        return _S()
-
+    captured = _capture_bridge_create(monkeypatch, "sess-login")
     from fledge_sidecar.routes import sessions as sr
-    monkeypatch.setattr(sr._bridge, "create_session", _fake_create_session)
     resp = TestClient(create_app()).post("/api/sessions", json={
         "path": str(tmp_path), "account": "work", "kind": "login", "login_target": "claude",
     })
@@ -511,17 +510,9 @@ def test_login_session_injects_account_env_claude(tmp_path: Path, monkeypatch):
     assert captured["session_id"] not in sr._opened_session_ids
 
 
-def test_login_session_codex_target(tmp_path: Path, monkeypatch):
+def test_login_session_codex_target_runs_codex_login(tmp_path: Path, monkeypatch):
     _write_config(tmp_path, monkeypatch)
-    captured = {}
-
-    def _fake_create_session(**kwargs):
-        captured.update(kwargs)
-        class _S: session_id = "sess-login2"
-        return _S()
-
-    from fledge_sidecar.routes import sessions as sr
-    monkeypatch.setattr(sr._bridge, "create_session", _fake_create_session)
+    captured = _capture_bridge_create(monkeypatch, "sess-login2")
     resp = TestClient(create_app()).post("/api/sessions", json={
         "path": str(tmp_path), "account": "work", "kind": "login", "login_target": "codex",
     })
