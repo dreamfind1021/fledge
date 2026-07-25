@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -97,3 +98,133 @@ def build_account_graph(
         seen.add(resolved)
         targets[key] = resolved
     return AccountGraph(source_key=source_key, source_dir=source_dir, targets=targets)
+
+
+EntryState = Literal[
+    "ok", "wrong_link", "broken_link", "real_file", "real_dir", "empty_dir",
+    "content_differs", "unexpected_type", "missing", "source_missing", "source_unsupported",
+]
+EntryAction = Literal[
+    "skip", "create_link", "relink", "copy", "backup_and_link", "backup_and_copy",
+]
+
+# 狀態 → (動作, 是否破壞既有內容)。needs_overwrite=True 者 apply 時必須在 overwrite 清單。
+# wrong_link/broken_link 重指向不損失資料（原目標檔案還在），故不需授權。
+# **不含 missing**——它是唯一「同一 state 在不同 share 需要不同 action」的狀態，見
+# _action_for。其他跨 share 都可能出現的狀態（ok / source_missing / source_unsupported）
+# 兩種 share 下動作相同，其餘則天然只在單一 share 出現（wrong_link 只可能是 symlink
+# 項、content_differs 只可能是 copy 項）。
+_ACTION_BY_STATE: dict[EntryState, tuple[EntryAction, bool]] = {
+    "source_missing": ("skip", False),
+    "source_unsupported": ("skip", False),
+    "ok": ("skip", False),
+    "empty_dir": ("create_link", False),   # 空目錄 rmdir 後直接連，不必備份
+    "wrong_link": ("relink", False),
+    "broken_link": ("relink", False),
+    "real_file": ("backup_and_link", True),
+    "real_dir": ("backup_and_link", True),
+    "content_differs": ("backup_and_copy", True),
+    "unexpected_type": ("backup_and_copy", True),
+}
+
+
+def _action_for(state: EntryState, share: ShareKind) -> tuple[EntryAction, bool]:
+    """狀態＋share → (動作, 是否需授權)。target 不存在時，copy 項要複製而不是建連結
+    ——只看 state 會把 CLAUDE.md 錯建成 symlink。"""
+    if state == "missing":
+        return ("copy", False) if share == "copy" else ("create_link", False)
+    return _ACTION_BY_STATE[state]
+
+
+@dataclass(frozen=True)
+class Operation:
+    account: str        # target account key
+    entry: str
+    target_path: str
+    state: EntryState
+    action: EntryAction
+    needs_overwrite: bool
+
+
+@dataclass(frozen=True)
+class Plan:
+    source_dir: str
+    targets: dict[str, str]
+    operations: list[Operation]
+
+
+def _same_link_target(link_path: str, source_entry: str) -> bool:
+    """既有 symlink 是否已指向 source entry。先字面比對（我們自己建的樣子），
+    不等再比 realpath——使用者用相對路徑等等價寫法建的連結不該被判成錯而無謂重建。"""
+    if os.readlink(link_path) == source_entry:
+        return True
+    return os.path.realpath(link_path) == os.path.realpath(source_entry)
+
+
+def _source_state(source_entry: str, share: ShareKind) -> EntryState | None:
+    """source 側的前置檢查。回非 None 表示這個 entry 根本無法處理——必須在
+    「備份 target」之前就判出來，否則會把使用者的 live 檔搬走卻放不回任何東西。"""
+    if not os.path.lexists(source_entry):
+        return "source_missing"      # 只同步現有內容，不替使用者發明目錄
+    if share == "copy" and not os.path.isfile(source_entry):
+        return "source_unsupported"  # 目錄或 broken symlink：read_bytes 必然拋錯
+    if share == "symlink" and not os.path.exists(source_entry):
+        return "source_unsupported"  # broken source：連過去只會在 target 製造 broken link
+    return None
+
+
+def probe_entry(source_dir: str, target_dir: str, spec: EntrySpec) -> EntryState:
+    """以 lstat/lexists（**不 follow**）判 target 的實際型別。純探測，無副作用。"""
+    source_entry = os.path.join(source_dir, spec.name)
+    blocked = _source_state(source_entry, spec.share)
+    if blocked is not None:
+        return blocked
+    target_entry = os.path.join(target_dir, spec.name)
+    if not os.path.lexists(target_entry):
+        return "missing"
+    if os.path.islink(target_entry):
+        if spec.share == "copy":
+            return "unexpected_type"  # copy 項是 symlink＝非預期型別，備份後改實體檔
+        if not os.path.exists(target_entry):
+            return "broken_link"
+        return "ok" if _same_link_target(target_entry, source_entry) else "wrong_link"
+    if spec.share == "copy":
+        if not os.path.isfile(target_entry):
+            return "unexpected_type"  # 同名目錄
+        try:
+            same = Path(target_entry).read_bytes() == Path(source_entry).read_bytes()
+        except OSError:
+            return "content_differs"  # 讀不到就當不同，交給 overwrite gate 把關
+        return "ok" if same else "content_differs"
+    if os.path.isdir(target_entry):
+        return "empty_dir" if not os.listdir(target_entry) else "real_dir"
+    return "real_file"
+
+
+def plan(graph: AccountGraph, selected_entries: list[str]) -> Plan:
+    """對每個 (target, entry) 探測狀態並決定動作。除 lstat 探測外無副作用。"""
+    specs: list[EntrySpec] = []
+    for name in selected_entries:
+        spec = _SPEC_BY_NAME.get(name)
+        if spec is None:
+            raise ValueError("unknown_entry")   # 前端只能傳 allowlist 內的名字
+        specs.append(spec)
+
+    operations: list[Operation] = []
+    for account_key, target_dir in graph.targets.items():
+        for spec in specs:
+            target_path = os.path.join(target_dir, spec.name)
+            # entry name 來自 allowlist（無分隔符），仍驗一次 containment 讓不變式顯式成立
+            if not is_within_root(target_path, target_dir):
+                raise ValueError("unknown_entry")
+            state = probe_entry(graph.source_dir, target_dir, spec)
+            action, needs_overwrite = _action_for(state, spec.share)
+            operations.append(Operation(
+                account=account_key,
+                entry=spec.name,
+                target_path=target_path,
+                state=state,
+                action=action,
+                needs_overwrite=needs_overwrite,
+            ))
+    return Plan(source_dir=graph.source_dir, targets=dict(graph.targets), operations=operations)

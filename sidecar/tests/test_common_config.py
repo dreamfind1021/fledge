@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
@@ -178,3 +180,178 @@ def test_build_graph_allows_dir_outside_home(tmp_path: Path, monkeypatch):
     }
     g = cc.build_account_graph(accounts, "work", ["personal"])
     assert g.targets["personal"] == str(outside.resolve())
+
+
+def _dirs(tmp_path: Path) -> tuple[str, str]:
+    """回 (source_dir, target_dir)，兩者皆已建立。"""
+    src = tmp_path / "src"
+    src.mkdir()
+    tgt = tmp_path / "tgt"
+    tgt.mkdir()
+    return str(src), str(tgt)
+
+
+SYMLINK_SPEC = cc.EntrySpec("commands", "symlink", True)
+COPY_SPEC = cc.EntrySpec("CLAUDE.md", "copy", True)
+
+
+def test_probe_source_missing_wins_over_everything(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    # source 沒有 commands/，即便 target 有實體目錄也不該動 → source_missing
+    (Path(tgt) / "commands").mkdir()
+    assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "source_missing"
+
+
+def test_probe_missing_and_ok(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "missing"
+    (Path(tgt) / "commands").symlink_to(Path(src) / "commands")
+    assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "ok"
+
+
+def test_probe_ok_accepts_equivalent_link_written_differently(tmp_path: Path):
+    # 既有連結用相對路徑寫成，realpath 相同即視為 ok（不做無謂重建）
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    os.symlink(os.path.relpath(Path(src) / "commands", tgt), Path(tgt) / "commands")
+    assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "ok"
+
+
+def test_probe_wrong_and_broken_link(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    link = Path(tgt) / "commands"
+    link.symlink_to(elsewhere)
+    assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "wrong_link"
+    link.unlink()
+    link.symlink_to(tmp_path / "gone")
+    assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "broken_link"
+
+
+def test_probe_real_file_dir_and_empty_dir(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    empty = Path(tgt) / "commands"
+    empty.mkdir()
+    assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "empty_dir"  # 空目錄不必備份
+    (empty / "x.md").write_text("hi", encoding="utf-8")
+    assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "real_dir"
+    empty_rm = Path(tgt) / "commands"
+    (empty_rm / "x.md").unlink()
+    empty_rm.rmdir()
+    (Path(tgt) / "commands").write_text("actually a file", encoding="utf-8")
+    assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "real_file"
+
+
+def test_probe_copy_entry_states(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "CLAUDE.md").write_text("rules", encoding="utf-8")
+    assert cc.probe_entry(src, tgt, COPY_SPEC) == "missing"
+    (Path(tgt) / "CLAUDE.md").write_text("rules", encoding="utf-8")
+    assert cc.probe_entry(src, tgt, COPY_SPEC) == "ok"          # 內容相同
+    (Path(tgt) / "CLAUDE.md").write_text("different", encoding="utf-8")
+    assert cc.probe_entry(src, tgt, COPY_SPEC) == "content_differs"
+    (Path(tgt) / "CLAUDE.md").unlink()
+    (Path(tgt) / "CLAUDE.md").symlink_to(Path(src) / "CLAUDE.md")
+    assert cc.probe_entry(src, tgt, COPY_SPEC) == "unexpected_type"  # copy 項不該是 symlink
+
+
+def test_probe_rejects_source_types_the_action_cannot_handle(tmp_path: Path):
+    # source 型別必須先驗：否則 apply 會「先備份 target、再讀 source 失敗」，
+    # 把使用者的 live 檔搬走卻沒放回任何東西
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "CLAUDE.md").mkdir()                       # copy 項的 source 是目錄
+    assert cc.probe_entry(src, tgt, COPY_SPEC) == "source_unsupported"
+    (Path(src) / "CLAUDE.md").rmdir()
+    (Path(src) / "CLAUDE.md").symlink_to(tmp_path / "gone")  # broken symlink
+    assert cc.probe_entry(src, tgt, COPY_SPEC) == "source_unsupported"
+    # symlink 項的 source 是 broken symlink → 連過去只會製造 broken link，不做
+    (Path(src) / "commands").symlink_to(tmp_path / "gone")
+    assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "source_unsupported"
+
+
+def test_probe_accepts_copy_source_symlinked_to_regular_file(tmp_path: Path):
+    # source 是 symlink 指向實體檔＝可讀，忠實同步其內容（合法布局，不擋）
+    src, tgt = _dirs(tmp_path)
+    real = tmp_path / "real-claude.md"
+    real.write_text("shared", encoding="utf-8")
+    (Path(src) / "CLAUDE.md").symlink_to(real)
+    assert cc.probe_entry(src, tgt, COPY_SPEC) == "missing"
+
+
+def test_plan_maps_states_to_actions_and_overwrite_flag(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    for name in ("commands", "plugins", "skills"):
+        (Path(src) / name).mkdir()
+    (Path(src) / "CLAUDE.md").write_text("rules", encoding="utf-8")
+    (Path(tgt) / "plugins").mkdir()
+    (Path(tgt) / "plugins" / "a.json").write_text("{}", encoding="utf-8")  # real_dir
+    (Path(tgt) / "CLAUDE.md").write_text("mine", encoding="utf-8")          # content_differs
+    accounts = {"work": {"config_dir": src}, "personal": {"config_dir": tgt}}
+    g = cc.build_account_graph(accounts, "work", ["personal"])
+    p = cc.plan(g, ["commands", "plugins", "skills", "CLAUDE.md"])
+    by_entry = {o.entry: o for o in p.operations}
+    assert p.source_dir == str(Path(src).resolve())
+    assert p.targets == {"personal": str(Path(tgt).resolve())}
+    assert (by_entry["commands"].state, by_entry["commands"].action) == ("missing", "create_link")
+    assert by_entry["commands"].needs_overwrite is False
+    assert (by_entry["plugins"].state, by_entry["plugins"].action) == ("real_dir", "backup_and_link")
+    assert by_entry["plugins"].needs_overwrite is True
+    assert (by_entry["skills"].state, by_entry["skills"].action) == ("missing", "create_link")
+    assert (by_entry["CLAUDE.md"].state, by_entry["CLAUDE.md"].action) == (
+        "content_differs", "backup_and_copy")
+    assert by_entry["CLAUDE.md"].needs_overwrite is True
+    assert by_entry["commands"].target_path == str(Path(tgt).resolve() / "commands")
+
+
+def test_plan_missing_copy_entry_maps_to_copy_not_create_link(tmp_path: Path):
+    # missing 是唯一依 share 分流的狀態：copy 項不存在時要複製，不能建 symlink
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "CLAUDE.md").write_text("rules", encoding="utf-8")
+    (Path(src) / "commands").mkdir()
+    g = cc.build_account_graph(
+        {"work": {"config_dir": src}, "personal": {"config_dir": tgt}}, "work", ["personal"])
+    by_entry = {o.entry: o for o in cc.plan(g, ["commands", "CLAUDE.md"]).operations}
+    assert by_entry["CLAUDE.md"].state == "missing"
+    assert by_entry["CLAUDE.md"].action == "copy"
+    assert by_entry["commands"].action == "create_link"
+
+
+def test_action_for_handles_every_entry_state():
+    # 漏一個 state＝plan() 在該狀態下 KeyError。以 EntryState 自身列舉而非手抄清單，
+    # 日後新增狀態卻忘了補 _ACTION_BY_STATE 時這裡才會紅（映射表無法自我把關）。
+    states = get_args(cc.EntryState)
+    assert len(states) == 11
+    for state in states:
+        for share in ("symlink", "copy"):
+            action, needs_overwrite = cc._action_for(state, share)
+            assert action in get_args(cc.EntryAction)
+            assert isinstance(needs_overwrite, bool)
+
+
+def test_plan_rejects_unknown_entry(tmp_path: Path):
+    accounts = _accounts(tmp_path)
+    g = cc.build_account_graph(accounts, "work", ["personal"])
+    with pytest.raises(ValueError, match="unknown_entry"):
+        cc.plan(g, ["commands", "../../etc/passwd"])
+
+
+def test_plan_covers_every_target(tmp_path: Path):
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "commands").mkdir()
+    t1 = tmp_path / "t1"
+    t1.mkdir()
+    t2 = tmp_path / "t2"
+    t2.mkdir()
+    accounts = {
+        "work": {"config_dir": str(src)},
+        "a": {"config_dir": str(t1)},
+        "b": {"config_dir": str(t2)},
+    }
+    g = cc.build_account_graph(accounts, "work", ["a", "b"])
+    p = cc.plan(g, ["commands"])
+    assert sorted(o.account for o in p.operations) == ["a", "b"]
