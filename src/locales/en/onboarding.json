@@ -1,0 +1,109 @@
+{
+  "common": {
+    "prev": "Back",
+    "next": "Next",
+    "del": "Remove",
+    "browse": "Browse…",
+    "copy": "Copy",
+    "cancel": "Cancel",
+    "skip": "Skip"
+  },
+  "welcome": {
+    "h": "Welcome to Fledge",
+    "sub": "Fledge gives your Claude Code a graphical workbench: manage several projects, keep work and personal accounts apart, and run multiple sessions side by side.<br />Next we'll walk through your development environment and settings. Every step is optional — you can rerun any of them later from Settings.",
+    "cta": "Get started"
+  },
+  "roots": {
+    "h": "Choose your root folders",
+    "sub": "Each root folder's immediate subfolders are scanned as projects.",
+    "note": "<strong>Your settings file is created when you finish this step.</strong> Everything after this is optional — close the window whenever you like and the root folders you added are kept. Pick up the rest from Settings.",
+    "placeholder": "/absolute/path/to/root/folder",
+    "add": "Add root",
+    "next": "Save and continue"
+  },
+  "env": {
+    "h": "Development environment",
+    "sub": "Install anything that's missing right here, then hit Re-check to refresh.",
+    "core": "Core",
+    "recommended": "Recommended (optional)",
+    "installed": "Installed",
+    "missing": "Not installed",
+    "install": "Install",
+    "copyCmd": "Copy command",
+    "recheck": "Re-check",
+    "running": "Running",
+    "brewTitle": "Homebrew must be installed manually",
+    "brewHint": "The official installer is interactive and needs sudo — please run it in your own terminal.",
+    "confirmTitle": "About to run this command",
+    "confirmRun": "Run it",
+    "pathHint": "PATH and git identity: <code>~/.local/bin</code> must be on your PATH (claude and uv install there); commits fail if <code>git config --global user.name/user.email</code> is unset. Neither is detected automatically in this version."
+  },
+  "login": {
+    "h": "Sign in",
+    "sub": "Each account signs in separately — shared config files do not carry your login.",
+    "note": "Fledge <strong>cannot confirm whether a sign-in succeeded</strong>: on macOS, Claude keeps its credentials in the Keychain rather than the account's config directory. All we do here is open a terminal with the right account environment — check its output to see how it went.",
+    "open": "Open sign-in terminal",
+    "codexDesc": "Codex signs in globally, not per account.",
+    "later": "Sign in later"
+  },
+  "cc": {
+    "h": "Share settings across accounts",
+    "sub": "Let both accounts use one copy of commands, plugins, skills and settings instead of maintaining each side separately.",
+    "owner": "Real files live in <strong>{{source}}</strong>",
+    "ownerDesc": "{{target}} gets links pointing at {{source}}'s matching items. CLAUDE.md stays a real file on both sides.",
+    "linked": "linked → {{path}}",
+    "notYet": "not created yet",
+    "pointsElsewhere": "link points somewhere else",
+    "yourOwn": "you have your own version, contents differ",
+    "ready": "Ready",
+    "willLink": "Will link",
+    "willRelink": "Will re-point",
+    "keep": "Left as is",
+    "conflictHint": "CLAUDE.md is left untouched — setup only does things that can't overwrite your work. To replace it with {{source}}'s version, open the Development environment section in Settings, where you can authorise each item individually (it renames a backup first).",
+    "advHint": "The advanced item <code>projects</code> (shared session history) is left alone by default.",
+    "apply": "Apply shared settings",
+    "naTitle": "Not applicable",
+    "naDesc": "<code>{{path}}</code> doesn't exist — you're using a single account, so there's nothing to share.<br />This card reappears once you add a second account in Settings."
+  },
+  "sys": {
+    "h": "System settings",
+    "sub": "All three are optional and can be changed any time in Settings.",
+    "subsTitle": "Subscriptions and costs",
+    "subsDesc": "Used by the dashboard to work out net return (cost vs usage).",
+    "addItem": "Add item",
+    "kmsTitle": "Knowledge base root",
+    "kmsDesc": "The memory panel reads library/ and topics/ under this folder as cross-project knowledge.",
+    "kmsPlaceholder": "/absolute/path/to/knowledge-base",
+    "tplTitle": "Deploy a template",
+    "tpl1": "A CLAUDE.md and docs/ skeleton for a new project — generic, meant to be edited.",
+    "tpl2": "Personal development methodology documents.",
+    "tpl3": "Knowledge base directory skeleton.",
+    "notDeployed": "Not deployed",
+    "notBundled": "Not bundled",
+    "deployTo": "Deploy to",
+    "otherLocation": "Somewhere else…",
+    "deploy": "Deploy",
+    "deployHint": "Never overwrites: existing files at the destination are always kept, only what's missing is added.",
+    "skipAll": "Skip all"
+  },
+  "done": {
+    "h": "You're all set",
+    "summary": "Found <strong>{{projects}}</strong> projects<br />across <strong>{{roots}}</strong> root folders and <strong>{{accounts}}</strong> accounts",
+    "hint": "Anything you skipped — sign-in, templates — is waiting in the Development environment section of Settings.",
+    "enter": "Open Fledge"
+  },
+  "st": {
+    "title": "Settings",
+    "stub": "Root folders · Manual projects · Accounts · Knowledge base root (existing sections, not redrawn in this prototype)",
+    "devEnv": "Development environment",
+    "pending": "{{count}} pending",
+    "ccTitle": "Shared settings across accounts",
+    "ccDesc": "{{source}} → {{target}}. {{count}} pending your authorisation.",
+    "replaceWith": "Replace with {{source}}'s version",
+    "backupHint": "Ticked items are renamed to <code>{{name}}</code> before the link is created — nothing is deleted outright.",
+    "apply": "Apply",
+    "tplDesc": "{{name}} · bundled",
+    "deployTo": "Deploy to…",
+    "rerunHint": "Environment checks and sign-in are one-off steps — <rerun>rerun setup</rerun> whenever you need them."
+  }
+}
