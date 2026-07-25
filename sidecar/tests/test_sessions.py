@@ -487,3 +487,52 @@ def test_session_rejects_unknown_field_fail_closed(tmp_path: Path, monkeypatch):
         "path": str(tmp_path), "account": "work", "command": "rm -rf /",
     })
     assert resp.status_code == 422
+
+
+def test_login_session_injects_account_env_claude(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    captured = {}
+
+    def _fake_create_session(**kwargs):
+        captured.update(kwargs)
+        class _S: session_id = "sess-login"
+        return _S()
+
+    from fledge_sidecar.routes import sessions as sr
+    monkeypatch.setattr(sr._bridge, "create_session", _fake_create_session)
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": str(tmp_path), "account": "work", "kind": "login", "login_target": "claude",
+    })
+    assert resp.status_code == 200
+    assert captured["command"] == ["claude"]
+    # 登入 session：注入該帳號 CLAUDE_CONFIG_DIR（_write_config 設 work=/tmp/fake-claude）
+    assert captured["env_overrides"]["CLAUDE_CONFIG_DIR"] == "/tmp/fake-claude"
+    # login 不是 claude → 不歸屬（不進 _opened_session_ids），與 terminal 對稱（plan review #6）
+    assert captured["session_id"] not in sr._opened_session_ids
+
+
+def test_login_session_codex_target(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    captured = {}
+
+    def _fake_create_session(**kwargs):
+        captured.update(kwargs)
+        class _S: session_id = "sess-login2"
+        return _S()
+
+    from fledge_sidecar.routes import sessions as sr
+    monkeypatch.setattr(sr._bridge, "create_session", _fake_create_session)
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": str(tmp_path), "account": "work", "kind": "login", "login_target": "codex",
+    })
+    assert resp.status_code == 200
+    assert captured["command"] == ["codex", "login"]
+
+
+def test_login_session_unknown_account_400(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": str(tmp_path), "account": "ghost", "kind": "login",
+    })
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "unknown_account"

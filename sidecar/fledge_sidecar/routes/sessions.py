@@ -54,8 +54,9 @@ class CreateSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")  # 未知欄位（如注入 "command"）→ 422
     path: str
     account: str = ""  # install kind 不需帳號；其餘 kind 會驗證
-    kind: Literal["claude", "terminal", "install"] = "claude"  # login 由 05 票加入
+    kind: Literal["claude", "terminal", "install", "login"] = "claude"
     install_id: str | None = None   # kind=install 必填
+    login_target: Literal["claude", "codex"] = "claude"  # kind=login 用
 
 
 class ResizeRequest(BaseModel):
@@ -67,12 +68,14 @@ def _login_shell() -> str:
     return os.environ.get("SHELL") or "/bin/zsh"
 
 
-def _resolve_command(kind: str = "claude") -> list[str]:
+def _resolve_command(kind: str = "claude", login_target: str = "claude") -> list[str]:
     """claude session 跑 claude（測試模式用 FLEDGE_TEST_COMMAND 替代）；
-    terminal session 跑使用者登入 shell（不進 claude），spec §1.2。"""
+    terminal session 跑使用者登入 shell（不進 claude），spec §1.2；
+    login session 跑 claude（觸發 OAuth）或 codex login。"""
     if kind == "terminal":
-        shell = os.environ.get("SHELL") or "/bin/zsh"
-        return [shell, "-l"]
+        return [_login_shell(), "-l"]
+    if kind == "login":
+        return ["codex", "login"] if login_target == "codex" else ["claude"]
     test_cmd = os.environ.get("FLEDGE_TEST_COMMAND")
     if test_cmd:
         return test_cmd.split()
@@ -133,7 +136,7 @@ def create_session(req: CreateSessionRequest):
         _opened_session_ids.add(session_id)        # 標記為被歸屬，on_close 才會補 close
     try:
         session = _bridge.create_session(
-            command=_resolve_command(req.kind),
+            command=_resolve_command(req.kind, req.login_target),
             cwd=req.path,
             env_overrides=env_overrides,
             project_path=req.path,
