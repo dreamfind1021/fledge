@@ -40,7 +40,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `__main__.py` | entry：拿空 port、啟 uvicorn、印 `FLEDGE_PORT=` | `main()` |
 | `app.py` | FastAPI app 組裝、掛路由 + `TokenAuthMiddleware`（驗 `X-Fledge-Token`、真 preflight 放行）+ CORS 收緊到 Tauri origin + 啟動認證狀態 log；lifespan startup 呼 `account_activity.mark_process_start`（活動 log 孤兒回收基準）、shutdown 關所有 PTY session | `create_app()` |
 | `auth.py` | sidecar 認證純函式（fail-closed 預設 + `FLEDGE_TEST_UNAUTH=1` opt-out；call-time 讀 env）：`token_ok`（constant-time）、`require_ws_token`（WS 共用） | `auth_disabled()`, `configured_token()`, `token_ok()`, `require_ws_token()` |
-| `paths.py` | 路徑正規化純函式：`expand_and_validate`（拒空/相對）、`probe_dir`（os.stat 四態 dir/missing/not_dir/denied，不用 is_dir 以分 missing/denied）、`resolve_best_effort`（跟隨 symlink、永不 raise）、`canonicalize`；containment helper：`is_within_root`/`is_within_any_root`（以 root+os.sep 比對避免 prefix 偽命中） | `expand_and_validate()`, `probe_dir()`, `resolve_best_effort()`, `canonicalize()`, `DirStatus`, `is_within_root()`, `is_within_any_root()` |
+| `paths.py` | 路徑正規化純函式：`expand_and_validate`（拒空/相對）、`probe_dir`（os.stat 四態 dir/missing/not_dir/denied，不用 is_dir 以分 missing/denied）、`resolve_best_effort`（跟隨 symlink、永不 raise）、`canonicalize`；containment helper：`is_within_root`/`is_within_any_root`（以 root+os.sep 比對避免 prefix 偽命中）；目錄同一性 helper：`dir_identity`/`same_dir`/`is_same_or_within`（比 `(st_dev, st_ino)`——APFS 預設不分大小寫，字串比對判不出同一個目錄） | `expand_and_validate()`, `probe_dir()`, `resolve_best_effort()`, `canonicalize()`, `DirStatus`, `is_within_root()`, `is_within_any_root()`, `dir_identity()`, `same_dir()`, `is_same_or_within()` |
 | `app_config.py` | `~/.fledge/config.json` 讀寫（原子寫）+ root/manual/override/account 寫入 helpers（含 account_references + remove_account 級聯 reassign）+ `kms_root`（KMS 根目錄，raw 含 ~、runtime 才 expanduser、不過 _migrate_path）+ `set_kms_root`；load 時自我遷移既有路徑成 canonical（resolve）+ 依 canonical 去重 | `AppConfig`, `default_config_path()` |
 | `project_scanner.py` | 根目錄 depth=1 掃描（標所屬 root、套 project_overrides）+ CC 用過記錄合併；逐 root best-effort 容權限（`scan_all` 回 `(projects, permission_error)`）；`encode_cc_project_dir` 編碼對齊 Claude Code（非英數→`-`）；`scan_all` recent 跨帳號 union | `scan_all()`, `scan_root()`, `encode_cc_project_dir()` |
 | `dir_tree.py` | 列一層目錄純函式：`list_dir_entries`（排除 dotfiles、資料夾在前+名稱 casefold 升冪、內容層 no-raise，I/O 例外由呼叫端 wrap） | `list_dir_entries()` |
@@ -62,10 +62,13 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `memory/scanner.py` | 找檔（對來源永遠唯讀）：`native_memory_files` 三態歸屬（encoded 反查：1 命中 matched／≥2 ambiguous／0 orphan，跳 MEMORY.md）+ `kms_files` 只掃 `library/`+`topics/`、`is_kms_file_allowed` realpath containment（擋 hidden/`_*`/CLAUDE.md/逃逸 symlink，與 route 共用） | `NativeRef`, `KmsRef`, `native_memory_files()`, `kms_files()`, `is_kms_file_allowed()` |
 | `memory/links.py` | Fledge-owned `memory-links.json`（唯讀源外唯一寫入）：`LinksStore` 無向 (min,max) 去重 + dismissed 綁 pair + module-level lock 序列化並寫（read-modify-write 重讀）+ atomic write（tmp→rename）0600；`suggest_links` topic 名/tags 正規化⊇專案名（長度<4 只手動） | `LinksStore`, `suggest_links()`, `_norm()` |
 | `memory/aggregator.py` | 組面板 payload：scope 分層（native user/feedback→global、project/reference→project、其餘→unknown；kms→kb）、專案中心分組（已連 topic 掛 project、unattributed/unknown 皆可見不靜默丟）、in-memory 搜尋（含 body、回 snippet）；**overview 只回摘要不含 body** | `MemoryItem`, `to_item()`, `build_overview()`, `build_related()` |
-| `routes/setup.py` | `GET /api/setup/status`（開發環境偵測：回 `{tools:[ToolStatus…]}`；安裝／登入不在此——走 `POST /api/sessions` kind=install/login）＋共通設置兩端點 `POST /api/setup/common-config/plan`（唯讀預覽）／`/apply`（實際套用）：Pydantic body `extra="forbid"`、apply 由 server 以相同輸入**重算 plan**（ADR-0002，不吃 client plan）、`_setup_lock` 序列化並發 apply；錯誤分流 `_PlanError`——`config_unreadable` 500（`json.JSONDecodeError` 是 `ValueError` 子類，不可當判別碼外洩）／模組判別碼 400／`probe_failed` 500（探測期 `OSError`）；apply 另設 readiness 閘 `config_not_initialized` 400（設定檔不存在時 `AppConfig.load()` 會 fallback 到 DEFAULT_CONFIG 的真實 home 目錄，預覽不設此閘） | `router` |
+| `routes/setup.py` | `GET /api/setup/status`（開發環境偵測：回 `{tools:[ToolStatus…]}`；安裝／登入不在此——走 `POST /api/sessions` kind=install/login）＋共通設置兩端點 `POST /api/setup/common-config/plan`（唯讀預覽）／`/apply`（實際套用）：Pydantic body `extra="forbid"`、apply 由 server 以相同輸入**重算 plan**（ADR-0002，不吃 client plan）、`_setup_lock` 序列化並發 apply；錯誤分流 `_PlanError`——`config_unreadable` 500（`json.JSONDecodeError` 是 `ValueError` 子類，不可當判別碼外洩）／模組判別碼 400／`probe_failed` 500（探測期 `OSError`）；apply 另設 readiness 閘 `config_not_initialized` 400（設定檔不存在時 `AppConfig.load()` 會 fallback 到 DEFAULT_CONFIG 的真實 home 目錄，預覽不設此閘）；範本三端點 `GET /api/setup/templates`（allowlist 全列、`available` 由 manifest 讀不讀得出來判定，未內建也照列）／`POST .../templates/plan`（唯讀預覽）／`POST .../templates/deploy`（server 重算 plan、走同一把 `_setup_lock`），錯誤同合約（模組判別碼 400／`probe_failed` 500） | `router` |
 | `setup/install_specs.py` | 開發工具資料表＋allowlist 安裝命令：`ToolSpec`（id/label/tier/binary/version_argv/install_command/docs_url）常數表（macOS/Homebrew 生態，core＋recommended 兩級）；**安全不變式：安裝命令只能來自本檔常數、route 以 install_id 查表**，Homebrew 本體 install_command=None（僅手動複製指令） | `ToolSpec`, `TOOL_SPECS`, `get_spec()`, `get_install_command()` |
 | `setup/env_detect.py` | 開發工具偵測純函式：which 命中才探版本（`_VERSION_TIMEOUT` 2s＋ThreadPool 平行、保序）；which/run 參數注入便於測試；版本探測失敗→version=None 不中斷 | `ToolStatus`, `detect_tool()`, `detect_all()` |
 | `setup/common_config.py` | 雙帳號共通設置（B/C 共用）：`build_account_graph`（模組自為安全權威，expand→absolute→resolve＋拒 home／祖先／根＋拒 target 解析到 source、與 source 祖先—子孫重疊、target 彼此重複或彼此巢狀）、`probe_entry`（lstat no-follow 十一態，含 source 型別前置驗證；`ok` 判定要求 realpath 落在 source dir 內）、`plan`（純函式）、`apply`（逐項盡力＋mutation 前重探測與 target dir realpath 重驗擋 TOCTOU＋動作與授權需求由驗過的 state 重算＋`(account, entry)` 授權閘＋就地改名備份不覆蓋＋relink 走隔離改名不誤刪＋`_copy_file` 以 `O_EXCL` 不跟隨不覆蓋、寫滿短寫、失敗比對 inode 清半截檔）；目錄同一性與巢狀判定走 `(st_dev, st_ino)`（APFS 預設不分大小寫，字串比對會把 `~/.claude` 與 `~/.CLAUDE` 當成兩個目錄）；`apply` 逐 op 驗確實屬於 graph；`OpResult.error` 是穩定判別碼（errno 映射，完整例外只進 log）；INFO 記 apply 起訖與備份位置、WARNING 記 conflict/stale/failed、ERROR 帶 traceback，不記檔案內容；source entry 是 symlink 時連字面路徑不追鏈 | `ENTRY_SPECS`, `build_account_graph()`, `probe_entry()`, `plan()`, `apply()` |
+| `setup/safe_fs.py` | 檔案系統寫入原語（`common_config` 與 `templates` 共用）：`copy_file_no_clobber`（`O_EXCL｜O_NOFOLLOW` 不跟隨不覆蓋、選填 `dir_fd` 讓路徑不再經名稱解析、寫滿短寫、失敗比對 `(st_dev, st_ino)` 只清自己建的半截檔）、`error_code`（errno→穩定判別碼，含 macOS 對 `O_DIRECTORY｜O_NOFOLLOW` 開到 symlink 回的 `ENOTDIR`） | `copy_file_no_clobber()`, `error_code()` |
+| `setup/templates.py` | 範本部署：`TEMPLATE_SPECS` allowlist（含 `source_class`，build 分離的唯一真實來源；label/description 一律英文，B-4 以 id 對前端 i18n catalog）、`templates_root`（env 覆蓋＞凍結資料目錄＞repo public seed）、`build_manifest_entries`／`load_manifest`（**產生端與載入端各套一份**拒絕規則：symlink／絕對路徑／`..`／非 file-dir／重複 path／子項的目錄祖先未宣告／空 manifest；載入端另以 `lstat` **與實體種子樹對帳**——宣告不是證據，且輸出正規化成父在子前）、`resolve_destination`（正規化＋home 本身/祖先/根防呆，ADR-0001 取向）、`probe_entry`（`lexists`/`islink` no-follow 三態＋父目錄 realpath containment，走 inode 身分）、`plan`（唯讀預覽、conflict 停 subtree、blocked ancestry 逐元件上溯不用字串 prefix）、`deploy`（root fd 身分驗證＋每層子目錄 `O_DIRECTORY｜O_NOFOLLOW` 從父 fd 開出＋檔案以 `dir_fd` 寫入、只建目的地最後一層、寫入前 fd 相對重探、永不覆蓋、逐項盡力、穩定判別碼、INFO/WARNING/ERROR 稽核 log） | `TEMPLATE_SPECS`, `TemplateSpec`, `ManifestEntry`, `MANIFEST_FILENAME`, `templates_root()`, `get_template_spec()`, `build_manifest_entries()`, `load_manifest()`, `resolve_destination()`, `probe_entry()`, `plan()`, `deploy()` |
+| `setup/template_manifest.py` | artifact manifest（build／CI 對帳，runtime 不依賴）：`stage_templates`（來源樹先整棵盤點，symlink／非常規物件／id 不在 allowlist／分類與來源目錄不符一律**直接失敗**——不能交給 `rsync --no-links`，它遇 symlink 只印警告卻 exit 0）、`build_artifact_manifest`（分類取自 `TEMPLATE_SPECS`、**全部**範本都列、逐檔 sha256、目錄也登記）、`verify_artifact`（雙向對帳＋逐檔重算雜湊＋staged 根目錄白名單；fail-closed：`source_class` 與 allowlist **相等**比對、schema 驗證排在目錄判斷之前、缺席的 id 視為違規、`included=false` 連空目錄都不許存在；只回違規清單不拋例外） | `ARTIFACT_MANIFEST_FILENAME`, `stage_templates()`, `build_artifact_manifest()`, `verify_artifact()` |
 
 ### src/ — React 前端
 | 檔案 | 職責 | 匯出 |
@@ -130,7 +133,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `test_project_scanner.py` | depth=1 掃描、排除隱藏、root 欄位、套 override |
 | `test_projects.py` | /api/projects；tree endpoint（containment/kms_root deny/400/403/denied|missing|not_dir 200） |
 | `test_dir_tree.py` | `list_dir_entries`（dotfiles 排除/資料夾在前+名稱排序/空目錄/path 欄位） |
-| `test_paths.py` | containment helper（等於 root/子路徑/prefix 偽命中/root 外/trailing sep）＋既有 path 正規化 |
+| `test_paths.py` | containment helper（等於 root/子路徑/prefix 偽命中/root 外/trailing sep）＋目錄同一性 helper（APFS 大小寫別名、尚不存在的目錄不拋例外）＋既有 path 正規化 |
 | `test_config_routes.py` | config 寫入 endpoints（鎖/驗證/防呆/持久化） |
 | `test_pty_bridge.py` | PTY round-trip、env override、env_remove 剔除、並發 |
 | `test_sessions.py` | session 建立 + WS echo + resize + 模式 A + flow control（`_apply_flow_control` 單測 + pause 真閘住 PTY→WS/roundtrip/text 不入 PTY/壞 frame 不斷線/paused EOF→4001）+ kind=install/login（allowlist 命令/未知 install_id 400/不注入帳號 env/login 注入帳號 env/codex login/未知帳號 400/未知欄位 422） |
@@ -150,13 +153,19 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `test_memory_routes.py` | overview shape/links CRUD+dismiss/item 擋 traversal（403） |
 | `test_install_specs.py` | 資料表覆蓋 core 工具/欄位齊全/`get_spec`/`get_install_command` allowlist（未知 id、僅手動→None） |
 | `test_env_detect.py` | 偵測純函式（裝了探版本/沒裝跳過/探測失敗與 timeout 容忍/`detect_all` 一 spec 一 status） |
-| `test_setup_routes.py` | `/api/setup/status`（monkeypatch detect_all 注入假資料、回傳 shape）＋共通設置兩端點（plan 預覽不動 FS／apply 建連結／overwrite 閘與 pair 授權隔離／`_setup_lock` 並發序列化／400 判別碼／未知欄位與 client 夾帶 plan → 422／config 壞掉與探測 `OSError` 回判別碼不裸 500） |
+| `test_setup_routes.py` | `/api/setup/status`（monkeypatch detect_all 注入假資料、回傳 shape）＋共通設置兩端點（plan 預覽不動 FS／apply 建連結／overwrite 閘與 pair 授權隔離／`_setup_lock` 並發序列化／400 判別碼／未知欄位與 client 夾帶 plan → 422／config 壞掉與探測 `OSError` 回判別碼不裸 500）＋範本三端點（available 旗標／預覽不動 FS／deploy 真寫檔／四個 400 判別碼與 422／並發 deploy 序列化／`OSError`→`probe_failed`） |
+| `test_safe_fs.py` | 複製原語（短寫寫滿／`O_EXCL` 不覆蓋不寫穿 symlink／零長度寫視為失敗／失敗清半截檔／`dir_fd` 相對寫入）＋errno→判別碼映射（含 `ENOTDIR` 與 fallback） |
+| `test_templates.py` | 範本資料層與部署：allowlist／manifest 產生與載入的全部拒絕規則（含 `..` 鏈祖先全宣告的繞道）／父在子前正規化／目的地防呆／`probe_entry` 三態與逃逸父目錄／`plan` 四態與 conflict 停 subtree（含同前綴兄弟不誤擋）／`deploy`（永不覆蓋、只建最後一層、深度巢狀、兩種 fd 競態、祖先掉包→`destination_moved`、`stale`、穩定判別碼、稽核 log）／repo public seed 的 manifest drift |
+| `test_template_manifest.py` | artifact manifest：分類取自 spec 表／雙向對帳／雜湊重算／staged 根白名單／`included=false` 的 schema 與空目錄／缺席 id／symlink（含 manifest 也登記它的情形）／`stage_templates`（public-mode 排除 private、來源含 symlink 或 symlink 目錄即失敗、未知 id、分類放錯來源） |
+| `test_release_workflow.py` | release workflow 結構鎖（以 PyYAML 解析並剝註解行）：上傳步驟必須用 literal `|`（folded 會讓一個 `#` 吞掉整串）／驗證器與 drift 檢查必須在同一步驟且順序在上傳之前／private staging 前提斷言存在／release 不得帶 `--with-private-templates` |
 | `test_common_config.py` | allowlist／graph 防呆（target≡source、雙向祖先—子孫 overlap、target 彼此巢狀、home 祖先與根、平行 sibling 不誤擋）／十一態探測（含 source 型別前置、逃逸連結不判 ok）／`_action_for` 涵蓋全部十一態／apply 各分支／備份不覆蓋既有備份／TOCTOU stale／target dir 掉包與每 op 重驗／relink 不誤刪實體檔且不覆蓋競態新檔／per-account 授權隔離／symlink 不寫穿且原連結入備份／短寫寫滿 |
 
 ### build / 環境
 | 檔案 | 用途 |
 |------|------|
-| `sidecar/build_binary.sh` | PyInstaller 打包 sidecar 成 onedir 資料夾 + nested ad-hoc 簽章，rsync 到 `binaries/` |
+| `sidecar/build_binary.sh` | PyInstaller 打包 sidecar 成 onedir 資料夾 + nested ad-hoc 簽章，rsync 到 `binaries/`；另含範本 staging 階段（public 預設／`--with-private-templates` 才吃 `FLEDGE_PRIVATE_TEMPLATES_DIR`、逐範本重產 manifest、產 artifact manifest、打包前先跑驗證器）＋`--add-data build/templates:templates`。判定全在 `setup/template_manifest`，shell 只做 flag 解析與串接 |
+| `sidecar/resources/templates-public/` | 可進 repo 的 public 範本種子（`project-starter`：CLAUDE.md + docs/README.md + 提交版 `manifest.json`）。內容屬產品決策，改寫不需動程式碼；改動必須連同 manifest 一起提交（drift 檢查會擋） |
+| `scripts/verify_templates_artifact.py` | 薄 CLI 包住 `template_manifest.verify_artifact`（`--staged-root`／`--manifest`／`--allow-private`），供 `build_binary.sh` 與 release workflow 呼叫；違規或讀不到 manifest 一律 exit 1 |
 | `scripts/build-app-devtools.sh` | 偵錯打包：sidecar + `tauri build --features devtools`（帶 Web Inspector，啟動自動開）；給「只有打包版重現、dev 正常」的 bug 蒐證用。`npm run build:app:devtools`。正式 build 不帶 feature、不外洩 devtools |
 | `sidecar/pyproject.toml` | Python 依賴與測試設定 |
 | `vitest.config.ts` | 前端 vitest 設定（store lifecycle 測試） |
@@ -201,7 +210,10 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `sidecar/.../dir_tree.py`（列目錄邏輯變更） | `routes/projects.py`、`test_dir_tree.py` |
 | `sidecar/.../paths.py`（containment helper 變更） | `routes/projects.py`、`test_paths.py` |
 | `sidecar/.../routes/projects.py`（tree endpoint 變更） | `src/lib/sidecar.ts`、`Sidebar.tsx`/`FileTree*.tsx`、`test_projects.py` |
-| `sidecar/.../routes/setup.py`／`setup/*.py`（偵測 payload/資料表／共通設置合約變更） | `src/lib/sidecar.ts`（B-4 加 fetcher 後）、`test_setup_routes.py`、`test_env_detect.py`、`test_install_specs.py`、`test_common_config.py` |
+| `sidecar/.../routes/setup.py`／`setup/*.py`（偵測 payload/資料表／共通設置／範本合約變更） | `src/lib/sidecar.ts`（B-4 加 fetcher 後）、`test_setup_routes.py`、`test_env_detect.py`、`test_install_specs.py`、`test_common_config.py`、`test_templates.py`、`test_template_manifest.py` |
+| `sidecar/.../setup/templates.py`（`TEMPLATE_SPECS` 增刪／`source_class` 變更） | `setup/template_manifest.py`（分類唯一真實來源）、`sidecar/resources/templates-public/`（頂層目錄名須在 allowlist）、`.github/workflows/release.yml`（seed 分類與 drift 檢查）、`test_templates.py`、`test_template_manifest.py` |
+| `sidecar/build_binary.sh`（範本 staging 變更） | `scripts/verify_templates_artifact.py`、`.github/workflows/release.yml`、`setup/template_manifest.py`、`test_release_workflow.py` |
+| `sidecar/resources/templates-public/**`（seed 內容增刪） | 同目錄的 `manifest.json` 必須一起重產（`build_manifest_entries`），否則 `test_templates.py` 的 drift 測試與 release workflow 的 ③ 都會失敗 |
 | `src/lib/tabOrder.ts`（排序/插入邏輯變更） | `store/useAppStore.ts`、`tabOrder.test.ts` |
 | `src/lib/terminalRegistry.ts`（handle contract 變更） | `Terminal.tsx`、`App.tsx`（onDragEnd 貼路徑） |
 | `src/locales/*/sidebar.json`（key 增刪） | 另一語言 catalog 同步（`sidebar-parity.test.ts` 會擋）、`Sidebar.tsx`/`TabBar.tsx`/`FileTree*.tsx`/`Terminal.tsx` 的 t() 引用 |
@@ -220,6 +232,8 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `FLEDGE_CODEX_HOME` | 覆蓋 codex 資料根（觀測掃描；測試用） | `~/.codex` | ❌ |
 | `FLEDGE_USAGE_CACHE` | 覆蓋觀測 L2 快取路徑（測試用） | `~/.fledge/cache/usage-v1.json` | ❌ |
 | `FLEDGE_MEMORY_LINKS` | 覆蓋記憶層連結存儲路徑（測試用） | `~/.fledge/memory-links.json` | ❌ |
+| `FLEDGE_TEMPLATES_DIR` | 覆蓋範本根目錄（測試用） | 凍結時 `_MEIPASS/templates`，否則 repo `sidecar/resources/templates-public` | ❌ |
+| `FLEDGE_PRIVATE_TEMPLATES_DIR` | build 時私有範本 staging 來源（僅搭配 `--with-private-templates`；沒帶 flag 時完全不生效，release 禁止設定） | 無 | ❌ |
 
 ---
 

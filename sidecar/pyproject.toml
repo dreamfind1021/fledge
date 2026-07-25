@@ -15,6 +15,9 @@ dev = [
     "httpx>=0.27",
     "websockets>=13",
     "pyinstaller>=6.11",
+    # test_release_workflow.py 解析 release.yml 用。原本只是 uvicorn[standard] 的傳遞
+    # 相依（Required-by 為空），直接使用等於依賴一個沒宣告的東西。
+    "pyyaml>=6",
 ]
 
 [tool.pytest.ini_options]

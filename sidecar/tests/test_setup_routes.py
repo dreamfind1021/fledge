@@ -225,3 +225,127 @@ def test_common_config_apply_requires_initialised_config(tmp_path: Path, monkeyp
         json={"source": "work", "targets": ["personal"], "entries": ["commands"]},
     )
     assert r.status_code == 200
+
+
+def _templates_dir(tmp_path: Path, monkeypatch) -> Path:
+    """建一個只含 project-starter 的假範本根目錄（用正式 allowlist 內的 id）。"""
+    import json as _json
+
+    from fledge_sidecar.setup import templates as tp
+
+    root = tmp_path / "templates"
+    content = root / "project-starter"
+    (content / "docs").mkdir(parents=True)
+    (content / "docs" / "guide.md").write_text("guide", encoding="utf-8")
+    (content / "CLAUDE.md").write_text("rules", encoding="utf-8")
+    entries = tp.build_manifest_entries(str(content))
+    (content / tp.MANIFEST_FILENAME).write_text(
+        _json.dumps({"entries": [{"path": e.path, "type": e.type} for e in entries]}),
+        encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_TEMPLATES_DIR", str(root))
+    return root
+
+
+def test_templates_list_marks_availability(tmp_path: Path, monkeypatch):
+    _templates_dir(tmp_path, monkeypatch)
+    body = TestClient(create_app()).get("/api/setup/templates").json()
+    by_id = {t["id"]: t for t in body["templates"]}
+    assert by_id["project-starter"]["available"] is True
+    assert by_id["project-starter"]["source_class"] == "public"
+    # 這個 build 沒內建的範本要照列但標 available=false（前端顯示「未內建」而非崩潰）
+    assert by_id["dev-methodology"]["available"] is False
+
+
+def test_templates_plan_previews_without_mutating(tmp_path: Path, monkeypatch):
+    _templates_dir(tmp_path, monkeypatch)
+    dest = tmp_path / "work"
+    dest.mkdir()
+    r = TestClient(create_app()).post(
+        "/api/setup/templates/plan",
+        json={"template": "project-starter", "destination": str(dest)},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["state"] == "not_installed"
+    assert [o["path"] for o in body["operations"]] == ["CLAUDE.md", "docs", "docs/guide.md"]
+    assert not any(dest.iterdir())
+
+
+def test_templates_deploy_writes_files(tmp_path: Path, monkeypatch):
+    _templates_dir(tmp_path, monkeypatch)
+    dest = tmp_path / "work"
+    dest.mkdir()
+    r = TestClient(create_app()).post(
+        "/api/setup/templates/deploy",
+        json={"template": "project-starter", "destination": str(dest)},
+    )
+    assert r.status_code == 200
+    assert {x["outcome"] for x in r.json()["results"]} == {"created"}
+    assert (dest / "docs" / "guide.md").read_text(encoding="utf-8") == "guide"
+
+
+def test_templates_reject_bad_input(tmp_path: Path, monkeypatch):
+    _templates_dir(tmp_path, monkeypatch)
+    dest = tmp_path / "work"
+    dest.mkdir()
+    client = TestClient(create_app())
+    r = client.post("/api/setup/templates/plan",
+                    json={"template": "ghost", "destination": str(dest)})
+    assert r.status_code == 400 and r.json()["error"] == "unknown_template"
+    r = client.post("/api/setup/templates/plan",
+                    json={"template": "dev-methodology", "destination": str(dest)})
+    assert r.status_code == 400 and r.json()["error"] == "template_unavailable"
+    r = client.post("/api/setup/templates/plan",
+                    json={"template": "project-starter", "destination": "relative/dir"})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_destination"
+    r = client.post("/api/setup/templates/plan",
+                    json={"template": "project-starter", "destination": str(Path.home())})
+    assert r.status_code == 400 and r.json()["error"] == "unsafe_destination"
+    # 未知欄位 fail-closed（沿用 extra="forbid"）
+    r = client.post("/api/setup/templates/plan",
+                    json={"template": "project-starter", "destination": str(dest),
+                          "cmd": "rm -rf"})
+    assert r.status_code == 422
+
+
+def test_templates_deploy_serialises_concurrent_calls(tmp_path: Path, monkeypatch):
+    # _setup_lock：deploy 會動 FS。並發進來若不序列化，多個請求會同時看到 missing 然後
+    # 一起寫同一個路徑——O_EXCL 讓輸家拿到 target_exists（outcome=failed），使用者看到
+    # 一半成功一半失敗。序列化後應是「一個 created、其餘看到已完成→skipped」。
+    from concurrent.futures import ThreadPoolExecutor
+
+    _templates_dir(tmp_path, monkeypatch)
+    dest = tmp_path / "work"
+    dest.mkdir()
+    client = TestClient(create_app())
+    payload = {"template": "project-starter", "destination": str(dest)}
+
+    def _post():
+        return client.post("/api/setup/templates/deploy", json=payload)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        responses = [f.result() for f in [pool.submit(_post) for _ in range(8)]]
+    assert {r.status_code for r in responses} == {200}
+    outcomes = [next(x["outcome"] for x in r.json()["results"] if x["path"] == "CLAUDE.md")
+                for r in responses]
+    assert outcomes.count("created") == 1
+    assert set(outcomes) == {"created", "skipped"}, outcomes
+
+
+def test_templates_map_probe_failures_to_a_code(tmp_path: Path, monkeypatch):
+    # 探測期的 OSError 不是 client 輸入錯誤，但也不能裸 500——前端無從分辨與 i18n
+    # （CLAUDE.md §4.6.13）。與 common-config 兩端點的 probe_failed 合約一致。
+    _templates_dir(tmp_path, monkeypatch)
+    dest = tmp_path / "work"
+    dest.mkdir()
+
+    def _boom(template_id: str, destination_raw: str):
+        raise OSError("探測期 FS 出狀況")
+
+    monkeypatch.setattr(setup_mod.templates, "plan", _boom)
+    monkeypatch.setattr(setup_mod.templates, "deploy", _boom)
+    client = TestClient(create_app(), raise_server_exceptions=False)
+    for path in ("/api/setup/templates/plan", "/api/setup/templates/deploy"):
+        r = client.post(path, json={"template": "project-starter", "destination": str(dest)})
+        assert r.status_code == 500, path
+        assert r.json()["error"] == "probe_failed", path

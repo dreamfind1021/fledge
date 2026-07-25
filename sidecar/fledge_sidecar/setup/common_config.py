@@ -8,8 +8,6 @@
 """
 from __future__ import annotations
 
-import contextlib
-import errno
 import logging
 import os
 import time
@@ -18,7 +16,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from fledge_sidecar.paths import expand_and_validate, is_within_root, resolve_best_effort
+from fledge_sidecar.paths import (
+    expand_and_validate,
+    is_same_or_within,
+    is_within_root,
+    resolve_best_effort,
+    same_dir,
+)
+from fledge_sidecar.setup import safe_fs
 
 logger = logging.getLogger(__name__)
 
@@ -53,46 +58,6 @@ class AccountGraph:
     targets: dict[str, str]    # account key -> resolved dir
 
 
-def _dir_identity(path: str) -> tuple[int, int] | None:
-    """目錄的真實身分 (st_dev, st_ino)；不存在或讀不到回 None。
-
-    字串比對不足以判斷「是不是同一個目錄」：macOS 的 APFS 預設不分大小寫，
-    `~/.claude` 與 `~/.CLAUDE` 是同一個目錄，但 `Path.resolve()` 不做大小寫正規化，
-    兩者 resolve 完仍是不同字串。"""
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    return (st.st_dev, st.st_ino)
-
-
-def _same_dir(a: str, b: str) -> bool:
-    """兩個路徑是否指向同一個目錄。字串相等涵蓋尚不存在的目錄，inode 身分涵蓋
-    大小寫別名等字串看不出來的同一目錄。"""
-    if a == b:
-        return True
-    identity = _dir_identity(a)
-    return identity is not None and identity == _dir_identity(b)
-
-
-def _is_same_or_within(inner: str, outer: str) -> bool:
-    """inner 是否等於 outer 或落在其下。先字串比對（涵蓋尚不存在的目錄），
-    不中再以 inode 身分逐層上溯——大小寫別名的巢狀關係字串同樣看不出來。"""
-    if is_within_root(inner, outer):
-        return True
-    outer_id = _dir_identity(outer)
-    if outer_id is None:
-        return False
-    current = inner
-    while True:
-        if _dir_identity(current) == outer_id:
-            return True
-        parent = os.path.dirname(current)
-        if parent == current:      # 上溯到根仍未命中
-            return False
-        current = parent
-
-
 def _resolved_config_dir(accounts: dict[str, dict[str, str]], key: str) -> str:
     entry = accounts.get(key)
     if entry is None:
@@ -104,7 +69,7 @@ def _resolved_config_dir(accounts: dict[str, dict[str, str]], key: str) -> str:
         raise ValueError("invalid_config_dir") from exc
     # 底線防呆（ADR-0001）：resolved 是 home 本身或 home 的祖先（含 /）時，
     # containment root 大到形同不設防——必然是設錯，直接擋。
-    if _is_same_or_within(str(Path.home().resolve()), resolved):
+    if is_same_or_within(str(Path.home().resolve()), resolved):
         raise ValueError("unsafe_config_dir")
     return resolved
 
@@ -128,20 +93,20 @@ def build_account_graph(
         resolved = _resolved_config_dir(accounts, key)
         # key 不同不代表目錄不同（symlink 別名、尾斜線、APFS 大小寫別名）。target==source
         # 時備份動作會改名 source 自己的目錄，再連成指向自己的 broken link——必須在建
-        # graph 就擋死。比對走 _same_dir：純字串會被 ~/.claude vs ~/.CLAUDE 繞過。
-        if _same_dir(resolved, source_dir):
+        # graph 就擋死。比對走 paths.same_dir：純字串會被 ~/.claude vs ~/.CLAUDE 繞過。
+        if same_dir(resolved, source_dir):
             raise ValueError("target_equals_source")
         # 祖先／子孫重疊一樣有破壞性：source 在 target 之下時 target_path 會正好是
         # source 自己（備份把 source dir 改名）；target 在 source 之下時會在 source
         # 內建連結指回其父目錄（污染 source、可成環）。
-        if _is_same_or_within(resolved, source_dir) or _is_same_or_within(source_dir, resolved):
+        if is_same_or_within(resolved, source_dir) or is_same_or_within(source_dir, resolved):
             raise ValueError("overlapping_account_dirs")
-        if any(_same_dir(resolved, other) for other in seen):
+        if any(same_dir(resolved, other) for other in seen):
             raise ValueError("duplicate_target")
         # target 彼此巢狀是同一族破壞，只是發生在 target 側：外層 target 的 entry 路徑
         # 可能正好是內層 target 的整個 config_dir，備份會把內層帳號目錄改名。
         # 精確相同已由 duplicate_target 先擋，故此處只會命中真正的祖先／子孫關係。
-        if any(_is_same_or_within(resolved, other) or _is_same_or_within(other, resolved)
+        if any(is_same_or_within(resolved, other) or is_same_or_within(other, resolved)
                for other in seen):
             raise ValueError("overlapping_account_dirs")
         seen.add(resolved)
@@ -302,34 +267,6 @@ class ApplyResult:
     results: list[OpResult]
 
 
-def _copy_file(source_entry: str, target_path: str) -> None:
-    """複製實體檔。用 O_EXCL 開檔：不跟隨 symlink、也不覆蓋既有檔——
-    呼叫端保證 target_path 此刻不存在（missing 或剛備份完）。"""
-    data = Path(source_entry).read_bytes()
-    mode = os.stat(source_entry).st_mode & 0o777      # 沿用 source 權限，不擅自放寬
-    fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
-    created_ino = os.fstat(fd).st_ino
-    try:
-        # os.write 允許短寫（ENOSPC／EINTR 等）；忽略回傳值會靜默截斷卻仍回報 copied。
-        # backup_and_copy 是「先備份受害檔再複製」，截斷等於使用者的資料只剩在備份裡。
-        written = 0
-        while written < len(data):
-            n = os.write(fd, data[written:])
-            if n <= 0:
-                raise OSError(errno.EIO, "write made no progress")  # 不擋就是無限迴圈
-            written += n
-    except BaseException:
-        # 失敗時清掉這次自己建的半截檔——CLAUDE.md 是 claude 會實際讀的 live 設定，
-        # 留一份截斷的在那裡比沒有更糟（原檔在備份裡，重跑會看到 missing）。
-        # 比對 inode 才刪：空窗中若已被換成別的東西，不能誤刪別人的檔案。
-        with contextlib.suppress(OSError):
-            if os.lstat(target_path).st_ino == created_ino:
-                os.unlink(target_path)
-        raise
-    finally:
-        os.close(fd)
-
-
 def _backup(path: str) -> str:
     """就地改名成 <name>.fledge-backup-<時間戳>（同目錄 rename：原子、不跨卷、仍在
     containment root 內）。撞名時加序號——rename 對檔案是靜默覆蓋，直接用會吃掉舊備份。
@@ -348,25 +285,6 @@ def _backup(path: str) -> str:
         n += 1
     os.rename(path, candidate)
     return candidate
-
-
-# errno → 穩定判別碼。`str(OSError)` 夾帶 errno 文字與絕對路徑，是診斷細節而非前端
-# 合約（CLAUDE.md §4.6.13：sidecar 回 code、前端負責 i18n）。完整例外走 log。
-_ERROR_CODE_BY_ERRNO: dict[int, str] = {
-    errno.EACCES: "permission_denied",
-    errno.EPERM: "permission_denied",
-    errno.EROFS: "read_only_filesystem",
-    errno.ENOENT: "path_missing",
-    errno.EEXIST: "target_exists",
-    errno.ENOTEMPTY: "target_not_empty",
-    errno.ENOSPC: "no_space",
-    errno.EXDEV: "cross_device",
-    errno.ELOOP: "too_many_symlinks",
-}
-
-
-def _error_code(exc: OSError) -> str:
-    return _ERROR_CODE_BY_ERRNO.get(exc.errno or 0, "io_failed")
 
 
 def _apply_one(op: Operation, source_dir: str, overwrite: set[tuple[str, str]]) -> OpResult:
@@ -423,7 +341,7 @@ def _apply_one(op: Operation, source_dir: str, overwrite: set[tuple[str, str]]) 
             os.unlink(backup)                     # 確認是 symlink 才清掉隔離檔，不留垃圾
             return OpResult(op.account, op.entry, "relinked")
         if action == "copy":
-            _copy_file(source_entry, op.target_path)
+            safe_fs.copy_file_no_clobber(source_entry, op.target_path)
             return OpResult(op.account, op.entry, "copied")
         # 以下兩個是唯一「先毀後建」的動作（已過授權閘）。備份一律在 mutate 之前，
         # 且 backup 指派到 try 外層變數——中途失敗時使用者的資料只剩備份那一份，
@@ -434,13 +352,14 @@ def _apply_one(op: Operation, source_dir: str, overwrite: set[tuple[str, str]]) 
             return OpResult(op.account, op.entry, "created", backup_path=backup)
         if action == "backup_and_copy":
             backup = _backup(op.target_path)
-            _copy_file(source_entry, op.target_path)
+            safe_fs.copy_file_no_clobber(source_entry, op.target_path)
             return OpResult(op.account, op.entry, "copied", backup_path=backup)
     except OSError as exc:
         # 完整例外（含路徑與 traceback）只進 log；回給呼叫端的是穩定判別碼
         logger.error("共通設置檔案操作失敗：account=%s entry=%s action=%s backup=%s",
                      op.account, op.entry, action, backup, exc_info=True)
-        return OpResult(op.account, op.entry, "failed", backup_path=backup, error=_error_code(exc))
+        return OpResult(op.account, op.entry, "failed",
+                        backup_path=backup, error=safe_fs.error_code(exc))
     return OpResult(op.account, op.entry, "failed", error="unsupported_action")
 
 

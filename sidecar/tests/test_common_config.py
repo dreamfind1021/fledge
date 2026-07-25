@@ -576,38 +576,6 @@ def test_backup_never_overwrites_existing_backup(tmp_path: Path):
     assert Path(b2).read_text(encoding="utf-8") == "second"
 
 
-def test_copy_file_completes_short_writes(tmp_path: Path, monkeypatch):
-    # os.write 可能只寫入部分位元組（ENOSPC／EINTR）。忽略回傳值會靜默截斷卻仍回報
-    # copied——票 10 的 backup_and_copy 是「先備份受害檔再複製」，截斷等於資料只剩備份。
-    source = tmp_path / "CLAUDE.md"
-    payload = "x" * 5000
-    source.write_text(payload, encoding="utf-8")
-    target = tmp_path / "copied.md"
-    real_write = os.write
-    monkeypatch.setattr(cc.os, "write", lambda fd, data: real_write(fd, data[:4]))
-    cc._copy_file(str(source), str(target))
-    assert target.read_text(encoding="utf-8") == payload
-
-
-def test_copy_file_refuses_to_follow_or_clobber(tmp_path: Path):
-    # O_EXCL（票券不變式）：目標位置已被占用一律 EEXIST——不覆蓋既有實體檔，
-    # 也不沿最終元件的 symlink 寫穿到別處（那會寫出 account dir）。
-    source = tmp_path / "src.md"
-    source.write_text("rules", encoding="utf-8")
-    existing = tmp_path / "existing.md"
-    existing.write_text("MINE", encoding="utf-8")
-    with pytest.raises(FileExistsError):
-        cc._copy_file(str(source), str(existing))
-    assert existing.read_text(encoding="utf-8") == "MINE"
-    outside = tmp_path / "outside.md"
-    outside.write_text("OUTSIDE", encoding="utf-8")
-    link = tmp_path / "link.md"
-    link.symlink_to(outside)
-    with pytest.raises(FileExistsError):
-        cc._copy_file(str(source), str(link))
-    assert outside.read_text(encoding="utf-8") == "OUTSIDE"   # 沒寫穿
-
-
 def test_apply_rechecks_containment_before_every_op(tmp_path: Path, monkeypatch):
     # 票券不變式：「mkdir 後與每個 op 前各驗」。prepared 是 per-account 快取，只驗
     # mkdir 那次的話，多 entry 帳號在第一個 op 完成後被抽換，其餘 entry 會整批寫到
@@ -770,10 +738,13 @@ def test_failed_copy_replacement_still_reports_backup_path(tmp_path: Path, monke
     (Path(src) / "CLAUDE.md").write_text("shared", encoding="utf-8")
     (Path(tgt) / "CLAUDE.md").write_text("mine", encoding="utf-8")
 
-    def _boom(source_entry: str, target_path: str) -> None:
+    # 收 **kwargs：common_config 目前不傳 dir_fd，但 stub 不該綁死在呼叫端的當前寫法上
+    # ——真的收窄成兩個位置參數的話，哪天呼叫端加了關鍵字參數就會炸 TypeError
+    # （而 deploy 只捕 OSError），測試變成崩潰而不是紅。
+    def _boom(source_entry: str, target_path: str, **kwargs) -> None:
         raise PermissionError("nope")
 
-    monkeypatch.setattr(cc, "_copy_file", _boom)
+    monkeypatch.setattr(cc.safe_fs, "copy_file_no_clobber", _boom)
     g = _graph(src, tgt)
     r = cc.apply(cc.plan(g, ["CLAUDE.md"]), overwrite=[("personal", "CLAUDE.md")]).results[0]
     assert r.outcome == "failed"
@@ -840,37 +811,6 @@ def test_backup_survives_repeated_collisions_in_one_second(tmp_path: Path):
     assert len(set(backups)) == 4
     assert [Path(b).read_text(encoding="utf-8") for b in backups] == [
         "first", "second", "third", "fourth"]
-
-
-def test_copy_file_treats_zero_length_write_as_failure(tmp_path: Path, monkeypatch):
-    # os.write 回 0 代表沒有前進；不當成錯誤就是無限迴圈（掛住整個 sidecar 執行緒）
-    source = tmp_path / "CLAUDE.md"
-    source.write_text("x" * 100, encoding="utf-8")
-    target = tmp_path / "copied.md"
-    monkeypatch.setattr(cc.os, "write", lambda fd, data: 0)
-    with pytest.raises(OSError):
-        cc._copy_file(str(source), str(target))
-
-
-def test_copy_file_removes_its_partial_file_when_the_write_fails(tmp_path: Path, monkeypatch):
-    # 寫到一半失敗時，別把截斷的設定檔留在使用者的 live 位置（CLAUDE.md 是 claude
-    # 會實際讀的檔）。原檔在備份裡，重跑應看到 missing 而不是 content_differs。
-    source = tmp_path / "CLAUDE.md"
-    source.write_text("y" * 5000, encoding="utf-8")
-    target = tmp_path / "copied.md"
-    real_write = os.write
-    calls = []
-
-    def _fail_after_first_chunk(fd, data):
-        if calls:
-            raise OSError("disk full")
-        calls.append(1)
-        return real_write(fd, data[:10])
-
-    monkeypatch.setattr(cc.os, "write", _fail_after_first_chunk)
-    with pytest.raises(OSError):
-        cc._copy_file(str(source), str(target))
-    assert not target.exists(), "半截檔必須清掉，不能留在 live 位置"
 
 
 def test_apply_reports_stable_error_codes_not_raw_os_messages(tmp_path: Path, monkeypatch):

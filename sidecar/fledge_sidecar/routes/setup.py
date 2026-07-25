@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from fledge_sidecar.app_config import AppConfig, default_config_path
-from fledge_sidecar.setup import common_config
+from fledge_sidecar.setup import common_config, templates
 from fledge_sidecar.setup.env_detect import detect_all
 
 router = APIRouter()
@@ -105,3 +105,68 @@ def common_config_apply(body: CommonConfigApplyBody):
             result, [(o.account, o.entry) for o in body.overwrite]
         )
     return {"results": [asdict(r) for r in applied.results]}
+
+
+class TemplateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")   # 未知欄位 → 422
+    template: str
+    destination: str
+
+
+def _template_available(template_id: str) -> bool:
+    """這個 build 是否真的內建了該範本（manifest 讀得出來才算）。"""
+    try:
+        templates.load_manifest(template_id)
+    except ValueError:
+        return False
+    return True
+
+
+@router.get("/api/setup/templates")
+def list_templates():
+    """列出 allowlist 內的所有範本；未內建者標 available=false 讓前端顯示「未內建」。"""
+    return {"templates": [
+        {
+            "id": spec.id,
+            "label": spec.label,
+            "description": spec.description,
+            "source_class": spec.source_class,
+            "available": _template_available(spec.id),
+        }
+        for spec in templates.TEMPLATE_SPECS
+    ]}
+
+
+@router.post("/api/setup/templates/plan")
+def templates_plan(body: TemplateBody):
+    """唯讀預覽：回逐檔狀態與整體狀態，不動檔案系統。"""
+    try:
+        result = templates.plan(body.template, body.destination)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except OSError:
+        # 探測期 FS 出狀況（目錄不可讀、競態中消失）：非 client 輸入錯誤，但仍回判別碼
+        return JSONResponse(status_code=500, content={"error": "probe_failed"})
+    return {
+        "template": result.template,
+        "destination": result.destination,
+        "state": result.state,
+        "operations": [asdict(o) for o in result.operations],
+    }
+
+
+@router.post("/api/setup/templates/deploy")
+def templates_deploy(body: TemplateBody):
+    """部署範本。plan 由 server 重算（不接受 client 傳入的 plan），寫入以 _setup_lock 序列化。"""
+    with _setup_lock:
+        try:
+            result = templates.deploy(body.template, body.destination)
+        except ValueError as exc:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        except OSError:
+            return JSONResponse(status_code=500, content={"error": "probe_failed"})
+    return {
+        "template": result.template,
+        "destination": result.destination,
+        "results": [asdict(r) for r in result.results],
+    }

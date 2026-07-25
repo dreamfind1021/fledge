@@ -1,5 +1,8 @@
-"""路徑正規化與 robust 目錄探測。寫入邊界與 scanner 一致用 resolve()。
-設計見 docs/planning/path-normalization-design.md。"""
+"""路徑正規化、robust 目錄探測與目錄同一性判定。寫入邊界與 scanner 一致用 resolve()。
+設計見 docs/planning/path-normalization-design.md。
+
+同一性判定（`dir_identity`／`same_dir`／`is_same_or_within`）以 (st_dev, st_ino) 比對：
+會刪改檔案的 containment 防呆不能只靠字串，macOS 的 APFS 預設不分大小寫。"""
 from __future__ import annotations
 
 import os
@@ -60,3 +63,43 @@ def is_within_root(realpath: str, root: str) -> bool:
 
 def is_within_any_root(realpath: str, roots: list[str]) -> bool:
     return any(is_within_root(realpath, r) for r in roots)
+
+
+def dir_identity(path: str) -> tuple[int, int] | None:
+    """目錄的真實身分 (st_dev, st_ino)；不存在或讀不到回 None。
+
+    字串比對不足以判斷「是不是同一個目錄」：macOS 的 APFS 預設不分大小寫，
+    `~/.claude` 與 `~/.CLAUDE` 是同一個目錄，但 `Path.resolve()` 不做大小寫正規化，
+    兩者 resolve 完仍是不同字串。"""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def same_dir(a: str, b: str) -> bool:
+    """兩個路徑是否指向同一個目錄。字串相等涵蓋尚不存在的目錄，inode 身分涵蓋
+    大小寫別名等字串看不出來的同一目錄。"""
+    if a == b:
+        return True
+    identity = dir_identity(a)
+    return identity is not None and identity == dir_identity(b)
+
+
+def is_same_or_within(inner: str, outer: str) -> bool:
+    """inner 是否等於 outer 或落在其下。先字串比對（涵蓋尚不存在的目錄），
+    不中再以 inode 身分逐層上溯——大小寫別名的巢狀關係字串同樣看不出來。"""
+    if is_within_root(inner, outer):
+        return True
+    outer_id = dir_identity(outer)
+    if outer_id is None:
+        return False
+    current = inner
+    while True:
+        if dir_identity(current) == outer_id:
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:      # 上溯到根仍未命中
+            return False
+        current = parent
