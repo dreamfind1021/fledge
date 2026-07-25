@@ -24,28 +24,44 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);   // 展開手動指令的那一列
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // latest-request-wins：偵測會重疊（重啟 sidecar 換 port 就會在舊請求在途時再發一次），
+  // 晚到的舊回應若照樣寫進 state，畫面會退回上一輪的結果、或在正確結果上蓋一條過期錯誤。
+  const reqId = useRef(0);
+  const mounted = useRef(true);
 
   const load = useCallback(async () => {
     if (port == null) return;
+    const myId = ++reqId.current;
     setLoading(true);
     setError(null);
     try {
-      setTools(await fetchSetupStatus(port));
+      const next = await fetchSetupStatus(port);
+      if (reqId.current !== myId) return;
+      setTools(next);
     } catch (e) {
+      if (reqId.current !== myId) return;
       // 偵測失敗要可見（沉默的空清單會被當成「什麼都沒裝」）；舊結果保留在畫面上
       setError(t("errors.status_failed", { reason: String(e) }));
     } finally {
-      setLoading(false);
+      if (reqId.current === myId) setLoading(false);
     }
   }, [port, t]);
 
   useEffect(() => { load(); }, [load]);
-  // unmount 後 setState 沒有意義（且 timer 會多活 2 秒）
-  useEffect(() => () => { if (copiedTimer.current) clearTimeout(copiedTimer.current); }, []);
+  useEffect(() => {
+    mounted.current = true;   // StrictMode 會 mount→cleanup→再 mount，這裡要重設回來
+    return () => {
+      mounted.current = false;
+      reqId.current += 1;     // 使在途請求失效，卸載後不再 setState
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    };
+  }, []);
 
   const copy = async (tool: ToolStatus) => {
     if (!tool.manual_command) return;
-    if (!(await writeClipboard(tool.manual_command))) return;   // 失敗不謊稱已複製
+    const ok = await writeClipboard(tool.manual_command);
+    // 卸載可能發生在寫入完成前——cleanup 已經跑過，此時再排 timer 就沒人清得掉
+    if (!ok || !mounted.current) return;   // 失敗不謊稱已複製
     setCopiedId(tool.id);
     if (copiedTimer.current) clearTimeout(copiedTimer.current);
     copiedTimer.current = setTimeout(() => setCopiedId(null), COPIED_FEEDBACK_MS);

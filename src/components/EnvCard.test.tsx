@@ -135,6 +135,56 @@ describe("EnvCard 環境偵測卡", () => {
     expect(ghRow.querySelector("button")).toBeNull(); // 已安裝 → 安裝按鈕消失
   });
 
+  // 重疊偵測的真實入口是 port 變更（重啟 sidecar）——「重新檢查」在 loading 時是 disabled 的。
+  // 先發的請求晚到時若照樣寫進 state，畫面會退回上一個 sidecar 的偵測結果。
+  it("重疊偵測：先發的回應晚到也不能覆蓋新結果", async () => {
+    let resolveStale!: (v: ToolStatus[]) => void;
+    fetchSetupStatus.mockImplementationOnce(() => new Promise<ToolStatus[]>((r) => { resolveStale = r; }));
+    fetchSetupStatus.mockResolvedValue([{ ...gh, installed: true, version: "gh 2.65.0" }]);
+
+    const ui = render(<EnvCard port={1234} onPrev={noop} onNext={noop} />);
+    ui.rerender(<EnvCard port={5678} onPrev={noop} onNext={noop} />); // 新 port → 新一輪偵測
+    await waitFor(() => expect(ui.container.textContent).toContain("gh 2.65.0"));
+
+    resolveStale([node]); // 舊 sidecar 的回應這時才到
+    await waitFor(() => expect(ui.container.textContent).toContain("gh 2.65.0"));
+    expect(ui.queryByText("Node.js")).toBeNull();
+  });
+
+  it("重疊偵測：先發的失敗晚到也不能在新結果上蓋錯誤", async () => {
+    let rejectStale!: (e: Error) => void;
+    fetchSetupStatus.mockImplementationOnce(() => new Promise<ToolStatus[]>((_, rej) => { rejectStale = rej; }));
+    fetchSetupStatus.mockResolvedValue([node]);
+
+    const ui = render(<EnvCard port={1234} onPrev={noop} onNext={noop} />);
+    ui.rerender(<EnvCard port={5678} onPrev={noop} onNext={noop} />);
+    await waitFor(() => expect(ui.getByText("Node.js")).toBeTruthy());
+
+    rejectStale(new Error("HTTP 500"));
+    await waitFor(() => expect(ui.getByText("Node.js")).toBeTruthy());
+    expect(ui.queryByRole("alert")).toBeNull();
+  });
+
+  // 複製的 Promise 尚未 resolve 就切頁：cleanup 已跑完，回呼不得再排一個逃過清理的 timer
+  it("複製途中卸載：resolve 後不再排 timer", async () => {
+    let resolveWrite!: (v: boolean) => void;
+    writeClipboard.mockImplementationOnce(() => new Promise<boolean>((r) => { resolveWrite = r; }));
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText("Homebrew")).toBeTruthy());
+    ui.getByText(zh.env.copyCmd).click();
+    await waitFor(() => expect(ui.getByText(zh.common.copy)).toBeTruthy());
+    ui.getByText(zh.common.copy).click();
+
+    cleanup(); // 卸載發生在 writeClipboard 完成之前
+    const timers = vi.spyOn(globalThis, "setTimeout");
+    resolveWrite(true);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(timers).not.toHaveBeenCalled();
+    timers.mockRestore();
+  });
+
   it("偵測失敗顯示錯誤訊息，且可再按重新檢查重試", async () => {
     fetchSetupStatus.mockRejectedValue(new Error("HTTP 500"));
     const ui = renderCard();
