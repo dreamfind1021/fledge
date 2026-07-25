@@ -645,3 +645,26 @@ def test_repo_public_seed_manifest_matches_its_content():
     generated = [{"path": e.path, "type": e.type}
                  for e in tp.build_manifest_entries(str(root))]
     assert committed["entries"] == generated
+
+
+def test_deploy_blocks_the_subtree_when_an_existing_dir_cannot_be_opened(tmp_path: Path,
+                                                                        monkeypatch):
+    # 既有目錄被判 skipped，但取 fd 失敗（權限／fd 用盡／抽換）時，其下必須整片停手。
+    # 這靠兩層守衛組合：present 分支的 except OSError → blocked，以及後代處理前的
+    # `parent_rel not in open_dirs`。原本只有「新建目錄後開 fd 失敗」被測到。
+    _demo_with_content(tmp_path)
+    dest = tmp_path / "work"
+    (dest / "docs").mkdir(parents=True)          # 目的地已有 docs（會走 present→skipped）
+    real_open_child = tp._open_child_dir
+
+    def _fail_for_docs(name, parent_fd):
+        if name == "docs":
+            raise PermissionError(13, "Permission denied")
+        return real_open_child(name, parent_fd)
+
+    monkeypatch.setattr(tp, "_open_child_dir", _fail_for_docs)
+    by_path = {r.path: r.outcome for r in tp.deploy("demo", str(dest)).results}
+    assert by_path["docs"] == "skipped"           # 目錄本來就在，不是失敗
+    assert by_path["docs/guide.md"] == "conflict"  # 但其下不得嘗試寫入
+    assert not (dest / "docs" / "guide.md").exists()
+    assert by_path["CLAUDE.md"] == "created"     # 逐項盡力：不相干的項目照做

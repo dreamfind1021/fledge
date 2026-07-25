@@ -75,6 +75,11 @@ jobs:
 
       - name: Verify + package (驗證失敗就沒有可上傳的檔案)
         run: |
+          # GitHub 預設 shell 是 `bash -e {0}`——**沒有 pipefail**。本步驟第④段是
+          # `python3 -c ... | while read`，左側 python 若語法錯／import 失敗會非 0 退出，
+          # 但右側 while 在零筆輸入下回 0，整條 pipeline 就變成 0，後面的 tar／upload／
+          # publish 照樣執行＝驗證缺席卻靜默通過。fail-closed 必須自己開 pipefail。
+          set -euo pipefail
           APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Fledge.app"
           STAGE="$APP/Contents/Resources/fledge-sidecar/_internal/templates"
 
