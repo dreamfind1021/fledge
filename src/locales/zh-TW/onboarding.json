@@ -6,7 +6,8 @@
     "browse": "瀏覽…",
     "copy": "複製",
     "cancel": "取消",
-    "skip": "略過"
+    "skip": "略過",
+    "progress": "設定步驟"
   },
   "welcome": {
     "h": "歡迎使用 Fledge",
@@ -19,7 +20,8 @@
     "note": "<strong>這一步完成後會建立設定檔。</strong>之後的每一步都可以略過或關閉視窗——已加入的根目錄不會遺失，未完成的部分可在設定頁繼續。",
     "placeholder": "/絕對路徑/到/工作根目錄",
     "add": "+ 加根",
-    "next": "建立設定並繼續"
+    "next": "建立設定並繼續",
+    "created": "設定檔已建立。根目錄之後可在設定頁調整。"
   },
   "env": {
     "h": "開發環境",
@@ -105,5 +107,13 @@
     "tplDesc": "{{name}} · 已內建",
     "deployTo": "部署到…",
     "rerunHint": "環境偵測與帳號登入是一次性的，需要時可 <rerun>重跑引導</rerun>。"
+  },
+  "errors": {
+    "invalid": "請輸入有效的絕對路徑",
+    "missing": "找不到此資料夾",
+    "not_dir": "這不是資料夾",
+    "denied": "部分資料夾無法讀取，請到系統設定授權",
+    "scan_failed": "掃描失敗：{{reason}}",
+    "onboard_failed": "設定寫入失敗：{{reason}}"
   }
 }

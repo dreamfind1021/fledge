@@ -1,23 +1,30 @@
 /* ===== Onboarding.css — 品牌 token 版 ===== */
 
 /* ── 全螢幕 overlay（onboarding 為強制向導，無關閉鈕）── */
+/* align-items:center + overflow:hidden 在內容高過視窗時會裁掉頂端且捲不回去（三步精靈
+   夠短沒露出來，環境頁一放進來品牌 header 就整塊消失）。改 flex-start + overflow:auto，
+   置中交給 .ob-inner 的 margin:auto 0：短內容仍垂直置中、長內容從頂端開始可捲。 */
 .ob-overlay {
   position: fixed;
   inset: 0;
   background: var(--bg);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   z-index: 400;
   font-family: var(--font-ui);
   color: var(--text);
-  overflow: hidden;
+  overflow: auto;
+  padding: 28px 0;
 }
 
 /* ── 裝飾光暈（pointer-events none，擺在 inner 之後）── */
+/* 用 fixed 而非 absolute：overlay 改 overflow:auto 後，向下／向右溢出的絕對定位元素會撐出
+   多餘捲動空間（glow-two 的 bottom:-260px 正是這種）。overlay 本身就是全屏 fixed，兩者
+   定位結果一致，但 fixed 不計入捲動區域。 */
 /* 上方：primary 暖光，對應 demo .ob-glow */
 .ob-glow {
-  position: absolute;
+  position: fixed;
   width: 760px;
   height: 760px;
   border-radius: 50%;
@@ -34,7 +41,7 @@
 
 /* 左下：ai 冷光，對應 demo .ob-glow.two */
 .ob-glow-two {
-  position: absolute;
+  position: fixed;
   width: 760px;
   height: 760px;
   border-radius: 50%;
@@ -56,10 +63,18 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 560px;
+  width: 720px;
+  margin: auto 0; /* 配合 overlay 的 flex-start：短內容仍垂直置中 */
 }
 
-/* ── 品牌 header（三步都持續顯示）── */
+/* ── 語言切換定位（絕對定位，不佔流佈局故各頁高度一致）── */
+.ob-lang {
+  position: absolute;
+  top: 0;
+  right: 0;
+}
+
+/* ── 品牌 header（每頁都持續顯示）── */
 .ob-logo {
   display: flex;
   align-items: center;
@@ -143,6 +158,23 @@
   color: var(--dim);
   margin: 0 0 18px;
   line-height: 1.5;
+}
+
+/* ── 說明區塊（根目錄頁的落檔提示，demo .b4-note）── */
+.ob-note {
+  background: color-mix(in srgb, var(--ai) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ai) 22%, transparent);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.55;
+  margin-bottom: 14px;
+}
+
+.ob-note strong {
+  color: var(--text);
+  font-weight: 600;
 }
 
 /* ── 內嵌訊息（錯誤 / 注意）── */
@@ -326,7 +358,8 @@
   font-size: 13.5px;
 }
 
-.ob-summary b {
+/* catalog 的 done.summary 用 <strong> 標數字（i18n-design §2.3：語意標記進 catalog、樣式留 CSS） */
+.ob-summary strong {
   color: var(--text);
   font-weight: 700;
 }
