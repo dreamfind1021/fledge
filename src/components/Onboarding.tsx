@@ -33,6 +33,7 @@ export function Onboarding({ onClose }: OnboardingProps) {
   const port = useAppStore((s) => s.port);
   const config = useAppStore((s) => s.config);
   const completeOnboarding = useAppStore((s) => s.completeOnboarding);
+  const loadConfig = useAppStore((s) => s.loadConfig); // onboard 失敗時向後端對帳落檔狀態
   // 首次時 config 為 in-memory DEFAULT（accounts = work/personal）
   const accountKeys = config ? Object.keys(config.accounts) : ["work", "personal"];
 
@@ -121,10 +122,22 @@ export function Onboarding({ onClose }: OnboardingProps) {
       setConfigCreated(true);
       next();
     } catch (e) {
-      // completeOnboarding 是兩步：onboard 落檔 → 重載專案清單。後半失敗也會走到這裡，但設定檔
-      // 已經寫進去且不可逆——誤判成未落檔的話，使用者再按一次只會撞 409 死循環。用 store config
-      // 對帳：onboard 成功會把 config 換成帶 is_first_run:false 的回應，失敗則原封不動。
-      const saved = useAppStore.getState().config?.is_first_run !== true;
+      // 落檔是不可逆的，誤判成未落檔會讓使用者再按一次撞 409 死循環。而失敗有兩種形狀：
+      //   ① onboard 成功、後半的專案重載才失敗 → store config 已是帶 is_first_run:false 的回應
+      //   ② 落檔已發生但事實沒進 store —— onboard() 是 resp.ok 之後才 resp.json()，body 截斷或
+      //      sidecar 在 config.save() 之後斷線都屬此類
+      // ② 用快照推斷不出來，所以快照說「還沒落檔」時不採信，回頭問後端（is_first_run 是後端依
+      // 設定檔存在與否即時算的，唯一權威）。連後端都問不到就維持未落檔——狀態不明時，讓下一次
+      // 重試去撞 409 也好過默默往下走。
+      let saved = useAppStore.getState().config?.is_first_run !== true;
+      if (!saved) {
+        try {
+          await loadConfig();
+          saved = useAppStore.getState().config?.is_first_run !== true;
+        } catch (reconcileError) {
+          console.warn("[onboarding] 落檔狀態對帳失敗，維持未落檔", reconcileError);
+        }
+      }
       if (saved) setConfigCreated(true);
       // onboard 409/400/連線錯誤要可見（Codex final review L2）；已落檔時不能謊稱寫入失敗
       setError(t(saved ? "errors.projects_reload_failed" : "errors.onboard_failed", { reason: String(e) }));

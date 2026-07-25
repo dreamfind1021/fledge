@@ -46,6 +46,7 @@ describe("Onboarding 精靈外殼", () => {
       completeOnboarding: async () => {
         onboardCalls += 1;
       },
+      loadConfig: async () => {}, // 預設：後端對帳結果與快照一致（仍未落檔）
     });
   });
   afterEach(cleanup); // vitest 未開 globals → testing-library 不會自動 cleanup
@@ -99,6 +100,48 @@ describe("Onboarding 精靈外殼", () => {
     ui.getByText(zh.common.next).click(); // 主按鈕已轉為單純前進
     await waitFor(() => expect(ui.getByText(zh.env.h)).toBeTruthy());
     expect(onboardCalls).toBe(1);
+  });
+
+  // onboard() 是 resp.ok 之後才 resp.json()：body 截斷／sidecar 在 config.save() 後斷線，都會讓
+  // 「已落檔」這個事實根本沒進 store 快照。落檔與否只有後端說了算，快照推斷不出來。
+  it("onboard 回應解析失敗但後端已落檔：向後端對帳後不重打 onboard", async () => {
+    useAppStore.setState({
+      completeOnboarding: async () => {
+        onboardCalls += 1;
+        throw new Error("Unexpected end of JSON input"); // 落檔已發生，config 卻沒更新
+      },
+      loadConfig: async () => {
+        useAppStore.setState({ config: { ...baseConfig, is_first_run: false } }); // 後端：檔案在
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachRootsWithDraft(ui);
+
+    ui.getByText(zh.roots.next).click();
+
+    await waitFor(() => expect(ui.getByText(zh.roots.created)).toBeTruthy());
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.env.h)).toBeTruthy());
+    expect(onboardCalls).toBe(1);
+  });
+
+  it("對帳本身也失敗（sidecar 不可用）：維持未落檔，不擅自前進", async () => {
+    useAppStore.setState({
+      completeOnboarding: async () => {
+        onboardCalls += 1;
+        throw new Error("Failed to fetch");
+      },
+      loadConfig: async () => {
+        throw new Error("Failed to fetch"); // 後端問不到 → 狀態不明時採保守解
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachRootsWithDraft(ui);
+
+    ui.getByText(zh.roots.next).click();
+
+    await waitFor(() => expect(ui.getByText(/設定寫入失敗/)).toBeTruthy());
+    expect(ui.getByText(zh.roots.next)).toBeTruthy(); // 主按鈕仍是「建立設定並繼續」
   });
 
   it("onboard 本身失敗（config 未更新）：仍視為未落檔，可重試", async () => {
