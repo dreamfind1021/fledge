@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from dataclasses import dataclass
@@ -47,6 +48,46 @@ class AccountGraph:
     targets: dict[str, str]    # account key -> resolved dir
 
 
+def _dir_identity(path: str) -> tuple[int, int] | None:
+    """目錄的真實身分 (st_dev, st_ino)；不存在或讀不到回 None。
+
+    字串比對不足以判斷「是不是同一個目錄」：macOS 的 APFS 預設不分大小寫，
+    `~/.claude` 與 `~/.CLAUDE` 是同一個目錄，但 `Path.resolve()` 不做大小寫正規化，
+    兩者 resolve 完仍是不同字串。"""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _same_dir(a: str, b: str) -> bool:
+    """兩個路徑是否指向同一個目錄。字串相等涵蓋尚不存在的目錄，inode 身分涵蓋
+    大小寫別名等字串看不出來的同一目錄。"""
+    if a == b:
+        return True
+    identity = _dir_identity(a)
+    return identity is not None and identity == _dir_identity(b)
+
+
+def _is_same_or_within(inner: str, outer: str) -> bool:
+    """inner 是否等於 outer 或落在其下。先字串比對（涵蓋尚不存在的目錄），
+    不中再以 inode 身分逐層上溯——大小寫別名的巢狀關係字串同樣看不出來。"""
+    if is_within_root(inner, outer):
+        return True
+    outer_id = _dir_identity(outer)
+    if outer_id is None:
+        return False
+    current = inner
+    while True:
+        if _dir_identity(current) == outer_id:
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:      # 上溯到根仍未命中
+            return False
+        current = parent
+
+
 def _resolved_config_dir(accounts: dict[str, dict[str, str]], key: str) -> str:
     entry = accounts.get(key)
     if entry is None:
@@ -58,7 +99,7 @@ def _resolved_config_dir(accounts: dict[str, dict[str, str]], key: str) -> str:
         raise ValueError("invalid_config_dir") from exc
     # 底線防呆（ADR-0001）：resolved 是 home 本身或 home 的祖先（含 /）時，
     # containment root 大到形同不設防——必然是設錯，直接擋。
-    if is_within_root(str(Path.home().resolve()), resolved):
+    if _is_same_or_within(str(Path.home().resolve()), resolved):
         raise ValueError("unsafe_config_dir")
     return resolved
 
@@ -80,21 +121,23 @@ def build_account_graph(
     seen: set[str] = set()
     for key in target_keys:
         resolved = _resolved_config_dir(accounts, key)
-        # key 不同不代表目錄不同（symlink 別名、尾斜線）。target==source 時備份動作會
-        # 改名 source 自己的目錄，再連成 broken link——必須在建 graph 就擋死。
-        if resolved == source_dir:
+        # key 不同不代表目錄不同（symlink 別名、尾斜線、APFS 大小寫別名）。target==source
+        # 時備份動作會改名 source 自己的目錄，再連成指向自己的 broken link——必須在建
+        # graph 就擋死。比對走 _same_dir：純字串會被 ~/.claude vs ~/.CLAUDE 繞過。
+        if _same_dir(resolved, source_dir):
             raise ValueError("target_equals_source")
         # 祖先／子孫重疊一樣有破壞性：source 在 target 之下時 target_path 會正好是
         # source 自己（備份把 source dir 改名）；target 在 source 之下時會在 source
         # 內建連結指回其父目錄（污染 source、可成環）。
-        if is_within_root(resolved, source_dir) or is_within_root(source_dir, resolved):
+        if _is_same_or_within(resolved, source_dir) or _is_same_or_within(source_dir, resolved):
             raise ValueError("overlapping_account_dirs")
-        if resolved in seen:
+        if any(_same_dir(resolved, other) for other in seen):
             raise ValueError("duplicate_target")
         # target 彼此巢狀是同一族破壞，只是發生在 target 側：外層 target 的 entry 路徑
         # 可能正好是內層 target 的整個 config_dir，備份會把內層帳號目錄改名。
         # 精確相同已由 duplicate_target 先擋，故此處只會命中真正的祖先／子孫關係。
-        if any(is_within_root(resolved, other) or is_within_root(other, resolved) for other in seen):
+        if any(_is_same_or_within(resolved, other) or _is_same_or_within(other, resolved)
+               for other in seen):
             raise ValueError("overlapping_account_dirs")
         seen.add(resolved)
         targets[key] = resolved
@@ -260,12 +303,24 @@ def _copy_file(source_entry: str, target_path: str) -> None:
     data = Path(source_entry).read_bytes()
     mode = os.stat(source_entry).st_mode & 0o777      # 沿用 source 權限，不擅自放寬
     fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    created_ino = os.fstat(fd).st_ino
     try:
         # os.write 允許短寫（ENOSPC／EINTR 等）；忽略回傳值會靜默截斷卻仍回報 copied。
         # backup_and_copy 是「先備份受害檔再複製」，截斷等於使用者的資料只剩在備份裡。
         written = 0
         while written < len(data):
-            written += os.write(fd, data[written:])
+            n = os.write(fd, data[written:])
+            if n <= 0:
+                raise OSError("write_made_no_progress")   # 不前進；不擋就是無限迴圈
+            written += n
+    except BaseException:
+        # 失敗時清掉這次自己建的半截檔——CLAUDE.md 是 claude 會實際讀的 live 設定，
+        # 留一份截斷的在那裡比沒有更糟（原檔在備份裡，重跑會看到 missing）。
+        # 比對 inode 才刪：空窗中若已被換成別的東西，不能誤刪別人的檔案。
+        with contextlib.suppress(OSError):
+            if os.lstat(target_path).st_ino == created_ino:
+                os.unlink(target_path)
+        raise
     finally:
         os.close(fd)
 
@@ -365,6 +420,15 @@ def apply(plan: Plan, overwrite: list[tuple[str, str]]) -> ApplyResult:
     prepared: dict[str, str | None] = {}    # account key -> 建 target dir 的錯誤訊息（None=成功）
 
     for op in plan.operations:
+        # op 必須確實屬於這張 graph：_apply_one 的 target_dir 是從 op.target_path 推出來的，
+        # 不驗的話一個 target_path 指到別處的 op 就會讓 rename／symlink 落在未登記目錄。
+        # 端點層會重算 plan（ADR-0002），但模組自為安全權威——C 的 repair 也直接呼叫本函式。
+        expected_dir = plan.targets.get(op.account)
+        if (expected_dir is None
+                or op.entry not in _SPEC_BY_NAME
+                or op.target_path != os.path.join(expected_dir, op.entry)):
+            results.append(OpResult(op.account, op.entry, "failed", error="operation_not_in_graph"))
+            continue
         if op.account not in prepared:
             target_dir = plan.targets[op.account]
             try:

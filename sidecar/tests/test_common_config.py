@@ -779,3 +779,95 @@ def test_failed_copy_replacement_still_reports_backup_path(tmp_path: Path, monke
     assert r.outcome == "failed"
     assert r.backup_path is not None
     assert Path(r.backup_path).read_text(encoding="utf-8") == "mine"
+
+
+def test_build_graph_rejects_case_alias_of_source_dir(tmp_path: Path):
+    # APFS 預設不分大小寫：~/.claude 與 ~/.CLAUDE 是同一個目錄，但 resolve() 不做
+    # 大小寫正規化，字串比對看不出來。放行的話 apply 會把 source 自己的 entry 備份
+    # 改名、再建一個指向自己的 broken symlink——使用者資料從正常路徑就消失了。
+    src = tmp_path / "claude"
+    (src / "commands").mkdir(parents=True)
+    alias = tmp_path / "CLAUDE"
+    if not os.path.exists(alias):
+        pytest.skip("此檔案系統區分大小寫，無此別名情境")
+    accounts = {"work": {"config_dir": str(src)}, "personal": {"config_dir": str(alias)}}
+    with pytest.raises(ValueError, match="target_equals_source"):
+        cc.build_account_graph(accounts, "work", ["personal"])
+
+
+def test_build_graph_rejects_case_alias_nested_under_source(tmp_path: Path):
+    # 同理但用巢狀別名：target 落在 source 之下，字串比對同樣漏掉
+    src = tmp_path / "claude"
+    (src / "projects").mkdir(parents=True)
+    nested_alias = tmp_path / "CLAUDE" / "projects"
+    if not os.path.exists(nested_alias):
+        pytest.skip("此檔案系統區分大小寫，無此別名情境")
+    accounts = {"work": {"config_dir": str(src)}, "personal": {"config_dir": str(nested_alias)}}
+    with pytest.raises(ValueError, match="overlapping_account_dirs"):
+        cc.build_account_graph(accounts, "work", ["personal"])
+
+
+def test_apply_refuses_operation_whose_path_is_not_in_the_graph(tmp_path: Path):
+    # apply 必須驗每個 op 確實屬於 graph：op.target_path 不等於
+    # join(plan.targets[account], entry) 時，_apply_one 會照著 op 給的路徑動手，
+    # 等於在未登記的目錄裡改名／建連結。授權與否都不得放行。
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "commands").mkdir()
+    (outside / "commands" / "PRECIOUS.md").write_text("不該被碰", encoding="utf-8")
+    rogue = cc.Operation("personal", "commands", str(outside / "commands"),
+                         "real_dir", "backup_and_link", True)
+    p = cc.Plan(source_dir=str(Path(src).resolve()),
+                targets={"personal": str(Path(tgt).resolve())}, operations=[rogue])
+    for overwrite in ([], [("personal", "commands")]):
+        r = cc.apply(p, overwrite=overwrite).results[0]
+        assert r.outcome == "failed"
+        assert r.error == "operation_not_in_graph"
+        assert (outside / "commands" / "PRECIOUS.md").read_text(encoding="utf-8") == "不該被碰"
+        assert not (outside / "commands").is_symlink()
+
+
+def test_backup_survives_repeated_collisions_in_one_second(tmp_path: Path):
+    # 撞名迴圈要能處理任意次數，不是只處理第一次（只測兩次的話 `if lexists: -1`
+    # 這種寫死一層的 mutant 也會過）
+    victim = tmp_path / "commands"
+    backups = []
+    for payload in ("first", "second", "third", "fourth"):
+        victim.write_text(payload, encoding="utf-8")
+        backups.append(cc._backup(str(victim)))
+    assert len(set(backups)) == 4
+    assert [Path(b).read_text(encoding="utf-8") for b in backups] == [
+        "first", "second", "third", "fourth"]
+
+
+def test_copy_file_treats_zero_length_write_as_failure(tmp_path: Path, monkeypatch):
+    # os.write 回 0 代表沒有前進；不當成錯誤就是無限迴圈（掛住整個 sidecar 執行緒）
+    source = tmp_path / "CLAUDE.md"
+    source.write_text("x" * 100, encoding="utf-8")
+    target = tmp_path / "copied.md"
+    monkeypatch.setattr(cc.os, "write", lambda fd, data: 0)
+    with pytest.raises(OSError):
+        cc._copy_file(str(source), str(target))
+
+
+def test_copy_file_removes_its_partial_file_when_the_write_fails(tmp_path: Path, monkeypatch):
+    # 寫到一半失敗時，別把截斷的設定檔留在使用者的 live 位置（CLAUDE.md 是 claude
+    # 會實際讀的檔）。原檔在備份裡，重跑應看到 missing 而不是 content_differs。
+    source = tmp_path / "CLAUDE.md"
+    source.write_text("y" * 5000, encoding="utf-8")
+    target = tmp_path / "copied.md"
+    real_write = os.write
+    calls = []
+
+    def _fail_after_first_chunk(fd, data):
+        if calls:
+            raise OSError("disk full")
+        calls.append(1)
+        return real_write(fd, data[:10])
+
+    monkeypatch.setattr(cc.os, "write", _fail_after_first_chunk)
+    with pytest.raises(OSError):
+        cc._copy_file(str(source), str(target))
+    assert not target.exists(), "半截檔必須清掉，不能留在 live 位置"
