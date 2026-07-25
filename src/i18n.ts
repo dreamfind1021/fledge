@@ -11,7 +11,17 @@ import sidebarEn from "./locales/en/sidebar.json";
 import onboardingZhTW from "./locales/zh-TW/onboarding.json";
 import onboardingEn from "./locales/en/onboarding.json";
 
-const stored = typeof localStorage !== "undefined" ? localStorage.getItem("fledge-lang") : null;
+// Storage 可能不存在或拋 SecurityError（被停用、隱私模式）。這行在 module 層跑，
+// 拋出去就是 import 期崩潰＝整個 app 開不起來，所以讀不到一律當沒設定、退回 OS 偵測。
+function readStoredLang(): string | null {
+  try {
+    return localStorage.getItem("fledge-lang");
+  } catch {
+    return null;
+  }
+}
+
+const stored = readStoredLang();
 const osLang = typeof navigator !== "undefined" && navigator.language.toLowerCase().startsWith("zh")
   ? "zh-TW" : "en";
 

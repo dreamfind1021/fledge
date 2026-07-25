@@ -7,7 +7,7 @@ const LANGS = [
   { code: "en", label: "English" },
 ] as const;
 
-/** 語言切換：寫入 localStorage（i18n.ts 權威序最高的一階）後才切，切換立刻生效、重開仍記得 */
+/** 語言切換：切換成功才落 localStorage 快取（i18n.ts 權威序最高的一階），切換立刻生效、重開仍記得 */
 export function LangSwitch() {
   const { i18n } = useTranslation();
   const current = i18n.resolvedLanguage ?? i18n.language;
@@ -20,10 +20,21 @@ export function LangSwitch() {
           type="button"
           className={code === current ? "lang-switch-btn is-on" : "lang-switch-btn"}
           aria-pressed={code === current}
-          onClick={() => {
-            // 先落 localStorage 再切：setItem 失敗時不會留下「這次變了、下次忘記」的不一致
-            if (typeof localStorage !== "undefined") localStorage.setItem("fledge-lang", code);
-            void i18n.changeLanguage(code);
+          onClick={async () => {
+            // 切換與寫快取不是原子操作，順序決定失敗時留下哪一種不一致：
+            // 先切再寫 → 最壞情況是「切了但記不住」；反過來則是「這次沒變、下次卻變了」
+            try {
+              await i18n.changeLanguage(code);
+            } catch (e) {
+              console.warn("[i18n] 語言切換失敗，不動快取", e);
+              return;
+            }
+            try {
+              localStorage.setItem("fledge-lang", code);
+            } catch (e) {
+              // Storage 被停用或配額滿：這次仍是想要的語言，只是重開會忘記，不該連切都切不動
+              console.warn("[i18n] 語言偏好無法寫入 localStorage", e);
+            }
           }}
         >
           {label}
