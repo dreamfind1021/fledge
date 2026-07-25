@@ -5,6 +5,7 @@ import { useAppStore } from "../store/useAppStore";
 import { pickDirectory } from "../lib/dialog";
 import { putKmsRoot } from "../lib/sidecar";
 import { AccountsEditor } from "./AccountsEditor";
+import { LangSwitch } from "./LangSwitch";
 import { validateSubscriptions } from "../lib/subscriptionsForm";
 import "./Settings.css";
 
@@ -83,6 +84,7 @@ export function Settings({ onClose }: SettingsProps) {
             <SettingsIcon size={19} strokeWidth={1.75} />
           </span>
           <span className="settings-head-title">設定</span>
+          <LangSwitch />
           <button className="settings-head-close" onClick={onClose} aria-label="關閉設定">
             <X size={18} strokeWidth={1.75} />
           </button>

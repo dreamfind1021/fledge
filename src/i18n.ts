@@ -8,6 +8,8 @@ import memoryZhTW from "./locales/zh-TW/memory.json";
 import memoryEn from "./locales/en/memory.json";
 import sidebarZhTW from "./locales/zh-TW/sidebar.json";
 import sidebarEn from "./locales/en/sidebar.json";
+import onboardingZhTW from "./locales/zh-TW/onboarding.json";
+import onboardingEn from "./locales/en/onboarding.json";
 
 const stored = typeof localStorage !== "undefined" ? localStorage.getItem("fledge-lang") : null;
 const osLang = typeof navigator !== "undefined" && navigator.language.toLowerCase().startsWith("zh")
@@ -15,13 +17,20 @@ const osLang = typeof navigator !== "undefined" && navigator.language.toLowerCas
 
 i18n.use(initReactI18next).init({
   resources: {
-    "zh-TW": { dashboard: zhTW, memory: memoryZhTW, sidebar: sidebarZhTW },
-    en: { dashboard: en, memory: memoryEn, sidebar: sidebarEn },
+    "zh-TW": { dashboard: zhTW, memory: memoryZhTW, sidebar: sidebarZhTW, onboarding: onboardingZhTW },
+    en: { dashboard: en, memory: memoryEn, sidebar: sidebarEn, onboarding: onboardingEn },
   },
   lng: stored ?? osLang,
   fallbackLng: "en",
   defaultNS: "dashboard",
   interpolation: { escapeValue: false }, // React 已 escape
 });
+
+// `index.html` 的 lang 是靜態 en：這裡與切換時同步真實語言，字型／斷行／螢幕閱讀器才吃得到
+const syncDocumentLang = (lng: string) => {
+  if (typeof document !== "undefined") document.documentElement.lang = lng;
+};
+syncDocumentLang(i18n.language);
+i18n.on("languageChanged", syncDocumentLang);
 
 export default i18n;

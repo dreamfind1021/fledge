@@ -1,0 +1,33 @@
+/* ===== LangSwitch.css — 語言切換膠囊（demo .b4-lang；定位交給呼叫端容器）===== */
+
+.lang-switch {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.lang-switch-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--dim);
+  border-radius: 99px;
+  padding: 4px 11px;
+  font-size: 11.5px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+}
+
+.lang-switch-btn:hover {
+  background: var(--hover);
+}
+
+.lang-switch-btn.is-on {
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.lang-switch-btn:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}

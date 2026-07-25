@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-07-25
+- **最後更新：** 2026-07-26
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -92,10 +92,11 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `lib/flowControl.ts` | 純狀態機：PTY 輸出 watermark flow control（`record` 計入/`ack` 扣除 → 越 HIGH=100K 回 pause、回落 LOW=10K 回 resume，遲滯+冪等；`pendingBytes` 供驗收量測），由 Terminal.onmessage 計帳、觸發送 WS 控制訊息 | `FlowController`, `FlowSignal`, `HIGH_WATERMARK`, `LOW_WATERMARK` |
 | `lib/dropPath.ts` | 純函式：拖檔路徑智慧引號格式化（safe charset `[\p{L}\p{N}/._-]` 原樣、其餘 POSIX 單引號跳脫 `'`→`'\''`、含控制字元整項跳過、多檔空白 join+尾隨空白、全跳過回空字串），供 Terminal 拖檔接線 | `formatPathsForPaste()` |
 | `lib/terminalLinks.ts` | 純函式：終端機行內連結偵測（Cmd+click 開連結用）。`linksInLine` 掃 URL（只放行 http/https/mailto/tel、剝尾隨標點）+ 檔案路徑（相對路徑對 projectPath 解析、`~/` 展開、剝 `:line:col`、containment 落在 home 內才放行、`..` 逃逸/home 外拒絕；無 home 只回 URL）；`strIndexToColumn` 把字串索引→xterm 欄位（全形字 spacer 校正） | `linksInLine()`, `strIndexToColumn()`, `TerminalLink`, `LinkOpts` |
-| `i18n.ts` | i18n 最小基建（react-i18next）：語言權威序 localStorage `fledge-lang` > OS zh 偵測 > en；defaultNS dashboard；註冊 namespace `dashboard` + `memory` + `sidebar` | default `i18n` |
+| `i18n.ts` | i18n 最小基建（react-i18next）：語言權威序 localStorage `fledge-lang` > OS zh 偵測 > en；defaultNS dashboard；註冊 namespace `dashboard` + `memory` + `sidebar` + `onboarding`；init 與 `languageChanged` 同步 `document.documentElement.lang`（`index.html` 是靜態 `lang="en"`） | default `i18n` |
 | `locales/{zh-TW,en}/dashboard.json` | 數據儀表板 locale catalog（兩檔 key 對齊，`i18nCatalog.test.ts` parity 鎖定）；既有元件字串遷移留後續 | — |
 | `locales/{zh-TW,en}/memory.json` | 記憶層 locale catalog（tabTitle/entry/search/section/related/attribution/settings/detail/a11y…；`memory-parity.test.ts` 鎖兩語 key 一致；type enum 值刻意顯示原值不翻譯〔§4.6.13 記錄例外〕）| — |
 | `locales/{zh-TW,en}/sidebar.json` | 側邊欄/分頁/檔案樹 locale catalog（search/menu/empty/tree/tabBar；`sidebar-parity.test.ts` 鎖兩語 key 一致） | — |
+| `locales/{zh-TW,en}/onboarding.json` | 引導精靈與設置卡 locale catalog（common/welcome/roots/env/login/cc/sys/done/st 九群共 89 key；逐字取自 `docs/design/b4-onboarding-wizard.html` 的 `T` 物件，`onboarding-parity.test.ts` 鎖兩語 key 一致）；部分值含 `<b>`/`<br />`/`<span style>` 內嵌標記與 demo 佔位數字，渲染方式與插值化由 B-4 各卡票決定 | — |
 | `lib/usageFormat.ts` | 純函式：儀表板數字格式化（fmtUSD 含負數/<$0.01、fmtPct、fmtTokens K/M、fmtClock HH:mm、fmtDayClock 今天/昨天/M/D）＋Codex 額度窗口標籤角色判定（`codexWindowLabel`：依 window_minutes 非位置，invalid 退 fallback） | `fmtUSD()`, `fmtPct()`, `fmtTokens()`, `fmtClock()`, `fmtDayClock()`, `codexWindowLabel()`, `WindowLabel` |
 | `lib/usagePoll.ts` | 純函式：儀表板輪詢 gating（作用分頁＋頁面可見才打 API）＋30s 成本面板間隔／15min Codex 額度間隔常數 | `shouldPoll()`, `POLL_INTERVAL_MS`, `CODEX_USAGE_INTERVAL_MS` |
 | `lib/dashboardLogic.ts` | 純函式：面板邏輯（donutParts top4+rest 角度） | `donutParts()` |
@@ -106,11 +107,12 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `components/Sidebar.tsx` | 依帳號（＝專案類型）分組列專案 + 三 band（開啟中/已接觸/自動發現收合）+ 帳號色塊標題 + 底部開資料夾 + 右鍵選單（改帳號/Finder/移除/使用終端機開啟）；open/active 判定只認 claude tab；溢出展開器（surfacedMore）；收合窄軌（`localStorage fledge.sidebarCollapsed`）；搜尋列旁 dashboard(`ChartColumn`)+memory(`Brain`→`openMemory`) 入口（收合軌與展開列雙處）；專案列抽 top-level `ProjectRow`（`useDraggable` id `project:`、展開 caret 切換檔案樹、條件渲染 `<FileTree>`）；既有字串改走 `t()`（sidebar ns） | `Sidebar` |
 | `components/TabBar.tsx` | tab 列：切換 + 帳號 chip + 關 tab + 統一狀態點（`tabDotState`：working 呼吸/waiting 穩定/連線態，取代 ●/⚠ 前綴）；terminal 分頁以 SquareTerminal 圖示取代狀態點；memory 分頁以 `Brain` 圖示 + 標題走 `memory:tabTitle`；分頁改 `SortableTab`（dnd-kit `useSortable` 水平排序；close button `onPointerDown` stopPropagation 不啟動拖曳）；aria 走 sidebar ns；標題改用 displayTabTitle（claude 多視窗序號） | `TabBar` |
 | `components/Terminal.tsx` | xterm.js 渲染：連 WS（用 `wsUrl()` 帶 `?token=`）雙向 I/O + ResizeObserver 回報 PTY 尺寸 + onclose 重連狀態機（4001 ended/其他 backoff，gate on backendStatus 用 getState 不放 effect 依賴）；onmessage→recordActivity、teardown→clearActivity（活動偵測旁路，§7 僅 3 處）+ flow control 計帳（per-connection `FlowController`：write 前 record/write callback ack，越 HIGH 送 pause、回落 LOW 送 resume，控制訊息綁該連線 socket 不引用外層 ws）；回前景/切 tab 強制重繪（visibilitychange/focus/isActive → fit+refresh，rAF coalesce、dims 變動才回報 resize）+ WebGL renderer（active-only 掛載、context loss/載入失敗全域退 DOM 並 console.warn、`ENABLE_WEBGL` kill switch、fonts.ready 清 atlas）+ smoothScrollDuration 125/scrollback 5000 + IME 真懸置（container capture 吞組字中 Meta／Unidentified keydown 防 xterm 提前 finalize（Unidentified＝CapsLock 中英切換附隨事件、治組字中重複輸入）；`ImeReplayGuard` 重放保險網＋`ImeDraftTracker` 幽靈草稿 ghost DOM 掛 .xterm-helpers；切回後 Esc/點擊＝確認文字屬已知平台差異；`Terminal.css` 蓋 composition-view 為主題色＋底線）+ 拖檔貼路徑（整窗 `onDragDropEvent`、isActive 閘控、drop gate：!disposed/!modalOpen/ready/paths>0/格式化非空 → `term.focus()`+`term.paste(formatPathsForPaste)`，走既有 onData→ws guard；`isActiveRef` 改 render body 同步賦值消 gap）；mount 註冊 `{paste, isComposing}` handle 到 terminalRegistry、unmount 註銷；`composingRef`（IME 組字旗標）；OS 拖檔 `onDragDropEvent` 加 IME gate＋選取複製（xterm 選取是內部狀態非 DOM Selection：Cmd+C capture 攔截 preventDefault 消 NSBeep／右鍵自訂 `ContextMenu`〔複製·貼上·全選〕，複製走 `term.getSelection()`＋`navigator.clipboard.writeText`、貼上走 `pasteFromClipboard`〔readText 全程 try/catch〕）＋Cmd+click 開連結（iTerm2 風格 `registerLinkProvider`：修飾鍵閘控〔Mac=Meta/其餘=Ctrl〕，未按住不提供連結＝不奪點擊；URL→`openUrl`、檔案路徑→`revealItemInDir`；連結偵測走 `lib/terminalLinks`，行號/全形字校正；接 `projectPath` prop 解析相對路徑；activate 二次確認修飾鍵；單行偵測，wrapped 連結為已知 v1 限制） | `Terminal` |
-| `components/Settings.tsx` | 設定頁 modal（Cmd+,）：roots/manual 編輯（打字或「瀏覽…」picker）+ 帳號編輯（接 AccountsEditor）+ KMS 根目錄欄位（input+picker+儲存→`putKmsRoot`，字串走 `memory:settings.*`、含 saveError） | `Settings` |
+| `components/Settings.tsx` | 設定頁 modal（Cmd+,）：roots/manual 編輯（打字或「瀏覽…」picker）+ 帳號編輯（接 AccountsEditor）+ KMS 根目錄欄位（input+picker+儲存→`putKmsRoot`，字串走 `memory:settings.*`、含 saveError）+ header 掛 `<LangSwitch>` | `Settings` |
 | `components/ContextMenu.tsx` | 通用右鍵選單（邊緣 clamp、任意鍵關、`MenuItem.disabled` 灰階常駐不可點） | `ContextMenu`, `MenuItem` |
 | `components/ProjectPicker.tsx` | 選專案 dialog（Cmd+T，fuzzy filter） | `ProjectPicker` |
 | `components/Onboarding.tsx` | 首次設定全屏 3 步 wizard（is_first_run 觸發：歡迎→設根+即時試掃→總結，完成才寫檔）；依 scan-preview status 擋無效 draft、denied 用 amber notice | `Onboarding` |
 | `components/AccountsEditor.tsx` | 設定頁帳號編輯區：加/改 config_dir/改 label/刪（級聯轉移面板）+ config_dir 警告依 DirStatus（不存在/不可讀/非資料夾） | `AccountsEditor` |
+| `components/LangSwitch.tsx` | 語言切換膠囊（中文／English autonym 不進 catalog）：先寫 localStorage `fledge-lang`（i18n 權威序最高階）再 `i18n.changeLanguage`；`aria-pressed` 標目前語言。定位交給呼叫端容器，設定頁 header 已掛，歡迎頁於票 22 掛上 | `LangSwitch` |
 | `components/Logo.tsx` | 品牌三色填色羽毛標（去背 PNG，與桌面 app icon 同源）共用元件；`<img>` 引用 `assets/fledge-feather.png`，接受 `size` prop（＝高度 px） | `FeatherMark` |
 | `components/Workspace.tsx` | TabBar+Terminal 合成一體面板（保留全 tab mount + display 切換）；tab 狀態矩陣與 ended/offline 子狀態；kind 分派加 `memory`→`<Memory>` 分支；Terminal 分支（claude/terminal + projectPath）內掛 `<RelatedFloat>`（既有 absolute wrapper 為定位包含塊，不改終端機尺寸）、並把 `projectPath` 傳進 `<Terminal>`（Cmd+click 連結的相對路徑解析）；`ws-term-area` 設 `useDroppable`（id `terminal-drop`，需求 4 drop target） | `Workspace` |
 | `components/Memory.tsx` | 記憶面板容器（**master-detail 雙欄**，純前端單例分頁）：持有 selection（複合 `{path,groupKey}`／`{projectKey}`）+ facet + group 展開 Set + body 快取（key=`path@mtime`）；30s 輪詢 gating（active+!hidden）；**q-guard**（q 非空時不清 selection、清搜尋後右欄復原 pin）；組 `<MemoryIndex>`（左）+ `<MemoryDetail>`（右）| `Memory` |
@@ -168,7 +170,8 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `scripts/verify_templates_artifact.py` | 薄 CLI 包住 `template_manifest.verify_artifact`（`--staged-root`／`--manifest`／`--allow-private`），供 `build_binary.sh` 與 release workflow 呼叫；違規或讀不到 manifest 一律 exit 1 |
 | `scripts/build-app-devtools.sh` | 偵錯打包：sidecar + `tauri build --features devtools`（帶 Web Inspector，啟動自動開）；給「只有打包版重現、dev 正常」的 bug 蒐證用。`npm run build:app:devtools`。正式 build 不帶 feature、不外洩 devtools |
 | `sidecar/pyproject.toml` | Python 依賴與測試設定 |
-| `vitest.config.ts` | 前端 vitest 設定（store lifecycle 測試） |
+| `vitest.config.ts` | 前端 vitest 設定（store lifecycle 測試）；掛 `setupFiles` |
+| `vitest.setup.ts` | 測試端環境 shim：Node 25 在 globalThis 放無方法的 `localStorage` 空殼並蓋掉 jsdom Storage，讓任何讀寫 localStorage 的模組一 import 就 TypeError；偵測到空殼才換上 in-memory Storage（正式執行環境不經過此檔） |
 
 ### docs/agents/ — Agent skills 設定（mattpocock engineering skills 讀取）
 | 檔案 | 用途 |
@@ -217,6 +220,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `src/lib/tabOrder.ts`（排序/插入邏輯變更） | `store/useAppStore.ts`、`tabOrder.test.ts` |
 | `src/lib/terminalRegistry.ts`（handle contract 變更） | `Terminal.tsx`、`App.tsx`（onDragEnd 貼路徑） |
 | `src/locales/*/sidebar.json`（key 增刪） | 另一語言 catalog 同步（`sidebar-parity.test.ts` 會擋）、`Sidebar.tsx`/`TabBar.tsx`/`FileTree*.tsx`/`Terminal.tsx` 的 t() 引用 |
+| `src/locales/*/onboarding.json`（key 增刪） | 另一語言 catalog 同步（`onboarding-parity.test.ts` 會擋）、`Onboarding.tsx` 與 B-4 各設置卡的 t() 引用 |
 
 ---
 

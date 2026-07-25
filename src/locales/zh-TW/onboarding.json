@@ -1,0 +1,109 @@
+{
+  "common": {
+    "prev": "上一步",
+    "next": "下一步",
+    "del": "刪",
+    "browse": "瀏覽…",
+    "copy": "複製",
+    "cancel": "取消",
+    "skip": "略過"
+  },
+  "welcome": {
+    "h": "歡迎使用 Fledge",
+    "sub": "Fledge 為你的 Claude Code 套上圖形化工作台：管理多個專案、分隔工作／私人帳號、同時開多個 session。<br />接下來會逐步檢查開發環境並完成設定，每一步都可以略過，之後在設定頁隨時重跑。",
+    "cta": "開始設定"
+  },
+  "roots": {
+    "h": "設定工作根目錄",
+    "sub": "每個根資料夾會掃描第一層子資料夾作為專案。",
+    "note": "<b>這一步完成後會建立設定檔。</b>之後的每一步都可以略過或關閉視窗——已加入的根目錄不會遺失，未完成的部分可在設定頁繼續。",
+    "placeholder": "/絕對路徑/到/工作根目錄",
+    "add": "+ 加根",
+    "next": "建立設定並繼續"
+  },
+  "env": {
+    "h": "開發環境",
+    "sub": "缺的工具可以直接在這裡安裝；安裝完按「重新檢查」更新狀態。",
+    "core": "核心",
+    "recommended": "常用（可略過）",
+    "installed": "已安裝",
+    "missing": "未安裝",
+    "install": "安裝",
+    "copyCmd": "複製指令",
+    "recheck": "重新檢查",
+    "running": "執行中",
+    "brewTitle": "Homebrew 需要手動安裝",
+    "brewHint": "官方安裝腳本為互動式且需要 sudo，請自行在終端機執行。",
+    "confirmTitle": "即將執行以下命令",
+    "confirmRun": "確認執行",
+    "pathHint": "PATH 與 git 身分：<span style=\"font-family:var(--font-mono)\">~/.local/bin</span> 需在 PATH 內（claude、uv 裝在這裡）；<span style=\"font-family:var(--font-mono)\">git config --global user.name/user.email</span> 若未設，commit 會失敗。這兩項本版不自動偵測。"
+  },
+  "login": {
+    "h": "帳號登入",
+    "sub": "每個帳號需要各自登入——共用設定檔不會幫你登入。",
+    "note": "Fledge <b>無法確認登入是否成功</b>：macOS 的 Claude 登入憑證存在 Keychain，不在帳號設定目錄裡。這裡只負責用正確的帳號環境開終端機，完成與否請看終端機輸出。",
+    "open": "開啟登入終端機",
+    "codexDesc": "Codex 登入是全域的，不分帳號。",
+    "later": "稍後再登入"
+  },
+  "cc": {
+    "h": "雙帳號共通設置",
+    "sub": "讓兩個帳號共用同一份 commands / plugins / skills 與設定，避免兩邊各改一次。",
+    "owner": "實體檔持有者：<span style=\"color:var(--primary)\">work</span>",
+    "ownerDesc": "personal 會建立連結指向 work 的同名項目；CLAUDE.md 兩邊各自保留實體檔。",
+    "linked": "已連結 → ~/.claude/commands",
+    "notYet": "尚未建立",
+    "pointsElsewhere": "連結指向其他位置",
+    "yourOwn": "你有自己的版本，內容不同",
+    "ready": "已就緒",
+    "willLink": "將建立連結",
+    "willRelink": "將重新指向",
+    "keep": "保留不動",
+    "conflictHint": "CLAUDE.md 會被保留不動——引導只做不會蓋掉東西的操作。要用 work 的版本取代，請到設定頁的「開發環境」區，那裡可以逐項授權（會先改名備份）。",
+    "advHint": "進階項 <span style=\"font-family:var(--font-mono)\">projects</span>（session 歷史跨帳號共用）預設不動。",
+    "apply": "套用共通設置",
+    "naTitle": "不適用",
+    "naDesc": "偵測到 <span style=\"font-family:var(--font-mono)\">~/.claude-tc</span> 不存在——你目前只使用一個帳號，不需要共通設置。<br />日後在設定頁新增第二個帳號後，這張卡會自動出現。"
+  },
+  "sys": {
+    "h": "系統設置",
+    "sub": "這三項都可以略過，之後在設定頁隨時修改。",
+    "subsTitle": "訂閱服務及費用",
+    "subsDesc": "用於數據儀表板計算淨投資報酬（成本 vs 用量）。",
+    "addItem": "+ 新增一項",
+    "kmsTitle": "知識庫根目錄",
+    "kmsDesc": "記憶層會讀取這個目錄下的 library / topics 作為跨專案知識來源。",
+    "kmsPlaceholder": "/絕對路徑/到/知識庫",
+    "tplTitle": "導入範本",
+    "tpl1": "新專案的 CLAUDE.md 與 docs/ 骨架，內容通用可自行改寫。",
+    "tpl2": "個人開發方法論文件集。",
+    "tpl3": "知識庫目錄骨架。",
+    "notDeployed": "尚未部署",
+    "notBundled": "未內建",
+    "deployTo": "部署到",
+    "otherLocation": "其他位置…",
+    "deploy": "部署",
+    "deployHint": "永不覆蓋：目的地已存在的同名檔案一律保留，只補缺少的部分。",
+    "skipAll": "全部略過"
+  },
+  "done": {
+    "h": "設定完成",
+    "summary": "掃描到 <b>20</b> 個專案<br />來自 <b>2</b> 個根目錄、<b>2</b> 個帳號",
+    "hint": "未完成的項目（登入、範本…）都能在設定頁的「開發環境」區隨時繼續。",
+    "enter": "進入 Fledge"
+  },
+  "st": {
+    "title": "設定",
+    "stub": "專案根目錄 · 手動專案 · 帳號 · 知識庫根目錄（現有區塊，此原型不重繪）",
+    "devEnv": "開發環境",
+    "pending": "1 項待處理",
+    "ccTitle": "雙帳號共通設置",
+    "ccDesc": "work → personal。1 項需要你的授權才能處理。",
+    "replaceWith": "用 work 的版本取代",
+    "backupHint": "勾選的項目會先改名備份為 <span style=\"font-family:var(--font-mono)\">CLAUDE.md.fledge-backup-20260726-001</span> 再建立連結，不會直接刪除。",
+    "apply": "套用",
+    "tplDesc": "Project starter · 已內建",
+    "deployTo": "部署到…",
+    "rerunHint": "環境偵測與帳號登入是一次性的，需要時可 <span style=\"color:var(--primary);cursor:pointer\">重跑引導</span>。"
+  }
+}
