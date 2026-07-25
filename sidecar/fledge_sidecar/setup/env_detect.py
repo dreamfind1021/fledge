@@ -42,7 +42,8 @@ def detect_tool(spec: ToolSpec, which=shutil.which, run=subprocess.run) -> ToolS
     path = which(spec.binary)
     if path is None:
         return ToolStatus(spec.id, spec.label, spec.tier, False, None, None)
-    version = _probe_version(spec.version_argv, run)
+    # 探測用 which 解析出的絕對路徑：裸名重查 PATH 可能命中另一個執行檔（path 與 version 不同源）
+    version = _probe_version([path, *spec.version_argv[1:]], run)
     return ToolStatus(spec.id, spec.label, spec.tier, True, path, version)
 
 

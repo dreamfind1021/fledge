@@ -19,6 +19,17 @@ def test_detect_installed_with_version():
     assert st.id == "node" and st.tier == "core"
 
 
+def test_detect_probes_resolved_path_not_bare_name():
+    # 版本探測要用 which 解析出的絕對路徑：裸名重查 PATH 可能命中另一個執行檔，
+    # 回報「A 的 path、B 的 version」（Codex 審查 finding 4）
+    seen: list[list[str]] = []
+    def _run(argv, **kw):
+        seen.append(list(argv))
+        return subprocess.CompletedProcess(argv, 0, stdout="v25.8.2\n", stderr="")
+    ed.detect_tool(SPEC, which=lambda b: "/opt/homebrew/bin/node", run=_run)
+    assert seen == [["/opt/homebrew/bin/node", "--version"]]
+
+
 def test_detect_missing_skips_version_probe():
     called = False
     def _run(argv, **kw):
