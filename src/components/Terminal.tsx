@@ -35,9 +35,6 @@ let lossCountInWindow = 0;
 const LOSS_WINDOW_MS = 60_000;
 const LOSS_PERMANENT_THRESHOLD = 3;
 
-// 剪貼簿寫入：xterm 的選取是內部狀態（term.getSelection()），非 DOM Selection，
-// webview 原生 Cmd+C／右鍵 Copy 都抓不到 → 必須由我們主動寫入（實作見 lib/clipboard）。
-
 // 剪貼簿讀取（右鍵貼上）：改走 Tauri 原生 clipboard plugin（Rust/NSPasteboard）而非
 // navigator.clipboard.readText()——後者在打包版會觸發 macOS 15+ 的剪貼簿隱私「Paste 膠囊」
 // （程式化 web 讀取被攔）。實測是否能繞掉。全程 try/catch 包住確保選單 onClick 不擲回，

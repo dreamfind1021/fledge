@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation, Trans } from "react-i18next";
-import { fetchSetupStatus, type ToolStatus } from "../lib/sidecar";
+import { fetchSetupStatus, type ToolStatus, type ToolTier } from "../lib/sidecar";
 import { writeClipboard } from "../lib/clipboard";
 
 interface EnvCardProps {
@@ -64,8 +64,11 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
             {t(tool.installed ? "env.installed" : "env.missing")}
           </span>
           {!tool.installed && tool.install_command && (
-            // 行為在票 24（確認面板 + 內嵌 PTY）；本票只確定按鈕出現在對的列上
-            <button className="b4-btn-sm primary" disabled>{t("env.install")}</button>
+            // 行為在票 24（確認面板 + 內嵌 PTY）；本票只確定按鈕出現在對的列上。
+            // primary 只給核心工具——常用區是可略過的，demo 也只讓核心那顆吃強調色。
+            <button className={`b4-btn-sm${tool.tier === "core" ? " primary" : ""}`} disabled>
+              {t("env.install")}
+            </button>
           )}
           {!tool.installed && !tool.install_command && tool.manual_command && (
             <button
@@ -77,7 +80,9 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
         </span>
       </div>
 
-      {expandedId === tool.id && tool.manual_command && (
+      {/* 條件要與觸發鍵一致（含 !installed）：重新檢查後轉為已安裝時，觸發鍵消失、
+          面板卻留著會變成一塊講「需要手動安裝」又收不掉的死內容 */}
+      {expandedId === tool.id && !tool.installed && tool.manual_command && (
         <div className="b4-confirm">
           <div className="b4-confirm-title">{t("env.brewTitle")}</div>
           <div className="b4-confirm-cmd">{tool.manual_command}</div>
@@ -92,7 +97,7 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
     </div>
   );
 
-  const section = (tier: string, heading: string) => {
+  const section = (tier: ToolTier, heading: string) => {
     const rows = (tools ?? []).filter((x) => x.tier === tier);
     if (rows.length === 0) return null;
     return (

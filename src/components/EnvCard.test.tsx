@@ -104,6 +104,21 @@ describe("EnvCard 環境偵測卡", () => {
     expect(writeClipboard).toHaveBeenCalledWith(BREW_CMD);
   });
 
+  // 觸發鍵只在未安裝時渲染：面板若不跟著收，重新檢查後會留下一塊「需要手動安裝」且無收合入口
+  it("展開中的工具在重新檢查後變成已安裝：面板跟著收起", async () => {
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText("Homebrew")).toBeTruthy());
+    ui.getByText(zh.env.copyCmd).click();
+    await waitFor(() => expect(ui.getByText(BREW_CMD)).toBeTruthy());
+
+    fetchSetupStatus.mockResolvedValue([{ ...brew, installed: true, version: "Homebrew 5.0.6" }, node, gh]);
+    ui.getByText(zh.env.recheck).click();
+
+    await waitFor(() => expect(ui.container.textContent).toContain("Homebrew 5.0.6"));
+    expect(ui.queryByText(BREW_CMD)).toBeNull();
+    expect(ui.queryByText(zh.env.brewTitle)).toBeNull();
+  });
+
   it("重新檢查重打端點並更新狀態", async () => {
     const ui = renderCard();
     await waitFor(() => expect(ui.getByText("GitHub CLI")).toBeTruthy());
