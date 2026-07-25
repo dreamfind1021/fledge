@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act } from "react";
 import { render, cleanup, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
@@ -163,6 +164,27 @@ describe("EnvCard 環境偵測卡", () => {
     rejectStale(new Error("HTTP 500"));
     await waitFor(() => expect(ui.getByText("Node.js")).toBeTruthy());
     expect(ui.queryByRole("alert")).toBeNull();
+  });
+
+  // 上面兩個競態測試都先等新請求完成才讓舊請求落地，那時 loading 本來就是 false——單獨把
+  // finally 的 guard 拿掉也不會被抓到。這條專門鎖 stale finally：兩個請求都還在途時先 settle 舊的。
+  it("重疊偵測：先發的請求落地不得提前解除 loading", async () => {
+    let settleStale!: (v: ToolStatus[]) => void;
+    let settleFresh!: (v: ToolStatus[]) => void;
+    fetchSetupStatus
+      .mockImplementationOnce(() => new Promise<ToolStatus[]>((r) => { settleStale = r; }))
+      .mockImplementationOnce(() => new Promise<ToolStatus[]>((r) => { settleFresh = r; }));
+
+    const ui = render(<EnvCard port={1234} onPrev={noop} onNext={noop} />);
+    ui.rerender(<EnvCard port={5678} onPrev={noop} onNext={noop} />);
+    const recheck = () => ui.getByText(zh.env.recheck) as HTMLButtonElement;
+    expect(recheck().disabled).toBe(true);
+
+    await act(async () => { settleStale([node]); });
+    expect(recheck().disabled).toBe(true); // 舊請求落地，新的還在途 → 仍是載入中
+
+    await act(async () => { settleFresh([gh]); });
+    expect(recheck().disabled).toBe(false);
   });
 
   // 複製的 Promise 尚未 resolve 就切頁：cleanup 已跑完，回呼不得再排一個逃過清理的 timer
