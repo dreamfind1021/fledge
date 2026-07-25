@@ -368,3 +368,273 @@ def test_plan_covers_every_target(tmp_path: Path):
     g = cc.build_account_graph(accounts, "work", ["a", "b"])
     p = cc.plan(g, ["commands"])
     assert sorted(o.account for o in p.operations) == ["a", "b"]
+
+
+def _graph(src: str, tgt: str) -> cc.AccountGraph:
+    accounts = {"work": {"config_dir": src}, "personal": {"config_dir": tgt}}
+    return cc.build_account_graph(accounts, "work", ["personal"])
+
+
+def test_apply_creates_links_and_copies(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(src) / "commands" / "a.md").write_text("A", encoding="utf-8")
+    (Path(src) / "CLAUDE.md").write_text("rules", encoding="utf-8")
+    g = _graph(src, tgt)
+    res = cc.apply(cc.plan(g, ["commands", "CLAUDE.md"]), overwrite=[])
+    outcomes = {r.entry: r.outcome for r in res.results}
+    assert outcomes == {"commands": "created", "CLAUDE.md": "copied"}
+    link = Path(tgt) / "commands"
+    assert link.is_symlink()
+    assert os.readlink(link) == str(Path(src).resolve() / "commands")  # 字面指 source entry
+    assert (link / "a.md").read_text(encoding="utf-8") == "A"
+    assert (Path(tgt) / "CLAUDE.md").read_text(encoding="utf-8") == "rules"
+    assert not (Path(tgt) / "CLAUDE.md").is_symlink()  # copy 項是實體檔
+
+
+def test_apply_links_literal_path_when_source_entry_is_symlink(tmp_path: Path):
+    # source entry 本身是 symlink → 連字面路徑，不追鏈（link target 永遠留在 source dir 內）
+    src, tgt = _dirs(tmp_path)
+    far = tmp_path / "far"
+    far.mkdir()
+    (Path(src) / "commands").symlink_to(far)
+    g = _graph(src, tgt)
+    cc.apply(cc.plan(g, ["commands"]), overwrite=[])
+    assert os.readlink(Path(tgt) / "commands") == str(Path(src).resolve() / "commands")
+
+
+def test_apply_relinks_wrong_and_broken_without_overwrite(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(src) / "skills").mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (Path(tgt) / "commands").symlink_to(elsewhere)          # wrong_link
+    (Path(tgt) / "skills").symlink_to(tmp_path / "gone")    # broken_link
+    g = _graph(src, tgt)
+    res = cc.apply(cc.plan(g, ["commands", "skills"]), overwrite=[])
+    assert {r.outcome for r in res.results} == {"relinked"}
+    assert os.readlink(Path(tgt) / "commands") == str(Path(src).resolve() / "commands")
+    assert elsewhere.is_dir()   # 原目標沒被碰
+
+
+def test_apply_replaces_empty_dir_without_backup(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(tgt) / "commands").mkdir()   # 空目錄（首次登入常見）
+    g = _graph(src, tgt)
+    res = cc.apply(cc.plan(g, ["commands"]), overwrite=[])
+    assert res.results[0].outcome == "created"
+    assert res.results[0].backup_path is None
+    assert (Path(tgt) / "commands").is_symlink()
+
+
+def test_apply_skips_ok_and_source_missing(tmp_path: Path):
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(tgt) / "commands").symlink_to(Path(src) / "commands")   # 已 ok
+    g = _graph(src, tgt)
+    res = cc.apply(cc.plan(g, ["commands", "plugins"]), overwrite=[])  # plugins source 沒有
+    assert {r.entry: r.outcome for r in res.results} == {
+        "commands": "skipped", "plugins": "skipped"}
+    assert not (Path(tgt) / "plugins").exists()   # 不替使用者發明目錄
+
+
+def test_apply_creates_missing_target_dir(tmp_path: Path):
+    # 首次 onboarding：target 帳號 config_dir 還不存在 → 自動建最後一層
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "commands").mkdir()
+    tgt = tmp_path / "not-yet"
+    accounts = {"work": {"config_dir": str(src)}, "personal": {"config_dir": str(tgt)}}
+    g = cc.build_account_graph(accounts, "work", ["personal"])
+    res = cc.apply(cc.plan(g, ["commands"]), overwrite=[])
+    assert res.results[0].outcome == "created"
+    assert (tgt / "commands").is_symlink()
+
+
+def test_apply_fails_target_when_parent_missing(tmp_path: Path):
+    # 只建最後一層：父目錄不存在＝路徑很可能打錯，不遞建一串垃圾目錄
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "commands").mkdir()
+    tgt = tmp_path / "no" / "such" / "parent"
+    accounts = {"work": {"config_dir": str(src)}, "personal": {"config_dir": str(tgt)}}
+    g = cc.build_account_graph(accounts, "work", ["personal"])
+    res = cc.apply(cc.plan(g, ["commands"]), overwrite=[])
+    assert res.results[0].outcome == "failed"
+    assert res.results[0].error
+
+
+def test_apply_continues_after_one_entry_fails(tmp_path: Path, monkeypatch):
+    # 逐項盡力：單項失敗不阻斷其餘 entry
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(src) / "skills").mkdir()
+    real_symlink = os.symlink
+
+    def _boom(source, target, **kw):
+        if str(target).endswith("commands"):
+            raise PermissionError("nope")
+        return real_symlink(source, target, **kw)
+
+    monkeypatch.setattr(cc.os, "symlink", _boom)
+    g = _graph(src, tgt)
+    res = cc.apply(cc.plan(g, ["commands", "skills"]), overwrite=[])
+    by_entry = {r.entry: r for r in res.results}
+    assert by_entry["commands"].outcome == "failed"
+    assert by_entry["skills"].outcome == "created"
+
+
+def test_apply_marks_stale_when_fs_changed_after_plan(tmp_path: Path):
+    # TOCTOU：plan 後 target 冒出實體檔 → apply 前重探測不符 → stale，不依過時 plan 覆寫
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    g = _graph(src, tgt)
+    p = cc.plan(g, ["commands"])
+    assert p.operations[0].state == "missing"
+    (Path(tgt) / "commands").write_text("appeared after plan", encoding="utf-8")
+    res = cc.apply(p, overwrite=[])
+    assert res.results[0].outcome == "stale"
+    assert (Path(tgt) / "commands").read_text(encoding="utf-8") == "appeared after plan"
+
+
+def test_apply_refuses_when_target_dir_swapped_for_symlink(tmp_path: Path):
+    # parent containment 重驗（spec §6.5）：plan 後整個 target account dir 被換成
+    # 指向別處的 symlink → 所有 mutation 都會落到 account dir 外
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "commands").mkdir()
+    tgt = tmp_path / "tgt"
+    tgt.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    g = _graph(str(src), str(tgt))
+    p = cc.plan(g, ["commands"])
+    tgt.rmdir()
+    tgt.symlink_to(outside)
+    res = cc.apply(p, overwrite=[])
+    assert res.results[0].outcome == "failed"
+    assert not (outside / "commands").exists()   # 沒寫出 account dir
+
+
+def test_relink_never_deletes_a_real_file_it_did_not_inspect(tmp_path: Path, monkeypatch):
+    # 殘餘 race：重探測說是 symlink，但 unlink 之前被換成實體檔。
+    # 直接 unlink 會誤刪未授權資料（relink 的 needs_overwrite=False），
+    # 故改走「隔離改名→驗型別」——資料必須存活。
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(tgt) / "commands").write_text("REAL", encoding="utf-8")
+    op = cc.Operation("personal", "commands", str(Path(tgt).resolve() / "commands"),
+                      "wrong_link", "relink", False)
+    p = cc.Plan(source_dir=str(Path(src).resolve()),
+                targets={"personal": str(Path(tgt).resolve())}, operations=[op])
+    monkeypatch.setattr(cc, "probe_entry", lambda *a, **k: "wrong_link")  # 騙過重探測
+    res = cc.apply(p, overwrite=[])
+    assert res.results[0].outcome in {"stale", "failed"}
+    survivors = [q for q in Path(tgt).iterdir()
+                 if q.is_file() and not q.is_symlink()
+                 and q.read_text(encoding="utf-8") == "REAL"]
+    assert survivors, "實體檔必須存活（原位或隔離備份）"
+
+
+def test_relink_restore_does_not_clobber_a_file_that_reappeared(tmp_path: Path, monkeypatch):
+    # 隔離改名後、還原前，target 位置又冒出新檔：還原用的 os.rename 會靜默覆蓋它。
+    # 正確行為是保留隔離檔並回報位置——新舊兩份資料都必須存活。
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(tgt) / "commands").write_text("REAL", encoding="utf-8")
+    real_backup = cc._backup
+
+    def _backup_then_someone_writes(path: str) -> str:
+        b = real_backup(path)
+        Path(path).write_text("NEW", encoding="utf-8")   # 空窗中冒出的新檔
+        return b
+
+    monkeypatch.setattr(cc, "_backup", _backup_then_someone_writes)
+    monkeypatch.setattr(cc, "probe_entry", lambda *a, **k: "wrong_link")
+    op = cc.Operation("personal", "commands", str(Path(tgt).resolve() / "commands"),
+                      "wrong_link", "relink", False)
+    p = cc.Plan(source_dir=str(Path(src).resolve()),
+                targets={"personal": str(Path(tgt).resolve())}, operations=[op])
+    r = cc.apply(p, overwrite=[]).results[0]
+    assert r.outcome == "stale"
+    assert r.backup_path is not None
+    assert Path(r.backup_path).read_text(encoding="utf-8") == "REAL"   # 舊資料在隔離檔
+    assert (Path(tgt) / "commands").read_text(encoding="utf-8") == "NEW"  # 新檔沒被蓋掉
+
+
+def test_backup_never_overwrites_existing_backup(tmp_path: Path):
+    # 同秒內第二次備份不得蓋掉第一次（rename 對檔案是靜默覆蓋，會直接吃掉資料）
+    victim = tmp_path / "commands"
+    victim.write_text("first", encoding="utf-8")
+    b1 = cc._backup(str(victim))
+    victim.write_text("second", encoding="utf-8")
+    b2 = cc._backup(str(victim))
+    assert b1 != b2
+    assert Path(b1).read_text(encoding="utf-8") == "first"
+    assert Path(b2).read_text(encoding="utf-8") == "second"
+
+
+def test_copy_file_completes_short_writes(tmp_path: Path, monkeypatch):
+    # os.write 可能只寫入部分位元組（ENOSPC／EINTR）。忽略回傳值會靜默截斷卻仍回報
+    # copied——票 10 的 backup_and_copy 是「先備份受害檔再複製」，截斷等於資料只剩備份。
+    source = tmp_path / "CLAUDE.md"
+    payload = "x" * 5000
+    source.write_text(payload, encoding="utf-8")
+    target = tmp_path / "copied.md"
+    real_write = os.write
+    monkeypatch.setattr(cc.os, "write", lambda fd, data: real_write(fd, data[:4]))
+    cc._copy_file(str(source), str(target))
+    assert target.read_text(encoding="utf-8") == payload
+
+
+def test_copy_file_refuses_to_follow_or_clobber(tmp_path: Path):
+    # O_EXCL（票券不變式）：目標位置已被占用一律 EEXIST——不覆蓋既有實體檔，
+    # 也不沿最終元件的 symlink 寫穿到別處（那會寫出 account dir）。
+    source = tmp_path / "src.md"
+    source.write_text("rules", encoding="utf-8")
+    existing = tmp_path / "existing.md"
+    existing.write_text("MINE", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        cc._copy_file(str(source), str(existing))
+    assert existing.read_text(encoding="utf-8") == "MINE"
+    outside = tmp_path / "outside.md"
+    outside.write_text("OUTSIDE", encoding="utf-8")
+    link = tmp_path / "link.md"
+    link.symlink_to(outside)
+    with pytest.raises(FileExistsError):
+        cc._copy_file(str(source), str(link))
+    assert outside.read_text(encoding="utf-8") == "OUTSIDE"   # 沒寫穿
+
+
+def test_apply_rechecks_containment_before_every_op(tmp_path: Path, monkeypatch):
+    # 票券不變式：「mkdir 後與每個 op 前各驗」。prepared 是 per-account 快取，只驗
+    # mkdir 那次的話，多 entry 帳號在第一個 op 完成後被抽換，其餘 entry 會整批寫到
+    # account dir 外。這裡在第一個連結建好之後才抽換，只有 per-op 那道能擋。
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "commands").mkdir()
+    (src / "skills").mkdir()
+    tgt = tmp_path / "tgt"
+    tgt.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    g = _graph(str(src), str(tgt))
+    p = cc.plan(g, ["commands", "skills"])
+    real_symlink = os.symlink
+    swapped: list[str] = []
+
+    def _swap_after_first_link(source, target, **kw):
+        real_symlink(source, target, **kw)
+        if not swapped:
+            swapped.append(str(target))
+            for child in tgt.iterdir():
+                child.unlink()
+            tgt.rmdir()
+            real_symlink(outside, tgt)   # 不走 Path.symlink_to：它會再繞回被 patch 的 os.symlink
+
+    monkeypatch.setattr(cc.os, "symlink", _swap_after_first_link)
+    outcomes = [r.outcome for r in cc.apply(p, overwrite=[]).results]
+    assert outcomes == ["created", "failed"]
+    assert not (outside / "skills").exists()   # 沒寫出 account dir

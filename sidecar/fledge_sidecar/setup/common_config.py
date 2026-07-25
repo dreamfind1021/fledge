@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -234,3 +235,133 @@ def plan(graph: AccountGraph, selected_entries: list[str]) -> Plan:
                 needs_overwrite=needs_overwrite,
             ))
     return Plan(source_dir=graph.source_dir, targets=dict(graph.targets), operations=operations)
+
+
+Outcome = Literal["created", "relinked", "copied", "skipped", "conflict", "stale", "failed"]
+
+
+@dataclass(frozen=True)
+class OpResult:
+    account: str
+    entry: str
+    outcome: Outcome
+    backup_path: str | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class ApplyResult:
+    results: list[OpResult]
+
+
+def _copy_file(source_entry: str, target_path: str) -> None:
+    """複製實體檔。用 O_EXCL 開檔：不跟隨 symlink、也不覆蓋既有檔——
+    呼叫端保證 target_path 此刻不存在（missing 或剛備份完）。"""
+    data = Path(source_entry).read_bytes()
+    mode = os.stat(source_entry).st_mode & 0o777      # 沿用 source 權限，不擅自放寬
+    fd = os.open(target_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        # os.write 允許短寫（ENOSPC／EINTR 等）；忽略回傳值會靜默截斷卻仍回報 copied。
+        # backup_and_copy 是「先備份受害檔再複製」，截斷等於使用者的資料只剩在備份裡。
+        written = 0
+        while written < len(data):
+            written += os.write(fd, data[written:])
+    finally:
+        os.close(fd)
+
+
+def _backup(path: str) -> str:
+    """就地改名成 <name>.fledge-backup-<時間戳>（同目錄 rename：原子、不跨卷、仍在
+    containment root 內）。撞名時加序號——rename 對檔案是靜默覆蓋，直接用會吃掉舊備份。"""
+    base = f"{path}.fledge-backup-{time.strftime('%Y%m%d-%H%M%S')}"
+    candidate = base
+    n = 1
+    while os.path.lexists(candidate):
+        candidate = f"{base}-{n}"
+        n += 1
+    os.rename(path, candidate)
+    return candidate
+
+
+def _apply_one(op: Operation, source_dir: str, overwrite: set[tuple[str, str]]) -> OpResult:
+    spec = _SPEC_BY_NAME[op.entry]
+    target_dir = os.path.dirname(op.target_path)
+    if op.action == "skip":
+        return OpResult(op.account, op.entry, "skipped")
+
+    # parent containment 重驗（spec §6.5）：target dir 是 build_account_graph resolve 過的，
+    # realpath 應等於自己；被換成指向別處的 symlink 時就不等——那樣所有 mutation
+    # 都會落到 account dir 外，必須停手。
+    if os.path.realpath(target_dir) != target_dir:
+        return OpResult(op.account, op.entry, "failed", error="target_dir_moved")
+
+    # apply-time revalidation（spec §6.5）：dry-run→確認→apply 之間 FS 可變，
+    # 每個 mutation 前重探一次，與 plan 不符就停手，不依過時 plan 覆寫。
+    if probe_entry(source_dir, target_dir, spec) != op.state:
+        return OpResult(op.account, op.entry, "stale")
+
+    # 授權以 (account, entry) 為單位：裸 entry 名會讓 A 帳號的授權連帶授權 B 帳號
+    if op.needs_overwrite and (op.account, op.entry) not in overwrite:
+        return OpResult(op.account, op.entry, "conflict")
+
+    source_entry = os.path.join(source_dir, spec.name)
+    backup: str | None = None      # 備份成功但後續失敗時，仍要把備份位置回報給呼叫端
+    try:
+        if op.action == "create_link":
+            if op.state == "empty_dir":
+                os.rmdir(op.target_path)          # 只在空時成功，安全
+            os.symlink(source_entry, op.target_path)
+            return OpResult(op.account, op.entry, "created")
+        if op.action == "relink":
+            # 重探測到 unlink 之間仍可能被換成實體檔，直接 unlink 會誤刪未授權資料
+            # （relink 的 needs_overwrite=False）。改成先隔離改名再驗型別：不是預期的
+            # symlink 就還回去；位置已被重新占用時保留兩份資料，不覆蓋任何一份。
+            backup = _backup(op.target_path)
+            if not os.path.islink(backup):
+                # 不是預期的 symlink → 還原。但空窗中 target 位置可能已冒出別的東西，
+                # os.rename 會靜默覆蓋它（Python 無跨平台的 no-clobber rename），
+                # 故先確認位置仍空；不空就保留隔離檔並回報位置，兩份資料都不犧牲。
+                if os.path.lexists(op.target_path):
+                    return OpResult(op.account, op.entry, "stale", backup_path=backup)
+                os.rename(backup, op.target_path)
+                return OpResult(op.account, op.entry, "stale")
+            os.symlink(source_entry, op.target_path)
+            os.unlink(backup)                     # 確認是 symlink 才清掉隔離檔，不留垃圾
+            return OpResult(op.account, op.entry, "relinked")
+        if op.action == "copy":
+            _copy_file(source_entry, op.target_path)
+            return OpResult(op.account, op.entry, "copied")
+    except OSError as exc:
+        return OpResult(op.account, op.entry, "failed", backup_path=backup, error=str(exc))
+    return OpResult(op.account, op.entry, "failed", error="unsupported_action")
+
+
+def apply(plan: Plan, overwrite: list[tuple[str, str]]) -> ApplyResult:
+    """依 plan 執行，逐項盡力——單項失敗不阻斷其餘 entry（使用者修完重跑，已完成項回 skipped）。
+
+    `overwrite` 是被授權破壞既有內容的 `(account, entry)` pair 清單；未列的破壞性動作
+    回 conflict 不動。用 pair 而非裸 entry 名，否則授權 A 帳號會連帶授權 B 帳號。"""
+    allowed = {(a, e) for a, e in overwrite}
+    results: list[OpResult] = []
+    prepared: dict[str, str | None] = {}    # account key -> 建 target dir 的錯誤訊息（None=成功）
+
+    for op in plan.operations:
+        if op.account not in prepared:
+            target_dir = plan.targets[op.account]
+            try:
+                # 只建最後一層（parents=False）：父目錄不存在多半是路徑打錯，
+                # 遞建會在錯的地方留一串垃圾目錄。
+                Path(target_dir).mkdir(parents=False, exist_ok=True)
+                # mkdir(exist_ok=True) 對「已被換成 symlink 的 target dir」不會報錯，
+                # 故建完立刻驗一次 realpath（_apply_one 每個 op 前還會再驗）。
+                if os.path.realpath(target_dir) != target_dir:
+                    raise OSError("target_dir_moved")
+                prepared[op.account] = None
+            except OSError as exc:
+                prepared[op.account] = str(exc)
+        err = prepared[op.account]
+        if err is not None:
+            results.append(OpResult(op.account, op.entry, "failed", error=err))
+            continue
+        results.append(_apply_one(op, plan.source_dir, allowed))
+    return ApplyResult(results=results)
