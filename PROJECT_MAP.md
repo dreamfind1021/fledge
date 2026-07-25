@@ -62,9 +62,10 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `memory/scanner.py` | 找檔（對來源永遠唯讀）：`native_memory_files` 三態歸屬（encoded 反查：1 命中 matched／≥2 ambiguous／0 orphan，跳 MEMORY.md）+ `kms_files` 只掃 `library/`+`topics/`、`is_kms_file_allowed` realpath containment（擋 hidden/`_*`/CLAUDE.md/逃逸 symlink，與 route 共用） | `NativeRef`, `KmsRef`, `native_memory_files()`, `kms_files()`, `is_kms_file_allowed()` |
 | `memory/links.py` | Fledge-owned `memory-links.json`（唯讀源外唯一寫入）：`LinksStore` 無向 (min,max) 去重 + dismissed 綁 pair + module-level lock 序列化並寫（read-modify-write 重讀）+ atomic write（tmp→rename）0600；`suggest_links` topic 名/tags 正規化⊇專案名（長度<4 只手動） | `LinksStore`, `suggest_links()`, `_norm()` |
 | `memory/aggregator.py` | 組面板 payload：scope 分層（native user/feedback→global、project/reference→project、其餘→unknown；kms→kb）、專案中心分組（已連 topic 掛 project、unattributed/unknown 皆可見不靜默丟）、in-memory 搜尋（含 body、回 snippet）；**overview 只回摘要不含 body** | `MemoryItem`, `to_item()`, `build_overview()`, `build_related()` |
-| `routes/setup.py` | `GET /api/setup/status`（開發環境偵測：回 `{tools:[ToolStatus…]}`；安裝／登入不在此——走 `POST /api/sessions` kind=install/login） | `router` |
+| `routes/setup.py` | `GET /api/setup/status`（開發環境偵測：回 `{tools:[ToolStatus…]}`；安裝／登入不在此——走 `POST /api/sessions` kind=install/login）＋共通設置兩端點 `POST /api/setup/common-config/plan`（唯讀預覽）／`/apply`（實際套用）：Pydantic body `extra="forbid"`、apply 由 server 以相同輸入**重算 plan**（ADR-0002，不吃 client plan）、`_setup_lock` 序列化並發 apply；錯誤分流 `_PlanError`——`config_unreadable` 500（`json.JSONDecodeError` 是 `ValueError` 子類，不可當判別碼外洩）／模組判別碼 400／`probe_failed` 500（探測期 `OSError`） | `router` |
 | `setup/install_specs.py` | 開發工具資料表＋allowlist 安裝命令：`ToolSpec`（id/label/tier/binary/version_argv/install_command/docs_url）常數表（macOS/Homebrew 生態，core＋recommended 兩級）；**安全不變式：安裝命令只能來自本檔常數、route 以 install_id 查表**，Homebrew 本體 install_command=None（僅手動複製指令） | `ToolSpec`, `TOOL_SPECS`, `get_spec()`, `get_install_command()` |
 | `setup/env_detect.py` | 開發工具偵測純函式：which 命中才探版本（`_VERSION_TIMEOUT` 2s＋ThreadPool 平行、保序）；which/run 參數注入便於測試；版本探測失敗→version=None 不中斷 | `ToolStatus`, `detect_tool()`, `detect_all()` |
+| `setup/common_config.py` | 雙帳號共通設置（B/C 共用）：`build_account_graph`（模組自為安全權威，expand→absolute→resolve＋拒 home／祖先／根＋拒 target 解析到 source、與 source 祖先—子孫重疊、target 彼此重複或彼此巢狀）、`probe_entry`（lstat no-follow 十一態，含 source 型別前置驗證；`ok` 判定要求 realpath 落在 source dir 內）、`plan`（純函式）、`apply`（逐項盡力＋mutation 前重探測與 target dir realpath 重驗擋 TOCTOU＋動作與授權需求由驗過的 state 重算＋`(account, entry)` 授權閘＋就地改名備份不覆蓋＋relink 走隔離改名不誤刪＋`_copy_file` 以 `O_EXCL` 不跟隨不覆蓋、寫滿短寫）；source entry 是 symlink 時連字面路徑不追鏈 | `ENTRY_SPECS`, `build_account_graph()`, `probe_entry()`, `plan()`, `apply()` |
 
 ### src/ — React 前端
 | 檔案 | 職責 | 匯出 |
@@ -149,7 +150,8 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `test_memory_routes.py` | overview shape/links CRUD+dismiss/item 擋 traversal（403） |
 | `test_install_specs.py` | 資料表覆蓋 core 工具/欄位齊全/`get_spec`/`get_install_command` allowlist（未知 id、僅手動→None） |
 | `test_env_detect.py` | 偵測純函式（裝了探版本/沒裝跳過/探測失敗與 timeout 容忍/`detect_all` 一 spec 一 status） |
-| `test_setup_routes.py` | `/api/setup/status`（monkeypatch detect_all 注入假資料、回傳 shape） |
+| `test_setup_routes.py` | `/api/setup/status`（monkeypatch detect_all 注入假資料、回傳 shape）＋共通設置兩端點（plan 預覽不動 FS／apply 建連結／overwrite 閘與 pair 授權隔離／`_setup_lock` 並發序列化／400 判別碼／未知欄位與 client 夾帶 plan → 422／config 壞掉與探測 `OSError` 回判別碼不裸 500） |
+| `test_common_config.py` | allowlist／graph 防呆（target≡source、雙向祖先—子孫 overlap、target 彼此巢狀、home 祖先與根、平行 sibling 不誤擋）／十一態探測（含 source 型別前置、逃逸連結不判 ok）／`_action_for` 涵蓋全部十一態／apply 各分支／備份不覆蓋既有備份／TOCTOU stale／target dir 掉包與每 op 重驗／relink 不誤刪實體檔且不覆蓋競態新檔／per-account 授權隔離／symlink 不寫穿且原連結入備份／短寫寫滿 |
 
 ### build / 環境
 | 檔案 | 用途 |
@@ -199,7 +201,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `sidecar/.../dir_tree.py`（列目錄邏輯變更） | `routes/projects.py`、`test_dir_tree.py` |
 | `sidecar/.../paths.py`（containment helper 變更） | `routes/projects.py`、`test_paths.py` |
 | `sidecar/.../routes/projects.py`（tree endpoint 變更） | `src/lib/sidecar.ts`、`Sidebar.tsx`/`FileTree*.tsx`、`test_projects.py` |
-| `sidecar/.../routes/setup.py`／`setup/*.py`（偵測 payload/資料表變更） | `src/lib/sidecar.ts`（B-4 加 fetcher 後）、`test_setup_routes.py`、`test_env_detect.py`、`test_install_specs.py` |
+| `sidecar/.../routes/setup.py`／`setup/*.py`（偵測 payload/資料表／共通設置合約變更） | `src/lib/sidecar.ts`（B-4 加 fetcher 後）、`test_setup_routes.py`、`test_env_detect.py`、`test_install_specs.py`、`test_common_config.py` |
 | `src/lib/tabOrder.ts`（排序/插入邏輯變更） | `store/useAppStore.ts`、`tabOrder.test.ts` |
 | `src/lib/terminalRegistry.ts`（handle contract 變更） | `Terminal.tsx`、`App.tsx`（onDragEnd 貼路徑） |
 | `src/locales/*/sidebar.json`（key 增刪） | 另一語言 catalog 同步（`sidebar-parity.test.ts` 會擋）、`Sidebar.tsx`/`TabBar.tsx`/`FileTree*.tsx`/`Terminal.tsx` 的 t() 引用 |
