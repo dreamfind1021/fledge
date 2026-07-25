@@ -187,3 +187,131 @@ def test_load_manifest_reports_unavailable_when_not_shipped(tmp_path: Path):
     _seed(tmp_path)                      # 建了根目錄但沒有 manifest
     with pytest.raises(ValueError, match="template_unavailable"):
         tp.load_manifest("demo")
+
+
+def _demo_with_content(tmp_path: Path) -> Path:
+    """建含 CLAUDE.md + docs/guide.md 的 demo 範本，manifest 由 build_manifest_entries 產生。"""
+    content = _seed(tmp_path)
+    (content / "docs").mkdir()
+    (content / "docs" / "guide.md").write_text("guide", encoding="utf-8")
+    (content / "CLAUDE.md").write_text("rules", encoding="utf-8")
+    entries = tp.build_manifest_entries(str(content))
+    _write_manifest(content, [{"path": e.path, "type": e.type} for e in entries])
+    return content
+
+
+def test_resolve_destination_expands_and_resolves(tmp_path: Path):
+    dest = tmp_path / "work"
+    dest.mkdir()
+    assert tp.resolve_destination(str(dest)) == str(dest.resolve())
+
+
+def test_resolve_destination_rejects_unusable_and_unsafe(tmp_path: Path, monkeypatch):
+    for bad in ("", "   ", "relative/dir"):
+        with pytest.raises(ValueError, match="invalid_destination"):
+            tp.resolve_destination(bad)
+    # 底線防呆（ADR-0001 取向）：目的地是 home 本身／home 祖先／根 → containment 形同不設防
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for bad in (str(home), str(tmp_path), "/"):
+        with pytest.raises(ValueError, match="unsafe_destination"):
+            tp.resolve_destination(bad)
+
+
+def test_plan_reports_not_installed_on_empty_destination(tmp_path: Path):
+    _demo_with_content(tmp_path)
+    dest = tmp_path / "work"
+    dest.mkdir()
+    p = tp.plan("demo", str(dest))
+    assert p.template == "demo"
+    assert p.destination == str(dest.resolve())
+    assert p.state == "not_installed"
+    assert [(o.path, o.state) for o in p.operations] == [
+        ("CLAUDE.md", "missing"), ("docs", "missing"), ("docs/guide.md", "missing")]
+    assert not any(dest.iterdir()), "預覽不得動檔案系統"
+
+
+def test_plan_reports_partial_and_complete(tmp_path: Path):
+    _demo_with_content(tmp_path)
+    dest = tmp_path / "work"
+    (dest / "docs").mkdir(parents=True)
+    (dest / "CLAUDE.md").write_text("我自己的版本", encoding="utf-8")
+    p = tp.plan("demo", str(dest))
+    by_path = {o.path: o.state for o in p.operations}
+    assert by_path == {"CLAUDE.md": "present", "docs": "present", "docs/guide.md": "missing"}
+    assert p.state == "partial"
+    (dest / "docs" / "guide.md").write_text("g", encoding="utf-8")
+    assert tp.plan("demo", str(dest)).state == "complete"
+
+
+def test_plan_marks_type_mismatch_as_conflict_and_stops_subtree(tmp_path: Path):
+    # manifest 說 docs 是目錄，目的地卻是檔案 → conflict，其下內容不再續報 missing
+    _demo_with_content(tmp_path)
+    dest = tmp_path / "work"
+    dest.mkdir()
+    (dest / "docs").write_text("其實是檔案", encoding="utf-8")
+    p = tp.plan("demo", str(dest))
+    by_path = {o.path: o.state for o in p.operations}
+    assert by_path["docs"] == "conflict"
+    assert by_path["docs/guide.md"] == "conflict"
+    assert p.state == "conflict"
+
+
+def test_plan_marks_symlink_destination_entry_as_conflict(tmp_path: Path):
+    # 目的地既有 symlink：即使指向型別正確的東西也不接受——寫下去就是沿它寫出 root
+    _demo_with_content(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    dest = tmp_path / "work"
+    dest.mkdir()
+    (dest / "docs").symlink_to(outside)
+    p = tp.plan("demo", str(dest))
+    by_path = {o.path: o.state for o in p.operations}
+    assert by_path["docs"] == "conflict"
+    assert by_path["docs/guide.md"] == "conflict"
+
+
+def test_probe_entry_treats_an_escaping_parent_as_conflict(tmp_path: Path):
+    # probe_entry 是公開接縫，必須自己守父目錄 containment：plan 的 blocked-subtree
+    # 已擋下 symlink 父項，但單獨呼叫（或未來新增呼叫端）時沒有那層保護，
+    # 而 lexists/isfile 都會跟過 symlink 判成 present。
+    _demo_with_content(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "guide.md").write_text("外面的檔案", encoding="utf-8")
+    dest = tmp_path / "work"
+    dest.mkdir()
+    (dest / "docs").symlink_to(outside)
+    entry = tp.ManifestEntry("docs/guide.md", "file")
+    assert tp.probe_entry(str(dest), entry) == "conflict"
+
+
+def test_plan_does_not_block_a_sibling_sharing_the_conflicting_dir_prefix(tmp_path: Path):
+    # blocked ancestry 要逐元件上溯：字串 prefix 比對會讓 docs2/ 被 docs 誤命中，
+    # 整個無關的 subtree 被誤報 conflict 而永遠部署不出來
+    content = _seed(tmp_path)
+    (content / "docs").mkdir()
+    (content / "docs" / "guide.md").write_text("g", encoding="utf-8")
+    (content / "docs2").mkdir()
+    (content / "docs2" / "note.md").write_text("n", encoding="utf-8")
+    entries = tp.build_manifest_entries(str(content))
+    _write_manifest(content, [{"path": e.path, "type": e.type} for e in entries])
+    dest = tmp_path / "work"
+    dest.mkdir()
+    (dest / "docs").write_text("其實是檔案", encoding="utf-8")
+    by_path = {o.path: o.state for o in tp.plan("demo", str(dest)).operations}
+    assert by_path["docs"] == "conflict"
+    assert by_path["docs/guide.md"] == "conflict"
+    assert by_path["docs2"] == "missing"
+    assert by_path["docs2/note.md"] == "missing"
+
+
+def test_plan_rejects_unknown_template_and_unavailable(tmp_path: Path):
+    _seed(tmp_path)
+    dest = tmp_path / "work"
+    dest.mkdir()
+    with pytest.raises(ValueError, match="unknown_template"):
+        tp.plan("ghost", str(dest))
+    with pytest.raises(ValueError, match="template_unavailable"):
+        tp.plan("demo", str(dest))       # 根目錄在但沒有 manifest

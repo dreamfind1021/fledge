@@ -17,6 +17,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from fledge_sidecar.paths import (
+    expand_and_validate,
+    is_same_or_within,
+    resolve_best_effort,
+)
+
 SourceClass = Literal["public", "private"]
 EntryType = Literal["file", "dir"]
 
@@ -180,3 +186,95 @@ def load_manifest(template_id: str) -> list[ManifestEntry]:
 
     entries.sort(key=lambda e: _sort_key(e.path))
     return entries
+
+
+FileState = Literal["missing", "present", "conflict"]
+TemplateState = Literal["not_installed", "partial", "complete", "conflict"]
+
+
+@dataclass(frozen=True)
+class FileOp:
+    path: str          # 相對目的地
+    type: EntryType
+    state: FileState
+
+
+@dataclass(frozen=True)
+class TemplatePlan:
+    template: str
+    destination: str   # resolved
+    state: TemplateState
+    operations: list[FileOp]
+
+
+def resolve_destination(raw: str) -> str:
+    """目的地正規化 + 底線防呆。模組自為安全權威，不接受 caller 宣稱已 canonical。"""
+    try:
+        resolved = resolve_best_effort(expand_and_validate(raw))
+    except ValueError as exc:
+        raise ValueError("invalid_destination") from exc
+    # 目的地是 home 本身或 home 的祖先（含 /）時 containment root 大到形同不設防
+    if is_same_or_within(str(Path.home().resolve()), resolved):
+        raise ValueError("unsafe_destination")
+    return resolved
+
+
+def probe_entry(destination: str, entry: ManifestEntry) -> FileState:
+    """以 lstat/lexists（**不 follow**）判目的地該項的實際型別。純探測，無副作用。"""
+    target = os.path.join(destination, entry.path)
+    # 父目錄必須仍落在目的地內：中間某層是 symlink 指到外面時，寫下去就出了 root。
+    # 這道檢查不倚賴 plan 的 blocked-subtree——lexists/isfile 都會跟過 symlink 判成 present。
+    parent = os.path.dirname(target)
+    if not is_same_or_within(os.path.realpath(parent), destination):
+        return "conflict"
+    if not os.path.lexists(target):
+        return "missing"
+    if os.path.islink(target):
+        return "conflict"          # 既有 symlink 一律不接受，寫下去就是沿它寫出去
+    if entry.type == "dir":
+        return "present" if os.path.isdir(target) else "conflict"
+    return "present" if os.path.isfile(target) else "conflict"
+
+
+def _aggregate(states: list[FileState]) -> TemplateState:
+    if any(s == "conflict" for s in states):
+        return "conflict"
+    if all(s == "present" for s in states):
+        return "complete"
+    if all(s == "missing" for s in states):
+        return "not_installed"
+    return "partial"
+
+
+def _has_blocked_ancestor(rel: str, blocked: set[str]) -> bool:
+    """rel 的任一目錄祖先是否已被判 conflict。逐元件上溯而非字串 prefix：
+    載入端已正規化成父在子前，但用元件比對才不依賴那個前提，也不會被
+    `docs2/x` 誤命中 `docs`。"""
+    parent = os.path.dirname(rel)
+    while parent:
+        if parent in blocked:
+            return True
+        parent = os.path.dirname(parent)
+    return False
+
+
+def plan(template_id: str, destination_raw: str) -> TemplatePlan:
+    """比對 manifest 與目的地現況，產出逐檔操作。除探測外無副作用。"""
+    entries = load_manifest(template_id)          # 已對帳、去重、父在子前排序
+    destination = resolve_destination(destination_raw)
+    operations: list[FileOp] = []
+    blocked: set[str] = set()                     # conflict 的目錄，其下一律 conflict
+    for entry in entries:
+        if _has_blocked_ancestor(entry.path, blocked):
+            operations.append(FileOp(entry.path, entry.type, "conflict"))
+            continue
+        state = probe_entry(destination, entry)
+        if state == "conflict" and entry.type == "dir":
+            blocked.add(entry.path)
+        operations.append(FileOp(entry.path, entry.type, state))
+    return TemplatePlan(
+        template=template_id,
+        destination=destination,
+        state=_aggregate([o.state for o in operations]),
+        operations=operations,
+    )
