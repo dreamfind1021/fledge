@@ -633,3 +633,15 @@ def test_deploy_logs_outcomes(tmp_path: Path, caplog):
     assert any(r.levelname == "INFO" for r in caplog.records)
     assert any(r.levelname == "WARNING" and "conflict" in r.getMessage()
                for r in caplog.records)
+
+
+def test_repo_public_seed_manifest_matches_its_content():
+    # committed manifest 與實際內容脫節時，出貨的範本就會漏檔或多檔——這裡擋住 drift
+    import json as _json
+
+    root = Path(tp.templates_root()) / "project-starter"
+    assert root.is_dir(), "repo 內的 public seed 必須存在"
+    committed = _json.loads((root / tp.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    generated = [{"path": e.path, "type": e.type}
+                 for e in tp.build_manifest_entries(str(root))]
+    assert committed["entries"] == generated

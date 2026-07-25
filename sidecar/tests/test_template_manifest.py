@@ -224,3 +224,56 @@ def test_verify_rejects_malformed_manifest(tmp_path: Path):
     root = _staged(tmp_path, ["project-starter"])
     for bad in ({}, {"templates": "nope"}, {"templates": [{"id": "ghost", "included": True}]}):
         assert tm.verify_artifact(str(root), bad, allow_private=False)
+
+
+def test_stage_templates_public_mode_excludes_private(tmp_path: Path):
+    pub = tmp_path / "public"
+    (pub / "project-starter").mkdir(parents=True)
+    (pub / "project-starter" / "a.md").write_text("a", encoding="utf-8")
+    priv = tmp_path / "private"
+    (priv / "dev-methodology").mkdir(parents=True)
+    (priv / "dev-methodology" / "secret.md").write_text("私人", encoding="utf-8")
+    dest = tmp_path / "staged"
+    # public-mode：即使私有目錄就在旁邊、路徑也知道，也不得帶入
+    assert tm.stage_templates(str(pub), None, str(dest)) == ["project-starter"]
+    assert not (dest / "dev-methodology").exists()
+    # 自用 build：明確傳入才帶
+    assert tm.stage_templates(str(pub), str(priv), str(dest)) == [
+        "dev-methodology", "project-starter"]
+    assert (dest / "dev-methodology" / "secret.md").exists()
+
+
+def test_stage_templates_fails_loudly_on_symlink_in_source(tmp_path: Path):
+    pub = tmp_path / "public"
+    (pub / "project-starter").mkdir(parents=True)
+    (pub / "project-starter" / "a.md").write_text("a", encoding="utf-8")
+    outside = tmp_path / "outside.md"
+    outside.write_text("HOST", encoding="utf-8")
+    (pub / "project-starter" / "leak.md").symlink_to(outside)
+    with pytest.raises(ValueError, match="symlink"):
+        tm.stage_templates(str(pub), None, str(tmp_path / "staged"))
+
+
+def test_stage_templates_rejects_unknown_id_and_misplaced_class(tmp_path: Path):
+    pub = tmp_path / "public"
+    (pub / "mystery").mkdir(parents=True)
+    with pytest.raises(ValueError, match="allowlist"):
+        tm.stage_templates(str(pub), None, str(tmp_path / "s1"))
+    (pub / "mystery").rmdir()
+    (pub / "dev-methodology").mkdir()        # private 範本放在 public 來源
+    with pytest.raises(ValueError, match="分類"):
+        tm.stage_templates(str(pub), None, str(tmp_path / "s2"))
+
+
+def test_stage_templates_rejects_a_symlinked_template_dir(tmp_path: Path):
+    # 頂層 id 本身是 symlink 指向別處：`_inventory` 會跟進去看到一堆正常檔案
+    # （others 為空、樹內沒有任何 symlink），copytree 於是把宿主機那棵樹整個複製進
+    # staging，manifest 也會照登記、雜湊照驗過。只有根層的 isdir/islink 檢查擋得住。
+    real = tmp_path / "elsewhere" / "project-starter"
+    real.mkdir(parents=True)
+    (real / "host.md").write_text("HOST", encoding="utf-8")
+    pub = tmp_path / "public"
+    pub.mkdir()
+    (pub / "project-starter").symlink_to(real)
+    with pytest.raises(ValueError, match="只能有範本目錄"):
+        tm.stage_templates(str(pub), None, str(tmp_path / "staged"))

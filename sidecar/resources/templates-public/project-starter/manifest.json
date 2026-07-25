@@ -1,0 +1,16 @@
+{
+  "entries": [
+    {
+      "path": "CLAUDE.md",
+      "type": "file"
+    },
+    {
+      "path": "docs",
+      "type": "dir"
+    },
+    {
+      "path": "docs/README.md",
+      "type": "file"
+    }
+  ]
+}

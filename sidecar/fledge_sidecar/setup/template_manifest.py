@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import stat
 from pathlib import Path
 
-from fledge_sidecar.setup.templates import TEMPLATE_SPECS
+from fledge_sidecar.setup.templates import TEMPLATE_SPECS, SourceClass
 
 ARTIFACT_MANIFEST_FILENAME = "artifact-manifest.json"
 
@@ -46,6 +47,47 @@ def _inventory(root: str) -> tuple[list[str], list[str], list[str]]:
             else:
                 others.append(rel)                 # fifo/socket/device
     return sorted(files), sorted(dirs), sorted(others)
+
+
+def stage_templates(public_root: str, private_root: str | None, dest_root: str) -> list[str]:
+    """把範本內容複製到 staging 目錄，回實際帶入的 id 清單。
+
+    來源樹先整棵盤點：出現任何 symlink 或非常規物件就**直接失敗**，不做「跳過就好」
+    ——安靜略過會產出一個少檔案但驗證照樣通過的 artifact。這也是不能交給
+    `rsync -a --no-links` 的原因：它遇到 symlink 只印警告、exit code 仍是 0（已實測）。
+    private_root 為 None 時完全不碰私有內容（public-mode）。"""
+    if os.path.isdir(dest_root):
+        shutil.rmtree(dest_root)
+    os.makedirs(dest_root)
+    spec_by_id = {s.id: s for s in TEMPLATE_SPECS}
+    included: list[str] = []
+
+    sources: list[tuple[str, SourceClass]] = [(public_root, "public")]
+    if private_root is not None:
+        sources.append((private_root, "private"))
+
+    for root, expected_class in sources:
+        if not os.path.isdir(root):
+            raise ValueError(f"範本來源目錄不存在：{root}")
+        for name in sorted(os.listdir(root)):
+            src = os.path.join(root, name)
+            if not os.path.isdir(src) or os.path.islink(src):
+                raise ValueError(f"範本來源根目錄只能有範本目錄，發現：{name}")
+            spec = spec_by_id.get(name)
+            if spec is None:
+                raise ValueError(f"範本 id 不在 allowlist：{name}")
+            if spec.source_class != expected_class:
+                # public 目錄放 private 範本（或反之）＝分類與實際來源脫節，直接擋
+                raise ValueError(
+                    f"{name}：allowlist 分類為 {spec.source_class}，卻放在 {expected_class} 來源")
+            if name in included:
+                raise ValueError(f"{name}：public 與 private 來源都有同一個 id")
+            _, _, others = _inventory(src)
+            if others:
+                raise ValueError(f"{name}：來源樹含 symlink 或非常規物件 {others}")
+            shutil.copytree(src, os.path.join(dest_root, name), symlinks=False)
+            included.append(name)
+    return sorted(included)
 
 
 def build_artifact_manifest(staged_root: str, included_ids: list[str]) -> dict:
@@ -204,5 +246,6 @@ def verify_artifact(staged_root: str, manifest: dict, allow_private: bool) -> li
 __all__ = [
     "ARTIFACT_MANIFEST_FILENAME",
     "build_artifact_manifest",
+    "stage_templates",
     "verify_artifact",
 ]
