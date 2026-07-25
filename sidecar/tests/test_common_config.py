@@ -132,6 +132,24 @@ def test_build_graph_rejects_duplicate_target_dirs(tmp_path: Path):
         cc.build_account_graph(accounts, "work", ["a", "b"])
 
 
+def test_build_graph_rejects_overlapping_target_dirs(tmp_path: Path):
+    # target 彼此巢狀與 target-source 重疊是同一族破壞：外層 target 的 entry 路徑可能
+    # 正好是內層 target 的整個 config_dir（如 a=/t 的 projects 項＝b=/t/projects），
+    # 備份會把內層帳號目錄整個改名。兩種登記順序都要擋，不能靠 target_keys 排列漏網。
+    src = tmp_path / "src"
+    src.mkdir()
+    outer = tmp_path / "t"
+    (outer / "projects").mkdir(parents=True)
+    accounts = {
+        "work": {"config_dir": str(src)},
+        "a": {"config_dir": str(outer)},
+        "b": {"config_dir": str(outer / "projects")},
+    }
+    for order in (["a", "b"], ["b", "a"]):
+        with pytest.raises(ValueError, match="overlapping_account_dirs"):
+            cc.build_account_graph(accounts, "work", order)
+
+
 def test_build_graph_rejects_home_ancestor_and_root(tmp_path: Path, monkeypatch):
     # 底線防呆（ADR-0001）：config_dir 指到 home 本身／home 祖先／根，
     # containment 完全不會叫，apply 會直接在 home 底下動手

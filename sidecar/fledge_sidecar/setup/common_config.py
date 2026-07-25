@@ -89,6 +89,11 @@ def build_account_graph(
             raise ValueError("overlapping_account_dirs")
         if resolved in seen:
             raise ValueError("duplicate_target")
+        # target 彼此巢狀是同一族破壞，只是發生在 target 側：外層 target 的 entry 路徑
+        # 可能正好是內層 target 的整個 config_dir，備份會把內層帳號目錄改名。
+        # 精確相同已由 duplicate_target 先擋，故此處只會命中真正的祖先／子孫關係。
+        if any(is_within_root(resolved, other) or is_within_root(other, resolved) for other in seen):
+            raise ValueError("overlapping_account_dirs")
         seen.add(resolved)
         targets[key] = resolved
     return AccountGraph(source_key=source_key, source_dir=source_dir, targets=targets)
