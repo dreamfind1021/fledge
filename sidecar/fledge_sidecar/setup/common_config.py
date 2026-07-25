@@ -153,12 +153,18 @@ class Plan:
     operations: list[Operation]
 
 
-def _same_link_target(link_path: str, source_entry: str) -> bool:
+def _same_link_target(link_path: str, source_entry: str, source_dir: str) -> bool:
     """既有 symlink 是否已指向 source entry。先字面比對（我們自己建的樣子），
     不等再比 realpath——使用者用相對路徑等等價寫法建的連結不該被判成錯而無謂重建。"""
     if os.readlink(link_path) == source_entry:
         return True
-    return os.path.realpath(link_path) == os.path.realpath(source_entry)
+    real_link = os.path.realpath(link_path)
+    if real_link != os.path.realpath(source_entry):
+        return False
+    # realpath 相等還不夠：source entry 自己是 symlink 指到帳號目錄外時，「繞過 source
+    # 帳號目錄直接連向同一實體目標」的連結也會 realpath 相等。plan 明訂連字面路徑、不追
+    # 鏈以維持「連結目標限另一登記帳號」，故這種連結判 wrong_link 交給 relink 改正。
+    return is_within_root(real_link, os.path.realpath(source_dir))
 
 
 def _source_state(source_entry: str, share: ShareKind) -> EntryState | None:
@@ -187,7 +193,7 @@ def probe_entry(source_dir: str, target_dir: str, spec: EntrySpec) -> EntryState
             return "unexpected_type"  # copy 項是 symlink＝非預期型別，備份後改實體檔
         if not os.path.exists(target_entry):
             return "broken_link"
-        return "ok" if _same_link_target(target_entry, source_entry) else "wrong_link"
+        return "ok" if _same_link_target(target_entry, source_entry, source_dir) else "wrong_link"
     if spec.share == "copy":
         if not os.path.isfile(target_entry):
             return "unexpected_type"  # 同名目錄

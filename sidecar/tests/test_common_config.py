@@ -218,6 +218,19 @@ def test_probe_ok_accepts_equivalent_link_written_differently(tmp_path: Path):
     assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "ok"
 
 
+def test_probe_rejects_link_that_matches_only_outside_source_dir(tmp_path: Path):
+    # source entry 自己是 symlink 指到帳號目錄外時，target 直接連向同一實體目標雖然
+    # realpath 相等，卻繞過了 source 帳號目錄。plan 明訂「source entry 是 symlink 時連
+    # 字面路徑、不追鏈」以維持「連結目標限另一登記帳號」不變式——判 ok 等於從探測端把
+    # 它放回來（Fledge 會宣稱已共通、C 的 repair 也修不到）。應判 wrong_link 由 relink 改正。
+    src, tgt = _dirs(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (Path(src) / "commands").symlink_to(outside)
+    (Path(tgt) / "commands").symlink_to(outside)
+    assert cc.probe_entry(src, tgt, SYMLINK_SPEC) == "wrong_link"
+
+
 def test_probe_wrong_and_broken_link(tmp_path: Path):
     src, tgt = _dirs(tmp_path)
     (Path(src) / "commands").mkdir()
