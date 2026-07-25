@@ -363,3 +363,203 @@
   color: var(--text);
   font-weight: 700;
 }
+
+/* 動作列右側成組（重新檢查 + 下一步）*/
+.ob-actions-right {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* ══════════ 設置卡與狀態語彙（視覺權威：docs/design/b4-onboarding-wizard.html）══════════ */
+
+/* ── 分區（核心／常用）── */
+.b4-sec {
+  margin-bottom: 16px;
+}
+
+.b4-sec:last-of-type {
+  margin-bottom: 0;
+}
+
+.b4-sec-h {
+  font-size: 11px;
+  color: var(--faint);
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+}
+
+.b4-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+}
+
+/* ── 工具清單 ── */
+.b4-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.b4-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+/* 每列與它的展開面板同屬一個 group，分隔線因此掛在 group 的最後一列上 */
+.b4-row-group:last-child .b4-item {
+  border-bottom: none;
+}
+
+.b4-item-name {
+  font-weight: 600;
+  font-size: 13px;
+  flex: 0 0 auto;
+}
+
+.b4-item-meta {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.b4-item-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* ── 狀態點與 chip（六張設置卡共用的視覺語彙）── */
+.b4-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.b4-dot.ok {
+  background: var(--session);
+}
+
+.b4-dot.todo {
+  background: var(--faint);
+}
+
+.b4-chip {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 99px;
+  padding: 3px 9px;
+  white-space: nowrap;
+}
+
+.b4-chip.ok {
+  background: color-mix(in srgb, var(--session) 16%, transparent);
+  color: var(--session);
+}
+
+.b4-chip.todo {
+  background: color-mix(in srgb, var(--faint) 22%, transparent);
+  color: var(--dim);
+}
+
+/* ── 卡內小按鈕 ── */
+.b4-btn-sm {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  white-space: nowrap;
+}
+
+.b4-btn-sm:hover {
+  background: var(--hover);
+}
+
+.b4-btn-sm:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.b4-btn-sm.primary {
+  background: var(--primary);
+  color: var(--primary-ink);
+  border-color: transparent;
+}
+
+.b4-btn-sm.primary:hover {
+  filter: brightness(1.05);
+}
+
+/* pointer-events 一併關掉，disabled 的 primary 才不會 hover 變亮誤導成可按 */
+.b4-btn-sm:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── 提示文字 ── */
+.b4-hint {
+  font-size: 11.5px;
+  color: var(--faint);
+  line-height: 1.55;
+  margin: 10px 0 0;
+}
+
+.b4-hint-inline {
+  margin: 0;
+}
+
+.b4-hint code {
+  font-family: var(--font-mono);
+}
+
+/* ── 展開的命令面板（手動安裝指令；票 24 的安裝確認沿用同一組樣式）── */
+.b4-confirm {
+  background: color-mix(in srgb, var(--warning) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 26%, transparent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  /* 直接接在觸發它的那一列下面，不飄到清單外 */
+  margin: 0 0 10px;
+}
+
+.b4-confirm-title {
+  font-size: 12px;
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.b4-confirm-cmd {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text);
+  background: var(--term-bg);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 7px 0 9px;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.b4-confirm-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}

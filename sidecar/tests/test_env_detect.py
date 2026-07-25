@@ -5,6 +5,9 @@ from fledge_sidecar.setup.install_specs import ToolSpec
 
 SPEC = ToolSpec("node", "Node.js", "core", "node", ["node", "--version"],
                 "brew install node", "https://nodejs.org")
+# 僅手動安裝（install_command=None）：官方指令放在 note，如 Homebrew 本體
+MANUAL_SPEC = ToolSpec("homebrew", "Homebrew", "core", "brew", ["brew", "--version"],
+                       None, "https://brew.sh", '/bin/bash -c "$(curl -fsSL install.sh)"')
 
 
 def _fake_run_ok(argv, **kw):
@@ -56,6 +59,22 @@ def test_detect_version_probe_timeout_is_tolerated():
         raise subprocess.TimeoutExpired(argv, 2)
     st = ed.detect_tool(SPEC, which=lambda b: "/usr/bin/node", run=_run)
     assert st.installed is True and st.version is None
+
+
+# 前端靠這三欄決定「顯示什麼」：未安裝時列 binary 名（version 為 None）、
+# 有 install_command 才給一鍵安裝、只有 manual_command 時給「複製指令」。
+# 命令字串一律由後端資料表提供，前端不得自帶（spec §5 allowlist 不變式）。
+def test_status_carries_binary_and_install_command():
+    st = ed.detect_tool(SPEC, which=lambda b: None, run=_fake_run_ok)
+    assert st.binary == "node"
+    assert st.install_command == "brew install node"
+    assert st.manual_command is None  # 無 note → 不給「複製指令」
+
+
+def test_manual_only_tool_reports_manual_command():
+    st = ed.detect_tool(MANUAL_SPEC, which=lambda b: None, run=_fake_run_ok)
+    assert st.install_command is None  # 不能一鍵安裝
+    assert st.manual_command == '/bin/bash -c "$(curl -fsSL install.sh)"'
 
 
 def test_detect_all_returns_one_status_per_spec():

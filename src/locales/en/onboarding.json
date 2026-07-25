@@ -33,6 +33,8 @@
     "install": "Install",
     "copyCmd": "Copy command",
     "recheck": "Re-check",
+    "checking": "Checking your tools…",
+    "copied": "Copied",
     "running": "Running",
     "brewTitle": "Homebrew must be installed manually",
     "brewHint": "The official installer is interactive and needs sudo — please run it in your own terminal.",
@@ -115,6 +117,7 @@
     "denied": "Some folders couldn't be read — grant access in System Settings",
     "scan_failed": "Scan failed: {{reason}}",
     "onboard_failed": "Couldn't save your settings: {{reason}}",
+    "status_failed": "Couldn't check your tools: {{reason}}",
     "projects_reload_failed": "Your settings were saved, but the project list failed to load: {{reason}}"
   }
 }

@@ -10,6 +10,7 @@ vi.mock("../lib/dialog", () => ({ pickDirectory: vi.fn() }));
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   scanPreview: vi.fn(async (_port: number, path: string) => ({ path, count: 3, status: "ok" as const })),
+  fetchSetupStatus: vi.fn(async () => []), // 環境頁掛 EnvCard 後會偵測；外殼測試不碰網路
 }));
 
 const account = { config_dir: "~/.claude", label: "Work" };

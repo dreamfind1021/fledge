@@ -7,6 +7,7 @@ import { pickDirectory } from "../lib/dialog";
 import { wizardSteps, clampStepIndex, progressCells, type WizardStep } from "../lib/onboardingSteps";
 import { FeatherMark } from "./Logo";
 import { LangSwitch } from "./LangSwitch";
+import { EnvCard } from "./EnvCard";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -20,9 +21,8 @@ interface DraftRoot {
 }
 
 // 待填頁 → catalog 群名。群名沿用 demo 的簡寫（common→cc、system→sys），與頁 id 不同名。
-// 內容由票 23–28 各自補；外殼只負責標題、說明與導覽。
+// 內容由票 25–28 各自補；外殼只負責標題、說明與導覽。
 const PENDING_NS: Partial<Record<WizardStep, string>> = {
-  env: "env",
   login: "login",
   common: "cc",
   system: "sys",
@@ -269,7 +269,10 @@ export function Onboarding({ onClose }: OnboardingProps) {
             </div>
           )}
 
-          {/* ── 環境／登入／共通設置／系統設置：外殼就位，內容待票 23–28 ── */}
+          {/* ── 環境偵測（票 23）：標題、清單與導覽都在卡片內，重新檢查與下一步同列 ── */}
+          {step === "env" && <EnvCard port={port} onPrev={prev} onNext={next} />}
+
+          {/* ── 登入／共通設置／系統設置：外殼就位，內容待票 25–28 ── */}
           {pendingNs && (
             <div>
               <h2 className="ob-h">{t(`${pendingNs}.h`)}</h2>
