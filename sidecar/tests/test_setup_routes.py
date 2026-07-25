@@ -205,3 +205,23 @@ def test_common_config_apply_serialises_concurrent_calls(tmp_path: Path, monkeyp
     outcomes = [r.json()["results"][0]["outcome"] for r in responses]
     assert outcomes.count("created") == 1
     assert set(outcomes) == {"created", "skipped"}
+
+
+def test_common_config_apply_requires_initialised_config(tmp_path: Path, monkeypatch):
+    # config.json 不存在時 AppConfig.load() 會 fallback 到 DEFAULT_CONFIG
+    # （work=~/.claude、personal=~/.claude-tc）——未 onboard 的使用者一送出 apply
+    # 就會對真實 home 目錄動手。破壞性端點自己強制 readiness，不靠尚未存在的前端精靈。
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(tmp_path / "nope.json"))
+    client = TestClient(create_app())
+    r = client.post(
+        "/api/setup/common-config/apply",
+        json={"source": "work", "targets": ["personal"], "entries": ["commands"]},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"] == "config_not_initialized"
+    # 唯讀預覽不受影響（精靈要能在寫檔前先看狀態）
+    r = client.post(
+        "/api/setup/common-config/plan",
+        json={"source": "work", "targets": ["personal"], "entries": ["commands"]},
+    )
+    assert r.status_code == 200

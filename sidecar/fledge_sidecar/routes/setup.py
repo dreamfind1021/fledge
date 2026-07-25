@@ -11,7 +11,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from fledge_sidecar.app_config import AppConfig
+from fledge_sidecar.app_config import AppConfig, default_config_path
 from fledge_sidecar.setup import common_config
 from fledge_sidecar.setup.env_detect import detect_all
 
@@ -91,6 +91,11 @@ def common_config_plan(body: CommonConfigBody):
 def common_config_apply(body: CommonConfigApplyBody):
     """套用共通設置。plan 由 server 以相同輸入**重算**（ADR-0002）——不接受 client
     回傳的 plan 物件，client 狀態不可信且 dry-run 後 FS 可能已變。"""
+    # 破壞性端點自己強制 readiness：設定檔不存在時 AppConfig.load() 會 fallback 到
+    # DEFAULT_CONFIG（work=~/.claude、personal=~/.claude-tc），未 onboard 的使用者
+    # 一送出就會對真實 home 目錄動手。唯讀預覽不設此閘（精靈要能先看狀態）。
+    if not default_config_path().exists():
+        return JSONResponse(status_code=400, content={"error": "config_not_initialized"})
     with _setup_lock:
         try:
             result = _build_plan(body)

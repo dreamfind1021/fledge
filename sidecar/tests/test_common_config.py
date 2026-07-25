@@ -871,3 +871,35 @@ def test_copy_file_removes_its_partial_file_when_the_write_fails(tmp_path: Path,
     with pytest.raises(OSError):
         cc._copy_file(str(source), str(target))
     assert not target.exists(), "半截檔必須清掉，不能留在 live 位置"
+
+
+def test_apply_reports_stable_error_codes_not_raw_os_messages(tmp_path: Path, monkeypatch):
+    # OpResult.error 是前端合約的一部分（route 以 asdict 原封轉出）。str(OSError) 會夾帶
+    # errno 文字與絕對路徑，前端 i18n 映不到（CLAUDE.md §4.6.13）——一律回穩定判別碼。
+    import errno as errno_mod
+
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+
+    def _denied(source, target, **kw):
+        raise PermissionError(errno_mod.EACCES, "Permission denied")
+
+    monkeypatch.setattr(cc.os, "symlink", _denied)
+    g = _graph(src, tgt)
+    r = cc.apply(cc.plan(g, ["commands"]), overwrite=[]).results[0]
+    assert r.outcome == "failed"
+    assert r.error == "permission_denied"
+    assert "/" not in (r.error or ""), "判別碼不得夾帶路徑"
+
+
+def test_apply_logs_destructive_outcomes(tmp_path: Path, caplog):
+    # 破壞性操作要留伺服端稽核紀錄：使用者事後找不到 .fledge-backup-* 時，log 是唯一線索
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    (Path(tgt) / "commands").mkdir()
+    (Path(tgt) / "commands" / "mine.md").write_text("MINE", encoding="utf-8")
+    g = _graph(src, tgt)
+    with caplog.at_level("INFO", logger=cc.__name__):
+        cc.apply(cc.plan(g, ["commands"]), overwrite=[])          # → conflict
+    assert any(r.levelname == "INFO" for r in caplog.records)
+    assert any(r.levelname == "WARNING" and "conflict" in r.getMessage() for r in caplog.records)

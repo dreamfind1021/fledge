@@ -9,13 +9,18 @@
 from __future__ import annotations
 
 import contextlib
+import errno
+import logging
 import os
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from fledge_sidecar.paths import expand_and_validate, is_within_root, resolve_best_effort
+
+logger = logging.getLogger(__name__)
 
 ShareKind = Literal["symlink", "copy"]
 
@@ -311,7 +316,7 @@ def _copy_file(source_entry: str, target_path: str) -> None:
         while written < len(data):
             n = os.write(fd, data[written:])
             if n <= 0:
-                raise OSError("write_made_no_progress")   # 不前進；不擋就是無限迴圈
+                raise OSError(errno.EIO, "write made no progress")  # 不擋就是無限迴圈
             written += n
     except BaseException:
         # 失敗時清掉這次自己建的半截檔——CLAUDE.md 是 claude 會實際讀的 live 設定，
@@ -327,7 +332,14 @@ def _copy_file(source_entry: str, target_path: str) -> None:
 
 def _backup(path: str) -> str:
     """就地改名成 <name>.fledge-backup-<時間戳>（同目錄 rename：原子、不跨卷、仍在
-    containment root 內）。撞名時加序號——rename 對檔案是靜默覆蓋，直接用會吃掉舊備份。"""
+    containment root 內）。撞名時加序號——rename 對檔案是靜默覆蓋，直接用會吃掉舊備份。
+
+    **已知殘餘風險**：序號迴圈只擋得住本 process 的連續備份。`lexists` 到 `rename`
+    之間仍有 check-then-act 窗口——若另一支程式（第二個 sidecar、使用者的工具）
+    在該窗口內剛好建出同名檔，`os.rename` 會靜默覆蓋它。要真正消滅需要 macOS 專屬的
+    `renameatx_np(RENAME_EXCL)`（ctypes），評估後判定不值得引入平台相依碼：命中需要
+    對方在毫秒級窗口內產生「同路徑＋同秒時間戳＋同序號」的檔案，遠超出本模組
+    「防意外、不防已取得執行權的行為者」的威脅模型。"""
     base = f"{path}.fledge-backup-{time.strftime('%Y%m%d-%H%M%S')}"
     candidate = base
     n = 1
@@ -336,6 +348,25 @@ def _backup(path: str) -> str:
         n += 1
     os.rename(path, candidate)
     return candidate
+
+
+# errno → 穩定判別碼。`str(OSError)` 夾帶 errno 文字與絕對路徑，是診斷細節而非前端
+# 合約（CLAUDE.md §4.6.13：sidecar 回 code、前端負責 i18n）。完整例外走 log。
+_ERROR_CODE_BY_ERRNO: dict[int, str] = {
+    errno.EACCES: "permission_denied",
+    errno.EPERM: "permission_denied",
+    errno.EROFS: "read_only_filesystem",
+    errno.ENOENT: "path_missing",
+    errno.EEXIST: "target_exists",
+    errno.ENOTEMPTY: "target_not_empty",
+    errno.ENOSPC: "no_space",
+    errno.EXDEV: "cross_device",
+    errno.ELOOP: "too_many_symlinks",
+}
+
+
+def _error_code(exc: OSError) -> str:
+    return _ERROR_CODE_BY_ERRNO.get(exc.errno or 0, "io_failed")
 
 
 def _apply_one(op: Operation, source_dir: str, overwrite: set[tuple[str, str]]) -> OpResult:
@@ -406,7 +437,10 @@ def _apply_one(op: Operation, source_dir: str, overwrite: set[tuple[str, str]]) 
             _copy_file(source_entry, op.target_path)
             return OpResult(op.account, op.entry, "copied", backup_path=backup)
     except OSError as exc:
-        return OpResult(op.account, op.entry, "failed", backup_path=backup, error=str(exc))
+        # 完整例外（含路徑與 traceback）只進 log；回給呼叫端的是穩定判別碼
+        logger.error("共通設置檔案操作失敗：account=%s entry=%s action=%s backup=%s",
+                     op.account, op.entry, action, backup, exc_info=True)
+        return OpResult(op.account, op.entry, "failed", backup_path=backup, error=_error_code(exc))
     return OpResult(op.account, op.entry, "failed", error="unsupported_action")
 
 
@@ -418,6 +452,10 @@ def apply(plan: Plan, overwrite: list[tuple[str, str]]) -> ApplyResult:
     allowed = {(a, e) for a, e in overwrite}
     results: list[OpResult] = []
     prepared: dict[str, str | None] = {}    # account key -> 建 target dir 的錯誤訊息（None=成功）
+    # 破壞性操作要留伺服端稽核紀錄：使用者事後找不到 .fledge-backup-* 時 log 是唯一線索。
+    # 只記路徑與判別碼，不記檔案內容。
+    logger.info("共通設置 apply 開始：source=%s targets=%s ops=%d overwrite=%d",
+                plan.source_dir, sorted(plan.targets), len(plan.operations), len(allowed))
 
     for op in plan.operations:
         # op 必須確實屬於這張 graph：_apply_one 的 target_dir 是從 op.target_path 推出來的，
@@ -447,4 +485,14 @@ def apply(plan: Plan, overwrite: list[tuple[str, str]]) -> ApplyResult:
             results.append(OpResult(op.account, op.entry, "failed", error=err))
             continue
         results.append(_apply_one(op, plan.source_dir, allowed))
+
+    for r in results:
+        # 沒做成的每一項都留一行：conflict/stale 是「刻意沒動」，failed 另有 ERROR 帶 traceback
+        if r.outcome in {"conflict", "stale", "failed"}:
+            logger.warning("共通設置 %s：account=%s entry=%s error=%s backup=%s",
+                           r.outcome, r.account, r.entry, r.error, r.backup_path)
+        elif r.backup_path:
+            logger.info("共通設置 %s：account=%s entry=%s 既有內容已備份至 %s",
+                        r.outcome, r.account, r.entry, r.backup_path)
+    logger.info("共通設置 apply 完成：%s", dict(Counter(r.outcome for r in results)))
     return ApplyResult(results=results)
