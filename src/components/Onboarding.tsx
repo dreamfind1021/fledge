@@ -9,6 +9,7 @@ import { FeatherMark } from "./Logo";
 import { LangSwitch } from "./LangSwitch";
 import { EnvCard } from "./EnvCard";
 import { LoginCard } from "./LoginCard";
+import { CommonConfigCard } from "./CommonConfigCard";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -21,10 +22,9 @@ interface DraftRoot {
   count: number;
 }
 
-// 待填頁 → catalog 群名。群名沿用 demo 的簡寫（common→cc、system→sys），與頁 id 不同名。
-// 內容由票 26–28 各自補；外殼只負責標題、說明與導覽。
+// 待填頁 → catalog 群名。群名沿用 demo 的簡寫（system→sys），與頁 id 不同名。
+// 內容由票 27–28 補；外殼只負責標題、說明與導覽。
 const PENDING_NS: Partial<Record<WizardStep, string>> = {
-  common: "cc",
   system: "sys",
 };
 
@@ -282,7 +282,17 @@ export function Onboarding({ onClose }: OnboardingProps) {
             />
           )}
 
-          {/* ── 共通設置／系統設置：外殼就位，內容待票 26–28 ── */}
+          {/* ── 共通設置（票 26）：逐項狀態 + 非破壞性套用，導覽在卡片內 ── */}
+          {step === "common" && (
+            <CommonConfigCard
+              port={port}
+              accounts={config?.accounts ?? {}}
+              onPrev={prev}
+              onNext={next}
+            />
+          )}
+
+          {/* ── 系統設置：外殼就位，內容待票 27–28 ── */}
           {pendingNs && (
             <div>
               <h2 className="ob-h">{t(`${pendingNs}.h`)}</h2>

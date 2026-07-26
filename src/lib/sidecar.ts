@@ -243,6 +243,105 @@ export async function fetchSetupStatus(port: number): Promise<ToolStatus[]> {
   return (await resp.json()).tools as ToolStatus[];
 }
 
+// --- 雙帳號共通設置（spec-b4 §6.3；安全權威在後端 setup/common_config.py）---
+
+/** 要同步的共通設置項。清單由前端持有是因為後端沒有列舉端點，但**不是第二份權威**：
+ *  不在後端 allowlist 內的名字會被回 `unknown_entry`。
+ *
+ *  刻意不含進階項 `projects`（session 歷史跨帳號共用）——精靈預設不動它（票 26）。 */
+export const COMMON_CONFIG_ENTRIES = [
+  "commands", "plugins", "skills", "settings.json", "CLAUDE.md",
+] as const;
+
+// 後端 common_config.py 的三組 enum。以 union 而非 string 承接，讓「後端新增一種狀態」
+// 在前端的映射表上編譯失敗，而不是靜默掉到某個 fallback 文案。
+export type CommonConfigState =
+  | "ok" | "wrong_link" | "broken_link" | "real_file" | "real_dir" | "empty_dir"
+  | "content_differs" | "unexpected_type" | "missing" | "source_missing" | "source_unsupported";
+export type CommonConfigAction =
+  | "skip" | "create_link" | "relink" | "copy" | "backup_and_link" | "backup_and_copy";
+export type CommonConfigOutcome =
+  | "created" | "relinked" | "copied" | "skipped" | "conflict" | "stale" | "failed";
+
+export interface CommonConfigOperation {
+  account: string;             // target account key
+  entry: string;
+  target_path: string;
+  state: CommonConfigState;
+  action: CommonConfigAction;
+  needs_overwrite: boolean;    // 為真＝會蓋掉既有內容，需在 apply 的 overwrite 清單才執行
+}
+
+export interface CommonConfigPlan {
+  source_dir: string;          // 實體檔持有者（source account）的 resolved config_dir
+  operations: CommonConfigOperation[];
+}
+
+export interface CommonConfigOpResult {
+  account: string;
+  entry: string;
+  outcome: CommonConfigOutcome;
+  backup_path: string | null;
+  error: string | null;        // 判別碼（失敗時）——顯示前必須映射，不得直接呈現
+}
+
+export interface CommonConfigRequest {
+  source: string;
+  targets: string[];
+  entries: readonly string[];
+}
+
+/** setup 端點的判別碼錯誤。理由同 `SessionError`：`code` 只放欄位、不進 message，
+ *  否則 `String(e)` 會讓後端判別碼繞過 i18n 映射直接出現在畫面上（spec-b4 §5）。 */
+export class SetupError extends Error {
+  constructor(public readonly code: string | null, public readonly status: number) {
+    super(`setup request failed: ${status}`);
+    this.name = "SetupError";
+  }
+}
+
+async function setupPost<T>(port: number, path: string, body: object): Promise<T> {
+  const resp = await fetch(`${base(port)}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    let code: string | null = null;
+    try {
+      code = (await resp.json())?.error ?? null;
+    } catch {
+      /* 非 JSON body（422 的 detail 陣列、裸 5xx）→ 無判別碼可映射 */
+    }
+    throw new SetupError(code, resp.status);
+  }
+  return resp.json();
+}
+
+/** 唯讀預覽：回每個 (target, entry) 的目前狀態與建議動作，不動檔案系統。 */
+export function commonConfigPlan(port: number, req: CommonConfigRequest): Promise<CommonConfigPlan> {
+  return setupPost(port, "/api/setup/common-config/plan", {
+    source: req.source, targets: req.targets, entries: [...req.entries],
+  });
+}
+
+/** 套用共通設置。`overwrite` 是被授權破壞既有內容的 `(account, entry)`；未列者回 conflict 不動。
+ *
+ *  參數刻意必填而非預設空陣列：精靈一律送 `[]`（spec-b4 定案 8，逐項授權只在設定頁版），
+ *  由呼叫端顯式表態才看得出「這裡是非破壞性的」是刻意選擇，不是漏填。 */
+export async function commonConfigApply(
+  port: number,
+  req: CommonConfigRequest & { overwrite: { account: string; entry: string }[] },
+): Promise<CommonConfigOpResult[]> {
+  const body = {
+    source: req.source, targets: req.targets, entries: [...req.entries], overwrite: req.overwrite,
+  };
+  const data = await setupPost<{ results: CommonConfigOpResult[] }>(
+    port, "/api/setup/common-config/apply", body,
+  );
+  return data.results;
+}
+
 export interface SubscriptionItem {
   name: string;
   monthly_cost: number;
