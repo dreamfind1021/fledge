@@ -138,5 +138,16 @@ else
 fi
 
 echo
-echo "下一步：設定頁 → 新增帳號 → config_dir 填 ${PROBE_DIR} → 回引導頁的共通設置。"
-echo "驗完：scripts/make-probe-account.sh --clean，並到設定頁移除該帳號。"
+echo "怎麼讓卡片看到這個目錄："
+echo "  ・設定頁內嵌的共通設置卡（票 29 之後）：設定頁 → 新增帳號 → config_dir 填"
+echo "    ${PROBE_DIR}，卡片就會多一組。"
+echo "  ・引導精靈（票 26）：**看不到新加的帳號**。精靈只在 first-run 出現，而 first-run 的"
+echo "    帳號清單是後端寫死的預設值（work=~/.claude、personal=~/.claude-tc），精靈內也不提供"
+echo "    加帳號（spec-b4 §1）。要在精靈裡看到這些狀態，只能讓 ~/.claude-tc 本身呈現它們："
+echo "        mv ~/.claude-tc ~/.claude-tc.acceptance   # 原目錄完整保留，可逆"
+echo "        mv ${PROBE_DIR} ~/.claude-tc"
+echo "        # …驗收…"
+echo "        mv ~/.claude-tc ${PROBE_DIR}              # 換回來"
+echo "        mv ~/.claude-tc.acceptance ~/.claude-tc"
+echo
+echo "驗完：scripts/make-probe-account.sh --clean（若有加帳號，也到設定頁移除）。"
