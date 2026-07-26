@@ -176,6 +176,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `sidecar/build_binary.sh` | PyInstaller 打包 sidecar 成 onedir 資料夾 + nested ad-hoc 簽章，rsync 到 `binaries/`；另含範本 staging 階段（public 預設／`--with-private-templates` 才吃 `FLEDGE_PRIVATE_TEMPLATES_DIR`、逐範本重產 manifest、產 artifact manifest、打包前先跑驗證器）＋`--add-data build/templates:templates`。判定全在 `setup/template_manifest`，shell 只做 flag 解析與串接 |
 | `sidecar/resources/templates-public/` | 可進 repo 的 public 範本種子（`project-starter`：CLAUDE.md + docs/README.md + 提交版 `manifest.json`）。內容屬產品決策，改寫不需動程式碼；改動必須連同 manifest 一起提交（drift 檢查會擋） |
 | `scripts/verify_templates_artifact.py` | 薄 CLI 包住 `template_manifest.verify_artifact`（`--staged-root`／`--manifest`／`--allow-private`），供 `build_binary.sh` 與 release workflow 呼叫；違規或讀不到 manifest 一律 exit 1 |
+| `scripts/make-probe-account.sh` | 共通設置卡（票 26／29）驗收用：造一個拋棄式帳號目錄湊齊各種項目狀態（`--fresh` 全待建立／預設混合：非空實體目錄→保留不動、缺項→將建立連結、連錯位置→將重新指向、已正確連結→已就緒、`CLAUDE.md` 內容不同→保留不動），`--clean` 收掉。**安全不變式：只刪自己建的目錄**——判準是目錄內的 `.fledge-probe` 哨兵檔，目錄已存在卻沒有哨兵一律拒絕；第二道以 realpath 比對 `config.json` 的已登記帳號目錄（讀不到設定檔不阻擋，哨兵才是主防線）。此腳本的第一版把「已登記帳號」檢查寫成設定檔不存在就靜默跳過（fail-open），驗防呆時把 `~/.claude-tc` 的內容 `rm -rf` 掉了 |
 | `scripts/build-app-devtools.sh` | 偵錯打包：sidecar + `tauri build --features devtools`（帶 Web Inspector，啟動自動開）；給「只有打包版重現、dev 正常」的 bug 蒐證用。`npm run build:app:devtools`。正式 build 不帶 feature、不外洩 devtools |
 | `sidecar/pyproject.toml` | Python 依賴與測試設定 |
 | `vitest.config.ts` | 前端 vitest 設定（store lifecycle 測試）；掛 `setupFiles` |
