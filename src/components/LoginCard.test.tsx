@@ -70,20 +70,44 @@ describe("LoginCard 登入卡", () => {
     expect(createSession).toHaveBeenCalledWith(1234, {
       path: "", account: "personal", kind: "login", loginTarget: "claude",
     });
+    // 帳號卡按鈕：第一張吃 primary（對齊 demo），其餘平樣式
+    const buttons = ui.getAllByText(zh.login.open) as HTMLButtonElement[];
+    expect(buttons[0].className).toContain("primary");
+    expect(buttons[1].className).not.toContain("primary");
     expect(ui.getByTestId("terminal").getAttribute("data-session")).toBe("sess-1");
   });
 
-  // Codex 登入本質是全域的（B-1 收尾票已確認），不可做成 per-account
-  it("Codex 卡用 login_target=codex，且只有一張", async () => {
+  // Codex 登入本質是全域的（B-1 收尾票已確認），不可做成 per-account，也不該借一個帳號
+  // 去通過後端驗證——後端對 login_target=codex 已比照 install 免帳號。
+  it("Codex 卡用 login_target=codex、不帶 account，且只有一張", async () => {
     const ui = renderCard();
 
     ui.getAllByText(zh.login.open)[2].click();
 
     await waitFor(() => expect(ui.getByTestId("terminal")).toBeTruthy());
-    const opts = createSession.mock.calls[0][1];
-    expect(opts.kind).toBe("login");
-    expect(opts.loginTarget).toBe("codex");
+    expect(createSession).toHaveBeenCalledWith(1234, {
+      path: "", account: undefined, kind: "login", loginTarget: "codex",
+    });
     expect(createSession).toHaveBeenCalledTimes(1);
+  });
+
+  // 全域功能不該依賴帳號存在（帳號清單那一幀還沒載入時也一樣）
+  it("沒有任何帳號時仍有 Codex 卡", () => {
+    const ui = renderCard({ accounts: {} });
+    const cards = [...ui.container.querySelectorAll(".b4-card")];
+    expect(cards).toHaveLength(1);
+    expect(cards[0].textContent).toContain("Codex");
+  });
+
+  // unmount 會關掉 session（票 24 的模式），而 login.note 又叫使用者「看終端機輸出」——
+  // 不講清楚「離開會中斷」就自相矛盾（票 24 用 env.installHint 做了同一件事）
+  it("終端機掛著時才提示離開會中斷登入", async () => {
+    const ui = renderCard();
+    expect(ui.queryByText(zh.login.leaveHint)).toBeNull();
+
+    ui.getAllByText(zh.login.open)[0].click();
+
+    await waitFor(() => expect(ui.getByText(zh.login.leaveHint)).toBeTruthy());
   });
 
   // 沿用票 24 的教訓：一次只掛一個終端機，且必須「關完舊的才建新的」

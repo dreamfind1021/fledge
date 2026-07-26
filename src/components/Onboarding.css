@@ -447,7 +447,7 @@
   font-weight: 600;
 }
 
-/* ── 略過（稍後再登入 / 略過全部）：明確可按但不搶主按鈕的視覺重量 ── */
+/* ── 略過（稍後再登入）：明確可按但不搶主按鈕的視覺重量 ── */
 .b4-skip {
   background: transparent;
   border: none;
@@ -593,6 +593,11 @@
 
 .b4-hint-inline {
   margin: 0;
+}
+
+/* 提醒「離開會中斷」用警示色，與一般灰階提示區隔 */
+.b4-hint-warn {
+  color: var(--warning);
 }
 
 .b4-hint code {

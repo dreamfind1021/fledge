@@ -495,6 +495,32 @@ def test_session_rejects_unknown_field_fail_closed(tmp_path: Path, monkeypatch):
     assert resp.status_code == 422
 
 
+def test_codex_login_needs_no_account_and_no_claude_env(tmp_path: Path, monkeypatch):
+    # codex 登入是全域的（不分帳號，B-1 收尾票已確認）：不驗帳號、不注入 CLAUDE_CONFIG_DIR，
+    # 比照 kind=install。否則前端只能借一個帳號去通過驗證，等於把 workaround 固化在 UI。
+    _write_config(tmp_path, monkeypatch)
+    captured = _capture_bridge_create(monkeypatch, "sess-codex")
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": "", "kind": "login", "login_target": "codex",
+    })
+    assert resp.status_code == 200
+    assert captured["command"] == ["codex", "login"]
+    assert captured["cwd"] == str(Path.home())
+    assert "CLAUDE_CONFIG_DIR" not in captured["env_overrides"]
+    assert "CLAUDE_CONFIG_DIR" in (captured.get("env_remove") or [])
+    assert "account" not in captured          # 不歸屬、不綁帳號
+
+
+def test_claude_login_still_requires_valid_account(tmp_path: Path, monkeypatch):
+    # 只有 codex 目標免帳號；claude 登入的重點就是寫進「哪一個」帳號的 config_dir
+    _write_config(tmp_path, monkeypatch)
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": "", "account": "nope", "kind": "login", "login_target": "claude",
+    })
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "unknown_account"
+
+
 def test_login_session_runs_in_home_not_project(tmp_path: Path, monkeypatch):
     # 登入不屬於任何專案（它也刻意不進活動歸屬），而精靈的登入頁根本沒有專案路徑可傳——
     # 沿用 cwd=req.path 的話前端只能編一個假路徑，空字串則直接 spawn 失敗。與 kind=install 一致跑在 home。

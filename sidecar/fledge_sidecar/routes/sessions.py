@@ -105,6 +105,22 @@ def _apply_flow_control(text: str, flow_gate: asyncio.Event) -> None:
         logger.debug("flow control 忽略未知 type: %r", msg_type)
 
 
+def _unattributed_session(command: list[str], project_path: str) -> dict:
+    """開一個不綁帳號的 session（安裝、codex 登入）：跑在 home、不注入帳號 env 且主動剔除
+    `CLAUDE_CONFIG_DIR`（即便 sidecar 自身環境有），不進活動歸屬。
+
+    這兩種工作都不屬於任何專案也不屬於任何帳號——安裝是系統層、codex 登入是全域的。
+    """
+    session = _bridge.create_session(
+        command=command,
+        cwd=str(Path.home()),
+        env_overrides={},
+        env_remove=["CLAUDE_CONFIG_DIR"],
+        project_path=project_path,
+    )
+    return {"session_id": session.session_id, "ws_url": f"/ws/{session.session_id}"}
+
+
 @router.post("/api/sessions")
 def create_session(req: CreateSessionRequest):
     config = AppConfig.load()
@@ -114,14 +130,11 @@ def create_session(req: CreateSessionRequest):
         cmd = get_install_command(req.install_id)
         if cmd is None:
             return JSONResponse(status_code=400, content={"error": "unknown_install_id"})
-        session = _bridge.create_session(
-            command=[_login_shell(), "-lc", cmd],
-            cwd=str(Path.home()),
-            env_overrides={},                      # 不注入帳號 env
-            env_remove=["CLAUDE_CONFIG_DIR"],      # 即便 sidecar 自身環境有，也移除
-            project_path=req.path,
-        )
-        return {"session_id": session.session_id, "ws_url": f"/ws/{session.session_id}"}
+        return _unattributed_session([_login_shell(), "-lc", cmd], req.path)
+
+    # --- codex 登入是全域的（不分帳號，B-1 收尾票已確認）→ 與 install 同樣不綁帳號 ---
+    if req.kind == "login" and req.login_target == "codex":
+        return _unattributed_session(_resolve_command(req.kind, req.login_target), req.path)
 
     # --- 其餘 kind 需要合法帳號 ---
     if req.account not in config.accounts:        # 驗證帳號合法（不 spawn 偽造/拼錯 key）

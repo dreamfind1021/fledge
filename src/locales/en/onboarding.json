@@ -49,7 +49,8 @@
     "note": "Fledge <strong>cannot confirm whether a sign-in succeeded</strong>: on macOS, Claude keeps its credentials in the Keychain rather than the account's config directory. All we do here is open a terminal with the right account environment — check its output to see how it went.",
     "open": "Open sign-in terminal",
     "codexDesc": "Codex signs in globally, not per account.",
-    "later": "Sign in later"
+    "later": "Sign in later",
+    "leaveHint": "Stay on this step while signing in — leaving closes the terminal and cancels it."
   },
   "cc": {
     "h": "Share settings across accounts",
