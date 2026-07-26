@@ -40,6 +40,7 @@
     "brewHint": "官方安裝腳本為互動式且需要 sudo，請自行在終端機執行。",
     "confirmTitle": "即將執行以下命令",
     "confirmRun": "確認執行",
+    "installHint": "安裝過程請留在這一步——離開會中斷安裝。",
     "pathHint": "PATH 與 git 身分：<code>~/.local/bin</code> 需在 PATH 內（claude、uv 裝在這裡）；<code>git config --global user.name/user.email</code> 若未設，commit 會失敗。這兩項本版不自動偵測。"
   },
   "login": {
@@ -118,6 +119,8 @@
     "scan_failed": "掃描失敗：{{reason}}",
     "onboard_failed": "設定寫入失敗：{{reason}}",
     "status_failed": "工具偵測失敗：{{reason}}",
+    "unknown_install_id": "這個工具沒有可用的安裝命令，請改為手動安裝",
+    "install_failed": "無法啟動安裝：{{reason}}",
     "projects_reload_failed": "設定已建立，但專案清單載入失敗：{{reason}}"
   }
 }

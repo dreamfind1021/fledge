@@ -40,6 +40,7 @@
     "brewHint": "The official installer is interactive and needs sudo — please run it in your own terminal.",
     "confirmTitle": "About to run this command",
     "confirmRun": "Run it",
+    "installHint": "Stay on this step while it installs — leaving cancels the install.",
     "pathHint": "PATH and git identity: <code>~/.local/bin</code> must be on your PATH (claude and uv install there); commits fail if <code>git config --global user.name/user.email</code> is unset. Neither is detected automatically in this version."
   },
   "login": {
@@ -118,6 +119,8 @@
     "scan_failed": "Scan failed: {{reason}}",
     "onboard_failed": "Couldn't save your settings: {{reason}}",
     "status_failed": "Couldn't check your tools: {{reason}}",
+    "unknown_install_id": "No install command is available for this tool — please install it manually",
+    "install_failed": "Couldn't start the install: {{reason}}",
     "projects_reload_failed": "Your settings were saved, but the project list failed to load: {{reason}}"
   }
 }

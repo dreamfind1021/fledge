@@ -4,17 +4,27 @@ import { act } from "react";
 import { render, cleanup, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
-import type { ToolStatus } from "../lib/sidecar";
+import { SessionError, type CreateSessionOptions, type ToolStatus } from "../lib/sidecar";
 import { EnvCard } from "./EnvCard";
 
 const fetchSetupStatus = vi.fn<(port: number) => Promise<ToolStatus[]>>();
 const writeClipboard = vi.fn<(text: string) => Promise<boolean>>();
+const createSession = vi.fn<(port: number, opts: CreateSessionOptions) => Promise<string>>();
+const closeSession = vi.fn<(port: number, sessionId: string) => Promise<void>>();
 
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   fetchSetupStatus: (port: number) => fetchSetupStatus(port),
+  createSession: (port: number, opts: CreateSessionOptions) => createSession(port, opts),
+  closeSession: (port: number, sessionId: string) => closeSession(port, sessionId),
 }));
 vi.mock("../lib/clipboard", () => ({ writeClipboard: (t: string) => writeClipboard(t) }));
+// xterm 進 jsdom 會炸（canvas/WebGL）；本卡只需驗「終端機有沒有被掛上、掛在哪個 session」
+vi.mock("./Terminal", () => ({
+  Terminal: ({ sessionId, tabId }: { sessionId: string; tabId: string }) => (
+    <div data-testid="terminal" data-session={sessionId} data-tab={tabId} />
+  ),
+}));
 
 const BREW_CMD = '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"';
 
@@ -40,6 +50,8 @@ describe("EnvCard 環境偵測卡", () => {
     await i18n.changeLanguage("zh-TW"); // 固定語言，斷言才對得上 catalog
     fetchSetupStatus.mockReset().mockResolvedValue([brew, node, gh]);
     writeClipboard.mockReset().mockResolvedValue(true);
+    createSession.mockReset().mockResolvedValue("sess-1");
+    closeSession.mockReset().mockResolvedValue(undefined);
   });
   afterEach(cleanup); // vitest 未開 globals → testing-library 不會自動 cleanup
 
@@ -71,13 +83,13 @@ describe("EnvCard 環境偵測卡", () => {
     expect(ui.container.querySelector(".b4-hint")?.textContent).toContain("~/.local/bin");
   });
 
-  it("未安裝且有 install_command：顯示安裝按鈕，本票尚無行為（票 24 接 PTY）", async () => {
+  it("安裝按鈕只出現在未安裝且能一鍵安裝的列上", async () => {
     const ui = renderCard();
     await waitFor(() => expect(ui.getByText("GitHub CLI")).toBeTruthy());
 
     const install = ui.getByText(zh.env.install) as HTMLButtonElement;
-    expect(install.disabled).toBe(true);
-    // 已安裝的工具不給安裝按鈕
+    expect(install.disabled).toBe(false);
+    // 已安裝（node）與只能手動安裝（homebrew）的列都不給安裝按鈕
     expect(ui.getAllByText(zh.env.install)).toHaveLength(1);
   });
 
@@ -217,5 +229,150 @@ describe("EnvCard 環境偵測卡", () => {
     ui.getByText(zh.env.recheck).click();
     await waitFor(() => expect(ui.getByText("Node.js")).toBeTruthy());
     expect(ui.queryByRole("alert")).toBeNull(); // 重試成功後錯誤要消失
+  });
+});
+
+describe("EnvCard 一鍵安裝", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("zh-TW");
+    fetchSetupStatus.mockReset().mockResolvedValue([brew, node, gh]);
+    writeClipboard.mockReset().mockResolvedValue(true);
+    createSession.mockReset().mockResolvedValue("sess-1");
+    closeSession.mockReset().mockResolvedValue(undefined);
+  });
+  afterEach(cleanup);
+
+  /** 載入完成後按下 gh 那列的「安裝」，回到確認面板前的狀態 */
+  async function reachConfirm(ui: ReturnType<typeof render>) {
+    await waitFor(() => expect(ui.getByText("GitHub CLI")).toBeTruthy());
+    ui.getByText(zh.env.install).click();
+    await waitFor(() => expect(ui.getByText(zh.env.confirmTitle)).toBeTruthy());
+  }
+
+  // 上游 spec §5 硬性要求：執行前必須讓使用者看到完整命令並確認
+  it("按安裝先出確認面板顯示完整命令，此時還沒建立 session", async () => {
+    const ui = renderCard();
+    await reachConfirm(ui);
+
+    expect(ui.getByText("brew install gh")).toBeTruthy();
+    expect(ui.getByText(zh.env.confirmRun)).toBeTruthy();
+    expect(ui.getByText(zh.common.cancel)).toBeTruthy();
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it("取消：面板收起、不建立 session", async () => {
+    const ui = renderCard();
+    await reachConfirm(ui);
+
+    ui.getByText(zh.common.cancel).click();
+
+    await waitFor(() => expect(ui.queryByText(zh.env.confirmTitle)).toBeNull());
+    expect(createSession).not.toHaveBeenCalled();
+    expect(ui.queryByTestId("terminal")).toBeNull();
+  });
+
+  // 安全不變式（spec §5）：前端只送 install_id，永遠不送 raw command，也不送 account
+  it("確認執行：以 install_id 建 session 並在卡片內掛終端機", async () => {
+    const ui = renderCard();
+    await reachConfirm(ui);
+
+    ui.getByText(zh.env.confirmRun).click();
+
+    await waitFor(() => expect(ui.getByTestId("terminal")).toBeTruthy());
+    expect(createSession).toHaveBeenCalledWith(1234, { path: "", kind: "install", installId: "gh" });
+    const term = ui.getByTestId("terminal");
+    expect(term.getAttribute("data-session")).toBe("sess-1");
+    expect(term.getAttribute("data-tab")).toContain("sess-1"); // 合成 tabId，不與真 tab 相撞
+    expect(ui.queryByText(zh.env.confirmRun)).toBeNull();      // 確認面板讓位給終端機
+  });
+
+  it("建立 session 失敗：顯示映射後的判別碼訊息，不掛終端機", async () => {
+    createSession.mockRejectedValue(new SessionError("unknown_install_id", 400));
+    const ui = renderCard();
+    await reachConfirm(ui);
+
+    ui.getByText(zh.env.confirmRun).click();
+
+    await waitFor(() => expect(ui.getByRole("alert")).toBeTruthy());
+    expect(ui.getByRole("alert").textContent).toBe(zh.errors.unknown_install_id);
+    expect(ui.queryByTestId("terminal")).toBeNull();
+  });
+
+  // 安裝跑完後 shell 結束，輸出要留在原地供檢視——「重新檢查」轉成已安裝也不能把它收掉
+  it("重新檢查後該工具轉為已安裝：終端機輸出仍保留", async () => {
+    const ui = renderCard();
+    await reachConfirm(ui);
+    ui.getByText(zh.env.confirmRun).click();
+    await waitFor(() => expect(ui.getByTestId("terminal")).toBeTruthy());
+
+    fetchSetupStatus.mockResolvedValue([brew, node, { ...gh, installed: true, version: "gh 2.65.0" }]);
+    ui.getByText(zh.env.recheck).click();
+
+    await waitFor(() => expect(ui.container.textContent).toContain("gh 2.65.0"));
+    expect(ui.getByTestId("terminal")).toBeTruthy();
+  });
+
+  it("卸載時關閉安裝 session，不留 orphan PTY", async () => {
+    const ui = renderCard();
+    await reachConfirm(ui);
+    ui.getByText(zh.env.confirmRun).click();
+    await waitFor(() => expect(ui.getByTestId("terminal")).toBeTruthy());
+
+    await act(async () => { cleanup(); });
+
+    expect(closeSession).toHaveBeenCalledWith(1234, "sess-1");
+  });
+
+  // 「一次只跑一個」是為了避免兩個 brew 併行撞鎖——所以順序必須是「關完舊的才 spawn 新的」。
+  // 只斷言 closeSession 有被呼叫是不夠的：先 spawn 再關，兩個安裝仍會短暫併行（Codex R1 Medium）。
+  it("改裝另一個工具：舊 session 關閉完成前，不得建立新的", async () => {
+    const claude: ToolStatus = {
+      id: "claude", label: "Claude Code CLI", tier: "core", installed: false, path: null, version: null,
+      binary: "claude", install_command: "curl -fsSL https://claude.ai/install.sh | bash", manual_command: null,
+    };
+    fetchSetupStatus.mockResolvedValue([brew, node, claude, gh]);
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText("GitHub CLI")).toBeTruthy());
+    ui.getAllByText(zh.env.install)[1].click(); // gh
+    await waitFor(() => expect(ui.getByText(zh.env.confirmTitle)).toBeTruthy());
+    ui.getByText(zh.env.confirmRun).click();
+    await waitFor(() => expect(ui.getByTestId("terminal")).toBeTruthy());
+
+    let settleClose!: () => void;
+    closeSession.mockImplementationOnce(() => new Promise<void>((r) => { settleClose = () => r(); }));
+    createSession.mockClear().mockResolvedValue("sess-2");
+
+    ui.getByText(zh.env.install).click(); // 只剩 claude 那顆
+    await waitFor(() => expect(ui.getByText(zh.env.confirmTitle)).toBeTruthy());
+    ui.getByText(zh.env.confirmRun).click();
+
+    await waitFor(() => expect(closeSession).toHaveBeenCalledWith(1234, "sess-1"));
+    expect(createSession).not.toHaveBeenCalled(); // 舊的還沒關掉 → 不得先 spawn
+
+    await act(async () => { settleClose(); });
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+  });
+
+  it("改裝另一個工具：卡片內仍只有一個終端機，指向新 session", async () => {
+    const claude: ToolStatus = {
+      id: "claude", label: "Claude Code CLI", tier: "core", installed: false, path: null, version: null,
+      binary: "claude", install_command: "curl -fsSL https://claude.ai/install.sh | bash", manual_command: null,
+    };
+    fetchSetupStatus.mockResolvedValue([brew, node, claude, gh]);
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText("GitHub CLI")).toBeTruthy());
+    ui.getAllByText(zh.env.install)[1].click(); // 常用區的 gh（核心區的 claude 是第 0 顆）
+    await waitFor(() => expect(ui.getByText(zh.env.confirmTitle)).toBeTruthy());
+    ui.getByText(zh.env.confirmRun).click();
+    await waitFor(() => expect(ui.getByTestId("terminal")).toBeTruthy());
+
+    createSession.mockResolvedValue("sess-2");
+    ui.getByText(zh.env.install).click(); // 只剩 claude 那列還有安裝鍵（gh 的已讓位給終端機）
+    await waitFor(() => expect(ui.getByText(zh.env.confirmTitle)).toBeTruthy());
+    ui.getByText(zh.env.confirmRun).click();
+
+    await waitFor(() => expect(ui.getByTestId("terminal").getAttribute("data-session")).toBe("sess-2"));
+    expect(closeSession).toHaveBeenCalledWith(1234, "sess-1");
+    expect(ui.getAllByTestId("terminal")).toHaveLength(1);
   });
 });

@@ -134,19 +134,48 @@ class PtyBridge:
     def close_session(self, session_id: str) -> None:
         with self._lock:
             session = self.sessions.pop(session_id, None)
-        if session is not None:
-            if self.on_close is not None:
-                try:
-                    self.on_close(session)
-                except Exception as e:  # callback 不得阻斷關閉
-                    logger.debug("on_close callback failed for %s: %s", session_id, e)
+        if session is None:
+            return
+        try:
+            # close() 關閉 PTY master fd 並終止子進程；只用 terminate() 不關 fd，
+            # 會每 session 洩漏一個 fd 直到 EMFILE（Codex 對抗式審查 HIGH）。
+            session.pty.close(force=True)
+        except Exception as e:
+            # 清理階段 best-effort：進程可能已自行結束，記錄但不中斷關閉流程
+            logger.debug("close session %s failed: %s", session_id, e)
+            if self._restore_if_alive(session_id, session):
+                # 進程還在跑、handle 已放回 → 這次不算關成功，usage span 留到真正關掉那次
+                # 才收尾。提前呼叫 on_close 會寫下 close 事件（`load_sessions` 讓它蓋過
+                # live_session_ids），使這個仍在跑的 session 之後的用量歸屬不到帳號，
+                # 且 `_opened_session_ids` 一旦 discard，真正關閉時也不會再補（Codex R3 Medium）。
+                return
+        if self.on_close is not None:
             try:
-                # close() 關閉 PTY master fd 並終止子進程；只用 terminate() 不關 fd，
-                # 會每 session 洩漏一個 fd 直到 EMFILE（Codex 對抗式審查 HIGH）。
-                session.pty.close(force=True)
-            except Exception as e:
-                # 清理階段 best-effort：進程可能已自行結束，記錄但不中斷關閉流程
-                logger.debug("close session %s failed: %s", session_id, e)
+                self.on_close(session)
+            except Exception as e:  # callback 不得阻斷關閉
+                logger.debug("on_close callback failed for %s: %s", session_id, e)
+
+    def _restore_if_alive(self, session_id: str, session: Session) -> bool:
+        """close 失敗後決定 handle 去留（Codex 票 24 R2 Medium）。
+
+        close_session 是先 pop 再 close，失敗就丟掉 handle 的話，仍在跑的子進程會就此失聯——
+        重複 DELETE、close_all() 都再也找不到它。但 close 失敗最常見的原因正是「進程已自行
+        結束」，那種情況把 handle 放回去只會讓 live_ids() 多報一個活 session，所以要分開判斷。
+        問不出存活狀態時一律當已死：留一個狀態不明的 handle 只會讓 registry 失真。
+
+        回傳是否放回——呼叫端據此決定要不要收尾 usage span。
+        """
+        try:
+            alive = session.pty.isalive()
+        except Exception as e:
+            logger.debug("liveness probe failed for %s: %s", session_id, e)
+            return False
+        if not alive:
+            return False
+        with self._lock:
+            # setdefault：同 id 若已被新 session 佔用，不拿舊 handle 覆蓋它
+            self.sessions.setdefault(session_id, session)
+        return True
 
     def close_all(self) -> None:
         """關閉所有 session：lock 內 snapshot + 清空，再逐一 best-effort close。
