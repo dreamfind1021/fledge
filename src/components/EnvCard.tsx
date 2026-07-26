@@ -81,10 +81,16 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
     copiedTimer.current = setTimeout(() => setCopiedId(null), COPIED_FEEDBACK_MS);
   };
 
+  // 偵測與安裝各自寫一個 error state、合併顯示時偵測優先，因此兩者不能並行——晚返回的那個
+  // 會蓋掉另一個的結果（Codex 票25 R2）。兩個入口互斥就沒有這個 race 可言。
+  const busy = loading || starting;
+
   /** 確認執行後才走到這裡：建 install session（body 只有 install_id）並掛終端機。 */
   const startInstall = async (tool: ToolStatus) => {
-    // 偵測錯誤與 session 錯誤是兩個 state（合併顯示、偵測優先）：不先清掉上一輪的偵測失敗，
-    // 這次的安裝結果就會被過期訊息蓋住——連安裝成功都還掛著「工具偵測失敗」。
+    // 守在 start() 之前而不是進去才擋：start() 回 false 時什麼都沒發生，
+    // 那時清掉偵測錯誤等於「清了卻沒開始任何事」。
+    if (port == null || busy) return;
+    // 安裝真的要開始了：上一輪的偵測失敗已經過期，留著會蓋住這次的安裝結果
     setDetectError(null);
     const ok = await start({
       cardId: tool.id,
@@ -154,7 +160,7 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
           <div className="b4-confirm-title">{t("env.confirmTitle")}</div>
           <div className="b4-confirm-cmd">{tool.install_command}</div>
           <div className="b4-confirm-foot">
-            <button className="b4-btn-sm primary" onClick={() => startInstall(tool)} disabled={starting}>
+            <button className="b4-btn-sm primary" onClick={() => startInstall(tool)} disabled={busy}>
               {t("env.confirmRun")}
             </button>
             <button className="b4-btn-sm" onClick={() => setExpandedId(null)}>{t("common.cancel")}</button>
@@ -204,7 +210,7 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
       <div className="ob-actions">
         <button onClick={onPrev} className="ob-btn-ghost">{t("common.prev")}</button>
         <div className="ob-actions-right">
-          <button onClick={load} disabled={loading} className="b4-btn-sm">{t("env.recheck")}</button>
+          <button onClick={load} disabled={busy} className="b4-btn-sm">{t("env.recheck")}</button>
           <button onClick={onNext} className="ob-btn">{t("common.next")}</button>
         </div>
       </div>

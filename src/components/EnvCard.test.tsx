@@ -344,6 +344,55 @@ describe("EnvCard 一鍵安裝", () => {
     expect(ui.queryByRole("alert")).toBeNull();   // 安裝真的跑起來了，卻還掛著偵測失敗＝誤導
   });
 
+  // 偵測與安裝各自寫一個 error state、合併顯示時偵測優先——兩者若能並行，晚返回的那個
+  // 就會蓋掉另一個的結果。最小解是讓兩種操作互斥（Codex 票25 R2 Medium-1）。
+  it("偵測進行中：安裝的確認鍵停用", async () => {
+    const ui = renderCard();
+    await reachConfirm(ui);
+
+    let settleLoad!: (v: ToolStatus[]) => void;
+    fetchSetupStatus.mockImplementationOnce(() => new Promise<ToolStatus[]>((r) => { settleLoad = r; }));
+    ui.getByText(zh.env.recheck).click();
+
+    await waitFor(() =>
+      expect((ui.getByText(zh.env.confirmRun) as HTMLButtonElement).disabled).toBe(true));
+    ui.getByText(zh.env.confirmRun).click();
+    expect(createSession).not.toHaveBeenCalled();
+
+    await act(async () => { settleLoad([brew, node, gh]); });
+  });
+
+  it("安裝建立中：重新檢查停用", async () => {
+    let settleCreate!: (id: string) => void;
+    createSession.mockImplementationOnce(() => new Promise<string>((r) => { settleCreate = r; }));
+    const ui = renderCard();
+    await reachConfirm(ui);
+
+    ui.getByText(zh.env.confirmRun).click();
+
+    await waitFor(() =>
+      expect((ui.getByText(zh.env.recheck) as HTMLButtonElement).disabled).toBe(true));
+    expect(fetchSetupStatus).toHaveBeenCalledTimes(1); // 初次載入那一次，沒有第二次
+
+    await act(async () => { settleCreate("sess-1"); });
+  });
+
+  // start() 在 port 未就緒時直接回 false，什麼都沒發生——這時不該把畫面上的偵測錯誤清掉
+  it("port 未就緒：按確認不清掉既有的偵測錯誤", async () => {
+    const ui = renderCard();
+    await reachConfirm(ui);                                  // 先展開確認面板
+
+    fetchSetupStatus.mockRejectedValue(new Error("HTTP 500"));
+    ui.getByText(zh.env.recheck).click();                    // 造出偵測錯誤（舊清單保留）
+    await waitFor(() => expect(ui.getByRole("alert")).toBeTruthy());
+
+    ui.rerender(<EnvCard port={null} onPrev={noop} onNext={noop} />);  // sidecar 重啟中
+    await act(async () => { ui.getByText(zh.env.confirmRun).click(); });
+
+    expect(ui.queryByRole("alert")).toBeTruthy();
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
   it("卸載時關閉安裝 session，不留 orphan PTY", async () => {
     const ui = renderCard();
     await reachConfirm(ui);
