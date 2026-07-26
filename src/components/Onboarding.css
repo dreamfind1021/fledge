@@ -563,3 +563,39 @@
   gap: 8px;
   align-items: center;
 }
+
+/* ── 卡片內的安裝終端機（票 24）── */
+.b4-term {
+  border: 1px solid var(--term-border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--term-bg);
+  /* 與展開面板一樣，直接接在觸發它的那一列下面 */
+  margin: 0 0 10px;
+}
+
+.b4-term-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--term-elev);
+  border-bottom: 1px solid var(--term-border);
+  font-size: 11.5px;
+  color: var(--term-dim);
+}
+
+.b4-term-cmd {
+  font-family: var(--font-mono);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* xterm 的容器是 width/height 100%，掛在流佈局裡必須由外層給定高度；
+   190px 對齊 demo 的終端機區高度（約 12 行輸出，安裝腳本看得到尾段） */
+.b4-term-mount {
+  height: 190px;
+  padding: 6px 8px;
+}

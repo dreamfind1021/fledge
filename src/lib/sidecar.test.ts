@@ -68,7 +68,7 @@ describe("auth token", () => {
     await m.rawHealth(1);
     await m.fetchProjects(1);
     await m.scanPreview(1, "/x");
-    await m.createSession(1, "/x", "work");
+    await m.createSession(1, { path: "/x", account: "work" });
     await m.closeSession(1, "sid");
     await m.resizeSession(1, "sid", 1, 1);
     await m.fetchConfig(1);
@@ -92,8 +92,7 @@ describe("auth token", () => {
 });
 
 describe("createSession kind", () => {
-  it("request body 帶 kind：預設 claude、可指定 terminal", async () => {
-    const bodies: Array<Record<string, unknown>> = [];
+  const stubFetch = (bodies: Array<Record<string, unknown>>) =>
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_url: string, init?: RequestInit) => {
@@ -101,11 +100,52 @@ describe("createSession kind", () => {
         return { ok: true, json: async () => ({ session_id: "s" }) } as unknown as Response;
       }),
     );
+
+  it("request body 帶 kind：預設 claude、可指定 terminal", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    stubFetch(bodies);
     const m = await import("./sidecar");
-    await m.createSession(1234, "/x", "work");
-    await m.createSession(1234, "/x", "work", "terminal");
+    await m.createSession(1234, { path: "/x", account: "work" });
+    await m.createSession(1234, { path: "/x", account: "work", kind: "terminal" });
     expect(bodies[0]).toEqual({ path: "/x", account: "work", kind: "claude" });
     expect(bodies[1]).toEqual({ path: "/x", account: "work", kind: "terminal" });
+  });
+
+  // 安全不變式（spec §5）：安裝命令只能由後端以 install_id 查 TOOL_SPECS 取得。
+  // 前端送出的 body 不得含任何命令字串，也不該帶 account（安裝不歸屬、不注入帳號 env）。
+  it("kind=install 只送 install_id，不帶 command 也不帶 account", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    stubFetch(bodies);
+    const m = await import("./sidecar");
+    await m.createSession(1234, { path: "", kind: "install", installId: "homebrew" });
+    expect(bodies[0]).toEqual({ path: "", kind: "install", install_id: "homebrew" });
+  });
+
+  it("kind=login 送 login_target", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    stubFetch(bodies);
+    const m = await import("./sidecar");
+    await m.createSession(1234, { path: "/x", account: "work", kind: "login", loginTarget: "codex" });
+    expect(bodies[0]).toEqual({ path: "/x", account: "work", kind: "login", login_target: "codex" });
+  });
+
+  // 後端判別碼要能被前端映射成 i18n 字串（spec-b4 §5：不得把判別碼直接顯示給使用者）
+  it("400 帶判別碼：throw SessionError 並保留 code", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false, status: 400, json: async () => ({ error: "unknown_install_id" }),
+    }) as unknown as Response));
+    const m = await import("./sidecar");
+    await expect(m.createSession(1234, { path: "", kind: "install", installId: "nope" }))
+      .rejects.toMatchObject({ code: "unknown_install_id" });
+  });
+
+  it("非 JSON 錯誤回應：code 為 null、訊息帶狀態碼", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false, status: 500, json: async () => { throw new Error("not json"); },
+    }) as unknown as Response));
+    const m = await import("./sidecar");
+    await expect(m.createSession(1234, { path: "/x", account: "work" }))
+      .rejects.toMatchObject({ code: null, message: expect.stringContaining("500") });
   });
 });
 

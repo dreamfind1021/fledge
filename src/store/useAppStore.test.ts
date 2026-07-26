@@ -107,7 +107,7 @@ describe("useAppStore", () => {
   it("openTab 帶 accountOverride 用指定帳號（臨時、不寫 config）", async () => {
     vi.mocked(sidecar.createSession).mockResolvedValue("sess-ov");
     await useAppStore.getState().openTab(proj("/p/x"), "personal");
-    expect(sidecar.createSession).toHaveBeenCalledWith(1234, "/p/x", "personal", "claude");
+    expect(sidecar.createSession).toHaveBeenCalledWith(1234, { path: "/p/x", account: "personal", kind: "claude" });
     expect(useAppStore.getState().tabs[0].account).toBe("personal");
     expect(sidecar.setProjectOverride).not.toHaveBeenCalled();
   });
@@ -169,7 +169,7 @@ describe("useAppStore", () => {
     await useAppStore.getState().openTab(proj("/p/t"), undefined, "terminal");
     expect(useAppStore.getState().tabs).toHaveLength(2);
     expect(useAppStore.getState().tabs.every((t) => t.kind === "terminal")).toBe(true);
-    expect(sidecar.createSession).toHaveBeenLastCalledWith(1234, "/p/t", "work", "terminal");
+    expect(sidecar.createSession).toHaveBeenLastCalledWith(1234, { path: "/p/t", account: "work", kind: "terminal" });
   });
 
   it("requestCloseTab：terminal 分頁直接關、不跳確認框（即使 ready+sessionId）", async () => {

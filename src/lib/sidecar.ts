@@ -132,18 +132,49 @@ export async function scanPreview(
   return { path: data.path, count: data.count, status: data.status };
 }
 
-export async function createSession(
-  port: number,
-  path: string,
-  account: string,
-  kind: "claude" | "terminal" = "claude",
-): Promise<string> {
+export type SessionKind = "claude" | "terminal" | "install" | "login";
+
+export interface CreateSessionOptions {
+  path: string;
+  account?: string;                     // install 不傳：後端不驗帳號、也不注入帳號 env
+  kind?: SessionKind;
+  installId?: string;                   // kind=install 必填；後端據此查 TOOL_SPECS 取命令
+  loginTarget?: "claude" | "codex";     // kind=login 用
+}
+
+/** 建立 session 失敗。`code` 是後端的英文判別碼（400 才有），呼叫端據此映射 i18n 字串；
+ *  message 維持既有格式（含狀態碼），讓還沒 t() 化的呼叫端顯示的內容不變。 */
+export class SessionError extends Error {
+  constructor(public readonly code: string | null, status: number) {
+    super(`createSession failed: ${status}${code ? ` (${code})` : ""}`);
+    this.name = "SessionError";
+  }
+}
+
+export async function createSession(port: number, opts: CreateSessionOptions): Promise<string> {
+  const { path, account, kind = "claude", installId, loginTarget } = opts;
+  // 安全不變式（spec §5）：body 只放 allowlist key（install_id），永遠不含命令字串。
+  // 未給的欄位一律不放進 body——後端 extra="forbid" 只擋未知欄位，但少送等於用後端預設，
+  // 也讓「安裝不帶 account」這件事在 wire 上看得出來。
+  const body: Record<string, unknown> = { path, kind };
+  if (account !== undefined) body.account = account;
+  if (installId !== undefined) body.install_id = installId;
+  if (loginTarget !== undefined) body.login_target = loginTarget;
+
   const resp = await fetch(`${base(port)}/api/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ path, account, kind }),
+    body: JSON.stringify(body),
   });
-  if (!resp.ok) throw new Error(`createSession failed: ${resp.status}`);
+  if (!resp.ok) {
+    let code: string | null = null;
+    try {
+      code = (await resp.json())?.error ?? null;
+    } catch {
+      /* 非 JSON body（422 的 detail 陣列、裸 5xx）→ 無判別碼可映射 */
+    }
+    throw new SessionError(code, resp.status);
+  }
   return (await resp.json()).session_id;
 }
 

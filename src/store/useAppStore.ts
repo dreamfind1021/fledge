@@ -141,7 +141,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeTabId: id,
     }));
     try {
-      const sessionId = await createSession(port, project.path, account, kind);
+      const sessionId = await createSession(port, { path: project.path, account, kind });
       // 若 tab 在建立期間已被關閉，補清這個剛建好的 session（防 orphan，審查 round 1 HIGH）
       if (!get().tabs.some((t) => t.id === id)) {
         await closeSession(port, sessionId);
