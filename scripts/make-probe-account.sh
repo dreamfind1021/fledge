@@ -109,8 +109,10 @@ else
 
   # plugins 不建立 → missing
 
-  mkdir -p "${PROBE_DIR}/.elsewhere/skills"               # wrong_link：連到別處、目標存在
-  ln -s "${PROBE_DIR}/.elsewhere/skills" "${PROBE_DIR}/skills"
+  # wrong_link：連到別處、目標存在。用相對路徑，整個目錄改名搬走後這條連結仍然成立
+  # （絕對路徑會在搬家後變成 broken_link，那是另一種狀態）
+  mkdir -p "${PROBE_DIR}/.elsewhere/skills"
+  ln -s ".elsewhere/skills" "${PROBE_DIR}/skills"
 
   ln -s "${SOURCE_DIR}/settings.json" "${PROBE_DIR}/settings.json"   # ok：已正確連到 source
 
