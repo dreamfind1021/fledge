@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act } from "react";
 import { render, cleanup, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
@@ -180,6 +181,42 @@ describe("CommonConfigCard 共通設置卡", () => {
     // 剩下的只有精靈不會授權的 conflict 項 → 主按鈕讓位給「下一步」，不誘導使用者再按一次
     expect(ui.queryByText(zh.cc.apply)).toBeNull();
     expect(ui.getByText(zh.common.next)).toBeTruthy();
+  });
+
+  // 套用途中 sidecar 重啟：那批結果屬於上一個 sidecar，寫進新畫面就是張冠李戴。
+  // 元件沒有 unmount（變的是它面對的 port），所以 mounted 擋不住，要靠 request generation
+  it("套用途中 sidecar 重啟：舊結果不寫進新狀態，按鈕仍恢復可用", async () => {
+    let settleApply!: (list: CommonConfigOpResult[]) => void;
+    commonConfigApply.mockImplementationOnce(
+      () => new Promise<CommonConfigOpResult[]>((r) => { settleApply = r; }),
+    );
+    const ui = renderCard();
+    await settled(ui);
+
+    ui.getByText(zh.cc.apply).click();
+    await waitFor(() =>
+      expect((ui.getByText(zh.cc.apply) as HTMLButtonElement).disabled).toBe(true));
+
+    ui.rerender(<CommonConfigCard port={5678} accounts={accounts} onPrev={noop} onNext={noop} />);
+    await act(async () => { settleApply([result({ outcome: "created" })]); });
+
+    expect(ui.container.textContent).not.toContain(zh.results.created);
+    // 作廢的那一輪仍要交還 busy，否則按鈕永久停用（票 25 R4）
+    expect((ui.getByText(zh.cc.apply) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // 逐項結果只描述「剛才那次套用做了什麼」；換 port／換帳號重測後還疊著它，
+  // 就會用歷史 outcome 蓋住最新狀態
+  it("非套用觸發的重新偵測：清掉上一次的逐項結果", async () => {
+    const ui = renderCard();
+    await settled(ui);
+    ui.getByText(zh.cc.apply).click();
+    await waitFor(() => expect(ui.container.textContent).toContain(zh.results.created));
+
+    ui.rerender(<CommonConfigCard port={5678} accounts={accounts} onPrev={noop} onNext={noop} />);
+
+    await waitFor(() => expect(ui.container.textContent).not.toContain(zh.results.created));
+    expect(ui.container.textContent).toContain(zh.cc.willLink); // 回到最新 plan 的說法
   });
 
   // 按鈕反映「現在還做不做得到」而不是「按過了沒」：有項目沒做成時要能再按一次

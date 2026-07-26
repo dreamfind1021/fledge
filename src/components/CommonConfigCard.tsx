@@ -130,9 +130,13 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     [t, i18n],
   );
 
-  const load = useCallback(async () => {
+  /** 重新偵測。`keepResults` 只有 apply 後的那一次 refresh 傳 true——逐項結果是「剛才那次
+   *  套用做了什麼」，換 port／換帳號後重測的畫面再疊上歷史 outcome 就會蓋住最新狀態
+   *  （Codex R1 Medium-3）。 */
+  const load = useCallback(async (keepResults = false) => {
     if (port == null || source == null) return;
     const myId = ++reqId.current;
+    if (!keepResults) setResults(null);
     setLoading(true);
     setError(null);
     try {
@@ -180,6 +184,12 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [port, source, accountsSig, t, describeError]);
 
+  // apply 內必須用**最新**的 load：它自己捕獲的那個 closure 綁著送出當下的 port／accounts，
+  // sidecar 在途中重啟時會拿舊 port 去重測，把畫面寫成上一個 sidecar 的狀態（Codex R1 High）。
+  // render body 同步（比照 useCardSession 的 runningRef／portRef）——放進 effect 會慢一拍。
+  const loadRef = useRef(load);
+  loadRef.current = load;
+
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     mounted.current = true;   // StrictMode 會 mount→cleanup→再 mount，這裡要重設回來
@@ -191,6 +201,10 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
 
   const apply = async () => {
     if (port == null || source == null || targets == null || targets.length === 0) return;
+    // apply 也算一輪 request：與 load 共用同一個計數器，才擋得住「送出途中 port／accounts 變了，
+    // 舊 apply 回來把上一個狀態的結果寫進新畫面」（Codex R1 High）。只有 mounted 擋不住這種
+    // ——元件還在，變的是它面對的 sidecar。
+    const myId = ++reqId.current;
     setBusy(true);
     setError(null);
     try {
@@ -201,7 +215,7 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
         // 精靈只做非破壞性操作（spec-b4 定案 8）：needs_overwrite 的項目後端會回 conflict 不動
         overwrite: [],
       });
-      if (!mounted.current) return;
+      if (reqId.current !== myId) return;
       setResults(Object.fromEntries(list.map((r) => [`${r.account}/${r.entry}`, r])));
       // 失敗項的判別碼不進畫面（逐項只顯示「處理失敗」），但要留在 console——
       // 沒有它使用者回報「失敗」時無從追查
@@ -210,11 +224,13 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
           console.warn(`[common-config] ${r.account}/${r.entry} 失敗：${r.error}`, r.backup_path);
         }
       }
-      await load();   // 狀態一律即時偵測（spec-b4 §4）：套用後不能停在過時的 plan
+      // 狀態一律即時偵測（spec-b4 §4）：套用後不能停在過時的 plan。保留剛設的逐項結果
+      await loadRef.current(true);
     } catch (e) {
-      if (!mounted.current) return;
+      if (reqId.current !== myId) return;
       setError(describeError(e));
     } finally {
+      // busy 一律解除（連作廢的那一輪也是）——不解除按鈕會永久停用到切頁重掛（票 25 R4）
       if (mounted.current) setBusy(false);
     }
   };
