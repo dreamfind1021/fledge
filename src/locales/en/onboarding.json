@@ -77,6 +77,7 @@
     "willRelink": "Will re-point",
     "keep": "Left as is",
     "unavailable": "Can't handle",
+    "excludedHint": "These accounts are left out this time — their config folders don't exist or can't be used: {{accounts}}. Check those accounts' config folders in Settings.",
     "conflictHint": "Anything marked “Left as is” stays untouched — setup only does things that can't overwrite your work. To switch to {{source}}'s version, open the Development environment section in Settings, where you can authorise each item individually (it renames a backup first).",
     "advHint": "The advanced item <code>projects</code> (shared session history) is left alone by default.",
     "apply": "Apply shared settings",

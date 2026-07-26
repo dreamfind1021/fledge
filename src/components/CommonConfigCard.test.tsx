@@ -227,6 +227,10 @@ describe("CommonConfigCard 共通設置卡", () => {
     await act(async () => { settleApply([result({ outcome: "created" })]); });
 
     expect(ui.container.textContent).not.toContain(zh.results.created);
+    // port 為 null 時 load() 一開頭就 return，若舊快照沒被丟掉，那張卡會無限期留著、
+    // 按鈕還看起來能按（Codex R4 ①）
+    expect(ui.container.querySelector(".b4-item")).toBeNull();
+    expect(ui.queryByText(zh.cc.apply)).toBeNull();
   });
 
   // 偵測的三個欄位要嘛整包換、要嘛整包丟。上一輪是「不適用」、這一輪 plan 失敗時若只清掉
@@ -326,7 +330,14 @@ describe("CommonConfigCard 共通設置卡", () => {
 
     ui.getByText(zh.cc.apply).click();
 
-    await waitFor(() => expect(ui.container.textContent).toContain(zh.results.conflict));
+    // 結果要落在它自己那一列——整頁搜字串的話，顯示到錯的列也會通過
+    await waitFor(() => {
+      const rows = [...ui.container.querySelectorAll(".b4-item")];
+      expect(rows[1].textContent).toContain(zh.results.conflict);
+    });
+    const rows = [...ui.container.querySelectorAll(".b4-item")];
+    expect(rows[0].textContent).toContain(zh.results.created);
+    expect(rows[0].textContent).not.toContain(zh.results.conflict);
   });
 
   // 上下文簽章不能用手寫分隔符拼：macOS 路徑允許 `|` 與 `=`，兩組不同帳號拼出同一個簽章時，
@@ -438,9 +449,14 @@ describe("CommonConfigCard 共通設置卡", () => {
     ui.getByText(zh.cc.apply).click();
 
     await waitFor(() => expect(ui.container.textContent).toContain(zh.results.failed));
-    expect(ui.getByText(zh.cc.apply)).toBeTruthy();
     // 判別碼不進畫面（只有「處理失敗」）——原因留在 console
     expect(ui.container.textContent).not.toContain("permission_denied");
+
+    // 「留著按鈕」要真的能再跑一次，不是只有按鈕還在
+    commonConfigApply.mockClear().mockResolvedValue([result({ outcome: "created" })]);
+    ui.getByText(zh.cc.apply).click();
+    await waitFor(() => expect(commonConfigApply).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(ui.container.textContent).toContain(zh.results.created));
   });
 
   // 只有 needs_overwrite 項時，精靈能做的事是零：主按鈕不該亮「套用」誘導使用者按下去
@@ -615,6 +631,25 @@ describe("CommonConfigCard 共通設置卡", () => {
 
     const groups = [...ui.container.querySelectorAll(".b4-sec-h")];
     expect(groups.map((g) => g.textContent)).toEqual(["personal", "extra"]);
-    expect(ui.container.querySelectorAll(".b4-list")).toHaveLength(2);
+    const lists = [...ui.container.querySelectorAll(".b4-list")];
+    expect(lists).toHaveLength(2);
+    // 每組只能有自己那個帳號的項目——只數清單數量的話，兩組都塞全部 operation 也會通過
+    for (const list of lists) {
+      expect(list.querySelectorAll(".b4-item")).toHaveLength(1);
+    }
+    expect(lists[0].textContent).toContain("commands");
+  });
+
+  // 部分帳號可用時仍會照常顯示卡片；被排除的那些不能就這樣消失，否則畫面看起來像
+  // 「所有登記帳號都同步好了」（Codex R4 ④）
+  it("多帳號中有一個目錄不可用：明說這次不會處理它", async () => {
+    checkDir.mockImplementation(async (_port, path) => (path === "~/.claude-x" ? "missing" : "dir"));
+    const ui = renderCard({
+      accounts: { ...accounts, extra: { config_dir: "~/.claude-x", label: "額外" } },
+    });
+    await settled(ui);
+
+    const hints = [...ui.container.querySelectorAll(".b4-hint-warn")];
+    expect(hints.some((h) => h.textContent?.includes("extra"))).toBe(true);
   });
 });

@@ -212,8 +212,12 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   const ctxRef = useRef(ctx);
   useLayoutEffect(() => {
     ctxRef.current = ctx;
-    // 離開一個上下文就把結果丟掉，不只是隱藏。只比對 `results.ctx === ctx` 的話，
-    // A→B→A（帳號改掉又改回來）會讓舊 outcome 復活、疊在最新 plan 上（Codex R3 ②）
+    // 離開一個上下文＝上一輪偵測到的東西與套用結果都不再描述畫面上的帳號，**兩個都要丟**。
+    // 只丟 results 的話，port 過渡成 `null`（sidecar 重啟的中間態）時 `load()` 會在最開頭
+    // 直接 return，那張舊卡就無限期留著、按鈕還看起來能按（Codex R4 ①）。
+    setDetected(null);
+    // 用 functional update 比對而非無條件清除：apply 剛寫進來的結果屬於當前 ctx，
+    // 而 A→B→A（帳號改掉又改回來）時舊 outcome 不該復活（Codex R3 ②）
     setResults((r) => (r != null && r.ctx !== ctx ? null : r));
   }, [ctx]);
 
@@ -277,11 +281,11 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   // 但那不是「已經是你要的狀態」（那一列標的是「無法處理」）
   const allReady = ops.length > 0 && ops.every((o) => o.state === "ok");
   const isNotApplicable = targets != null && targets.length === 0;
+  // 這一輪沒被納入的候選帳號。全部被排除＝不適用卡；只排除一部分時**仍要講**——三個帳號裡
+  // 有一個目錄不存在時，畫面只列另外那個，使用者會以為所有帳號都同步好了（Codex R4 ④）
+  const excluded = candidates.filter((k) => !(targets ?? []).includes(k));
   // 不適用卡要指出是哪個目錄卡住（candidates 全空＝只登記一個帳號，另一套文案）
-  const unusableDirs = candidates
-    .filter((k) => !(targets ?? []).includes(k))
-    .map((k) => accounts[k].config_dir)
-    .join(", ");
+  const unusableDirs = excluded.map((k) => accounts[k].config_dir).join(", ");
   const showApply = !isNotApplicable && plan != null && canApply;
 
   const renderRow = (op: CommonConfigOperation) => {
@@ -357,6 +361,13 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
               </div>
             </div>
           ))}
+
+          {/* 有帳號被排除在這一輪之外時要講明白，否則畫面看起來像「全部帳號都處理了」 */}
+          {excluded.length > 0 && (
+            <p className="b4-hint b4-hint-warn">
+              {t("cc.excludedHint", { accounts: excluded.join(", ") })}
+            </p>
+          )}
 
           {/* 琥珀＝我們刻意不碰，不是錯誤。沒講清楚去哪裡處理，使用者只會看到一個沒解釋的 chip */}
           {hasConflict && (

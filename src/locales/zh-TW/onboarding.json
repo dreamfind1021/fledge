@@ -77,6 +77,7 @@
     "willRelink": "將重新指向",
     "keep": "保留不動",
     "unavailable": "無法處理",
+    "excludedHint": "這次不會處理下列帳號——它們的設定目錄不存在或無法使用：{{accounts}}。請到設定頁確認這些帳號的設定目錄。",
     "conflictHint": "標為「保留不動」的項目不會被改動——引導只做不會蓋掉東西的操作。要改用 {{source}} 的版本，請到設定頁的「開發環境」區，那裡可以逐項授權（會先改名備份）。",
     "advHint": "進階項 <code>projects</code>（session 歷史跨帳號共用）預設不動。",
     "apply": "套用共通設置",
