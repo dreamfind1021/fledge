@@ -61,7 +61,7 @@ describe("auth token", () => {
     const seen: Array<Record<string, string>> = [];
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
       seen.push((init?.headers ?? {}) as Record<string, string>);
-      return { ok: true, json: async () => ({ projects: [], permission_error: false, status: "ok", path: "", count: 0, version: "", ok: true, claude_found: false, session_id: "s", kpi: {} }) } as unknown as Response;
+      return { ok: true, json: async () => ({ projects: [], permission_error: false, status: "ok", path: "", count: 0, version: "", ok: true, claude_found: false, session_id: "s", kpi: {}, results: [] }) } as unknown as Response;
     }));
     const m = await import("./sidecar");
     await m.fetchHealth(1);
@@ -85,7 +85,9 @@ describe("auth token", () => {
     await m.addMemoryLink(1, "/a", "/b");
     await m.removeMemoryLink(1, "/a", "/b");
     await m.fetchDirTree(1, "/p");
-    expect(seen.length).toBeGreaterThanOrEqual(20);
+    await m.commonConfigPlan(1, { source: "work", targets: ["personal"], entries: ["commands"] });
+    await m.commonConfigApply(1, { source: "work", targets: ["personal"], entries: ["commands"], overwrite: [] });
+    expect(seen.length).toBeGreaterThanOrEqual(22);
     for (const h of seen) expect(h["X-Fledge-Token"]).toBe("tok");
     setAuthToken(null);
   });
@@ -146,6 +148,81 @@ describe("createSession kind", () => {
     const m = await import("./sidecar");
     await expect(m.createSession(1234, { path: "/x", account: "work" }))
       .rejects.toMatchObject({ code: null, message: expect.stringContaining("500") });
+  });
+});
+
+describe("common config plan/apply", () => {
+  const stubFetch = (calls: Array<{ url: string; body: Record<string, unknown> }>, json: unknown) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        calls.push({ url, body: JSON.parse(init!.body as string) });
+        return { ok: true, json: async () => json } as unknown as Response;
+      }),
+    );
+
+  it("plan 送 source/targets/entries，回 source_dir 與 operations", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const operations = [{
+      account: "personal", entry: "commands", target_path: "/t/commands",
+      state: "missing", action: "create_link", needs_overwrite: false,
+    }];
+    stubFetch(calls, { source_dir: "/s", operations });
+    const m = await import("./sidecar");
+
+    const plan = await m.commonConfigPlan(1234, {
+      source: "work", targets: ["personal"], entries: m.COMMON_CONFIG_ENTRIES,
+    });
+
+    expect(calls[0].url).toContain("/api/setup/common-config/plan");
+    expect(calls[0].body).toEqual({
+      source: "work", targets: ["personal"], entries: [...m.COMMON_CONFIG_ENTRIES],
+    });
+    expect(plan).toEqual({ source_dir: "/s", operations });
+  });
+
+  // 後端 body 的 entries 必須是可序列化的陣列——readonly tuple 直接塞進 JSON.stringify 沒問題，
+  // 但 overwrite 這個欄位不能省略：省略等於「用後端預設」，而預設剛好也是空陣列，
+  // 之後後端一改預設就會靜默變成破壞性操作
+  it("apply 送 overwrite 清單，回 results", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const results = [{ account: "personal", entry: "commands", outcome: "created", backup_path: null, error: null }];
+    stubFetch(calls, { results });
+    const m = await import("./sidecar");
+
+    const applied = await m.commonConfigApply(1234, {
+      source: "work", targets: ["personal"], entries: ["commands"], overwrite: [],
+    });
+
+    expect(calls[0].url).toContain("/api/setup/common-config/apply");
+    expect(calls[0].body).toEqual({
+      source: "work", targets: ["personal"], entries: ["commands"], overwrite: [],
+    });
+    expect(applied).toEqual(results);
+  });
+
+  it("400/500 帶判別碼：throw SetupError 並保留 code，message 不含判別碼", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false, status: 500, json: async () => ({ error: "probe_failed" }),
+    }) as unknown as Response));
+    const m = await import("./sidecar");
+
+    await expect(m.commonConfigPlan(1234, { source: "work", targets: ["personal"], entries: ["commands"] }))
+      .rejects.toMatchObject({ code: "probe_failed", status: 500 });
+    // 判別碼進 message 就會繞過 i18n 映射出現在畫面上（spec-b4 §5，比照 SessionError）
+    await expect(m.commonConfigPlan(1234, { source: "work", targets: ["personal"], entries: ["commands"] }))
+      .rejects.toThrow(/^(?!.*probe_failed).*$/);
+  });
+
+  it("非 JSON 錯誤回應（422 detail 陣列、裸 5xx）：code 為 null", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false, status: 422, json: async () => { throw new Error("not json"); },
+    }) as unknown as Response));
+    const m = await import("./sidecar");
+
+    await expect(m.commonConfigApply(1234, {
+      source: "work", targets: ["personal"], entries: ["commands"], overwrite: [],
+    })).rejects.toMatchObject({ code: null, status: 422 });
   });
 });
 

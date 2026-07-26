@@ -11,6 +11,9 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   scanPreview: vi.fn(async (_port: number, path: string) => ({ path, count: 3, status: "ok" as const })),
   fetchSetupStatus: vi.fn(async () => []), // 環境頁掛 EnvCard 後會偵測；外殼測試不碰網路
+  // 共通設置頁掛 CommonConfigCard 後會探帳號目錄並預覽；同樣不碰網路
+  checkDir: vi.fn(async () => "dir" as const),
+  commonConfigPlan: vi.fn(async () => ({ source_dir: "/Users/x/.claude", operations: [] })),
 }));
 
 const account = { config_dir: "~/.claude", label: "Work" };
@@ -176,6 +179,20 @@ describe("Onboarding 精靈外殼", () => {
 
     await waitFor(() => expect(ui.getByText(zh.sys.h)).toBeTruthy());
     expect(ui.queryByText(zh.cc.h)).toBeNull();
+  });
+
+  it("雙帳號：登入頁的下一步進到共通設置卡", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachRootsWithDraft(ui);
+
+    ui.getByText(zh.roots.next).click();
+    await waitFor(() => expect(ui.getByText(zh.env.h)).toBeTruthy());
+    ui.getByText(zh.common.next).click(); // 環境 → 登入
+    await waitFor(() => expect(ui.getByText(zh.login.h)).toBeTruthy());
+    ui.getByText(zh.common.next).click(); // 登入 → 共通設置
+
+    await waitFor(() => expect(ui.getByText(zh.cc.h)).toBeTruthy());
+    expect(ui.queryByText(zh.sys.h)).toBeNull();
   });
 
   it("進度條格數跟著帳號數：雙帳號七格、單帳號六格", async () => {

@@ -398,11 +398,21 @@
   padding: 14px;
 }
 
+/* 不適用的卡片整體壓暗（不是停用的互動元件，只是當下沒有內容可處理） */
+.b4-card.is-na {
+  opacity: 0.55;
+}
+
 /* ── 卡片標頭（標題 + 說明 + 右側動作）── */
 .b4-card-top {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+}
+
+/* 標頭左側的狀態點要對齊標題第一行（flex-start 會讓它貼在容器頂端） */
+.b4-card-top > .b4-dot {
+  margin-top: 5px;
 }
 
 .b4-card-title {
@@ -486,6 +496,17 @@
   border-bottom: none;
 }
 
+/* 沒有展開面板的清單（共通設置）直接把列掛在 list 下——限定直接子元素，
+   否則會連 `.b4-row-group` 內唯一的那列一起去掉分隔線（環境卡每列都會沒有底線） */
+.b4-list > .b4-item:last-child {
+  border-bottom: none;
+}
+
+/* 多帳號時每個 target 一組清單，組間留距（組內的分隔線由 .b4-item 自己負責） */
+.b4-group + .b4-group {
+  margin-top: 12px;
+}
+
 .b4-item-name {
   font-weight: 600;
   font-size: 13px;
@@ -525,6 +546,17 @@
   background: var(--faint);
 }
 
+/* 琥珀＝會動到既有內容（重新指向）或我們刻意不碰（保留不動），不是錯誤色 */
+.b4-dot.warn {
+  background: var(--warning);
+}
+
+/* 空心＝不適用（該項目前無從處理），與「待辦」的實心灰區隔 */
+.b4-dot.na {
+  background: transparent;
+  border: 1px solid var(--faint);
+}
+
 .b4-chip {
   font-size: 11px;
   font-weight: 600;
@@ -541,6 +573,11 @@
 .b4-chip.todo {
   background: color-mix(in srgb, var(--faint) 22%, transparent);
   color: var(--dim);
+}
+
+.b4-chip.warn {
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  color: var(--warning);
 }
 
 /* ── 卡內小按鈕 ── */

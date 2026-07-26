@@ -57,19 +57,35 @@
     "sub": "讓兩個帳號共用同一份 commands / plugins / skills 與設定，避免兩邊各改一次。",
     "owner": "實體檔持有者：<strong>{{source}}</strong>",
     "ownerDesc": "{{target}} 會建立連結指向 {{source}} 的同名項目；CLAUDE.md 兩邊各自保留實體檔。",
-    "linked": "已連結 → {{path}}",
-    "notYet": "尚未建立",
-    "pointsElsewhere": "連結指向其他位置",
-    "yourOwn": "你有自己的版本，內容不同",
+    "checking": "偵測共通設置狀態中…",
+    "state": {
+      "ok": "已與 {{source}} 同步",
+      "missing": "尚未建立",
+      "wrong_link": "連結指向其他位置",
+      "broken_link": "連結的目標已不存在",
+      "empty_dir": "目前是空目錄",
+      "real_file": "你有自己的檔案",
+      "real_dir": "你有自己的目錄，且不是空的",
+      "content_differs": "你有自己的版本，內容不同",
+      "unexpected_type": "型別與預期不同",
+      "source_missing": "{{source}} 沒有這一項",
+      "source_unsupported": "{{source}} 的這一項無法共用"
+    },
     "ready": "已就緒",
     "willLink": "將建立連結",
+    "willCopy": "將複製一份",
     "willRelink": "將重新指向",
     "keep": "保留不動",
-    "conflictHint": "CLAUDE.md 會被保留不動——引導只做不會蓋掉東西的操作。要用 {{source}} 的版本取代，請到設定頁的「開發環境」區，那裡可以逐項授權（會先改名備份）。",
+    "unavailable": "無法處理",
+    "excludedHint": "這次不會處理下列帳號——它們的設定目錄不存在或無法使用：{{accounts}}。請到設定頁確認這些帳號的設定目錄。",
+    "conflictHint": "標為「保留不動」的項目不會被改動——引導只做不會蓋掉東西的操作。要改用 {{source}} 的版本，請到設定頁的「開發環境」區，那裡可以逐項授權（會先改名備份）。",
     "advHint": "進階項 <code>projects</code>（session 歷史跨帳號共用）預設不動。",
     "apply": "套用共通設置",
+    "nothingToDo": "沒有需要處理的項目——這幾項都已經是你要的狀態。",
     "naTitle": "不適用",
-    "naDesc": "偵測到 <code>{{path}}</code> 不存在——你目前只使用一個帳號，不需要共通設置。<br />日後在設定頁新增第二個帳號後，這張卡會自動出現。"
+    "naDesc": "偵測到 <code>{{path}}</code> 不存在——你目前只使用一個帳號，不需要共通設置。<br />日後在設定頁新增第二個帳號後，這張卡會自動出現。",
+    "naDescBlocked": "無法確認 <code>{{path}}</code> 能不能用作另一個帳號的設定目錄，因此這一步先跳過（不會對未確認的目錄動手）。<br />請到設定頁檢查該帳號的設定目錄。",
+    "naDescSingle": "你目前只登記一個帳號，沒有另一個帳號需要共用設定。<br />日後在設定頁新增帳號後，這張卡會自動出現。"
   },
   "sys": {
     "h": "系統設置",
@@ -112,6 +128,15 @@
     "deployTo": "部署到…",
     "rerunHint": "環境偵測與帳號登入是一次性的，需要時可 <rerun>重跑引導</rerun>。"
   },
+  "results": {
+    "created": "已建立連結",
+    "relinked": "已重新指向",
+    "copied": "已複製一份",
+    "skipped": "無需處理",
+    "conflict": "保留不動（需授權）",
+    "stale": "狀態已變動，未處理",
+    "failed": "處理失敗"
+  },
   "errors": {
     "invalid": "請輸入有效的絕對路徑",
     "missing": "找不到此資料夾",
@@ -124,6 +149,16 @@
     "install_failed": "無法啟動安裝：{{reason}}",
     "projects_reload_failed": "設定已建立，但專案清單載入失敗：{{reason}}",
     "unknown_account": "找不到這個帳號，請回設定頁確認帳號設定",
-    "login_failed": "無法開啟登入終端機：{{reason}}"
+    "login_failed": "無法開啟登入終端機：{{reason}}",
+    "check_dir_failed": "無法確認帳號的設定目錄：{{reason}}",
+    "common_config_failed": "共通設置操作失敗，請稍後再試",
+    "config_not_initialized": "設定檔尚未建立，請先完成根目錄那一步",
+    "config_unreadable": "Fledge 設定檔讀不到或內容損壞，請檢查 ~/.fledge/config.json",
+    "probe_failed": "無法讀取帳號的設定目錄，請到系統設定授權後重試",
+    "invalid_config_dir": "有帳號的設定目錄路徑無效，請到設定頁修正",
+    "unsafe_config_dir": "有帳號的設定目錄指向家目錄本身，太危險——請到設定頁改成專屬的子目錄",
+    "target_equals_source": "兩個帳號指向同一個設定目錄，請到設定頁修正",
+    "duplicate_target": "有多個帳號指向同一個設定目錄，請到設定頁修正",
+    "overlapping_account_dirs": "帳號的設定目錄互相包含，請到設定頁改成彼此獨立的目錄"
   }
 }
