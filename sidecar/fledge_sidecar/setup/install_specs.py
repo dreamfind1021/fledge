@@ -18,7 +18,7 @@ class ToolSpec:
     version_argv: list[str]  # 版本探測命令（含 binary）
     install_command: str | None  # 內建固定 shell 命令；None=僅手動（如 Homebrew 本體）
     docs_url: str
-    note: str = ""
+    note: str = ""      # 僅手動安裝時的官方指令；經 ToolStatus.manual_command 露給 UI 供複製
 
 
 # 平台：macOS（Homebrew 生態）。install_command 為常數，2026-07-25 已對照官方文件確認。

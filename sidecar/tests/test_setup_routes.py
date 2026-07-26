@@ -10,8 +10,9 @@ from fledge_sidecar.setup.env_detect import ToolStatus
 
 def test_status_returns_tools(monkeypatch):
     fake = [
-        ToolStatus("node", "Node.js", "core", True, "/opt/homebrew/bin/node", "v25.8.2"),
-        ToolStatus("git", "Git", "core", False, None, None),
+        ToolStatus("node", "Node.js", "core", True, "/opt/homebrew/bin/node", "v25.8.2",
+                   "node", "brew install node", None),
+        ToolStatus("git", "Git", "core", False, None, None, "git", "brew install git", None),
     ]
     monkeypatch.setattr(setup_mod, "detect_all", lambda: fake)
     body = TestClient(create_app()).get("/api/setup/status").json()
@@ -19,6 +20,20 @@ def test_status_returns_tools(monkeypatch):
     node = body["tools"][0]
     assert node["installed"] is True and node["version"] == "v25.8.2"
     assert body["tools"][1]["installed"] is False and body["tools"][1]["path"] is None
+
+
+def test_status_exposes_commands_for_ui(monkeypatch):
+    # UI 要靠 payload 決定列什麼：未安裝時顯示 binary 名、有 install_command 才給一鍵安裝、
+    # 只有 manual_command（Homebrew）給「複製指令」。前端不得自帶命令字串（spec §5）。
+    fake = [
+        ToolStatus("homebrew", "Homebrew", "core", False, None, None,
+                   "brew", None, '/bin/bash -c "$(curl -fsSL install.sh)"'),
+    ]
+    monkeypatch.setattr(setup_mod, "detect_all", lambda: fake)
+    brew = TestClient(create_app()).get("/api/setup/status").json()["tools"][0]
+    assert brew["binary"] == "brew"
+    assert brew["install_command"] is None
+    assert brew["manual_command"] == '/bin/bash -c "$(curl -fsSL install.sh)"'
 
 
 def _config_with_accounts(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:

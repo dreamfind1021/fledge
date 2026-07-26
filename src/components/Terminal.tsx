@@ -15,6 +15,7 @@ import { ImeDraftTracker } from "../lib/imeDraftTracker";
 import { FlowController, type FlowSignal } from "../lib/flowControl";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { readText as tauriReadText } from "@tauri-apps/plugin-clipboard-manager";
+import { writeClipboard } from "../lib/clipboard";
 import { formatPathsForPaste } from "../lib/dropPath";
 import { registerTerminal, unregisterTerminal } from "../lib/terminalRegistry";
 import { ContextMenu, type MenuItem } from "./ContextMenu";
@@ -33,17 +34,6 @@ let lossWindowStart = 0;
 let lossCountInWindow = 0;
 const LOSS_WINDOW_MS = 60_000;
 const LOSS_PERMANENT_THRESHOLD = 3;
-
-// 剪貼簿寫入：xterm 的選取是內部狀態（term.getSelection()），非 DOM Selection，
-// webview 原生 Cmd+C／右鍵 Copy 都抓不到 → 必須由我們主動寫入。WKWebView 在 secure
-// context 下 writeText 可用；失敗（權限/環境）只記 log 不擲回，避免中斷終端機操作。
-async function writeClipboard(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch (err) {
-    console.warn("剪貼簿寫入失敗（複製）", err);
-  }
-}
 
 // 剪貼簿讀取（右鍵貼上）：改走 Tauri 原生 clipboard plugin（Rust/NSPasteboard）而非
 // navigator.clipboard.readText()——後者在打包版會觸發 macOS 15+ 的剪貼簿隱私「Paste 膠囊」

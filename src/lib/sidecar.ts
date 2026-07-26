@@ -184,6 +184,29 @@ export async function resizeSession(
   }
 }
 
+// --- 開發環境偵測（spec-b4 §5）---
+// 工具清單與命令字串一律由後端 TOOL_SPECS 提供，前端不得自帶：install_command 為 null
+// 代表只能手動安裝（官方指令在 manual_command）；安裝執行走 install_id allowlist（票 24）。
+export type ToolTier = "core" | "recommended";
+
+export interface ToolStatus {
+  id: string;
+  label: string;
+  tier: ToolTier;            // 後端若新增 tier，這裡與 EnvCard 的分區呼叫端要一起補
+  installed: boolean;
+  path: string | null;
+  version: string | null;
+  binary: string;            // 未安裝時列這個（沒有版本可列）
+  install_command: string | null;
+  manual_command: string | null;
+}
+
+export async function fetchSetupStatus(port: number): Promise<ToolStatus[]> {
+  const resp = await fetch(`${base(port)}/api/setup/status`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()).tools as ToolStatus[];
+}
+
 export interface SubscriptionItem {
   name: string;
   monthly_cost: number;

@@ -33,6 +33,8 @@
     "install": "安裝",
     "copyCmd": "複製指令",
     "recheck": "重新檢查",
+    "checking": "檢查工具中…",
+    "copied": "已複製",
     "running": "執行中",
     "brewTitle": "Homebrew 需要手動安裝",
     "brewHint": "官方安裝腳本為互動式且需要 sudo，請自行在終端機執行。",
@@ -115,6 +117,7 @@
     "denied": "部分資料夾無法讀取，請到系統設定授權",
     "scan_failed": "掃描失敗：{{reason}}",
     "onboard_failed": "設定寫入失敗：{{reason}}",
+    "status_failed": "工具偵測失敗：{{reason}}",
     "projects_reload_failed": "設定已建立，但專案清單載入失敗：{{reason}}"
   }
 }
