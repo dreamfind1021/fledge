@@ -35,8 +35,10 @@ export function LoginCard({ port, accounts, onPrev, onNext }: LoginCardProps) {
   const { running, starting, error, start } = useCardSession<string>(port);
 
   const cards: LoginTarget[] = [
+    // 帳號卡與全域卡走不相交的命名空間："codex" 是合法帳號 key，共用前綴會讓兩張卡撞 id，
+    // 進而在兩處各掛一個指向同一 session 的終端機（Codex 票25 R1 Medium-2）
     ...Object.keys(accounts).map((key) => ({
-      id: `login-${key}`,
+      id: `login-account-${key}`,
       title: key,
       desc: <span className="b4-mono">{accounts[key].config_dir}</span>,
       account: key,
@@ -44,7 +46,7 @@ export function LoginCard({ port, accounts, onPrev, onNext }: LoginCardProps) {
     })),
     // Codex 登入本質全域（B-1 收尾票已確認），只給一張、不做成 per-account，也不掛在帳號數上。
     // "Codex" 是品牌名、不進 catalog（比照 Fledge wordmark，§4.6.13 記錄例外）。
-    { id: "login-codex", title: "Codex", desc: t("login.codexDesc"), target: "codex" as const },
+    { id: "login-global-codex", title: "Codex", desc: t("login.codexDesc"), target: "codex" as const },
   ];
 
   const openLogin = (card: LoginTarget) =>

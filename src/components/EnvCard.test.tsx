@@ -312,6 +312,38 @@ describe("EnvCard 一鍵安裝", () => {
     expect(ui.getByTestId("terminal")).toBeTruthy();
   });
 
+  // 偵測錯誤與安裝錯誤是兩個 state（合併顯示）：安裝時若不清掉上一輪的偵測錯誤，
+  // 使用者會看到過期的「工具偵測失敗」蓋住這次的安裝結果（Codex 票25 R1 Medium-1）
+  it("重新檢查失敗後安裝也失敗：顯示安裝錯誤而非過期的偵測錯誤", async () => {
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText("GitHub CLI")).toBeTruthy());
+
+    fetchSetupStatus.mockRejectedValue(new Error("HTTP 500"));
+    ui.getByText(zh.env.recheck).click();
+    await waitFor(() => expect(ui.getByRole("alert").textContent).toContain("HTTP 500"));
+
+    createSession.mockRejectedValue(new SessionError("unknown_install_id", 400));
+    await reachConfirm(ui);            // 舊清單還在，那一列仍可按安裝
+    ui.getByText(zh.env.confirmRun).click();
+
+    await waitFor(() => expect(ui.getByRole("alert").textContent).toBe(zh.errors.unknown_install_id));
+  });
+
+  it("重新檢查失敗後安裝成功：偵測錯誤不殘留在畫面上", async () => {
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText("GitHub CLI")).toBeTruthy());
+
+    fetchSetupStatus.mockRejectedValue(new Error("HTTP 500"));
+    ui.getByText(zh.env.recheck).click();
+    await waitFor(() => expect(ui.getByRole("alert")).toBeTruthy());
+
+    await reachConfirm(ui);
+    ui.getByText(zh.env.confirmRun).click();
+
+    await waitFor(() => expect(ui.getByTestId("terminal")).toBeTruthy());
+    expect(ui.queryByRole("alert")).toBeNull();   // 安裝真的跑起來了，卻還掛著偵測失敗＝誤導
+  });
+
   it("卸載時關閉安裝 session，不留 orphan PTY", async () => {
     const ui = renderCard();
     await reachConfirm(ui);

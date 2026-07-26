@@ -83,6 +83,9 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
 
   /** 確認執行後才走到這裡：建 install session（body 只有 install_id）並掛終端機。 */
   const startInstall = async (tool: ToolStatus) => {
+    // 偵測錯誤與 session 錯誤是兩個 state（合併顯示、偵測優先）：不先清掉上一輪的偵測失敗，
+    // 這次的安裝結果就會被過期訊息蓋住——連安裝成功都還掛著「工具偵測失敗」。
+    setDetectError(null);
     const ok = await start({
       cardId: tool.id,
       // 安全不變式（spec §5）：只送 allowlist key，命令由後端以 install_id 查 TOOL_SPECS

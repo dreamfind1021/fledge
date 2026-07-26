@@ -79,6 +79,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `lib/dialog.ts` | Tauri plugin-dialog 封裝：開系統資料夾選擇器 | `pickDirectory()` |
 | `lib/clipboard.ts` | 剪貼簿寫入（`navigator.clipboard.writeText`）：失敗只記 log 不擲回，回傳成功與否讓呼叫端決定要不要提示（終端機複製 fire-and-forget、設置卡要顯示「已複製」） | `writeClipboard()` |
 | `lib/useCardSession.ts` | 設置卡共用的「卡片內單一終端機 session」生命週期 hook（環境卡的安裝、登入卡的 OAuth）：一次只跑一個、切換時**先 `await closeSession` 關完舊的才建新的**（後端一收到 create 就 spawn PTY，先建後關會讓兩者真的併行，票 24 Codex R1）、卸載一律收 PTY 不留 orphan；`runningRef`／`portRef` 走 render body 同步（cleanup effect 空依賴，不能跟著 port／running 重跑）、`mounted` 在 mount effect 內重設（StrictMode 會 mount→cleanup→再 mount）；`start()` 回傳是否真的建立，呼叫端據此收起過場 UI；錯誤走 `mapError(code)`→`fallbackError(reason)`，判別碼不得直接顯示（spec-b4 §5） | `useCardSession()`, `CardSession` |
+| `lib/sourceHygiene.test.ts` | 原始檔衛生防線：掃 `src`／`sidecar`／`src-tauri/src` 的 `.ts/.tsx/.css/.json/.py/.rs`，斷言不含 NUL 或其他非預期控制字元（僅允許 `\t`／`\n`）。起因是票 25 曾把真正的 NUL 寫進 `LoginCard.tsx`，git 判成二進位後**該 commit 的新增完全沒進 diff**，而本專案的審查流程（對抗式審查、兩軸 review、PR diff）全建立在 diff 上。用 `import.meta.glob` 而非 `node:fs`（無 `@types/node`）；另有一條「掃得到檔案」的哨兵測試，避免 glob 失效後空掃永遠綠 | — |
 | `lib/liveTab.ts` | 純函式：live Claude session 判定（kind=claude + ready + sessionId），store/App 共用；terminal tab 永遠回 false | `isLiveClaudeTab()` |
 | `lib/tabOrder.ts` | 純函式：`reorderTabs`（拖曳排序 arrayMove）+ `insertTabAdjacent`（需求 2 相鄰插入：同 projectPath 群尾） | `reorderTabs()`, `insertTabAdjacent()` |
 | `lib/tabTitle.ts` | 純函式：分頁顯示標題（claude 同 (path,account) 多視窗加序號 #2/#3，render 時算、關閉重編號；非 claude 回 raw title） | `displayTabTitle()` |

@@ -91,6 +91,24 @@ describe("LoginCard 登入卡", () => {
     expect(createSession).toHaveBeenCalledTimes(1);
   });
 
+  // 帳號 key 允許英數／底線／連字號，"codex" 因此是合法帳號名——卡片 id 若共用同一個
+  // 命名空間就會與全域 Codex 卡相撞，兩張卡會渲染同一個 session 的終端機（Codex 票25 R1 Medium-2）
+  it("帳號名剛好叫 codex：與全域 Codex 卡不相撞", async () => {
+    const ui = renderCard({ accounts: { codex: { config_dir: "~/.claude-codex", label: "同名帳號" } } });
+    const cards = [...ui.container.querySelectorAll(".b4-card")];
+    expect(cards).toHaveLength(2);
+
+    ui.getAllByText(zh.login.open)[0].click(); // 那個叫 codex 的「帳號」
+
+    await waitFor(() => expect(ui.getAllByTestId("terminal")).toHaveLength(1));
+    expect(createSession).toHaveBeenCalledWith(1234, {
+      path: "", account: "codex", kind: "login", loginTarget: "claude",
+    });
+    // 終端機只能掛在帳號卡下面，不能同時出現在全域 Codex 卡裡
+    expect(cards[0].querySelector("[data-testid=terminal]")).toBeTruthy();
+    expect(cards[1].querySelector("[data-testid=terminal]")).toBeNull();
+  });
+
   // 全域功能不該依賴帳號存在（帳號清單那一幀還沒載入時也一樣）
   it("沒有任何帳號時仍有 Codex 卡", () => {
     const ui = renderCard({ accounts: {} });
