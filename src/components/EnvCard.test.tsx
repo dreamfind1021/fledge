@@ -312,6 +312,119 @@ describe("EnvCard 一鍵安裝", () => {
     expect(ui.getByTestId("terminal")).toBeTruthy();
   });
 
+  // 偵測錯誤與安裝錯誤是兩個 state（合併顯示）：安裝時若不清掉上一輪的偵測錯誤，
+  // 使用者會看到過期的「工具偵測失敗」蓋住這次的安裝結果（Codex 票25 R1 Medium-1）
+  it("重新檢查失敗後安裝也失敗：顯示安裝錯誤而非過期的偵測錯誤", async () => {
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText("GitHub CLI")).toBeTruthy());
+
+    fetchSetupStatus.mockRejectedValue(new Error("HTTP 500"));
+    ui.getByText(zh.env.recheck).click();
+    await waitFor(() => expect(ui.getByRole("alert").textContent).toContain("HTTP 500"));
+
+    createSession.mockRejectedValue(new SessionError("unknown_install_id", 400));
+    await reachConfirm(ui);            // 舊清單還在，那一列仍可按安裝
+    ui.getByText(zh.env.confirmRun).click();
+
+    await waitFor(() => expect(ui.getByRole("alert").textContent).toBe(zh.errors.unknown_install_id));
+  });
+
+  it("重新檢查失敗後安裝成功：偵測錯誤不殘留在畫面上", async () => {
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText("GitHub CLI")).toBeTruthy());
+
+    fetchSetupStatus.mockRejectedValue(new Error("HTTP 500"));
+    ui.getByText(zh.env.recheck).click();
+    await waitFor(() => expect(ui.getByRole("alert")).toBeTruthy());
+
+    await reachConfirm(ui);
+    ui.getByText(zh.env.confirmRun).click();
+
+    await waitFor(() => expect(ui.getByTestId("terminal")).toBeTruthy());
+    expect(ui.queryByRole("alert")).toBeNull();   // 安裝真的跑起來了，卻還掛著偵測失敗＝誤導
+  });
+
+  // 偵測與安裝各自寫一個 error state、合併顯示時偵測優先——兩者若能並行，晚返回的那個
+  // 就會蓋掉另一個的結果。最小解是讓兩種操作互斥（Codex 票25 R2 Medium-1）。
+  it("偵測進行中：安裝的確認鍵停用", async () => {
+    const ui = renderCard();
+    await reachConfirm(ui);
+
+    let settleLoad!: (v: ToolStatus[]) => void;
+    fetchSetupStatus.mockImplementationOnce(() => new Promise<ToolStatus[]>((r) => { settleLoad = r; }));
+    ui.getByText(zh.env.recheck).click();
+
+    await waitFor(() =>
+      expect((ui.getByText(zh.env.confirmRun) as HTMLButtonElement).disabled).toBe(true));
+    ui.getByText(zh.env.confirmRun).click();
+    expect(createSession).not.toHaveBeenCalled();
+
+    await act(async () => { settleLoad([brew, node, gh]); });
+  });
+
+  it("安裝建立中：重新檢查停用", async () => {
+    let settleCreate!: (id: string) => void;
+    createSession.mockImplementationOnce(() => new Promise<string>((r) => { settleCreate = r; }));
+    const ui = renderCard();
+    await reachConfirm(ui);
+
+    ui.getByText(zh.env.confirmRun).click();
+
+    await waitFor(() =>
+      expect((ui.getByText(zh.env.recheck) as HTMLButtonElement).disabled).toBe(true));
+    expect(fetchSetupStatus).toHaveBeenCalledTimes(1); // 初次載入那一次，沒有第二次
+
+    await act(async () => { settleCreate("sess-1"); });
+  });
+
+  // start() 在 port 未就緒時直接回 false，什麼都沒發生——這時不該把畫面上的偵測錯誤清掉
+  it("port 未就緒：按確認不清掉既有的偵測錯誤", async () => {
+    const ui = renderCard();
+    await reachConfirm(ui);                                  // 先展開確認面板
+
+    fetchSetupStatus.mockRejectedValue(new Error("HTTP 500"));
+    ui.getByText(zh.env.recheck).click();                    // 造出偵測錯誤（舊清單保留）
+    await waitFor(() => expect(ui.getByRole("alert")).toBeTruthy());
+
+    ui.rerender(<EnvCard port={null} onPrev={noop} onNext={noop} />);  // sidecar 重啟中
+    await act(async () => { ui.getByText(zh.env.confirmRun).click(); });
+
+    expect(ui.queryByRole("alert")).toBeTruthy();
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  // port 變更（sidecar 重啟）是繞過按鈕互斥的自動入口：effect 會直接重跑偵測。
+  // 此時在途的建立若照樣寫進 running，終端機就會拿新 port 去連舊 sidecar 的 session
+  // （Codex 票25 R3 Medium）。
+  it("建立中換 port：舊 session 不掛到新 sidecar 上，並用舊 port 收掉", async () => {
+    let settleCreate!: (id: string) => void;
+    createSession.mockImplementationOnce(() => new Promise<string>((r) => { settleCreate = r; }));
+    const ui = renderCard();
+    await reachConfirm(ui);
+    ui.getByText(zh.env.confirmRun).click();
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+
+    ui.rerender(<EnvCard port={5678} onPrev={noop} onNext={noop} />);
+    await act(async () => { settleCreate("sess-old"); });
+
+    expect(ui.queryByTestId("terminal")).toBeNull();
+    expect(closeSession).toHaveBeenCalledWith(1234, "sess-old");   // 舊 port、舊 session
+  });
+
+  it("建立中換 port 後失敗：過期的錯誤不寫進畫面", async () => {
+    let rejectCreate!: (e: Error) => void;
+    createSession.mockImplementationOnce(() => new Promise<string>((_, rej) => { rejectCreate = rej; }));
+    const ui = renderCard();
+    await reachConfirm(ui);
+    ui.getByText(zh.env.confirmRun).click();
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+
+    ui.rerender(<EnvCard port={5678} onPrev={noop} onNext={noop} />);
+    await act(async () => { rejectCreate(new SessionError("unknown_install_id", 400)); });
+
+    expect(ui.queryByRole("alert")).toBeNull();
+  });
+
   it("卸載時關閉安裝 session，不留 orphan PTY", async () => {
     const ui = renderCard();
     await reachConfirm(ui);

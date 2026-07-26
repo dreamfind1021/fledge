@@ -49,7 +49,8 @@
     "note": "Fledge <strong>無法確認登入是否成功</strong>：macOS 的 Claude 登入憑證存在 Keychain，不在帳號設定目錄裡。這裡只負責用正確的帳號環境開終端機，完成與否請看終端機輸出。",
     "open": "開啟登入終端機",
     "codexDesc": "Codex 登入是全域的，不分帳號。",
-    "later": "稍後再登入"
+    "later": "稍後再登入",
+    "leaveHint": "登入進行中請留在這一步——離開會關掉終端機、中斷登入流程。"
   },
   "cc": {
     "h": "雙帳號共通設置",
@@ -121,6 +122,8 @@
     "status_failed": "工具偵測失敗：{{reason}}",
     "unknown_install_id": "這個工具沒有可用的安裝命令，請改為手動安裝",
     "install_failed": "無法啟動安裝：{{reason}}",
-    "projects_reload_failed": "設定已建立，但專案清單載入失敗：{{reason}}"
+    "projects_reload_failed": "設定已建立，但專案清單載入失敗：{{reason}}",
+    "unknown_account": "找不到這個帳號，請回設定頁確認帳號設定",
+    "login_failed": "無法開啟登入終端機：{{reason}}"
   }
 }

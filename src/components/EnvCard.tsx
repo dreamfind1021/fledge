@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation, Trans } from "react-i18next";
-import { ChevronRight } from "lucide-react";
-import {
-  fetchSetupStatus, createSession, closeSession, SessionError,
-  type ToolStatus, type ToolTier,
-} from "../lib/sidecar";
+import { fetchSetupStatus, type ToolStatus, type ToolTier } from "../lib/sidecar";
 import { writeClipboard } from "../lib/clipboard";
-import { Terminal } from "./Terminal";
+import { useCardSession } from "../lib/useCardSession";
+import { CardTerminal } from "./CardTerminal";
 
 interface EnvCardProps {
   port: number | null;
@@ -17,48 +14,35 @@ interface EnvCardProps {
 // 「已複製」回饋的顯示時間；純視覺回饋，超時後按鈕文字換回「複製」
 const COPIED_FEEDBACK_MS = 2000;
 
-// 執行中的安裝：卡片內掛一個 Terminal 需要 sessionId 與一個 tabId。
-// tabId 只是 activityTracker／terminalRegistry 的 key，這裡合成一個絕不會與真 tab 相撞的值
-// （真 tab 用 uuid）；對應的 tab 不存在於 store，setTabStatus／setTabActivity 因此是 no-op。
-interface RunningInstall {
-  toolId: string;
-  sessionId: string;
-  tabId: string;
-  command: string;   // 標頭顯示「實際跑的是什麼」，值來自後端 payload
-}
-
 /** 精靈的環境頁：核心／常用兩區工具狀態（唯讀偵測）＋重新檢查＋一鍵安裝。
  *
  * 狀態一律即時偵測、不落存（spec-b4 §4）。工具清單與命令字串全部來自後端 TOOL_SPECS——
- * 本檔不得出現任何安裝命令字面值，送出的 body 也只有 install_id（spec §5 allowlist 不變式）。 */
+ * 本檔不得出現任何安裝命令字面值，送出的 body 也只有 install_id（spec §5 allowlist 不變式）。
+ * 安裝 session 的生命週期（一次一個、關舊再建新、卸載收 PTY）走共用的 `useCardSession`。 */
 export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
   const { t } = useTranslation("onboarding");
   const [tools, setTools] = useState<ToolStatus[] | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [detectError, setDetectError] = useState<string | null>(null);
   // 展開的那一列：僅手動安裝的工具展開「複製指令」、可一鍵安裝的展開「執行前確認」。
   // 同一列不會兩種都要，故共用一個 id——也順帶保證同時只展開一列。
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);       // 建 session 中，擋重複送出
-  const [running, setRunning] = useState<RunningInstall | null>(null);
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // latest-request-wins：偵測會重疊（重啟 sidecar 換 port 就會在舊請求在途時再發一次），
   // 晚到的舊回應若照樣寫進 state，畫面會退回上一輪的結果、或在正確結果上蓋一條過期錯誤。
   const reqId = useRef(0);
   const mounted = useRef(true);
-  // cleanup effect 的依賴是空陣列（不能讓它跟著 port／running 重跑，否則會誤殺執行中的安裝），
-  // 所以卸載時要關的 session 與當下的 port 都走 render body 同步的 ref 讀（比照 Terminal 的 isActiveRef）
-  const runningRef = useRef<RunningInstall | null>(null);
-  const portRef = useRef(port);
-  runningRef.current = running;
-  portRef.current = port;
+  // meta 存「實際會跑的命令」，供終端機標頭顯示（值來自後端 payload，前端不自組）
+  const { running, starting, error: sessionError, setError: setSessionError, start } =
+    useCardSession<string>(port);
 
   const load = useCallback(async () => {
     if (port == null) return;
     const myId = ++reqId.current;
     setLoading(true);
-    setError(null);
+    setDetectError(null);
+    setSessionError(null);   // 重新檢查＝重新來過，上一輪的安裝錯誤不該留在畫面上
     try {
       const next = await fetchSetupStatus(port);
       if (reqId.current !== myId) return;
@@ -66,10 +50,12 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
     } catch (e) {
       if (reqId.current !== myId) return;
       // 偵測失敗要可見（沉默的空清單會被當成「什麼都沒裝」）；舊結果保留在畫面上
-      setError(t("errors.status_failed", { reason: String(e) }));
+      setDetectError(t("errors.status_failed", { reason: String(e) }));
     } finally {
       if (reqId.current === myId) setLoading(false);
     }
+    // setSessionError 是 useState setter（引用穩定），不影響此 callback 的重建時機
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [port, t]);
 
   useEffect(() => { load(); }, [load]);
@@ -79,12 +65,11 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
       mounted.current = false;
       reqId.current += 1;     // 使在途請求失效，卸載後不再 setState
       if (copiedTimer.current) clearTimeout(copiedTimer.current);
-      // 離開這一步就收掉安裝 PTY：留著會變成前端再也找不到的 orphan（使用者已在確認面板被
-      // 告知離開會中斷安裝）。closeSession 自己吞錯誤、不 throw。
-      const live = runningRef.current;
-      if (live && portRef.current != null) void closeSession(portRef.current, live.sessionId);
+      // 安裝 PTY 的收尾在 useCardSession 的 cleanup（同樣是卸載即關，不留 orphan）
     };
   }, []);
+
+  const error = detectError ?? sessionError;
 
   const copy = async (tool: ToolStatus) => {
     if (!tool.manual_command) return;
@@ -96,51 +81,32 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
     copiedTimer.current = setTimeout(() => setCopiedId(null), COPIED_FEEDBACK_MS);
   };
 
+  // 偵測與安裝各自寫一個 error state、合併顯示時偵測優先，因此兩者不能並行——晚返回的那個
+  // 會蓋掉另一個的結果（Codex 票25 R2）。兩個入口互斥就沒有這個 race 可言。
+  const busy = loading || starting;
+
   /** 確認執行後才走到這裡：建 install session（body 只有 install_id）並掛終端機。 */
   const startInstall = async (tool: ToolStatus) => {
-    if (port == null || starting) return;
-    const prev = runningRef.current;
-    setStarting(true);
-    setError(null);
-    try {
-      // 一次只跑一個安裝：兩個 brew 併行會互相撞鎖。順序必須是「關完舊的才 spawn 新的」——
-      // 後端一收到 create 就 spawn PTY，先建後關等於讓兩個安裝真的併行過一段時間。
-      // 先 setRunning(null) 卸載舊 Terminal（收 WS），再等 DELETE 回來。
-      // 已知限制：closeSession 吞掉自身錯誤（既有契約），關閉失敗時我們無從得知，
-      // 仍會往下建新的——併行窗口因此收窄到「後端關不掉」這種例外情形。
-      if (prev) {
-        setRunning(null);
-        await closeSession(port, prev.sessionId);
-        if (!mounted.current) return;
-      }
-      const sessionId = await createSession(port, { path: "", kind: "install", installId: tool.id });
-      if (!mounted.current) {
-        void closeSession(port, sessionId);   // 卸載後才回來的 session 沒人掛得上，直接收掉
-        return;
-      }
-      setRunning({
-        toolId: tool.id,
-        sessionId,
-        tabId: `ob-install-${sessionId}`,
-        command: tool.install_command ?? "",
-      });
-      setExpandedId(null);                    // 確認面板讓位給終端機
-    } catch (e) {
-      if (!mounted.current) return;
-      // 後端判別碼不得直接顯示（spec-b4 §5）；未知形狀退回帶 reason 的通用訊息
-      const code = e instanceof SessionError ? e.code : null;
-      setError(code === "unknown_install_id"
-        ? t("errors.unknown_install_id")
-        : t("errors.install_failed", { reason: String(e) }));
-    } finally {
-      if (mounted.current) setStarting(false);
-    }
+    // 守在 start() 之前而不是進去才擋：start() 回 false 時什麼都沒發生，
+    // 那時清掉偵測錯誤等於「清了卻沒開始任何事」。
+    if (port == null || busy) return;
+    // 安裝真的要開始了：上一輪的偵測失敗已經過期，留著會蓋住這次的安裝結果
+    setDetectError(null);
+    const ok = await start({
+      cardId: tool.id,
+      // 安全不變式（spec §5）：只送 allowlist key，命令由後端以 install_id 查 TOOL_SPECS
+      options: { path: "", kind: "install", installId: tool.id },
+      meta: tool.install_command ?? "",
+      mapError: (code) => (code === "unknown_install_id" ? t("errors.unknown_install_id") : null),
+      fallbackError: (reason) => t("errors.install_failed", { reason }),
+    });
+    if (ok) setExpandedId(null);   // 確認面板讓位給終端機
   };
 
   // 觸發鍵與它展開的確認面板必須用同一個判定：條件一旦分岔，就會出現「按鈕沒了、面板還在」
   // 這類收不掉的死內容（票 23 的複製面板就踩過一次）。執行中那列不算——終端機已佔住位置。
   const canInstall = (tool: ToolStatus) =>
-    !tool.installed && !!tool.install_command && running?.toolId !== tool.id;
+    !tool.installed && !!tool.install_command && running?.cardId !== tool.id;
 
   const renderRow = (tool: ToolStatus) => (
     // 展開的手動指令面板要接在觸發它的那一列下面，故與該列同屬一個 fragment
@@ -194,7 +160,7 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
           <div className="b4-confirm-title">{t("env.confirmTitle")}</div>
           <div className="b4-confirm-cmd">{tool.install_command}</div>
           <div className="b4-confirm-foot">
-            <button className="b4-btn-sm primary" onClick={() => startInstall(tool)} disabled={starting}>
+            <button className="b4-btn-sm primary" onClick={() => startInstall(tool)} disabled={busy}>
               {t("env.confirmRun")}
             </button>
             <button className="b4-btn-sm" onClick={() => setExpandedId(null)}>{t("common.cancel")}</button>
@@ -205,16 +171,13 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
 
       {/* 安裝終端機：可互動（sudo 提示可直接回答）。**不 gate installed**——跑完轉成已安裝
           正是成功結果，輸出要留在原地供檢視（與上面「怎麼手動裝」的面板性質相反）。 */}
-      {running?.toolId === tool.id && port != null && (
-        <div className="b4-term">
-          <div className="b4-term-head">
-            <ChevronRight size={12} strokeWidth={2} />
-            <span className="b4-term-cmd">{running.command}</span>
-          </div>
-          <div className="b4-term-mount">
-            <Terminal port={port} sessionId={running.sessionId} tabId={running.tabId} isActive />
-          </div>
-        </div>
+      {running?.cardId === tool.id && port != null && (
+        <CardTerminal
+          port={port}
+          sessionId={running.sessionId}
+          tabId={running.tabId}
+          title={running.meta}
+        />
       )}
     </div>
   );
@@ -247,7 +210,7 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
       <div className="ob-actions">
         <button onClick={onPrev} className="ob-btn-ghost">{t("common.prev")}</button>
         <div className="ob-actions-right">
-          <button onClick={load} disabled={loading} className="b4-btn-sm">{t("env.recheck")}</button>
+          <button onClick={load} disabled={busy} className="b4-btn-sm">{t("env.recheck")}</button>
           <button onClick={onNext} className="ob-btn">{t("common.next")}</button>
         </div>
       </div>

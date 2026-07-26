@@ -398,6 +398,75 @@
   padding: 14px;
 }
 
+/* ── 卡片標頭（標題 + 說明 + 右側動作）── */
+.b4-card-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.b4-card-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.b4-card-desc {
+  font-size: 12px;
+  color: var(--dim);
+  margin: 3px 0 0;
+  line-height: 1.5;
+}
+
+.b4-card-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.b4-mono {
+  font-family: var(--font-mono);
+}
+
+/* ── 說明框（登入頁講「為什麼沒有完成狀態」）── */
+.b4-note {
+  background: color-mix(in srgb, var(--ai) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ai) 22%, transparent);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.55;
+  margin-bottom: 14px;
+}
+
+.b4-note strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ── 略過（稍後再登入）：明確可按但不搶主按鈕的視覺重量 ── */
+.b4-skip {
+  background: transparent;
+  border: none;
+  color: var(--faint);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  padding: 4px 2px;
+}
+
+.b4-skip:hover {
+  color: var(--dim);
+}
+
+.b4-skip:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
 /* ── 工具清單 ── */
 .b4-list {
   display: flex;
@@ -524,6 +593,11 @@
 
 .b4-hint-inline {
   margin: 0;
+}
+
+/* 提醒「離開會中斷」用警示色，與一般灰階提示區隔 */
+.b4-hint-warn {
+  color: var(--warning);
 }
 
 .b4-hint code {
