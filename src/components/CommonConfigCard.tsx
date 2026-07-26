@@ -116,13 +116,14 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   const source = accountKeys[0] ?? null;
   const candidates = accountKeys.slice(1);
   // effect dep 用簽章而非 accounts 物件：父層每次 render 都給新引用（config?.accounts ?? {}）。
-  // 只看 key 與 config_dir——label 改名不影響共通設置。
-  const accountsSig = accountKeys.map((k) => `${k}=${accounts[k].config_dir}`).join("|");
+  // 只看 key 與 config_dir——label 改名不影響共通設置。用 JSON 而非自訂分隔符拼接：
+  // macOS 路徑允許 `|` 與 `=`，手寫分隔符會讓兩組不同帳號拼出同一個簽章。
+  const accountsSig = JSON.stringify(accountKeys.map((k) => [k, accounts[k].config_dir]));
   // 這一輪操作面對的**資料上下文**：換 sidecar（port）或換帳號就是換了一個世界，先前送出的
   // 請求結果不再屬於當前畫面。與 `reqId`（load-vs-load 的先後）是兩件事，**刻意不共用**——
   // 讓 apply 去推進 reqId 會作廢正在跑的合法 load，那個 load 的 `loading` 就沒人解除，
   // apply 再失敗就永久停用按鈕（Codex R2 ①，與票 25 R4 同一族）
-  const ctx = `${port ?? ""}|${source ?? ""}|${accountsSig}`;
+  const ctx = JSON.stringify([port, source, accountsSig]);
 
   const describeError = useCallback(
     (e: unknown): string => {

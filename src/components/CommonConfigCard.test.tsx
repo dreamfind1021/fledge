@@ -229,6 +229,31 @@ describe("CommonConfigCard 共通設置卡", () => {
     expect(ui.container.textContent).not.toContain(zh.results.created);
   });
 
+  // 上下文簽章不能用手寫分隔符拼：macOS 路徑允許 `|` 與 `=`，兩組不同帳號拼出同一個簽章時，
+  // 換帳號後回來的 apply 結果會被當成「還在同一個世界」而寫進新畫面
+  it("帳號目錄含分隔字元：換帳號後舊結果仍被判為過期", async () => {
+    let settleApply!: (list: CommonConfigOpResult[]) => void;
+    commonConfigApply.mockImplementationOnce(
+      () => new Promise<CommonConfigOpResult[]>((r) => { settleApply = r; }),
+    );
+    // 這兩組帳號在 `k=dir` join `|` 的寫法下會拼出同一個字串（人為但可構造）：
+    //   work=~/.claude|personal=~/a|b=c   ← 兩組都是這個
+    const before = { work: accounts.work, personal: { config_dir: "~/a|b=c", label: "私人" } };
+    const after = {
+      work: accounts.work,
+      personal: { config_dir: "~/a", label: "私人" },
+      b: { config_dir: "c", label: "第三個" },
+    };
+    const ui = renderCard({ accounts: before });
+    await settled(ui);
+    ui.getByText(zh.cc.apply).click();
+
+    ui.rerender(<CommonConfigCard port={1234} accounts={after} onPrev={noop} onNext={noop} />);
+    await act(async () => { settleApply([result({ outcome: "created" })]); });
+
+    expect(ui.container.textContent).not.toContain(zh.results.created);
+  });
+
   // 語言切換會重建 load（deps 含 t）。那不是「換了世界」——results 不該被它清掉（Codex R2 ③）
   it("切換語言不清掉剛套用的逐項結果", async () => {
     const ui = renderCard();
