@@ -322,11 +322,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   reorderTabs: (activeId, overId) =>
     set((s) => ({ tabs: reorderTabs(s.tabs, activeId, overId) })),
 
+  // 找不到 tab 就原樣回傳（不是 `tabs` 沒變、而是連新陣列都不建）：精靈的安裝終端機走合成
+  // tabId、store 內沒有對應 tab，仍會照常回報狀態與活動——照樣 set 會讓 select `s.tabs` 的
+  // TabBar／Workspace 每次都白重繪一輪。
   setTabStatus: (tabId, status) =>
-    set((s) => ({ tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, status } : t)) })),
+    set((s) => (s.tabs.some((t) => t.id === tabId)
+      ? { tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, status } : t)) }
+      : s)),
 
   setTabActivity: (tabId, activity) =>
-    set((s) => ({ tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, activity } : t)) })),
+    set((s) => (s.tabs.some((t) => t.id === tabId)
+      ? { tabs: s.tabs.map((t) => (t.id === tabId ? { ...t, activity } : t)) }
+      : s)),
 
   // ended 的 tab 按「重啟」：關舊 tab + 用同專案同帳號開新 session
   restartTab: async (tabId) => {

@@ -295,4 +295,18 @@ describe("useAppStore", () => {
       expect(t.sessionId).toBeNull();
     }
   });
+
+  // 精靈的安裝終端機用合成 tabId（store 內沒有對應 tab），Terminal 仍會照常回報狀態與活動。
+  // 若照樣 set 出一支新 tabs 陣列，select s.tabs 的 TabBar／Workspace 會被無意義地重繪一輪。
+  it("setTabStatus／setTabActivity 打到不存在的 tabId：tabs 引用不變（不觸發訂閱者）", () => {
+    const tabs = [
+      { id: "t1", projectPath: "/a", account: "work", title: "a", sessionId: "s1", status: "ready" as const, kind: "claude" as const },
+    ];
+    useAppStore.setState({ tabs });
+
+    useAppStore.getState().setTabStatus("ob-install-sess-9", "ended");
+    useAppStore.getState().setTabActivity("ob-install-sess-9", "working");
+
+    expect(useAppStore.getState().tabs).toBe(tabs);
+  });
 });

@@ -135,6 +135,8 @@ export async function scanPreview(
 export type SessionKind = "claude" | "terminal" | "install" | "login";
 
 export interface CreateSessionOptions {
+  // 工作目錄兼歸屬標記。install 沒有所屬專案（後端固定跑在 home、只把它當 project_path 記錄），
+  // 故傳空字串——不是漏填。
   path: string;
   account?: string;                     // install 不傳：後端不驗帳號、也不注入帳號 env
   kind?: SessionKind;
@@ -142,11 +144,14 @@ export interface CreateSessionOptions {
   loginTarget?: "claude" | "codex";     // kind=login 用
 }
 
-/** 建立 session 失敗。`code` 是後端的英文判別碼（400 才有），呼叫端據此映射 i18n 字串；
- *  message 維持既有格式（含狀態碼），讓還沒 t() 化的呼叫端顯示的內容不變。 */
+/** 建立 session 失敗。`code` 是後端的英文判別碼（400 才有），呼叫端據此映射 i18n 字串。
+ *
+ * 判別碼**只放欄位、不放 message**：`openTab` 會把 `String(e)` 寫進 `tab.error`，由
+ * `Workspace` 直接顯示給使用者——寫進 message 等於讓判別碼繞過 i18n 映射出現在畫面上
+ * （CLAUDE.md §4.6.13 / spec-b4 §5）。message 因此維持既有的 `createSession failed: <status>`。 */
 export class SessionError extends Error {
-  constructor(public readonly code: string | null, status: number) {
-    super(`createSession failed: ${status}${code ? ` (${code})` : ""}`);
+  constructor(public readonly code: string | null, public readonly status: number) {
+    super(`createSession failed: ${status}`);
     this.name = "SessionError";
   }
 }

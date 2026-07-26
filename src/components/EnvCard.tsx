@@ -129,6 +129,11 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
     }
   };
 
+  // 觸發鍵與它展開的確認面板必須用同一個判定：條件一旦分岔，就會出現「按鈕沒了、面板還在」
+  // 這類收不掉的死內容（票 23 的複製面板就踩過一次）。執行中那列不算——終端機已佔住位置。
+  const canInstall = (tool: ToolStatus) =>
+    !tool.installed && !!tool.install_command && running?.toolId !== tool.id;
+
   const renderRow = (tool: ToolStatus) => (
     // 展開的手動指令面板要接在觸發它的那一列下面，故與該列同屬一個 fragment
     <div key={tool.id} className="b4-row-group">
@@ -141,8 +146,7 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
           <span className={`b4-chip ${tool.installed ? "ok" : "todo"}`}>
             {t(tool.installed ? "env.installed" : "env.missing")}
           </span>
-          {/* 執行中那一列不再給安裝鍵——終端機已經佔住它的位置 */}
-          {!tool.installed && tool.install_command && running?.toolId !== tool.id && (
+          {canInstall(tool) && (
             // primary 只給核心工具——常用區是可略過的，demo 也只讓核心那顆吃強調色
             <button
               className={`b4-btn-sm${tool.tier === "core" ? " primary" : ""}`}
@@ -177,7 +181,7 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
 
       {/* 執行前確認：上游 spec §5 硬性要求——先看到完整將執行的命令才動手。
           命令字串來自後端 payload，與 PTY 實際查表取得的是同一份。 */}
-      {expandedId === tool.id && !tool.installed && tool.install_command && running?.toolId !== tool.id && (
+      {expandedId === tool.id && canInstall(tool) && (
         <div className="b4-confirm">
           <div className="b4-confirm-title">{t("env.confirmTitle")}</div>
           <div className="b4-confirm-cmd">{tool.install_command}</div>
