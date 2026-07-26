@@ -27,7 +27,8 @@ const GROUPS = [
   },
   {
     name: "Tauri 殼",
-    files: import.meta.glob("/src-tauri/**/*.rs", { query: "?raw", import: "default", eager: true }),
+    // 限定 src/：`/src-tauri/**` 會掃進 target/ 裡 Cargo 產生的 .rs（本機建置產物、數 GB）
+    files: import.meta.glob("/src-tauri/src/**/*.rs", { query: "?raw", import: "default", eager: true }),
     sentinel: "/src-tauri/src/lib.rs",
   },
 ] as { name: string; files: Record<string, unknown>; sentinel: string }[];

@@ -393,6 +393,38 @@ describe("EnvCard 一鍵安裝", () => {
     expect(createSession).not.toHaveBeenCalled();
   });
 
+  // port 變更（sidecar 重啟）是繞過按鈕互斥的自動入口：effect 會直接重跑偵測。
+  // 此時在途的建立若照樣寫進 running，終端機就會拿新 port 去連舊 sidecar 的 session
+  // （Codex 票25 R3 Medium）。
+  it("建立中換 port：舊 session 不掛到新 sidecar 上，並用舊 port 收掉", async () => {
+    let settleCreate!: (id: string) => void;
+    createSession.mockImplementationOnce(() => new Promise<string>((r) => { settleCreate = r; }));
+    const ui = renderCard();
+    await reachConfirm(ui);
+    ui.getByText(zh.env.confirmRun).click();
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+
+    ui.rerender(<EnvCard port={5678} onPrev={noop} onNext={noop} />);
+    await act(async () => { settleCreate("sess-old"); });
+
+    expect(ui.queryByTestId("terminal")).toBeNull();
+    expect(closeSession).toHaveBeenCalledWith(1234, "sess-old");   // 舊 port、舊 session
+  });
+
+  it("建立中換 port 後失敗：過期的錯誤不寫進畫面", async () => {
+    let rejectCreate!: (e: Error) => void;
+    createSession.mockImplementationOnce(() => new Promise<string>((_, rej) => { rejectCreate = rej; }));
+    const ui = renderCard();
+    await reachConfirm(ui);
+    ui.getByText(zh.env.confirmRun).click();
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+
+    ui.rerender(<EnvCard port={5678} onPrev={noop} onNext={noop} />);
+    await act(async () => { rejectCreate(new SessionError("unknown_install_id", 400)); });
+
+    expect(ui.queryByRole("alert")).toBeNull();
+  });
+
   it("卸載時關閉安裝 session，不留 orphan PTY", async () => {
     const ui = renderCard();
     await reachConfirm(ui);
