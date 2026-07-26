@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation, Trans } from "react-i18next";
 import {
   COMMON_CONFIG_ENTRIES,
@@ -94,7 +94,11 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   const [plan, setPlan] = useState<CommonConfigPlan | null>(null);
   // null＝還沒判定；[]＝判定完沒有可用 target（不適用）
   const [targets, setTargets] = useState<string[] | null>(null);
-  const [results, setResults] = useState<Record<string, CommonConfigOpResult> | null>(null);
+  // 逐項結果連同它產生時的資料上下文一起存：上下文一變（換 sidecar／換帳號）就整批失效。
+  // 用上下文判定而不是「這次 load 是不是 apply 觸發的」——`load` 的 deps 含 `t`，光是切換
+  // 語言就會重建它，那時清掉剛套用的結果毫無道理（Codex R2 ③）
+  const [results, setResults] =
+    useState<{ ctx: string; map: Record<string, CommonConfigOpResult> } | null>(null);
   // 有候選帳號目錄「存在但不能用」（denied／not_dir）或探測本身失敗——與「還沒建立」不同，
   // 說成「不存在」是假話，兩者要分開的文案
   const [blocked, setBlocked] = useState(false);
@@ -114,6 +118,11 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   // effect dep 用簽章而非 accounts 物件：父層每次 render 都給新引用（config?.accounts ?? {}）。
   // 只看 key 與 config_dir——label 改名不影響共通設置。
   const accountsSig = accountKeys.map((k) => `${k}=${accounts[k].config_dir}`).join("|");
+  // 這一輪操作面對的**資料上下文**：換 sidecar（port）或換帳號就是換了一個世界，先前送出的
+  // 請求結果不再屬於當前畫面。與 `reqId`（load-vs-load 的先後）是兩件事，**刻意不共用**——
+  // 讓 apply 去推進 reqId 會作廢正在跑的合法 load，那個 load 的 `loading` 就沒人解除，
+  // apply 再失敗就永久停用按鈕（Codex R2 ①，與票 25 R4 同一族）
+  const ctx = `${port ?? ""}|${source ?? ""}|${accountsSig}`;
 
   const describeError = useCallback(
     (e: unknown): string => {
@@ -130,13 +139,10 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     [t, i18n],
   );
 
-  /** 重新偵測。`keepResults` 只有 apply 後的那一次 refresh 傳 true——逐項結果是「剛才那次
-   *  套用做了什麼」，換 port／換帳號後重測的畫面再疊上歷史 outcome 就會蓋住最新狀態
-   *  （Codex R1 Medium-3）。 */
-  const load = useCallback(async (keepResults = false) => {
+  /** 重新偵測。不碰 `results`——逐項結果的有效期綁在資料上下文（`ctx`）上，見上面的註解。 */
+  const load = useCallback(async () => {
     if (port == null || source == null) return;
     const myId = ++reqId.current;
-    if (!keepResults) setResults(null);
     setLoading(true);
     setError(null);
     try {
@@ -161,8 +167,8 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
         return;
       }
       if (reqId.current !== myId) return;
-      setTargets(live);
       if (live.length === 0) {
+        setTargets([]);
         setPlan(null);
         return;
       }
@@ -172,6 +178,9 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
         entries: COMMON_CONFIG_ENTRIES,
       });
       if (reqId.current !== myId) return;
+      // targets 與 plan 一起換（同一批 setState 只重繪一次）：先設 targets 再等 plan 的話，
+      // 這段往返期間畫面會是「新帳號分組配舊 plan」，新那一組空著（Codex R2 ④ 附帶）
+      setTargets(live);
       setPlan(next);
     } catch (e) {
       if (reqId.current !== myId) return;
@@ -184,11 +193,15 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [port, source, accountsSig, t, describeError]);
 
-  // apply 內必須用**最新**的 load：它自己捕獲的那個 closure 綁著送出當下的 port／accounts，
-  // sidecar 在途中重啟時會拿舊 port 去重測，把畫面寫成上一個 sidecar 的狀態（Codex R1 High）。
-  // render body 同步（比照 useCardSession 的 runningRef／portRef）——放進 effect 會慢一拍。
-  const loadRef = useRef(load);
-  loadRef.current = load;
+  // apply 回來時要比對「畫面現在的上下文」，而它自己 closure 裡的 `ctx` 是送出當下那一版，
+  // 故只能靠 ref。在 commit 後才更新（不寫在 render body）——render 可能被 concurrent 中途
+  // 丟棄，那時 ref 會指向使用者根本沒切換過去的那一版（Codex R2 ②）。apply 由使用者事件觸發、
+  // 必定發生在 commit 之後，讀到的因此永遠是「畫面上那一版」。
+  //
+  // refresh 則直接用 apply 自己捕獲的 `load`：走到那一行代表 ctx 沒變過，也就是 port／source／
+  // accounts 都還是同一組，該 closure 打的必然是同一個 sidecar。
+  const ctxRef = useRef(ctx);
+  useLayoutEffect(() => { ctxRef.current = ctx; }, [ctx]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -201,10 +214,10 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
 
   const apply = async () => {
     if (port == null || source == null || targets == null || targets.length === 0) return;
-    // apply 也算一輪 request：與 load 共用同一個計數器，才擋得住「送出途中 port／accounts 變了，
-    // 舊 apply 回來把上一個狀態的結果寫進新畫面」（Codex R1 High）。只有 mounted 擋不住這種
-    // ——元件還在，變的是它面對的 sidecar。
-    const myId = ++reqId.current;
+    // 送出當下的資料上下文。回來時上下文若已改變，這批結果屬於上一個 sidecar／上一組帳號，
+    // 寫進新畫面就是張冠李戴（Codex R1 High）——只有 mounted 擋不住，元件還在，變的是它面對的
+    // 世界。**不推進 `reqId`**：那會作廢正在跑的合法 load（Codex R2 ①）。
+    const myCtx = ctx;
     setBusy(true);
     setError(null);
     try {
@@ -215,8 +228,8 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
         // 精靈只做非破壞性操作（spec-b4 定案 8）：needs_overwrite 的項目後端會回 conflict 不動
         overwrite: [],
       });
-      if (reqId.current !== myId) return;
-      setResults(Object.fromEntries(list.map((r) => [`${r.account}/${r.entry}`, r])));
+      if (ctxRef.current !== myCtx) return;
+      setResults({ ctx: myCtx, map: Object.fromEntries(list.map((r) => [`${r.account}/${r.entry}`, r])) });
       // 失敗項的判別碼不進畫面（逐項只顯示「處理失敗」），但要留在 console——
       // 沒有它使用者回報「失敗」時無從追查
       for (const r of list) {
@@ -224,10 +237,10 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
           console.warn(`[common-config] ${r.account}/${r.entry} 失敗：${r.error}`, r.backup_path);
         }
       }
-      // 狀態一律即時偵測（spec-b4 §4）：套用後不能停在過時的 plan。保留剛設的逐項結果
-      await loadRef.current(true);
+      // 狀態一律即時偵測（spec-b4 §4）：套用後不能停在過時的 plan
+      await load();
     } catch (e) {
-      if (reqId.current !== myId) return;
+      if (ctxRef.current !== myCtx) return;
       setError(describeError(e));
     } finally {
       // busy 一律解除（連作廢的那一輪也是）——不解除按鈕會永久停用到切頁重掛（票 25 R4）
@@ -253,7 +266,8 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   const showApply = !isNotApplicable && plan != null && canApply;
 
   const renderRow = (op: CommonConfigOperation) => {
-    const res = results?.[`${op.account}/${op.entry}`];
+    // 上下文對不上的結果直接視為不存在（換 sidecar／換帳號後那批 outcome 已經沒有意義）
+    const res = results?.ctx === ctx ? results.map[`${op.account}/${op.entry}`] : undefined;
     // 套用過的項目，chip 改顯示逐項結果（現況文字仍是重新偵測後的最新狀態）
     const chip: Chip = res
       ? { key: `results.${res.outcome}`, tone: OUTCOME_TONE[res.outcome] }

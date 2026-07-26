@@ -4,6 +4,7 @@ import { act } from "react";
 import { render, cleanup, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
+import en from "../locales/en/onboarding.json";
 import {
   SetupError,
   COMMON_CONFIG_ENTRIES,
@@ -197,26 +198,110 @@ describe("CommonConfigCard 共通設置卡", () => {
     await waitFor(() =>
       expect((ui.getByText(zh.cc.apply) as HTMLButtonElement).disabled).toBe(true));
 
+    checkDir.mockClear();
+    commonConfigPlan.mockClear();
     ui.rerender(<CommonConfigCard port={5678} accounts={accounts} onPrev={noop} onNext={noop} />);
     await act(async () => { settleApply([result({ outcome: "created" })]); });
 
     expect(ui.container.textContent).not.toContain(zh.results.created);
     // 作廢的那一輪仍要交還 busy，否則按鈕永久停用（票 25 R4）
     expect((ui.getByText(zh.cc.apply) as HTMLButtonElement).disabled).toBe(false);
+    // 重測必須打到新 sidecar：apply 若用自己捕獲的舊 load closure，這裡會看到 1234
+    await waitFor(() => expect(commonConfigPlan).toHaveBeenCalled());
+    for (const [p] of [...checkDir.mock.calls, ...commonConfigPlan.mock.calls]) {
+      expect(p).toBe(5678);
+    }
   });
 
-  // 逐項結果只描述「剛才那次套用做了什麼」；換 port／換帳號重測後還疊著它，
-  // 就會用歷史 outcome 蓋住最新狀態
-  it("非套用觸發的重新偵測：清掉上一次的逐項結果", async () => {
+  // port 過渡期會經過 null（Rust 端重啟時 sidecar_port 短暫無值），那一段同樣是「換了世界」
+  it("套用途中 port 過渡 null 再換新：舊結果一樣不寫回", async () => {
+    let settleApply!: (list: CommonConfigOpResult[]) => void;
+    commonConfigApply.mockImplementationOnce(
+      () => new Promise<CommonConfigOpResult[]>((r) => { settleApply = r; }),
+    );
+    const ui = renderCard();
+    await settled(ui);
+    ui.getByText(zh.cc.apply).click();
+
+    ui.rerender(<CommonConfigCard port={null} accounts={accounts} onPrev={noop} onNext={noop} />);
+    await act(async () => { settleApply([result({ outcome: "created" })]); });
+
+    expect(ui.container.textContent).not.toContain(zh.results.created);
+  });
+
+  // 語言切換會重建 load（deps 含 t）。那不是「換了世界」——results 不該被它清掉（Codex R2 ③）
+  it("切換語言不清掉剛套用的逐項結果", async () => {
     const ui = renderCard();
     await settled(ui);
     ui.getByText(zh.cc.apply).click();
     await waitFor(() => expect(ui.container.textContent).toContain(zh.results.created));
 
+    await act(async () => { await i18n.changeLanguage("en"); });
+
+    expect(ui.container.textContent).toContain(en.results.created);
+    await i18n.changeLanguage("zh-TW");
+  });
+
+  // apply 不得推進 load 的計數器：被它作廢的那個 load 的 `loading` 就沒人解除，
+  // apply 再失敗畫面只剩一顆永遠停用的按鈕（Codex R2 ①，票 25 R4 同族）
+  it("套用與偵測同時在途：套用失敗不影響那一輪偵測", async () => {
+    let failApply!: () => void;
+    commonConfigApply.mockImplementationOnce(
+      () => new Promise<CommonConfigOpResult[]>((_, rej) => {
+        failApply = () => rej(new SetupError("probe_failed", 500));
+      }),
+    );
+    const ui = renderCard();
+    await settled(ui);
+    ui.getByText(zh.cc.apply).click();
+
+    // apply 還沒回來時換帳號，開一輪新偵測並讓它停在途中
+    let settlePlan!: (p: CommonConfigPlan) => void;
+    commonConfigPlan.mockImplementationOnce(
+      () => new Promise<CommonConfigPlan>((r) => { settlePlan = r; }),
+    );
+    ui.rerender(
+      <CommonConfigCard
+        port={1234}
+        accounts={{ ...accounts, personal: { config_dir: "~/.claude-tc2", label: "私人" } }}
+        onPrev={noop}
+        onNext={noop}
+      />,
+    );
+    await waitFor(() => expect(commonConfigPlan).toHaveBeenCalledTimes(2));
+
+    await act(async () => { failApply(); });
+    await act(async () => {
+      settlePlan({
+        source_dir: "/Users/x/.claude",
+        operations: [op({ entry: "skills", state: "wrong_link", action: "relink" })],
+      });
+    });
+
+    // 那一輪偵測必須照樣上畫面，按鈕也要恢復可用——apply 若作廢了它，兩者都不會發生
+    expect(ui.container.textContent).toContain(zh.cc.willRelink);
+    expect((ui.getByText(zh.cc.apply) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // 逐項結果只描述「剛才那次套用做了什麼」；換 port／換帳號重測後還疊著它，
+  // 就會用歷史 outcome 蓋住最新狀態
+  it("換 sidecar 後重新偵測：結果失效，畫面來自新 sidecar 的回應", async () => {
+    const ui = renderCard();
+    await settled(ui);
+    ui.getByText(zh.cc.apply).click();
+    await waitFor(() => expect(ui.container.textContent).toContain(zh.results.created));
+
+    commonConfigPlan.mockClear().mockResolvedValue({
+      source_dir: "/Users/x/.claude",
+      // 新回應給一個舊 plan 沒有的狀態，畫面出現它才證明重繪來自新請求而非只是清掉結果
+      operations: [op({ entry: "skills", state: "wrong_link", action: "relink" })],
+    });
     ui.rerender(<CommonConfigCard port={5678} accounts={accounts} onPrev={noop} onNext={noop} />);
 
-    await waitFor(() => expect(ui.container.textContent).not.toContain(zh.results.created));
-    expect(ui.container.textContent).toContain(zh.cc.willLink); // 回到最新 plan 的說法
+    await waitFor(() => expect(ui.container.textContent).toContain(zh.cc.willRelink));
+    expect(ui.container.textContent).not.toContain(zh.results.created);
+    expect(commonConfigPlan).toHaveBeenCalledTimes(1);
+    expect(commonConfigPlan.mock.calls[0][0]).toBe(5678);
   });
 
   // 按鈕反映「現在還做不做得到」而不是「按過了沒」：有項目沒做成時要能再按一次
