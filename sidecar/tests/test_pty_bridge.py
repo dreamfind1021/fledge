@@ -242,3 +242,51 @@ def test_close_failure_drops_handle_when_liveness_unknown():
     bridge = _bridge_with_bad_close(alive=OSError("cannot tell"))
     bridge.close_session("s")
     assert bridge.sessions == {}   # 問不出狀態就當已死，不留一個狀態不明的 handle
+
+
+# 被恢復的 session 還活著 → usage span 不能收尾：on_close 會 discard _opened_session_ids
+# 並寫 record_close，而 load_sessions 讓 close event 蓋過 live_session_ids——提前呼叫等於讓
+# 這個仍在跑的 session 之後的用量歸屬不到帳號，且真正關掉那次也不會再補 close（Codex R3 Medium）。
+def test_close_failure_defers_on_close_while_process_alive():
+    from fledge_sidecar.pty_bridge import PtyBridge, Session
+
+    alive = {"v": True}
+    closed = []
+
+    class _BadThenGoodPty:
+        fd = 7
+        def close(self, force=False):
+            if alive["v"]:
+                raise OSError("boom")     # 第一次關不掉
+        def isalive(self):
+            return alive["v"]
+
+    bridge = PtyBridge(on_close=lambda s: closed.append(s.session_id))
+    bridge.sessions["s"] = Session(session_id="s", pty=_BadThenGoodPty())  # type: ignore[arg-type]
+
+    bridge.close_session("s")
+    assert "s" in bridge.sessions      # 還活著 → handle 留著
+    assert closed == []                # span 尚未收尾
+
+    alive["v"] = False                 # 進程結束後重試
+    bridge.close_session("s")
+    assert bridge.sessions == {}
+    assert closed == ["s"]             # 這次才收尾，且只收一次
+
+
+def test_close_failure_still_fires_on_close_when_process_exited():
+    from fledge_sidecar.pty_bridge import PtyBridge, Session
+
+    closed = []
+
+    class _BadPty:
+        fd = 7
+        def close(self, force=False):
+            raise OSError("boom")
+        def isalive(self):
+            return False               # 進程已自行結束＝關閉其實已達成
+
+    bridge = PtyBridge(on_close=lambda s: closed.append(s.session_id))
+    bridge.sessions["s"] = Session(session_id="s", pty=_BadPty())  # type: ignore[arg-type]
+    bridge.close_session("s")
+    assert closed == ["s"]             # 丟棄 handle 的路徑照常收尾 span
