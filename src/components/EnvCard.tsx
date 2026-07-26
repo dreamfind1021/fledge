@@ -103,13 +103,21 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
     setStarting(true);
     setError(null);
     try {
+      // 一次只跑一個安裝：兩個 brew 併行會互相撞鎖。順序必須是「關完舊的才 spawn 新的」——
+      // 後端一收到 create 就 spawn PTY，先建後關等於讓兩個安裝真的併行過一段時間。
+      // 先 setRunning(null) 卸載舊 Terminal（收 WS），再等 DELETE 回來。
+      // 已知限制：closeSession 吞掉自身錯誤（既有契約），關閉失敗時我們無從得知，
+      // 仍會往下建新的——併行窗口因此收窄到「後端關不掉」這種例外情形。
+      if (prev) {
+        setRunning(null);
+        await closeSession(port, prev.sessionId);
+        if (!mounted.current) return;
+      }
       const sessionId = await createSession(port, { path: "", kind: "install", installId: tool.id });
       if (!mounted.current) {
         void closeSession(port, sessionId);   // 卸載後才回來的 session 沒人掛得上，直接收掉
         return;
       }
-      // 一次只跑一個安裝：兩個 brew 併行會互相撞鎖，且卡片內只有一個終端機位置
-      if (prev) void closeSession(port, prev.sessionId);
       setRunning({
         toolId: tool.id,
         sessionId,

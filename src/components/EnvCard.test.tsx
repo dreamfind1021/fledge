@@ -323,8 +323,37 @@ describe("EnvCard 一鍵安裝", () => {
     expect(closeSession).toHaveBeenCalledWith(1234, "sess-1");
   });
 
-  // 一次只跑一個安裝：多個 brew 同時跑會互相撞鎖
-  it("改裝另一個工具：先關掉前一個 session 再建新的", async () => {
+  // 「一次只跑一個」是為了避免兩個 brew 併行撞鎖——所以順序必須是「關完舊的才 spawn 新的」。
+  // 只斷言 closeSession 有被呼叫是不夠的：先 spawn 再關，兩個安裝仍會短暫併行（Codex R1 Medium）。
+  it("改裝另一個工具：舊 session 關閉完成前，不得建立新的", async () => {
+    const claude: ToolStatus = {
+      id: "claude", label: "Claude Code CLI", tier: "core", installed: false, path: null, version: null,
+      binary: "claude", install_command: "curl -fsSL https://claude.ai/install.sh | bash", manual_command: null,
+    };
+    fetchSetupStatus.mockResolvedValue([brew, node, claude, gh]);
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText("GitHub CLI")).toBeTruthy());
+    ui.getAllByText(zh.env.install)[1].click(); // gh
+    await waitFor(() => expect(ui.getByText(zh.env.confirmTitle)).toBeTruthy());
+    ui.getByText(zh.env.confirmRun).click();
+    await waitFor(() => expect(ui.getByTestId("terminal")).toBeTruthy());
+
+    let settleClose!: () => void;
+    closeSession.mockImplementationOnce(() => new Promise<void>((r) => { settleClose = () => r(); }));
+    createSession.mockClear().mockResolvedValue("sess-2");
+
+    ui.getByText(zh.env.install).click(); // 只剩 claude 那顆
+    await waitFor(() => expect(ui.getByText(zh.env.confirmTitle)).toBeTruthy());
+    ui.getByText(zh.env.confirmRun).click();
+
+    await waitFor(() => expect(closeSession).toHaveBeenCalledWith(1234, "sess-1"));
+    expect(createSession).not.toHaveBeenCalled(); // 舊的還沒關掉 → 不得先 spawn
+
+    await act(async () => { settleClose(); });
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
+  });
+
+  it("改裝另一個工具：卡片內仍只有一個終端機，指向新 session", async () => {
     const claude: ToolStatus = {
       id: "claude", label: "Claude Code CLI", tier: "core", installed: false, path: null, version: null,
       binary: "claude", install_command: "curl -fsSL https://claude.ai/install.sh | bash", manual_command: null,
