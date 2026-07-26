@@ -34,6 +34,22 @@ interface Chip {
   tone: Tone;
 }
 
+/** 一輪偵測的結果快照。`targets` 為空即「不適用」；`plan` 只在有 target 時才有值。 */
+interface Detected {
+  targets: string[];
+  plan: CommonConfigPlan | null;
+  // 有候選帳號目錄「存在但不能用」（denied／not_dir）或探測本身失敗——與「還沒建立」不同，
+  // 說成「不存在」是假話，兩者要分開的文案
+  blocked: boolean;
+}
+
+// 「做成了」那一類 outcome。它們與「最新偵測說這一項需要授權才能動」是互相矛盾的兩件事
+// （apply 與重測之間有人動了那個檔案），chip 又長在現況欄——這時要說現況（Codex R3 ⑥）。
+// 失敗類（conflict／stale／failed）不受影響：「剛才沒能處理」與「現在需要授權」並不衝突。
+const SUCCEEDED: ReadonlySet<CommonConfigOutcome> = new Set<CommonConfigOutcome>([
+  "created", "relinked", "copied", "skipped",
+]);
+
 // 後端 state → 現況文案。用 Record 窮舉而非 `cc.state.${state}` 樣板：後端新增一種狀態時
 // 這裡編譯失敗，而不是靜默顯示成 key 原文（catalog key 沿用判別碼原名，spec-b4 §5 命名約定）。
 const STATE_TEXT: Record<CommonConfigState, string> = {
@@ -91,17 +107,14 @@ function chipFor(op: CommonConfigOperation): Chip {
  *   的使用者建出他沒要求的帳號目錄。全部都不存在時整張卡「不適用」。 */
 export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfigCardProps) {
   const { t, i18n } = useTranslation("onboarding");
-  const [plan, setPlan] = useState<CommonConfigPlan | null>(null);
-  // null＝還沒判定；[]＝判定完沒有可用 target（不適用）
-  const [targets, setTargets] = useState<string[] | null>(null);
+  // 一輪偵測的完整結果，**三個欄位一起換**。拆成獨立 state 時它們不是原子的：plan 失敗只清掉
+  // plan、targets 還留著上一輪的 []，畫面就同時出現錯誤訊息與一張說「不適用」的卡（Codex R3 ⑤）
+  const [detected, setDetected] = useState<Detected | null>(null);
   // 逐項結果連同它產生時的資料上下文一起存：上下文一變（換 sidecar／換帳號）就整批失效。
   // 用上下文判定而不是「這次 load 是不是 apply 觸發的」——`load` 的 deps 含 `t`，光是切換
   // 語言就會重建它，那時清掉剛套用的結果毫無道理（Codex R2 ③）
   const [results, setResults] =
     useState<{ ctx: string; map: Record<string, CommonConfigOpResult> } | null>(null);
-  // 有候選帳號目錄「存在但不能用」（denied／not_dir）或探測本身失敗——與「還沒建立」不同，
-  // 說成「不存在」是假話，兩者要分開的文案
-  const [blocked, setBlocked] = useState(false);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -140,7 +153,8 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     [t, i18n],
   );
 
-  /** 重新偵測。不碰 `results`——逐項結果的有效期綁在資料上下文（`ctx`）上，見上面的註解。 */
+  /** 重新偵測。不碰 `results`——逐項結果的有效期綁在資料上下文（`ctx`）上，見上面的註解。
+   *  偵測結果一律整包寫進 `detected`，中途不留半套狀態。 */
   const load = useCallback(async () => {
     if (port == null || source == null) return;
     const myId = ++reqId.current;
@@ -148,6 +162,7 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     setError(null);
     try {
       let live: string[];
+      let blocked: boolean;
       try {
         const statuses = await Promise.all(
           candidates.map((key) => checkDir(port, accounts[key].config_dir)),
@@ -155,22 +170,17 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
         live = candidates.filter((_, i) => statuses[i] === "dir");
         // missing＝單純還沒有第二個帳號目錄；denied／not_dir＝存在但不能用。兩者都排除
         // （apply 會 mkdir），但只有前者能說「不存在，你只用一個帳號」
-        if (reqId.current === myId) {
-          setBlocked(statuses.some((s) => s !== "dir" && s !== "missing"));
-        }
+        blocked = statuses.some((s) => s !== "dir" && s !== "missing");
       } catch (e) {
         if (reqId.current !== myId) return;
         // 探測不到就當不適用：對「未確認存在」的目錄送 apply 會替使用者建出目錄
         setError(t("errors.check_dir_failed", { reason: String(e) }));
-        setBlocked(true);
-        setTargets([]);
-        setPlan(null);
+        setDetected({ targets: [], plan: null, blocked: true });
         return;
       }
       if (reqId.current !== myId) return;
       if (live.length === 0) {
-        setTargets([]);
-        setPlan(null);
+        setDetected({ targets: [], plan: null, blocked });
         return;
       }
       const next = await commonConfigPlan(port, {
@@ -179,13 +189,11 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
         entries: COMMON_CONFIG_ENTRIES,
       });
       if (reqId.current !== myId) return;
-      // targets 與 plan 一起換（同一批 setState 只重繪一次）：先設 targets 再等 plan 的話，
-      // 這段往返期間畫面會是「新帳號分組配舊 plan」，新那一組空著（Codex R2 ④ 附帶）
-      setTargets(live);
-      setPlan(next);
+      setDetected({ targets: live, plan: next, blocked });
     } catch (e) {
       if (reqId.current !== myId) return;
-      setPlan(null);
+      // 偵測沒完成就沒有可信的快照可顯示：留著上一輪的會變成「錯誤訊息配一張說不適用的卡」
+      setDetected(null);
       setError(describeError(e));
     } finally {
       if (reqId.current === myId) setLoading(false);
@@ -202,7 +210,12 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   // refresh 則直接用 apply 自己捕獲的 `load`：走到那一行代表 ctx 沒變過，也就是 port／source／
   // accounts 都還是同一組，該 closure 打的必然是同一個 sidecar。
   const ctxRef = useRef(ctx);
-  useLayoutEffect(() => { ctxRef.current = ctx; }, [ctx]);
+  useLayoutEffect(() => {
+    ctxRef.current = ctx;
+    // 離開一個上下文就把結果丟掉，不只是隱藏。只比對 `results.ctx === ctx` 的話，
+    // A→B→A（帳號改掉又改回來）會讓舊 outcome 復活、疊在最新 plan 上（Codex R3 ②）
+    setResults((r) => (r != null && r.ctx !== ctx ? null : r));
+  }, [ctx]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -214,7 +227,8 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   }, []);
 
   const apply = async () => {
-    if (port == null || source == null || targets == null || targets.length === 0) return;
+    const targets = detected?.targets ?? [];
+    if (port == null || source == null || targets.length === 0) return;
     // 送出當下的資料上下文。回來時上下文若已改變，這批結果屬於上一個 sidecar／上一組帳號，
     // 寫進新畫面就是張冠李戴（Codex R1 High）——只有 mounted 擋不住，元件還在，變的是它面對的
     // 世界。**不推進 `reqId`**：那會作廢正在跑的合法 load（Codex R2 ①）。
@@ -229,7 +243,9 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
         // 精靈只做非破壞性操作（spec-b4 定案 8）：needs_overwrite 的項目後端會回 conflict 不動
         overwrite: [],
       });
-      if (ctxRef.current !== myCtx) return;
+      // 卸載也要擋：`ctxRef` 不會因為 unmount 而改變，只看它的話卸載後還會再發一次
+      // checkDir／plan 請求（React 忽略 setState，但網路與檔案探測是真的跑了，Codex R3 ③）
+      if (!mounted.current || ctxRef.current !== myCtx) return;
       setResults({ ctx: myCtx, map: Object.fromEntries(list.map((r) => [`${r.account}/${r.entry}`, r])) });
       // 失敗項的判別碼不進畫面（逐項只顯示「處理失敗」），但要留在 console——
       // 沒有它使用者回報「失敗」時無從追查
@@ -241,7 +257,7 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
       // 狀態一律即時偵測（spec-b4 §4）：套用後不能停在過時的 plan
       await load();
     } catch (e) {
-      if (ctxRef.current !== myCtx) return;
+      if (!mounted.current || ctxRef.current !== myCtx) return;
       setError(describeError(e));
     } finally {
       // busy 一律解除（連作廢的那一輪也是）——不解除按鈕會永久停用到切頁重掛（票 25 R4）
@@ -249,6 +265,8 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     }
   };
 
+  const targets = detected?.targets ?? null;
+  const plan = detected?.plan ?? null;
   const ops = plan?.operations ?? [];
   const hasConflict = ops.some((o) => o.needs_overwrite);
   // 精靈真的做得到的事＝非 skip 且不需授權。**conflict 項不算**：精靈永遠不授權它，
@@ -268,7 +286,9 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
 
   const renderRow = (op: CommonConfigOperation) => {
     // 上下文對不上的結果直接視為不存在（換 sidecar／換帳號後那批 outcome 已經沒有意義）
-    const res = results?.ctx === ctx ? results.map[`${op.account}/${op.entry}`] : undefined;
+    const prev = results?.ctx === ctx ? results.map[`${op.account}/${op.entry}`] : undefined;
+    // 「上次做成了」配上「現在又需要授權」＝ apply 之後有別的東西動過這個檔案。chip 說現況。
+    const res = prev != null && op.needs_overwrite && SUCCEEDED.has(prev.outcome) ? undefined : prev;
     // 套用過的項目，chip 改顯示逐項結果（現況文字仍是重新偵測後的最新狀態）
     const chip: Chip = res
       ? { key: `results.${res.outcome}`, tone: OUTCOME_TONE[res.outcome] }
@@ -303,7 +323,7 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
               <p className="b4-card-desc">
                 {candidates.length === 0
                   ? <Trans t={t} i18nKey="cc.naDescSingle" />
-                  : blocked
+                  : detected?.blocked
                     ? <Trans t={t} i18nKey="cc.naDescBlocked" values={{ path: unusableDirs }} />
                     : <Trans t={t} i18nKey="cc.naDesc" values={{ path: unusableDirs }} />}
               </p>

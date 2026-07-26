@@ -229,6 +229,106 @@ describe("CommonConfigCard 共通設置卡", () => {
     expect(ui.container.textContent).not.toContain(zh.results.created);
   });
 
+  // 偵測的三個欄位要嘛整包換、要嘛整包丟。上一輪是「不適用」、這一輪 plan 失敗時若只清掉
+  // plan，畫面會同時掛著錯誤訊息與一張說「目錄不存在」的卡——而該目錄這輪明明探到了（R3 ⑤）
+  it("預覽失敗：不留上一輪的不適用卡", async () => {
+    checkDir.mockResolvedValue("missing");
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText(zh.cc.naTitle)).toBeTruthy());
+
+    checkDir.mockResolvedValue("dir");
+    commonConfigPlan.mockRejectedValue(new SetupError("probe_failed", 500));
+    ui.rerender(
+      <CommonConfigCard
+        port={1234}
+        accounts={{ work: accounts.work, personal: { config_dir: "~/.claude-tc3", label: "私人" } }}
+        onPrev={noop}
+        onNext={noop}
+      />,
+    );
+
+    await waitFor(() => expect(ui.getByRole("alert")).toBeTruthy());
+    expect(ui.queryByText(zh.cc.naTitle)).toBeNull();
+    expect(ui.container.querySelector(".is-na")).toBeNull();
+  });
+
+  // `ctx` 只是身分值、不帶時間——離開再回到同一個上下文（帳號改掉又改回來）時，
+  // 光比對相等會讓上一輪的 outcome 復活、疊在最新 plan 上（Codex R3 ②）
+  it("離開上下文再回來：舊的逐項結果不復活", async () => {
+    const other = { work: accounts.work, personal: { config_dir: "~/.claude-other", label: "私人" } };
+    const ui = renderCard();
+    await settled(ui);
+    ui.getByText(zh.cc.apply).click();
+    await waitFor(() => expect(ui.container.textContent).toContain(zh.results.created));
+
+    ui.rerender(<CommonConfigCard port={1234} accounts={other} onPrev={noop} onNext={noop} />);
+    await waitFor(() => expect(ui.container.textContent).not.toContain(zh.results.created));
+    ui.rerender(<CommonConfigCard port={1234} accounts={accounts} onPrev={noop} onNext={noop} />);
+
+    await waitFor(() => expect(ui.container.textContent).toContain(zh.cc.willLink));
+    expect(ui.container.textContent).not.toContain(zh.results.created);
+  });
+
+  // 卸載後不只是「不要 setState」——那一次 refresh 的 checkDir／plan 是真的會發出去的
+  it("套用回來時元件已卸載：不再發出重新偵測的請求", async () => {
+    let settleApply!: (list: CommonConfigOpResult[]) => void;
+    commonConfigApply.mockImplementationOnce(
+      () => new Promise<CommonConfigOpResult[]>((r) => { settleApply = r; }),
+    );
+    const ui = renderCard();
+    await settled(ui);
+    ui.getByText(zh.cc.apply).click();
+
+    cleanup();
+    checkDir.mockClear();
+    commonConfigPlan.mockClear();
+    await act(async () => { settleApply([result({ outcome: "created" })]); });
+
+    expect(checkDir).not.toHaveBeenCalled();
+    expect(commonConfigPlan).not.toHaveBeenCalled();
+    void ui;
+  });
+
+  // chip 長在「現況」欄。上次做成了、現在卻又需要授權，代表 apply 之後有別的東西動過那個檔案
+  // ——這時說「已建立」會讓使用者以為還好好的（Codex R3 ⑥）
+  it("套用後該項被外部改動：chip 說現況，不說上次的成功結果", async () => {
+    const conflicted = op({
+      entry: "commands", state: "real_file", action: "backup_and_link", needs_overwrite: true,
+    });
+    commonConfigPlan
+      .mockResolvedValueOnce({ source_dir: "/Users/x/.claude", operations: [op()] })
+      .mockResolvedValue({ source_dir: "/Users/x/.claude", operations: [conflicted] });
+    const ui = renderCard();
+    await settled(ui);
+
+    ui.getByText(zh.cc.apply).click();
+
+    await waitFor(() => expect(ui.container.textContent).toContain(zh.cc.state.real_file));
+    expect(ui.container.textContent).toContain(zh.cc.keep);
+    expect(ui.container.textContent).not.toContain(zh.results.created);
+  });
+
+  // 反面：失敗類 outcome 與「現在需要授權」並不衝突——「剛才沒能處理」本來就是它要說的事
+  it("保留不動的項目：仍看得到上一次的 conflict 結果", async () => {
+    const conflicted = op({
+      entry: "CLAUDE.md", state: "content_differs", action: "backup_and_copy", needs_overwrite: true,
+    });
+    commonConfigPlan.mockResolvedValue({
+      source_dir: "/Users/x/.claude",
+      operations: [op(), conflicted],
+    });
+    commonConfigApply.mockResolvedValue([
+      result({ entry: "commands", outcome: "created" }),
+      result({ entry: "CLAUDE.md", outcome: "conflict" }),
+    ]);
+    const ui = renderCard();
+    await settled(ui);
+
+    ui.getByText(zh.cc.apply).click();
+
+    await waitFor(() => expect(ui.container.textContent).toContain(zh.results.conflict));
+  });
+
   // 上下文簽章不能用手寫分隔符拼：macOS 路徑允許 `|` 與 `=`，兩組不同帳號拼出同一個簽章時，
   // 換帳號後回來的 apply 結果會被當成「還在同一個世界」而寫進新畫面
   it("帳號目錄含分隔字元：換帳號後舊結果仍被判為過期", async () => {
