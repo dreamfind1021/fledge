@@ -148,6 +148,24 @@ describe("LoginCard 登入卡", () => {
     expect(ui.getAllByTestId("terminal")).toHaveLength(1);
   });
 
+  // start() 途中 port 變更會讓那一輪變 stale，而 stale 的一輪不負責解除 starting——
+  // 若 [port] effect 也不解除，按鈕就永久停用到切頁重掛（Codex 票25 R4 Medium）
+  it("建立途中 sidecar 重啟：舊 Promise 落地後按鈕恢復可用", async () => {
+    let settleCreate!: (id: string) => void;
+    createSession.mockImplementationOnce(() => new Promise<string>((r) => { settleCreate = r; }));
+    const ui = renderCard();
+    ui.getAllByText(zh.login.open)[0].click();
+    await waitFor(() =>
+      expect((ui.getAllByText(zh.login.open)[0] as HTMLButtonElement).disabled).toBe(true));
+
+    ui.rerender(<LoginCard port={5678} accounts={accounts} onPrev={noop} onNext={noop} />);
+    await act(async () => { settleCreate("sess-old"); });
+
+    for (const b of ui.getAllByText(zh.login.open) as HTMLButtonElement[]) {
+      expect(b.disabled).toBe(false);
+    }
+  });
+
   it("卸載時關閉 session，不留 orphan PTY", async () => {
     const ui = renderCard();
     ui.getAllByText(zh.login.open)[0].click();

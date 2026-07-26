@@ -52,6 +52,9 @@ export function useCardSession<T>(port: number | null) {
     // （不必也無法 closeSession——舊 sidecar 已經不在）。首次 mount 跑這輪只是把基準設好。
     startGen.current += 1;
     setRunning(null);
+    // 作廢的同時要把 busy 交還：被作廢的那一輪在 finally 會因 stale 而跳過 setStarting(false)，
+    // 沒有人接手的話按鈕就永久停用到切頁重掛（Codex 票25 R4 Medium）。
+    setStarting(false);
   }, [port]);
 
   /** 回傳是否真的建立了 session——呼叫端據此收起確認面板之類的過場 UI。 */
