@@ -153,13 +153,17 @@ describe("CommonConfigCard 共通設置卡", () => {
   });
 
   it("套用後逐項回報結果並重新偵測狀態", async () => {
-    commonConfigPlan.mockResolvedValue({
-      source_dir: "/Users/x/.claude",
-      operations: [
-        op({ entry: "commands", state: "missing", action: "create_link" }),
-        op({ entry: "CLAUDE.md", state: "content_differs", action: "backup_and_copy", needs_overwrite: true }),
-      ],
-    });
+    const before = [
+      op({ entry: "commands", state: "missing", action: "create_link" }),
+      op({ entry: "CLAUDE.md", state: "content_differs", action: "backup_and_copy", needs_overwrite: true }),
+    ];
+    commonConfigPlan
+      .mockResolvedValueOnce({ source_dir: "/Users/x/.claude", operations: before })
+      // 重新偵測：commands 已連上，CLAUDE.md 仍是我們刻意不碰的衝突項
+      .mockResolvedValue({
+        source_dir: "/Users/x/.claude",
+        operations: [{ ...before[0], state: "ok", action: "skip" }, before[1]],
+      });
     commonConfigApply.mockResolvedValue([
       result({ entry: "commands", outcome: "created" }),
       result({ entry: "CLAUDE.md", outcome: "conflict" }),
@@ -173,9 +177,40 @@ describe("CommonConfigCard 共通設置卡", () => {
     expect(ui.container.textContent).toContain(zh.results.conflict);
     // 狀態即時偵測（spec-b4 §4）：套用後畫面不能停在過時的 plan
     expect(commonConfigPlan).toHaveBeenCalledTimes(2);
-    // 套用過了就往下走，主按鈕不再是「套用」
+    // 剩下的只有精靈不會授權的 conflict 項 → 主按鈕讓位給「下一步」，不誘導使用者再按一次
     expect(ui.queryByText(zh.cc.apply)).toBeNull();
     expect(ui.getByText(zh.common.next)).toBeTruthy();
+  });
+
+  // 按鈕反映「現在還做不做得到」而不是「按過了沒」：有項目沒做成時要能再按一次
+  it("套用後仍有沒做成的項目：保留套用鍵可重試", async () => {
+    commonConfigApply.mockResolvedValue([result({ outcome: "failed", error: "permission_denied" })]);
+    const ui = renderCard();
+    await settled(ui);
+
+    ui.getByText(zh.cc.apply).click();
+
+    await waitFor(() => expect(ui.container.textContent).toContain(zh.results.failed));
+    expect(ui.getByText(zh.cc.apply)).toBeTruthy();
+    // 判別碼不進畫面（只有「處理失敗」）——原因留在 console
+    expect(ui.container.textContent).not.toContain("permission_denied");
+  });
+
+  // 只有 needs_overwrite 項時，精靈能做的事是零：主按鈕不該亮「套用」誘導使用者按下去
+  it("只有保留不動的項目：主按鈕是下一步，但仍指路到設定頁", async () => {
+    commonConfigPlan.mockResolvedValue({
+      source_dir: "/Users/x/.claude",
+      operations: [
+        op({ entry: "CLAUDE.md", state: "content_differs", action: "backup_and_copy", needs_overwrite: true }),
+      ],
+    });
+    const ui = renderCard();
+    await settled(ui);
+
+    expect(ui.queryByText(zh.cc.apply)).toBeNull();
+    expect(ui.getByText(zh.common.next)).toBeTruthy();
+    expect(ui.container.querySelector(".b4-hint-warn")).toBeTruthy();
+    expect(ui.queryByText(zh.cc.nothingToDo)).toBeNull(); // 有東西沒處理，不能說「沒事可做」
   });
 
   it("套用失敗：顯示映射後的判別碼訊息，不謊稱已套用", async () => {
@@ -253,9 +288,41 @@ describe("CommonConfigCard 共通設置卡", () => {
     expect(commonConfigPlan).not.toHaveBeenCalled();
     expect(ui.getByRole("alert").textContent).toContain(zh.errors.check_dir_failed.split("{{")[0]);
     expect(ui.container.textContent).toContain("~/.claude-tc"); // 說明是哪個目錄沒確認到
+    // 探測失敗 ≠ 目錄不存在。同一張卡上寫「偵測到 X 不存在」又跳「無法確認 X」是自相矛盾
+    expect(ui.container.textContent).toContain(firstLine(zh.cc.naDescBlocked).split("<code>")[0]);
+    expect(ui.container.textContent).not.toContain("不存在");
+  });
+
+  // 目錄存在但讀不到（denied）或根本不是目錄（not_dir）：一樣排除（apply 會 mkdir），
+  // 但不能沿用「不存在，你只用一個帳號」那套文案——那對這兩種狀態是假話
+  it("目錄存在但不可用：用「無法確認」的文案，不說不存在", async () => {
+    checkDir.mockResolvedValue("denied");
+    const ui = renderCard();
+
+    await waitFor(() => expect(ui.getByText(zh.cc.naTitle)).toBeTruthy());
+    expect(commonConfigPlan).not.toHaveBeenCalled();
+    expect(ui.container.textContent).toContain(firstLine(zh.cc.naDescBlocked).split("<code>")[0]);
+    expect(ui.container.textContent).not.toContain("不存在");
   });
 
   it("全部已就緒：主按鈕直接是下一步，不打 apply", async () => {
+    commonConfigPlan.mockResolvedValue({
+      source_dir: "/Users/x/.claude",
+      operations: [
+        op({ entry: "commands", state: "ok", action: "skip" }),
+        op({ entry: "skills", state: "ok", action: "skip" }),
+      ],
+    });
+    const ui = renderCard();
+    await settled(ui);
+
+    expect(ui.queryByText(zh.cc.apply)).toBeNull();
+    expect(ui.getByText(zh.cc.nothingToDo)).toBeTruthy();
+    expect(commonConfigApply).not.toHaveBeenCalled();
+  });
+
+  // source 側缺項也是後端的 skip，但那不是「已經是你要的狀態」——逐列與卡底文案都不能說謊
+  it("source 沒有這一項：標無法處理，且不說「沒事可做」", async () => {
     commonConfigPlan.mockResolvedValue({
       source_dir: "/Users/x/.claude",
       operations: [
@@ -266,12 +333,12 @@ describe("CommonConfigCard 共通設置卡", () => {
     const ui = renderCard();
     await settled(ui);
 
-    expect(ui.queryByText(zh.cc.apply)).toBeNull();
-    expect(ui.getByText(zh.cc.nothingToDo)).toBeTruthy();
-    // source 沒有這一項時不能顯示「已就緒」——那會讓使用者以為同步好了
     const rows = [...ui.container.querySelectorAll(".b4-item")];
     expect(rows[1].textContent).toContain(withSource(zh.cc.state.source_missing));
     expect(rows[1].textContent).toContain(zh.cc.unavailable);
+    expect(rows[1].textContent).not.toContain(zh.cc.ready);
+    expect(ui.queryByText(zh.cc.nothingToDo)).toBeNull();
+    expect(ui.queryByText(zh.cc.apply)).toBeNull(); // 精靈對這一項無事可做
   });
 
   it("略過：不打 apply，直接往下一頁", async () => {

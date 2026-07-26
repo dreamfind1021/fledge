@@ -156,6 +156,15 @@ export class SessionError extends Error {
   }
 }
 
+/** 從錯誤回應取出後端判別碼；非 JSON body（422 的 detail 陣列、裸 5xx）→ null（無碼可映射）。 */
+async function readErrorCode(resp: Response): Promise<string | null> {
+  try {
+    return (await resp.json())?.error ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function createSession(port: number, opts: CreateSessionOptions): Promise<string> {
   const { path, account, kind = "claude", installId, loginTarget } = opts;
   // 安全不變式（spec §5）：body 只放 allowlist key（install_id），永遠不含命令字串。
@@ -171,15 +180,7 @@ export async function createSession(port: number, opts: CreateSessionOptions): P
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
   });
-  if (!resp.ok) {
-    let code: string | null = null;
-    try {
-      code = (await resp.json())?.error ?? null;
-    } catch {
-      /* 非 JSON body（422 的 detail 陣列、裸 5xx）→ 無判別碼可映射 */
-    }
-    throw new SessionError(code, resp.status);
-  }
+  if (!resp.ok) throw new SessionError(await readErrorCode(resp), resp.status);
   return (await resp.json()).session_id;
 }
 
@@ -306,15 +307,7 @@ async function setupPost<T>(port: number, path: string, body: object): Promise<T
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
   });
-  if (!resp.ok) {
-    let code: string | null = null;
-    try {
-      code = (await resp.json())?.error ?? null;
-    } catch {
-      /* 非 JSON body（422 的 detail 陣列、裸 5xx）→ 無判別碼可映射 */
-    }
-    throw new SetupError(code, resp.status);
-  }
+  if (!resp.ok) throw new SetupError(await readErrorCode(resp), resp.status);
   return resp.json();
 }
 

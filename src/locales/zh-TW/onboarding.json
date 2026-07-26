@@ -83,6 +83,7 @@
     "nothingToDo": "沒有需要處理的項目——這幾項都已經是你要的狀態。",
     "naTitle": "不適用",
     "naDesc": "偵測到 <code>{{path}}</code> 不存在——你目前只使用一個帳號，不需要共通設置。<br />日後在設定頁新增第二個帳號後，這張卡會自動出現。",
+    "naDescBlocked": "無法確認 <code>{{path}}</code> 能不能用作另一個帳號的設定目錄，因此這一步先跳過（不會對未確認的目錄動手）。<br />請到設定頁檢查該帳號的設定目錄。",
     "naDescSingle": "你目前只登記一個帳號，沒有另一個帳號需要共用設定。<br />日後在設定頁新增帳號後，這張卡會自動出現。"
   },
   "sys": {
@@ -151,7 +152,7 @@
     "check_dir_failed": "無法確認帳號的設定目錄：{{reason}}",
     "common_config_failed": "共通設置操作失敗，請稍後再試",
     "config_not_initialized": "設定檔尚未建立，請先完成根目錄那一步",
-    "config_unreadable": "Fledge 設定檔讀不到或內容損壞，請檢查 <code>~/.fledge/config.json</code>",
+    "config_unreadable": "Fledge 設定檔讀不到或內容損壞，請檢查 ~/.fledge/config.json",
     "probe_failed": "無法讀取帳號的設定目錄，請到系統設定授權後重試",
     "invalid_config_dir": "有帳號的設定目錄路徑無效，請到設定頁修正",
     "unsafe_config_dir": "有帳號的設定目錄指向家目錄本身，太危險——請到設定頁改成專屬的子目錄",

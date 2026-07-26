@@ -81,14 +81,6 @@ function chipFor(op: CommonConfigOperation): Chip {
   return ACTION_CHIP[op.action];
 }
 
-// 有專屬文案的後端判別碼。不在表內（含連線錯誤的 null）→ 通用訊息；判別碼本身只進 console，
-// 不得出現在畫面上（spec-b4 §5 / CLAUDE.md §4.6.13）。
-const MAPPED_ERRORS = new Set([
-  "config_not_initialized", "config_unreadable", "probe_failed", "unknown_account",
-  "invalid_config_dir", "unsafe_config_dir", "target_equals_source",
-  "duplicate_target", "overlapping_account_dirs",
-]);
-
 /** 精靈的共通設置頁：顯示每個共通項目前的狀態與將要執行的動作，套用只做**不會蓋掉任何東西**
  *  的操作。
  *
@@ -98,18 +90,21 @@ const MAPPED_ERRORS = new Set([
  * - **目錄不存在的帳號不列為 target**。`apply` 會 `mkdir` target dir，照送等於替只用一個帳號
  *   的使用者建出他沒要求的帳號目錄。全部都不存在時整張卡「不適用」。 */
 export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfigCardProps) {
-  const { t } = useTranslation("onboarding");
+  const { t, i18n } = useTranslation("onboarding");
   const [plan, setPlan] = useState<CommonConfigPlan | null>(null);
   // null＝還沒判定；[]＝判定完沒有可用 target（不適用）
   const [targets, setTargets] = useState<string[] | null>(null);
   const [results, setResults] = useState<Record<string, CommonConfigOpResult> | null>(null);
-  const [applied, setApplied] = useState(false);
+  // 有候選帳號目錄「存在但不能用」（denied／not_dir）或探測本身失敗——與「還沒建立」不同，
+  // 說成「不存在」是假話，兩者要分開的文案
+  const [blocked, setBlocked] = useState(false);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // latest-request-wins（同 EnvCard）：重啟 sidecar 換 port 會讓兩輪偵測重疊，
   // 晚到的舊回應照樣寫進 state 的話，畫面會退回上一輪結果或蓋上一條過期錯誤
   const reqId = useRef(0);
+  const mounted = useRef(true);
 
   const accountKeys = Object.keys(accounts);
   // source＝實體檔持有者。取第一個登記帳號（預設 work=~/.claude，spec §6.3）——精靈不讓使用者
@@ -123,12 +118,16 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   const describeError = useCallback(
     (e: unknown): string => {
       const code = e instanceof SetupError ? e.code : null;
-      if (code != null && MAPPED_ERRORS.has(code)) return t(`errors.${code}`);
+      // catalog 就是判別碼文案的真值來源（key 直接用判別碼原名，spec-b4 §5 命名約定）——
+      // 不另外維護一份「哪些碼有文案」的清單，漏補文案時自動退到通用訊息
+      if (code != null && i18n.exists(`errors.${code}`, { ns: "onboarding" })) {
+        return t(`errors.${code}`);
+      }
       // 未映射的判別碼與連線錯誤都退到通用訊息；細節留在 console 供除錯
       console.warn("[common-config] 未映射的錯誤", e);
       return t("errors.common_config_failed");
     },
-    [t],
+    [t, i18n],
   );
 
   const load = useCallback(async () => {
@@ -143,10 +142,16 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
           candidates.map((key) => checkDir(port, accounts[key].config_dir)),
         );
         live = candidates.filter((_, i) => statuses[i] === "dir");
+        // missing＝單純還沒有第二個帳號目錄；denied／not_dir＝存在但不能用。兩者都排除
+        // （apply 會 mkdir），但只有前者能說「不存在，你只用一個帳號」
+        if (reqId.current === myId) {
+          setBlocked(statuses.some((s) => s !== "dir" && s !== "missing"));
+        }
       } catch (e) {
         if (reqId.current !== myId) return;
         // 探測不到就當不適用：對「未確認存在」的目錄送 apply 會替使用者建出目錄
         setError(t("errors.check_dir_failed", { reason: String(e) }));
+        setBlocked(true);
         setTargets([]);
         setPlan(null);
         return;
@@ -176,7 +181,13 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   }, [port, source, accountsSig, t, describeError]);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => () => { reqId.current += 1; }, []);   // 卸載後在途回應不再寫 state
+  useEffect(() => {
+    mounted.current = true;   // StrictMode 會 mount→cleanup→再 mount，這裡要重設回來
+    return () => {
+      mounted.current = false;
+      reqId.current += 1;     // 使在途請求失效，卸載後不再 setState
+    };
+  }, []);
 
   const apply = async () => {
     if (port == null || source == null || targets == null || targets.length === 0) return;
@@ -190,8 +201,8 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
         // 精靈只做非破壞性操作（spec-b4 定案 8）：needs_overwrite 的項目後端會回 conflict 不動
         overwrite: [],
       });
+      if (!mounted.current) return;
       setResults(Object.fromEntries(list.map((r) => [`${r.account}/${r.entry}`, r])));
-      setApplied(true);
       // 失敗項的判別碼不進畫面（逐項只顯示「處理失敗」），但要留在 console——
       // 沒有它使用者回報「失敗」時無從追查
       for (const r of list) {
@@ -201,24 +212,29 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
       }
       await load();   // 狀態一律即時偵測（spec-b4 §4）：套用後不能停在過時的 plan
     } catch (e) {
-      if (reqId.current === 0) return;   // 理論上不可達；保持與 load 相同的「卸載後不寫」語意
+      if (!mounted.current) return;
       setError(describeError(e));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   };
 
   const ops = plan?.operations ?? [];
   const hasConflict = ops.some((o) => o.needs_overwrite);
-  const actionable = ops.some((o) => o.action !== "skip");
-  const na = targets != null && targets.length === 0;
-  // 不適用卡要指出是哪個目錄不存在（candidates 全空＝只登記一個帳號，另一套文案）
-  const missingDirs = candidates
+  // 精靈真的做得到的事＝非 skip 且不需授權。**conflict 項不算**：精靈永遠不授權它，
+  // 算進來會讓「套用」永遠亮著、按了永遠回 conflict。反過來，套用後仍有可做的項目
+  // （例如某項 failed）時按鈕自然留著，使用者可以再按一次重試——不用記「按過了」。
+  const canApply = ops.some((o) => o.action !== "skip" && !o.needs_overwrite);
+  // 「沒事可做」只在每一項都真的就緒時才說。source_missing／source_unsupported 也是 skip，
+  // 但那不是「已經是你要的狀態」（那一列標的是「無法處理」）
+  const allReady = ops.length > 0 && ops.every((o) => o.state === "ok");
+  const isNotApplicable = targets != null && targets.length === 0;
+  // 不適用卡要指出是哪個目錄卡住（candidates 全空＝只登記一個帳號，另一套文案）
+  const unusableDirs = candidates
     .filter((k) => !(targets ?? []).includes(k))
     .map((k) => accounts[k].config_dir)
     .join(", ");
-  // 套用過、或本來就沒事可做時，主按鈕讓位給「下一步」
-  const showApply = !na && plan != null && actionable && !applied;
+  const showApply = !isNotApplicable && plan != null && canApply;
 
   const renderRow = (op: CommonConfigOperation) => {
     const res = results?.[`${op.account}/${op.entry}`];
@@ -244,10 +260,10 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
       <p className="ob-sub">{t("cc.sub")}</p>
 
       {error && <div className="ob-error" role="alert">{error}</div>}
-      {plan === null && !na && loading && <p className="ob-sub">{t("cc.checking")}</p>}
+      {plan === null && !isNotApplicable && loading && <p className="ob-sub">{t("cc.checking")}</p>}
 
-      {/* 不適用：次帳號目錄不存在，或根本只登記一個帳號。灰態卡＋說明日後會自動出現 */}
-      {na && (
+      {/* 不適用：次帳號目錄不存在／不可用，或根本只登記一個帳號。灰態卡＋說明日後會自動出現 */}
+      {isNotApplicable && (
         <div className="b4-card is-na">
           <div className="b4-card-top">
             <span className="b4-dot na" />
@@ -256,7 +272,9 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
               <p className="b4-card-desc">
                 {candidates.length === 0
                   ? <Trans t={t} i18nKey="cc.naDescSingle" />
-                  : <Trans t={t} i18nKey="cc.naDesc" values={{ path: missingDirs }} />}
+                  : blocked
+                    ? <Trans t={t} i18nKey="cc.naDescBlocked" values={{ path: unusableDirs }} />
+                    : <Trans t={t} i18nKey="cc.naDesc" values={{ path: unusableDirs }} />}
               </p>
             </div>
           </div>
@@ -273,6 +291,9 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
               <p className="b4-card-desc">
                 {t("cc.ownerDesc", { source, target: targets.join(", ") })}
               </p>
+              {/* 實體檔到底在哪（後端 resolve 後的路徑）——demo 把它放在逐列，但那裡是單行
+                  ellipsis 的窄欄，多帳號分組後會全被截掉；擺在卡頭只顯示一次且完整 */}
+              <p className="b4-card-desc b4-mono">{plan.source_dir}</p>
             </div>
           </div>
 
@@ -291,7 +312,7 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
             <p className="b4-hint b4-hint-warn">{t("cc.conflictHint", { source })}</p>
           )}
           <p className="b4-hint"><Trans t={t} i18nKey="cc.advHint" /></p>
-          {!actionable && !applied && <p className="b4-hint">{t("cc.nothingToDo")}</p>}
+          {allReady && <p className="b4-hint">{t("cc.nothingToDo")}</p>}
         </div>
       )}
 

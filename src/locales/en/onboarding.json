@@ -83,6 +83,7 @@
     "nothingToDo": "Nothing to do — these items are already the way you want them.",
     "naTitle": "Not applicable",
     "naDesc": "<code>{{path}}</code> doesn't exist — you're using a single account, so there's nothing to share.<br />This card reappears once you add a second account in Settings.",
+    "naDescBlocked": "We couldn't confirm whether <code>{{path}}</code> can serve as another account's config folder, so this step is skipped (we won't touch a folder we haven't confirmed).<br />Check that account's config folder in Settings.",
     "naDescSingle": "Only one account is registered, so there's no second account to share settings with.<br />This card reappears once you add another account in Settings."
   },
   "sys": {
@@ -151,7 +152,7 @@
     "check_dir_failed": "Couldn't check the account's config folder: {{reason}}",
     "common_config_failed": "Couldn't apply the shared settings — please try again",
     "config_not_initialized": "Your settings file doesn't exist yet — finish the work folders step first",
-    "config_unreadable": "Fledge's settings file is missing or damaged — check <code>~/.fledge/config.json</code>",
+    "config_unreadable": "Fledge's settings file is missing or damaged — check ~/.fledge/config.json",
     "probe_failed": "Couldn't read the account's config folder — grant access in System Settings and retry",
     "invalid_config_dir": "An account's config folder path isn't valid — fix it in Settings",
     "unsafe_config_dir": "An account's config folder points at your home folder itself, which is unsafe — pick a dedicated subfolder in Settings",
