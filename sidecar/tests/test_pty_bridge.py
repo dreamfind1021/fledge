@@ -203,3 +203,42 @@ def test_create_session_env_remove_pops_key(monkeypatch):
         env_remove=["CLAUDE_CONFIG_DIR"],
     )
     assert "CLAUDE_CONFIG_DIR" not in captured["env"]
+
+
+# close 失敗時 handle 的去留（Codex 票 24 R2 Medium）：close_session 是先 pop 再 close，
+# 失敗就丟掉 handle 的話，還活著的子進程會就此失聯——連 shutdown 的 close_all() 都回收不到。
+def _bridge_with_bad_close(alive):
+    from fledge_sidecar.pty_bridge import PtyBridge, Session
+
+    class _BadPty:
+        fd = 7
+        def close(self, force=False):
+            raise OSError("boom")
+        def isalive(self):
+            if isinstance(alive, Exception):
+                raise alive
+            return alive
+
+    bridge = PtyBridge()
+    bridge.sessions["s"] = Session(session_id="s", pty=_BadPty())  # type: ignore[arg-type]
+    return bridge
+
+
+def test_close_failure_keeps_handle_when_process_still_alive():
+    bridge = _bridge_with_bad_close(alive=True)
+    bridge.close_session("s")  # 不應拋
+    # 進程還在跑 → handle 必須留著，否則永久 orphan（close_all 也找不到它）
+    assert "s" in bridge.sessions
+
+
+def test_close_failure_drops_handle_when_process_already_exited():
+    bridge = _bridge_with_bad_close(alive=False)
+    bridge.close_session("s")
+    # close 失敗最常見的原因就是進程已自行結束；留著只會讓 live_ids 多報一個活 session
+    assert bridge.sessions == {}
+
+
+def test_close_failure_drops_handle_when_liveness_unknown():
+    bridge = _bridge_with_bad_close(alive=OSError("cannot tell"))
+    bridge.close_session("s")
+    assert bridge.sessions == {}   # 問不出狀態就當已死，不留一個狀態不明的 handle
