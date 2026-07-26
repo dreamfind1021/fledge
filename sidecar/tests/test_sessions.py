@@ -495,6 +495,20 @@ def test_session_rejects_unknown_field_fail_closed(tmp_path: Path, monkeypatch):
     assert resp.status_code == 422
 
 
+def test_login_session_runs_in_home_not_project(tmp_path: Path, monkeypatch):
+    # 登入不屬於任何專案（它也刻意不進活動歸屬），而精靈的登入頁根本沒有專案路徑可傳——
+    # 沿用 cwd=req.path 的話前端只能編一個假路徑，空字串則直接 spawn 失敗。與 kind=install 一致跑在 home。
+    _write_config(tmp_path, monkeypatch)
+    captured = _capture_bridge_create(monkeypatch, "sess-login-home")
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": "", "account": "work", "kind": "login",
+    })
+    assert resp.status_code == 200
+    assert captured["cwd"] == str(Path.home())
+    # 帳號 env 仍要注入（登入的重點就是寫進該帳號的 config_dir）
+    assert captured["env_overrides"]["CLAUDE_CONFIG_DIR"] == "/tmp/fake-claude"
+
+
 def test_login_session_injects_account_env_claude(tmp_path: Path, monkeypatch):
     _write_config(tmp_path, monkeypatch)
     captured = _capture_bridge_create(monkeypatch, "sess-login")

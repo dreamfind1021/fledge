@@ -121,6 +121,8 @@
     "status_failed": "Couldn't check your tools: {{reason}}",
     "unknown_install_id": "No install command is available for this tool — please install it manually",
     "install_failed": "Couldn't start the install: {{reason}}",
-    "projects_reload_failed": "Your settings were saved, but the project list failed to load: {{reason}}"
+    "projects_reload_failed": "Your settings were saved, but the project list failed to load: {{reason}}",
+    "unknown_account": "That account no longer exists — check your account settings",
+    "login_failed": "Couldn't open the sign-in terminal: {{reason}}"
   }
 }

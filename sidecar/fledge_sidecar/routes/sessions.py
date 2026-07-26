@@ -137,7 +137,9 @@ def create_session(req: CreateSessionRequest):
     try:
         session = _bridge.create_session(
             command=_resolve_command(req.kind, req.login_target),
-            cwd=req.path,
+            # 登入不屬於任何專案（它也不進活動歸屬），跑在 home——與 kind=install 一致。
+            # 精靈的登入頁沒有專案路徑可傳，沿用 req.path 只會逼前端編一個假路徑。
+            cwd=str(Path.home()) if req.kind == "login" else req.path,
             env_overrides=env_overrides,
             project_path=req.path,
             account=req.account,

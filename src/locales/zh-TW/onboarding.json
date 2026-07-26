@@ -121,6 +121,8 @@
     "status_failed": "工具偵測失敗：{{reason}}",
     "unknown_install_id": "這個工具沒有可用的安裝命令，請改為手動安裝",
     "install_failed": "無法啟動安裝：{{reason}}",
-    "projects_reload_failed": "設定已建立，但專案清單載入失敗：{{reason}}"
+    "projects_reload_failed": "設定已建立，但專案清單載入失敗：{{reason}}",
+    "unknown_account": "找不到這個帳號，請回設定頁確認帳號設定",
+    "login_failed": "無法開啟登入終端機：{{reason}}"
   }
 }
