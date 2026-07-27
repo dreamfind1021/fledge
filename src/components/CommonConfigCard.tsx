@@ -481,10 +481,16 @@ export function CommonConfigCard({
             {recheckButton}
           </div>
 
-          {/* 多帳號時逐帳號分組——同一個 entry 在不同帳號可以是不同狀態，混在一張清單裡看不出誰是誰 */}
+          {/* 逐帳號分組——同一個 entry 在不同帳號可以是不同狀態，混在一張清單裡看不出誰是誰。
+              標題帶上該帳號的 `config_dir`：卡頭只講得出 source 在哪，不寫 target 的話畫面上
+              沒有任何地方能對出「這一組是哪個目錄」（票 29 驗收時使用者就問了這件事）。
+              單一 target 也照顯示——只有一組的人同樣需要知道那一組是誰。 */}
           {targets.map((key) => (
             <div key={key} className="b4-group">
-              {targets.length > 1 && <p className="b4-sec-h">{key}</p>}
+              <p className="b4-sec-h b4-group-head">
+                {key}
+                <span className="b4-group-path">{accounts[key]?.config_dir}</span>
+              </p>
               <div className="b4-list">
                 {ops.filter((o) => o.account === key).map(renderRow)}
               </div>

@@ -630,7 +630,8 @@ describe("CommonConfigCard 共通設置卡", () => {
     await settled(ui);
 
     const groups = [...ui.container.querySelectorAll(".b4-sec-h")];
-    expect(groups.map((g) => g.textContent)).toEqual(["personal", "extra"]);
+    // 標題要能對出「這一組是哪個帳號的哪個目錄」——只列 key 的話畫面上沒有第二處可以對照
+    expect(groups.map((g) => g.textContent)).toEqual(["personal~/.claude-tc", "extra~/.claude-x"]);
     const lists = [...ui.container.querySelectorAll(".b4-list")];
     expect(lists).toHaveLength(2);
     // 每組只能有自己那個帳號的項目——只數清單數量的話，兩組都塞全部 operation 也會通過
