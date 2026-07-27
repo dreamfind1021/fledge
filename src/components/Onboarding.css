@@ -436,7 +436,32 @@
   flex: 0 0 auto;
 }
 
+/* 說明文字當作卡片開頭時，與下面的欄位之間要留白（卡片標頭那組是貼著標題的） */
+.b4-card-desc-lead {
+  margin: 0 0 10px;
+}
+
 .b4-mono {
+  font-family: var(--font-mono);
+}
+
+/* ── 卡內表單欄位（系統設置頁的訂閱列與路徑列）── */
+.b4-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.b4-field {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* 費用是數字，右對齊 + 等寬字才對得起來；不隨名稱欄一起長 */
+.b4-cost {
+  flex: 0 0 96px;
+  text-align: right;
   font-family: var(--font-mono);
 }
 

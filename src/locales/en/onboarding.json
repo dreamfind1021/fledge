@@ -92,6 +92,8 @@
     "sub": "All three are optional and can be changed any time in Settings.",
     "subsTitle": "Subscriptions and costs",
     "subsDesc": "Used by the dashboard to work out net return (cost vs usage).",
+    "subsName": "Name",
+    "subsCost": "Monthly cost (USD)",
     "addItem": "Add item",
     "kmsTitle": "Knowledge base root",
     "kmsDesc": "The memory panel reads library/ and topics/ under this folder as cross-project knowledge.",
@@ -159,6 +161,11 @@
     "unsafe_config_dir": "An account's config folder points at your home folder itself, which is unsafe — pick a dedicated subfolder in Settings",
     "target_equals_source": "Two accounts point at the same config folder — fix it in Settings",
     "duplicate_target": "Several accounts point at the same config folder — fix it in Settings",
-    "overlapping_account_dirs": "The accounts' config folders contain one another — give each its own folder in Settings"
+    "overlapping_account_dirs": "The accounts' config folders contain one another — give each its own folder in Settings",
+    "subs_name": "Name is required",
+    "subs_cost": "Monthly cost must be a non-negative number",
+    "subs_failed": "Couldn't save the subscription list: {{reason}}",
+    "kms_failed": "Couldn't save the knowledge base root: {{reason}}",
+    "backend_unavailable": "The backend isn't connected yet — try again in a moment"
   }
 }

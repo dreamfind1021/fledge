@@ -92,6 +92,8 @@
     "sub": "這三項都可以略過，之後在設定頁隨時修改。",
     "subsTitle": "訂閱服務及費用",
     "subsDesc": "用於數據儀表板計算淨投資報酬（成本 vs 用量）。",
+    "subsName": "名稱",
+    "subsCost": "月費（USD）",
     "addItem": "+ 新增一項",
     "kmsTitle": "知識庫根目錄",
     "kmsDesc": "記憶層會讀取這個目錄下的 library / topics 作為跨專案知識來源。",
@@ -159,6 +161,11 @@
     "unsafe_config_dir": "有帳號的設定目錄指向家目錄本身，太危險——請到設定頁改成專屬的子目錄",
     "target_equals_source": "兩個帳號指向同一個設定目錄，請到設定頁修正",
     "duplicate_target": "有多個帳號指向同一個設定目錄，請到設定頁修正",
-    "overlapping_account_dirs": "帳號的設定目錄互相包含，請到設定頁改成彼此獨立的目錄"
+    "overlapping_account_dirs": "帳號的設定目錄互相包含，請到設定頁改成彼此獨立的目錄",
+    "subs_name": "名稱不可空白",
+    "subs_cost": "月費需為非負數字",
+    "subs_failed": "訂閱清單儲存失敗：{{reason}}",
+    "kms_failed": "知識庫根目錄儲存失敗：{{reason}}",
+    "backend_unavailable": "後端尚未連線，請稍後再試"
   }
 }
