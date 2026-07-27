@@ -756,6 +756,67 @@ describe("CommonConfigCard 設定頁版（allowOverwrite）", () => {
     await waitFor(() => expect(onPendingChange).toHaveBeenLastCalledWith(2)); // ok 的那項不算
   });
 
+  // 授權的有效期綁在「這一次的衝突」上。少了這條，「衝突 → 被改成一致 → 內容又被改成不同」
+  // 的來回會讓畫面以舊授權預先打勾，使用者在沒重新看過內容的情況下授權了覆蓋（Codex R1 High）
+  it("衝突消失又再出現：不沿用舊授權，勾選歸零且不送出", async () => {
+    const okOp = op({ entry: "CLAUDE.md", state: "ok", action: "skip" });
+    const ui = renderSettings();
+    await settled(ui);
+
+    fireEvent.click(ui.container.querySelector<HTMLInputElement>(".st-check input")!);
+    expect(ui.container.querySelector<HTMLInputElement>(".st-check input")!.checked).toBe(true);
+
+    // 第二輪：那項已經一致了 → 勾選框消失
+    commonConfigPlan.mockResolvedValue({ source_dir: "/Users/x/.claude", operations: [okOp] });
+    fireEvent.click(ui.getByText(zh.env.recheck));
+    await waitFor(() => expect(ui.container.querySelector(".st-check input")).toBeNull());
+
+    // 第三輪：內容又被改成不同 → 這是**新的**衝突，不是剛才那一次
+    commonConfigPlan.mockResolvedValue({ source_dir: "/Users/x/.claude", operations: [conflictOp()] });
+    fireEvent.click(ui.getByText(zh.env.recheck));
+    await waitFor(() => expect(ui.container.querySelector(".st-check input")).toBeTruthy());
+
+    expect(ui.container.querySelector<HTMLInputElement>(".st-check input")!.checked).toBe(false);
+    fireEvent.click(ui.getByText(zh.st.apply));
+    await waitFor(() => expect(commonConfigApply).toHaveBeenCalledTimes(1));
+    expect(commonConfigApply.mock.calls[0][1].overwrite).toEqual([]);
+  });
+
+  // 授權是一次性的：`stale`＝寫入前發現內容又變了，留著勾選就是讓下一次沿用對舊內容的授權
+  it("套用過就用掉授權：同一項仍衝突時要重新勾才會再送", async () => {
+    commonConfigApply.mockResolvedValue([result({ entry: "CLAUDE.md", outcome: "stale" })]);
+    const ui = renderSettings();
+    await settled(ui);
+
+    fireEvent.click(ui.container.querySelector<HTMLInputElement>(".st-check input")!);
+    fireEvent.click(ui.getByText(zh.st.apply));
+    await waitFor(() => expect(commonConfigApply).toHaveBeenCalledTimes(1));
+    expect(commonConfigApply.mock.calls[0][1].overwrite).toEqual([
+      { account: "personal", entry: "CLAUDE.md" },
+    ]);
+
+    // 重測後那項仍是衝突（內容還是不一樣），但授權已經用掉了
+    await waitFor(() => expect(commonConfigPlan).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(ui.container.querySelector<HTMLInputElement>(".st-check input")?.checked).toBe(false));
+
+    fireEvent.click(ui.getByText(zh.st.apply));
+    await waitFor(() => expect(commonConfigApply).toHaveBeenCalledTimes(2));
+    expect(commonConfigApply.mock.calls[1][1].overwrite).toEqual([]);
+  });
+
+  // 連線錯誤時請求可能已經到了後端，一樣視為用掉
+  it("套用連線失敗：授權同樣用掉，不會在下一次自動沿用", async () => {
+    commonConfigApply.mockRejectedValue(new Error("Failed to fetch"));
+    const ui = renderSettings();
+    await settled(ui);
+
+    fireEvent.click(ui.container.querySelector<HTMLInputElement>(".st-check input")!);
+    fireEvent.click(ui.getByText(zh.st.apply));
+
+    await waitFor(() => expect(ui.getByRole("alert")).toBeTruthy());
+    expect(ui.container.querySelector<HTMLInputElement>(".st-check input")!.checked).toBe(false);
+  });
+
   it("不適用時回報 0（單帳號使用者的設定頁不該掛著待處理數字）", async () => {
     const onPendingChange = vi.fn<(n: number) => void>();
     const ui = renderSettings({ accounts: { work: accounts.work }, onPendingChange });

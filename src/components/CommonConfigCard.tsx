@@ -31,9 +31,29 @@ interface CommonConfigCardProps {
   onPendingChange?: (count: number) => void;
 }
 
-// 備份檔名樣式（後端 `common_config._backup`：`<原名>.fledge-backup-<時間戳>`）。
-// 授權前要讓使用者看得到「不是直接刪掉」，時間戳到套用當下才知道，故顯示樣式而非實名。
-const BACKUP_PATTERN = "*.fledge-backup-YYYYMMDD-HHMMSS";
+// 備份檔名樣式（後端 `common_config._backup`：`<原名>.fledge-backup-<時間戳>`，撞名時再加 `-N`
+// 序號免得吃掉舊備份）。授權前要讓使用者看得到「不是直接刪掉」，時間戳到套用當下才知道，
+// 故顯示樣式而非實名；`[-N]` 那段照實列出，不然撞名時畫面說的檔名就是假的（Codex R1 #4）。
+const BACKUP_PATTERN = "*.fledge-backup-YYYYMMDD-HHMMSS[-N]";
+
+type AuthMap = Record<string, { account: string; entry: string }>;
+
+/** 依最新一輪 plan 篩掉已經失效的逐項授權。
+ *
+ * **授權的有效期綁在「這一次的衝突」上**：某項一旦不再 `needs_overwrite`，那次勾選就結束了。
+ * 少了這一步，「衝突 → 被外部修成一致 → 內容又被改成不同」的來回會讓畫面以**舊授權**預先打勾，
+ * 使用者於是在沒有重新看過內容的情況下授權覆蓋（Codex R1 High）。
+ *
+ * 沒有變動時回傳原本的引用——這個函式跑在 effect 裡，回傳新物件會讓它自己再觸發一次。 */
+function pruneAuthorized(current: AuthMap, ops: CommonConfigOperation[] | undefined): AuthMap {
+  const keys = Object.keys(current);
+  if (keys.length === 0) return current;
+  const kept = keys.filter((k) =>
+    (ops ?? []).some((o) => `${o.account}/${o.entry}` === k && o.needs_overwrite),
+  );
+  if (kept.length === keys.length) return current;
+  return Object.fromEntries(kept.map((k) => [k, current[k]]));
+}
 
 // 狀態點與 chip 共用一組色調（demo 的視覺語彙：綠＝就緒、灰＝待辦、琥珀＝會動到既有東西）
 type Tone = "ok" | "todo" | "warn";
@@ -134,7 +154,7 @@ export function CommonConfigCard({
   // 設定頁版的逐項授權。以 `(account, entry)` 為單位而非裸 entry 名（ADR-0002）：多 target 時
   // 裸名會讓「授權 A 帳號覆蓋 CLAUDE.md」連帶炸掉 B 帳號的。存 pair 物件而不是把 key 拆回來，
   // 免得帳號 key 或項目名含分隔字元時解析錯。
-  const [authorized, setAuthorized] = useState<Record<string, { account: string; entry: string }>>({});
+  const [authorized, setAuthorized] = useState<AuthMap>({});
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -244,6 +264,13 @@ export function CommonConfigCard({
   }, [ctx]);
 
   useEffect(() => { load(); }, [load]);
+
+  // 每接受一輪新的偵測結果就重篩授權（手動重新檢查、apply 後的自動重測都算）。
+  // ctx 沒變也要篩：同一組帳號裡，某項的衝突可能消失又出現，那是兩次不同的衝突。
+  useEffect(() => {
+    setAuthorized((a) => pruneAuthorized(a, detected?.plan?.operations));
+  }, [detected]);
+
   useEffect(() => {
     mounted.current = true;   // StrictMode 會 mount→cleanup→再 mount，這裡要重設回來
     return () => {
@@ -261,19 +288,20 @@ export function CommonConfigCard({
     const myCtx = ctx;
     setBusy(true);
     setError(null);
+    // 精靈只做非破壞性操作（spec-b4 定案 8）：needs_overwrite 的項目後端會回 conflict 不動。
+    // 設定頁版才送授權，且只送**最新一輪 plan 仍然需要授權**的項目——重新偵測後那一項可能
+    // 已經不衝突了（別人改過），照送等於授權一個使用者沒看到的現況
+    const overwrite = allowOverwrite
+      ? Object.values(authorized).filter((a) =>
+          ops.some((o) => o.account === a.account && o.entry === a.entry && o.needs_overwrite),
+        )
+      : [];
     try {
       const list = await commonConfigApply(port, {
         source,
         targets,
         entries: COMMON_CONFIG_ENTRIES,
-        // 精靈只做非破壞性操作（spec-b4 定案 8）：needs_overwrite 的項目後端會回 conflict 不動。
-        // 設定頁版才送授權，且只送**最新一輪 plan 仍然需要授權**的項目——重新偵測後那一項可能
-        // 已經不衝突了（別人改過），照送等於授權一個使用者沒看到的現況
-        overwrite: allowOverwrite
-          ? Object.values(authorized).filter((a) =>
-              ops.some((o) => o.account === a.account && o.entry === a.entry && o.needs_overwrite),
-            )
-          : [],
+        overwrite,
       });
       // 卸載也要擋：`ctxRef` 不會因為 unmount 而改變，只看它的話卸載後還會再發一次
       // checkDir／plan 請求（React 忽略 setState，但網路與檔案探測是真的跑了，Codex R3 ③）
@@ -293,7 +321,19 @@ export function CommonConfigCard({
       setError(describeError(e));
     } finally {
       // busy 一律解除（連作廢的那一輪也是）——不解除按鈕會永久停用到切頁重掛（票 25 R4）
-      if (mounted.current) setBusy(false);
+      if (mounted.current) {
+        setBusy(false);
+        // **授權是一次性的**：送出去就用掉了，成功失敗都算，連線錯誤也算（請求可能已經到了後端）。
+        // 失敗時留著勾選，等於讓下一次套用沿用「對舊內容的授權」去蓋掉新內容——`stale` 的定義
+        // 正是「寫入前發現內容又變了」。要重試就重新勾一次。
+        if (overwrite.length > 0) {
+          setAuthorized((a) => {
+            const next = { ...a };
+            for (const o of overwrite) delete next[`${o.account}/${o.entry}`];
+            return next;
+          });
+        }
+      }
     }
   };
 
@@ -336,16 +376,19 @@ export function CommonConfigCard({
       ? { key: `results.${res.outcome}`, tone: OUTCOME_TONE[res.outcome] }
       : chipFor(op);
     const key = `${op.account}/${op.entry}`;
-    // 設定頁版：需授權的項目用勾選框取代 chip——「保留不動」在這裡是可以推翻的，
-    // 給一個沒有動作的 chip 等於把唯一的出口藏起來。已經套用過的那一輪結果優先顯示。
-    const askAuth = allowOverwrite && op.needs_overwrite && res == null;
+    // 設定頁版：需授權的項目給勾選框——「保留不動」在這裡是可以推翻的，給一個沒有動作的 chip
+    // 等於把唯一的出口藏起來。**結果 chip 與勾選框並存**：上一次沒做成（stale／failed）時仍然
+    // 需要重新授權才能重試，只留結果 chip 會讓那一列再也回不到可授權狀態（授權用過即失效）。
+    const askAuth = allowOverwrite && op.needs_overwrite;
     return (
       <div key={key} className="b4-item">
         <span className={`b4-dot ${chip.tone}`} />
         <span className="b4-item-name">{op.entry}</span>
         <span className="b4-item-meta">{t(STATE_TEXT[op.state], { source })}</span>
         <span className="b4-item-right">
-          {askAuth ? (
+          {/* 有上一輪結果就先說結果（做成了什麼／為什麼沒做成），沒有結果才說「將執行的動作」 */}
+          {(res != null || !askAuth) && <span className={`b4-chip ${chip.tone}`}>{t(chip.key)}</span>}
+          {askAuth && (
             <label className="st-check">
               <input
                 type="checkbox"
@@ -361,8 +404,6 @@ export function CommonConfigCard({
               />
               <span>{t("st.replaceWith", { source })}</span>
             </label>
-          ) : (
-            <span className={`b4-chip ${chip.tone}`}>{t(chip.key)}</span>
           )}
         </span>
       </div>
