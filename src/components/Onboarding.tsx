@@ -27,6 +27,7 @@ export function Onboarding({ onClose }: OnboardingProps) {
   const { t } = useTranslation("onboarding");
   const port = useAppStore((s) => s.port);
   const config = useAppStore((s) => s.config);
+  const projects = useAppStore((s) => s.projects);
   const completeOnboarding = useAppStore((s) => s.completeOnboarding);
   const loadConfig = useAppStore((s) => s.loadConfig); // onboard 失敗時向後端對帳落檔狀態
   // 首次時 config 為 in-memory DEFAULT（accounts = work/personal）
@@ -141,8 +142,20 @@ export function Onboarding({ onClose }: OnboardingProps) {
     }
   };
 
-  const totalProjects = draftRoots.reduce((s, r) => s + r.count, 0);
-  const distinctAccounts = new Set(draftRoots.map((r) => r.account)).size;
+  // 落檔後要顯示的是**設定檔裡已經有的**根目錄：`draftRoots` 只裝「這一次新加的」，重跑引導
+  // （票 29 的入口）時必然是空的——只認它會讓根目錄頁變成「設定檔已建立」配一張空清單。
+  // 專案數取自 store 已載入的專案（依所屬 root 歸屬），不必為了顯示再掃一次。
+  const savedRoots: DraftRoot[] = (config?.roots ?? []).map((r) => ({
+    path: r.path,
+    account: r.default_account,
+    count: projects.filter((p) => p.root === r.path).length,
+  }));
+  // 首次啟動時 draft 有內容就用 draft（那才有 scan-preview 的即時計數），落檔後回頭看也還是它；
+  // 重跑引導沒有 draft，就顯示設定檔的內容
+  const shownRoots = draftRoots.length > 0 ? draftRoots : savedRoots;
+
+  const totalProjects = shownRoots.reduce((s, r) => s + r.count, 0);
+  const distinctAccounts = new Set(shownRoots.map((r) => r.account)).size;
 
   return (
     <div className="ob-overlay" ref={overlayRef}>
@@ -209,7 +222,7 @@ export function Onboarding({ onClose }: OnboardingProps) {
               </div>
 
               {/* 已加入的根目錄列表；落檔後純顯示——改動要走設定頁，不再有第二次 onboard */}
-              {draftRoots.map((r) => (
+              {shownRoots.map((r) => (
                 <div key={r.path} className="ob-row">
                   <span className="ob-row-path">{r.path}</span>
                   <select
@@ -256,7 +269,7 @@ export function Onboarding({ onClose }: OnboardingProps) {
                 <button onClick={prev} className="ob-btn-ghost">{t("common.prev")}</button>
                 <button
                   onClick={saveRootsAndContinue}
-                  disabled={busy || draftRoots.length === 0}
+                  disabled={busy || (!configCreated && draftRoots.length === 0)}
                   className="ob-btn"
                 >{configCreated ? t("common.next") : t("roots.next")}</button>
               </div>
@@ -305,7 +318,7 @@ export function Onboarding({ onClose }: OnboardingProps) {
                 <Trans
                   t={t}
                   i18nKey="done.summary"
-                  values={{ projects: totalProjects, roots: draftRoots.length, accounts: distinctAccounts }}
+                  values={{ projects: totalProjects, roots: shownRoots.length, accounts: distinctAccounts }}
                 />
               </p>
               <p className="ob-sub">{t("done.hint")}</p>

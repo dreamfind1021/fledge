@@ -197,6 +197,37 @@ describe("Onboarding 精靈外殼", () => {
     expect(ui.queryByText(zh.sys.h)).toBeNull();
   });
 
+  // 重跑引導（票 29 的入口）：設定檔已存在時進精靈。`draftRoots` 是「這一次新加的」，重跑時
+  // 必然是空的——拿它當清單來源與按鈕條件，會讓根目錄頁變成「設定檔已建立」配一張空清單，
+  // 且「下一步」永遠停用＝精靈卡在第二頁，後面五頁全部到不了（2026-07-27 驗收實測）
+  it("重跑引導：根目錄頁列出設定檔既有的根目錄，下一步可以往前走", async () => {
+    useAppStore.setState({
+      config: {
+        ...baseConfig,
+        is_first_run: false,
+        roots: [{ path: "/Users/x/work", default_account: "work" }],
+      },
+      projects: [
+        { name: "a", path: "/Users/x/work/a", account: "work", source: "root", root: "/Users/x/work", recent: null },
+        { name: "b", path: "/Users/x/work/b", account: "work", source: "root", root: "/Users/x/work", recent: null },
+      ],
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    ui.getByText(zh.welcome.cta).click();
+    await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
+
+    expect(ui.getByText(zh.roots.created)).toBeTruthy();
+    const row = ui.getByText("/Users/x/work").closest(".ob-row")!;
+    expect(row.textContent).toContain("2"); // 專案數取自已載入的專案，不用再掃一次
+
+    const next = ui.getByText(zh.common.next) as HTMLButtonElement;
+    expect(next.disabled).toBe(false);
+    fireEvent.click(next);
+
+    await waitFor(() => expect(ui.getByText(zh.env.h)).toBeTruthy());
+    expect(onboardCalls).toBe(0); // 重跑不得再打 onboard（first-run only，會撞 409）
+  });
+
   it("進度條格數跟著帳號數：雙帳號七格、單帳號六格", async () => {
     const dual = render(<Onboarding onClose={onClose} />);
     expect(dual.container.querySelectorAll(".ob-step-bar")).toHaveLength(7);

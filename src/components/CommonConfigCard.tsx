@@ -22,8 +22,38 @@ interface AccountInfo {
 interface CommonConfigCardProps {
   port: number | null;
   accounts: Record<string, AccountInfo>;
-  onPrev: () => void;
-  onNext: () => void;
+  // 精靈才有導覽列；設定頁版嵌在 modal 裡，兩個都不給（票 29）
+  onPrev?: () => void;
+  onNext?: () => void;
+  /** 設定頁版：逐項授權覆蓋既有內容。精靈一律不給（spec-b4 定案 8），這是兩處掛載唯一的行為差異。 */
+  allowOverwrite?: boolean;
+  /** 回報「還沒就緒的項目數」給呼叫端（設定頁摺疊標題上的待處理數）。 */
+  onPendingChange?: (count: number) => void;
+}
+
+// 備份檔名樣式（後端 `common_config._backup`：`<原名>.fledge-backup-<時間戳>`，撞名時再加 `-N`
+// 序號免得吃掉舊備份）。授權前要讓使用者看得到「不是直接刪掉」，時間戳到套用當下才知道，
+// 故顯示樣式而非實名；`[-N]` 那段照實列出，不然撞名時畫面說的檔名就是假的（Codex R1 #4）。
+const BACKUP_PATTERN = "*.fledge-backup-YYYYMMDD-HHMMSS[-N]";
+
+type AuthMap = Record<string, { account: string; entry: string }>;
+
+/** 依最新一輪 plan 篩掉已經失效的逐項授權。
+ *
+ * **授權的有效期綁在「這一次的衝突」上**：某項一旦不再 `needs_overwrite`，那次勾選就結束了。
+ * 少了這一步，「衝突 → 被外部修成一致 → 內容又被改成不同」的來回會讓畫面以**舊授權**預先打勾，
+ * 使用者於是在沒有重新看過內容的情況下授權覆蓋（Codex R1 High）。
+ *
+ * 沒有變動時回傳**原本的引用**：`setAuthorized` 收到同一個物件時 React 會跳過重繪
+ * （不是為了避免 effect 自我觸發——它的依賴是 `detected`，換物件也不會再觸發它一次）。 */
+function pruneAuthorized(current: AuthMap, ops: CommonConfigOperation[] | undefined): AuthMap {
+  const keys = Object.keys(current);
+  if (keys.length === 0) return current;
+  const kept = keys.filter((k) =>
+    (ops ?? []).some((o) => `${o.account}/${o.entry}` === k && o.needs_overwrite),
+  );
+  if (kept.length === keys.length) return current;
+  return Object.fromEntries(kept.map((k) => [k, current[k]]));
 }
 
 // 狀態點與 chip 共用一組色調（demo 的視覺語彙：綠＝就緒、灰＝待辦、琥珀＝會動到既有東西）
@@ -105,7 +135,14 @@ function chipFor(op: CommonConfigOperation): Chip {
  *   向設定頁——首次引導的使用者最不清楚後果，逐項授權留給票 29 的設定頁版。
  * - **目錄不存在的帳號不列為 target**。`apply` 會 `mkdir` target dir，照送等於替只用一個帳號
  *   的使用者建出他沒要求的帳號目錄。全部都不存在時整張卡「不適用」。 */
-export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfigCardProps) {
+export function CommonConfigCard({
+  port,
+  accounts,
+  onPrev,
+  onNext,
+  allowOverwrite = false,
+  onPendingChange,
+}: CommonConfigCardProps) {
   const { t, i18n } = useTranslation("onboarding");
   // 一輪偵測的完整結果，**三個欄位一起換**。拆成獨立 state 時它們不是原子的：plan 失敗只清掉
   // plan、targets 還留著上一輪的 []，畫面就同時出現錯誤訊息與一張說「不適用」的卡（Codex R3 ⑤）
@@ -115,6 +152,10 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   // 語言就會重建它，那時清掉剛套用的結果毫無道理（Codex R2 ③）
   const [results, setResults] =
     useState<{ ctx: string; map: Record<string, CommonConfigOpResult> } | null>(null);
+  // 設定頁版的逐項授權。以 `(account, entry)` 為單位而非裸 entry 名（ADR-0002）：多 target 時
+  // 裸名會讓「授權 A 帳號覆蓋 CLAUDE.md」連帶炸掉 B 帳號的。存 pair 物件而不是把 key 拆回來，
+  // 免得帳號 key 或項目名含分隔字元時解析錯。
+  const [authorized, setAuthorized] = useState<AuthMap>({});
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -219,9 +260,22 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     // 用 functional update 比對而非無條件清除：apply 剛寫進來的結果屬於當前 ctx，
     // 而 A→B→A（帳號改掉又改回來）時舊 outcome 不該復活（Codex R3 ②）
     setResults((r) => (r != null && r.ctx !== ctx ? null : r));
+    // 授權是對「這一組帳號的這些項目」給的，換了上下文就不能沿用——破壞性操作尤其不能靠猜
+    setAuthorized({});
   }, [ctx]);
 
   useEffect(() => { load(); }, [load]);
+
+  // 每接受一輪新的偵測結果就重篩授權（手動重新檢查、apply 後的自動重測都算）。
+  // ctx 沒變也要篩：同一組帳號裡，某項的衝突可能消失又出現，那是兩次不同的衝突。
+  //
+  // **必須是 layout effect**：passive effect 要等 paint 之後才跑，於是「新 plan 已經畫出來、
+  // 套用鍵也解除停用」與「舊授權還沒篩掉」之間有一個真實窗口，那一瞬間按下套用就會送出舊授權
+  // （Codex R2 High）。授權是破壞性操作的閘門，不能靠「使用者大概沒那麼快」。
+  useLayoutEffect(() => {
+    setAuthorized((a) => pruneAuthorized(a, detected?.plan?.operations));
+  }, [detected]);
+
   useEffect(() => {
     mounted.current = true;   // StrictMode 會 mount→cleanup→再 mount，這裡要重設回來
     return () => {
@@ -239,13 +293,20 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     const myCtx = ctx;
     setBusy(true);
     setError(null);
+    // 精靈只做非破壞性操作（spec-b4 定案 8）：needs_overwrite 的項目後端會回 conflict 不動。
+    // 設定頁版才送授權，且只送**最新一輪 plan 仍然需要授權**的項目——重新偵測後那一項可能
+    // 已經不衝突了（別人改過），照送等於授權一個使用者沒看到的現況
+    const overwrite = allowOverwrite
+      ? Object.values(authorized).filter((a) =>
+          ops.some((o) => o.account === a.account && o.entry === a.entry && o.needs_overwrite),
+        )
+      : [];
     try {
       const list = await commonConfigApply(port, {
         source,
         targets,
         entries: COMMON_CONFIG_ENTRIES,
-        // 精靈只做非破壞性操作（spec-b4 定案 8）：needs_overwrite 的項目後端會回 conflict 不動
-        overwrite: [],
+        overwrite,
       });
       // 卸載也要擋：`ctxRef` 不會因為 unmount 而改變，只看它的話卸載後還會再發一次
       // checkDir／plan 請求（React 忽略 setState，但網路與檔案探測是真的跑了，Codex R3 ③）
@@ -265,7 +326,22 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
       setError(describeError(e));
     } finally {
       // busy 一律解除（連作廢的那一輪也是）——不解除按鈕會永久停用到切頁重掛（票 25 R4）
-      if (mounted.current) setBusy(false);
+      if (mounted.current) {
+        setBusy(false);
+        // **授權是一次性的**：送出去就用掉了，成功失敗都算，連線錯誤也算（請求可能已經到了後端）。
+        // 失敗時留著勾選，等於讓下一次套用沿用「對舊內容的授權」去蓋掉新內容——`stale` 的定義
+        // 正是「寫入前發現內容又變了」。要重試就重新勾一次。
+        //
+        // 但**只能清自己那個上下文的授權**：舊 ctx 的請求回來時，使用者可能已經換了帳號並在新
+        // 上下文重新勾了同一個 pair，照刪會變成「勾了卻沒送出」（Codex R2 Medium）。
+        if (ctxRef.current === myCtx && overwrite.length > 0) {
+          setAuthorized((a) => {
+            const next = { ...a };
+            for (const o of overwrite) delete next[`${o.account}/${o.entry}`];
+            return next;
+          });
+        }
+      }
     }
   };
 
@@ -286,7 +362,27 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   const excluded = candidates.filter((k) => !(targets ?? []).includes(k));
   // 不適用卡要指出是哪個目錄卡住（candidates 全空＝只登記一個帳號，另一套文案）
   const unusableDirs = excluded.map((k) => accounts[k].config_dir).join(", ");
-  const showApply = !isNotApplicable && plan != null && canApply;
+  // 設定頁版的套用鍵一律在（那裡沒有「下一步」可以讓位，而且勾了授權才有得按會讓使用者
+  // 以為卡片壞了）；精靈版維持「有事可做才亮」的既有規則
+  const showApply = !isNotApplicable && plan != null && (allowOverwrite ? ops.length > 0 : canApply);
+  const hasNav = onPrev != null && onNext != null;
+
+  // 待處理＝還沒就緒的項目數（設定頁摺疊起來時，標題上的數字是唯一看得到的訊號）。
+  // 不適用或還沒偵測完就是 0——寧可不顯示，也不掛一個猜出來的數字。
+  const pendingCount = detected == null ? 0 : ops.filter((o) => o.state !== "ok").length;
+  useEffect(() => {
+    onPendingChange?.(pendingCount);
+  }, [pendingCount, onPendingChange]);
+
+  // 設定頁沒有換頁動作可以觸發重新偵測，卡片自己要有入口（精靈換頁時本來就會重測）。
+  // 「不適用」的卡也要有——使用者補建了帳號目錄之後，不然只能關掉設定頁再開一次。
+  const recheckButton = allowOverwrite ? (
+    <span className="b4-card-actions">
+      <button type="button" className="b4-btn-sm" onClick={load} disabled={loading || busy}>
+        {t("env.recheck")}
+      </button>
+    </span>
+  ) : null;
 
   const renderRow = (op: CommonConfigOperation) => {
     // 上下文對不上的結果直接視為不存在（換 sidecar／換帳號後那批 outcome 已經沒有意義）
@@ -297,13 +393,39 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     const chip: Chip = res
       ? { key: `results.${res.outcome}`, tone: OUTCOME_TONE[res.outcome] }
       : chipFor(op);
+    const key = `${op.account}/${op.entry}`;
+    // 設定頁版：需授權的項目給勾選框——「保留不動」在這裡是可以推翻的，給一個沒有動作的 chip
+    // 等於把唯一的出口藏起來。**結果 chip 與勾選框並存**：上一次沒做成（stale／failed）時仍然
+    // 需要重新授權才能重試，只留結果 chip 會讓那一列再也回不到可授權狀態（授權用過即失效）。
+    const askAuth = allowOverwrite && op.needs_overwrite;
     return (
-      <div key={`${op.account}/${op.entry}`} className="b4-item">
+      <div key={key} className="b4-item">
         <span className={`b4-dot ${chip.tone}`} />
         <span className="b4-item-name">{op.entry}</span>
         <span className="b4-item-meta">{t(STATE_TEXT[op.state], { source })}</span>
         <span className="b4-item-right">
-          <span className={`b4-chip ${chip.tone}`}>{t(chip.key)}</span>
+          {/* 有上一輪結果就先說結果（做成了什麼／為什麼沒做成），沒有結果才說「將執行的動作」 */}
+          {(res != null || !askAuth) && <span className={`b4-chip ${chip.tone}`}>{t(chip.key)}</span>}
+          {askAuth && (
+            <label className="st-check">
+              <input
+                type="checkbox"
+                checked={authorized[key] != null}
+                // 送出或重新偵測途中不給改：那時的勾選要嘛馬上被「送出即用掉」清掉、
+                // 要嘛被下一輪 plan 篩掉，看起來像自己跳回去
+                disabled={busy || loading}
+                onChange={(e) =>
+                  setAuthorized((a) => {
+                    const next = { ...a };
+                    if (e.target.checked) next[key] = { account: op.account, entry: op.entry };
+                    else delete next[key];
+                    return next;
+                  })
+                }
+              />
+              <span>{t("st.replaceWith", { source })}</span>
+            </label>
+          )}
         </span>
       </div>
     );
@@ -311,8 +433,13 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
 
   return (
     <div>
-      <h2 className="ob-h">{t("cc.h")}</h2>
-      <p className="ob-sub">{t("cc.sub")}</p>
+      {/* 頁標題只屬於精靈那一頁；設定頁版嵌在「開發環境」區裡，區塊自己已經有標題 */}
+      {hasNav && (
+        <>
+          <h2 className="ob-h">{t("cc.h")}</h2>
+          <p className="ob-sub">{t("cc.sub")}</p>
+        </>
+      )}
 
       {error && <div className="ob-error" role="alert">{error}</div>}
       {plan === null && !isNotApplicable && loading && <p className="ob-sub">{t("cc.checking")}</p>}
@@ -332,6 +459,7 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
                     : <Trans t={t} i18nKey="cc.naDesc" values={{ path: unusableDirs }} />}
               </p>
             </div>
+            {recheckButton}
           </div>
         </div>
       )}
@@ -350,12 +478,19 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
                   ellipsis 的窄欄，多帳號分組後會全被截掉；擺在卡頭只顯示一次且完整 */}
               <p className="b4-card-desc b4-mono">{plan.source_dir}</p>
             </div>
+            {recheckButton}
           </div>
 
-          {/* 多帳號時逐帳號分組——同一個 entry 在不同帳號可以是不同狀態，混在一張清單裡看不出誰是誰 */}
+          {/* 逐帳號分組——同一個 entry 在不同帳號可以是不同狀態，混在一張清單裡看不出誰是誰。
+              標題帶上該帳號的 `config_dir`：卡頭只講得出 source 在哪，不寫 target 的話畫面上
+              沒有任何地方能對出「這一組是哪個目錄」（票 29 驗收時使用者就問了這件事）。
+              單一 target 也照顯示——只有一組的人同樣需要知道那一組是誰。 */}
           {targets.map((key) => (
             <div key={key} className="b4-group">
-              {targets.length > 1 && <p className="b4-sec-h">{key}</p>}
+              <p className="b4-sec-h b4-group-head">
+                {key}
+                <span className="b4-group-path">{accounts[key]?.config_dir}</span>
+              </p>
               <div className="b4-list">
                 {ops.filter((o) => o.account === key).map(renderRow)}
               </div>
@@ -369,15 +504,30 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
             </p>
           )}
 
-          {/* 琥珀＝我們刻意不碰，不是錯誤。沒講清楚去哪裡處理，使用者只會看到一個沒解釋的 chip */}
+          {/* 琥珀＝我們刻意不碰，不是錯誤。精靈版沒講清楚去哪裡處理，使用者只會看到一個沒解釋的
+              chip；設定頁版就是那個「哪裡」，改成說明勾選後會發生什麼（先改名備份，不是直接刪） */}
           {hasConflict && (
-            <p className="b4-hint b4-hint-warn">{t("cc.conflictHint", { source })}</p>
+            <p className="b4-hint b4-hint-warn">
+              {allowOverwrite
+                ? <Trans t={t} i18nKey="st.backupHint" values={{ name: BACKUP_PATTERN }} />
+                : t("cc.conflictHint", { source })}
+            </p>
           )}
           <p className="b4-hint"><Trans t={t} i18nKey="cc.advHint" /></p>
           {allReady && <p className="b4-hint">{t("cc.nothingToDo")}</p>}
         </div>
       )}
 
+      {/* 設定頁版沒有導覽列，套用鍵改掛在卡片下方 */}
+      {!hasNav && showApply && (
+        <div className="b4-card-foot">
+          <button onClick={apply} disabled={busy || loading} className="b4-btn-sm primary">
+            {t("st.apply")}
+          </button>
+        </div>
+      )}
+
+      {hasNav && (
       <div className="ob-actions">
         <button onClick={onPrev} className="ob-btn-ghost">{t("common.prev")}</button>
         <div className="ob-actions-right">
@@ -391,6 +541,7 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

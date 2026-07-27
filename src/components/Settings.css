@@ -343,3 +343,97 @@
   flex: 0 0 110px;
   font-family: var(--font-ui);
 }
+
+/* ══════════ 「開發環境」摺疊區（票 29）══════════ */
+/* 內容是精靈那兩張卡（b4-* 樣式住在 Onboarding.css），這裡只負責摺疊殼與設定頁專屬的兩件事 */
+
+.st-fold {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-top: 18px;
+  overflow: hidden;
+}
+
+.st-fold-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 13px;
+  background: var(--surface-2);
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  text-align: left;
+}
+
+.st-fold-h:hover {
+  background: var(--hover);
+}
+
+.st-fold-h:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* 收合時 caret 指向右邊（展開＝朝下，與檔案樹一致） */
+.st-fold-caret {
+  transform: rotate(-90deg);
+}
+
+.st-fold-h .b4-chip {
+  margin-left: auto;
+}
+
+.st-fold-body {
+  padding: 13px;
+  border-top: 1px solid var(--border);
+}
+
+/* 逐項授權的勾選框：琥珀＝會動到既有內容，與卡片內其他警示色一致 */
+.st-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--warning);
+  cursor: pointer;
+}
+
+.st-check input {
+  accent-color: var(--warning);
+  cursor: pointer;
+}
+
+/* 卡片下方的套用鍵（設定頁版沒有精靈的導覽列） */
+.b4-card-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 11px;
+}
+
+/* 內文裡的行內按鈕（「重跑引導」）：長得像連結，但確實是按鈕 */
+.st-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--primary);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.st-link:hover {
+  filter: brightness(1.1);
+}
+
+/* 窄 modal（580px）下，卡片列的右側（chip／勾選框／按鈕）擠不下時換行而不是溢出。
+   只在設定頁生效——精靈的卡片寬得多，不需要改變它的版面 */
+.st-fold-body .b4-item {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
