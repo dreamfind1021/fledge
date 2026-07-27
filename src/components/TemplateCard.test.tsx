@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act } from "react";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
@@ -82,14 +83,15 @@ describe("TemplateCard 範本卡（精靈版）", () => {
     const ui = renderCard();
     await settled(ui);
 
-    expect(rows(ui)[0].textContent).toContain("Project starter");
-    expect(rows(ui)[1].textContent).toContain("Knowledge base seed");
+    // 名稱與說明都走 catalog：後端的 label／description 一律英文，拿它當常態文案會讓中文版露出英文
+    expect(rows(ui)[0].textContent).toContain(zh.sys.tpl["project-starter"].name);
+    expect(rows(ui)[1].textContent).toContain(zh.sys.tpl["kms-seed"].name);
+    expect(ui.container.textContent).not.toContain("Project starter");
     expect(rows(ui)[1].textContent).toContain(zh.sys.notBundled);
     expect(rows(ui)[1].querySelector(".b4-dot")?.className).toContain("na");
     // 未內建的範本按了也只會拿到 template_unavailable，不給按才誠實
     expect(ui.getAllByText(zh.sys.deploy)).toHaveLength(1);
-    // 說明文案以 id 對 catalog，不用後端的英文 description
-    expect(rows(ui)[0].textContent).toContain(zh.sys.tpl["project-starter"]);
+    expect(rows(ui)[0].textContent).toContain(zh.sys.tpl["project-starter"].desc);
     expect(ui.container.textContent).not.toContain("en fallback");
   });
 
@@ -176,6 +178,69 @@ describe("TemplateCard 範本卡（精靈版）", () => {
     expect((ui.getByText(zh.sys.deploy) as HTMLButtonElement).disabled).toBe(true);
     expect(ui.getByText(zh.sys.needDest)).toBeTruthy();
     expect(templatesPlan).not.toHaveBeenCalled();
+  });
+
+  // 選過的專案可能因為移除 root／重新掃描而從清單消失。若不把它留在 options 裡，
+  // select 會找不到相符項而顯示空白，部署卻仍寫往那個看不見的舊路徑
+  it("選過的專案從清單消失：仍留在下拉裡，畫面與實際部署目的地一致", async () => {
+    const ui = renderCard();
+    await settled(ui);
+
+    const select = ui.container.querySelector("select")!;
+    fireEvent.change(select, { target: { value: "/Users/x/work/llm-wiki" } });
+    await waitFor(() => expect(templatesPlan).toHaveBeenLastCalledWith(1234, "project-starter", "/Users/x/work/llm-wiki"));
+
+    // 專案清單重載後少了剛選的那個
+    await act(async () => {
+      useAppStore.setState({ projects: [project("fledge", "/Users/x/work/fledge")] });
+    });
+
+    expect(select.value).toBe("/Users/x/work/llm-wiki");
+    expect([...select.querySelectorAll("option")].map((o) => o.value)).toContain("/Users/x/work/llm-wiki");
+    fireEvent.click(ui.getByText(zh.sys.deploy));
+    await waitFor(() =>
+      expect(templatesDeploy).toHaveBeenCalledWith(1234, "project-starter", "/Users/x/work/llm-wiki"),
+    );
+  });
+
+  // 換目的地會讓兩輪預覽重疊：晚到的舊回應照樣寫進 state 的話，畫面會顯示上一個目的地的狀態
+  it("舊目的地的預覽晚回：不覆蓋新目的地的畫面，舊逐檔結果也不留著", async () => {
+    let releaseOld = (_p: TemplatePlan) => {};
+    templatesPlan.mockImplementationOnce(() => new Promise<TemplatePlan>((resolve) => { releaseOld = resolve; }));
+    const ui = renderCard();
+    await settled(ui);
+    await waitFor(() => expect(templatesPlan).toHaveBeenCalledTimes(1)); // 第一輪懸在半空
+
+    // 先部署一次（第一個目的地）留下逐檔結果，再換目的地
+    fireEvent.click(ui.getByText(zh.sys.deploy));
+    await waitFor(() => expect(ui.getByText(zh.sys.result.created)).toBeTruthy());
+
+    templatesPlan.mockResolvedValue(plan({ destination: "/Users/x/work/llm-wiki", state: "complete" }));
+    fireEvent.change(ui.container.querySelector("select")!, { target: { value: "/Users/x/work/llm-wiki" } });
+    await waitFor(() => expect(rows(ui)[0].textContent).toContain(zh.sys.state.complete));
+    // 換目的地＝上一個目的地的逐檔結果不再描述畫面上的東西
+    expect(ui.queryByText(zh.sys.result.created)).toBeNull();
+
+    await act(async () => { releaseOld(plan({ state: "not_installed" })); }); // 舊的這才回來
+    expect(rows(ui)[0].textContent).toContain(zh.sys.state.complete);
+    expect(rows(ui)[0].textContent).not.toContain(zh.sys.state.not_installed);
+  });
+
+  // self-use build 可能同時有三個可用範本；一個壞掉不該讓另外兩個成功的狀態一起消失
+  it("多個可用範本中一個預覽失敗：其餘照常顯示狀態，錯誤另外講", async () => {
+    fetchTemplates.mockResolvedValue([
+      TEMPLATES[0],
+      { ...TEMPLATES[1], available: true },
+    ]);
+    templatesPlan.mockImplementation(async (_p, template) => {
+      if (template === "kms-seed") throw new SetupError("template_unavailable", 400);
+      return plan();
+    });
+    const ui = renderCard();
+    await settled(ui);
+
+    await waitFor(() => expect(ui.getByText(zh.errors.template_unavailable)).toBeTruthy());
+    expect(rows(ui)[0].textContent).toContain(zh.sys.state.not_installed); // 好的那個還在
   });
 
   it("清單載入失敗：顯示通用文案，不外洩 HTTP 細節", async () => {

@@ -100,9 +100,18 @@
     "kmsPlaceholder": "/絕對路徑/到/知識庫",
     "tplTitle": "導入範本",
     "tpl": {
-      "project-starter": "新專案的 CLAUDE.md 與 docs/ 骨架，內容通用可自行改寫。",
-      "dev-methodology": "個人開發方法論文件集。",
-      "kms-seed": "知識庫目錄骨架。"
+      "project-starter": {
+        "name": "新專案骨架",
+        "desc": "新專案的 CLAUDE.md 與 docs/ 骨架，內容通用可自行改寫。"
+      },
+      "dev-methodology": {
+        "name": "開發方法論",
+        "desc": "個人開發方法論文件集。"
+      },
+      "kms-seed": {
+        "name": "知識庫骨架",
+        "desc": "知識庫目錄骨架。"
+      }
     },
     "notBundled": "未內建",
     "state": {
@@ -116,7 +125,8 @@
       "skipped": "已存在，保留原檔",
       "conflict": "同名項目型別不符，未處理",
       "stale": "狀態已變動，未處理",
-      "failed": "處理失敗"
+      "failed": "處理失敗",
+      "unknown": "未知的處理結果"
     },
     "deployTo": "部署到",
     "otherLocation": "其他位置…",

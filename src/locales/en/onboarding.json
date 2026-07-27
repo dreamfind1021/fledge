@@ -100,9 +100,18 @@
     "kmsPlaceholder": "/absolute/path/to/knowledge-base",
     "tplTitle": "Deploy a template",
     "tpl": {
-      "project-starter": "A CLAUDE.md and docs/ skeleton for a new project — generic, meant to be edited.",
-      "dev-methodology": "Personal development methodology documents.",
-      "kms-seed": "Knowledge base directory skeleton."
+      "project-starter": {
+        "name": "Project starter",
+        "desc": "A CLAUDE.md and docs/ skeleton for a new project — generic, meant to be edited."
+      },
+      "dev-methodology": {
+        "name": "Development methodology",
+        "desc": "Personal development methodology documents."
+      },
+      "kms-seed": {
+        "name": "Knowledge base seed",
+        "desc": "Knowledge base directory skeleton."
+      }
     },
     "notBundled": "Not bundled",
     "state": {
@@ -116,7 +125,8 @@
       "skipped": "Already there — kept as is",
       "conflict": "Name taken by a different kind of item — left alone",
       "stale": "Changed while deploying — left alone",
-      "failed": "Failed"
+      "failed": "Failed",
+      "unknown": "Unknown result"
     },
     "deployTo": "Deploy to",
     "otherLocation": "Somewhere else…",

@@ -34,13 +34,17 @@ const STATE_CHIP: Record<TemplateState, { key: string; tone: ChipTone }> = {
   conflict: { key: "sys.state.conflict", tone: "warn" },
 };
 
-const OUTCOME_TONE: Record<TemplateOutcome, ChipTone> = {
-  created: "ok",
-  skipped: "todo",   // 「已存在，保留原檔」是永不覆蓋的正常結果，不是失敗
-  conflict: "warn",
-  stale: "warn",
-  failed: "warn",
+// 逐檔結果 → chip。查不到（後端新增了 outcome、前端 catalog 還沒跟上）時退到通用文案：
+// 動態組 `sys.result.${outcome}` 會在那時把 i18n key 原文顯示給使用者（Codex R1 #5）
+const OUTCOME_CHIP: Record<TemplateOutcome, { key: string; tone: ChipTone }> = {
+  created: { key: "sys.result.created", tone: "ok" },
+  // 「已存在，保留原檔」是永不覆蓋的正常結果，不是失敗
+  skipped: { key: "sys.result.skipped", tone: "todo" },
+  conflict: { key: "sys.result.conflict", tone: "warn" },
+  stale: { key: "sys.result.stale", tone: "warn" },
+  failed: { key: "sys.result.failed", tone: "warn" },
 };
+const UNKNOWN_OUTCOME: { key: string; tone: ChipTone } = { key: "sys.result.unknown", tone: "warn" };
 
 // 判別碼 → catalog key。**刻意用顯式表而非 `errors.${code}` 動態查**（CommonConfigCard 用動態查）：
 // `probe_failed` 在共通設置卡是「讀不到帳號的設定目錄」，在這裡是「讀不到部署目的地」，
@@ -68,8 +72,10 @@ export function TemplateCard({ port }: TemplateCardProps) {
   const projects = useAppStore((s) => s.projects);
 
   const [templates, setTemplates] = useState<TemplateInfo[] | null>(null);
-  const [chosen, setChosen] = useState<string | null>(null);   // null＝跟著預設（第一個掃到的專案）
-  const [custom, setCustom] = useState<string | null>(null);   // picker 選的位置，要留在下拉裡
+  // null＝跟著預設（第一個掃到的專案）。使用者選過的路徑（專案或 picker）一律留在下拉裡，
+  // 即使它後來從 projects 消失（移除 root／重新掃描）——否則 select 找不到相符的 option 會顯示空白，
+  // 部署卻仍寫往那個看不見的舊路徑（Codex R1 #2）
+  const [chosen, setChosen] = useState<string | null>(null);
   // 預覽與逐檔結果都連同「產生它們的資料上下文」一起存：換 sidecar／換目的地就整批失效
   // （比照 CommonConfigCard 的 ctx——只比對相等的話 A→B→A 會讓舊結果復活）
   const [plans, setPlans] = useState<{ ctx: string; map: Record<string, TemplatePlan> } | null>(null);
@@ -120,16 +126,18 @@ export function TemplateCard({ port }: TemplateCardProps) {
     const myId = ++reqId.current;
     const myCtx = ctx;
     setError(null);
-    try {
-      const list = await Promise.all(available.map((tpl) => templatesPlan(port, tpl.id, dest)));
-      if (reqId.current !== myId) return;
-      setPlans({ ctx: myCtx, map: Object.fromEntries(available.map((tpl, i) => [tpl.id, list[i]])) });
-    } catch (e) {
-      if (reqId.current !== myId) return;
-      // 預覽沒完成就沒有可信的狀態可顯示：留著上一輪的會變成「錯誤訊息配一組過期 chip」
-      setPlans(null);
-      setError(describeError(e));
-    }
+    // 逐項 settled 而非 all：self-use build 可能同時有三個可用範本，其中一個的 manifest 壞掉
+    // 不該讓另外兩個成功的狀態一起消失（Codex R1 #3）。壞掉的那個沒有 chip，錯誤另外講。
+    const settled = await Promise.allSettled(available.map((tpl) => templatesPlan(port, tpl.id, dest)));
+    if (reqId.current !== myId) return;
+    const map: Record<string, TemplatePlan> = {};
+    available.forEach((tpl, i) => {
+      const r = settled[i];
+      if (r.status === "fulfilled") map[tpl.id] = r.value;
+    });
+    setPlans({ ctx: myCtx, map });
+    const failed = settled.find((r) => r.status === "rejected");
+    if (failed) setError(describeError(failed.reason));
   }, [port, dest, templates, ctx, describeError]);
 
   // deploy 回來時要比對「畫面現在的上下文」，而它 closure 裡的 ctx 是送出當下那一版，故只能靠 ref。
@@ -186,13 +194,14 @@ export function TemplateCard({ port }: TemplateCardProps) {
     const picked = await pickDirectory();
     // 取消 → 什麼都不動：select 綁的是 dest，會自己回到原本那一個
     if (!picked) return;
-    setCustom(picked);
     setChosen(picked);
   };
 
+  // 選過的路徑一定要有對應的 option（picker 選的位置，或後來從 projects 消失的專案），
+  // 否則 select 顯示空白、部署卻寫往那個看不見的路徑
   const destOptions = projects.map((p) => ({ value: p.path, label: `${p.name} — ${p.path}` }));
-  if (custom != null && !destOptions.some((o) => o.value === custom)) {
-    destOptions.push({ value: custom, label: custom });
+  if (chosen != null && !destOptions.some((o) => o.value === chosen)) {
+    destOptions.push({ value: chosen, label: chosen });
   }
 
   const chipFor = (tpl: TemplateInfo): { key: string; tone: ChipTone } | null => {
@@ -215,13 +224,18 @@ export function TemplateCard({ port }: TemplateCardProps) {
               <div key={tpl.id} className="b4-row-group">
                 <div className="b4-item">
                   <span className={`b4-dot ${tpl.available ? "ok" : "na"}`} />
+                  {/* 名稱與說明都以 id 對 catalog；catalog 沒有這個 id（後端新增了範本）才退後端的
+                      `label`／`description`——後端一律回英文（§4.6.13），拿它當常態文案會讓中文版
+                      出現英文範本名（Codex R1 #1） */}
                   <div className="b4-tpl-text">
-                    <span className="b4-item-name">{tpl.label}</span>
-                    {/* 說明以 id 對 catalog；catalog 沒有這個 id（後端新增了範本）才退後端的英文
-                        description——後端一律回英文（§4.6.13），拿它當常態文案會露出未翻譯的字串 */}
+                    <span className="b4-item-name">
+                      {i18n.exists(`sys.tpl.${tpl.id}.name`, { ns: "onboarding" })
+                        ? t(`sys.tpl.${tpl.id}.name`)
+                        : tpl.label}
+                    </span>
                     <p className="b4-card-desc">
-                      {i18n.exists(`sys.tpl.${tpl.id}`, { ns: "onboarding" })
-                        ? t(`sys.tpl.${tpl.id}`)
+                      {i18n.exists(`sys.tpl.${tpl.id}.desc`, { ns: "onboarding" })
+                        ? t(`sys.tpl.${tpl.id}.desc`)
                         : tpl.description}
                     </p>
                   </div>
@@ -240,14 +254,15 @@ export function TemplateCard({ port }: TemplateCardProps) {
                 {/* 逐檔結果（部署後）。永不覆蓋是後端的不變式，這裡只如實呈現每個檔案的下場 */}
                 {files && (
                   <div className="b4-files">
-                    {files.map((f) => (
-                      <div key={f.path} className="b4-file">
-                        <span className="b4-item-meta">{f.path}</span>
-                        <span className={`b4-chip ${OUTCOME_TONE[f.outcome]}`}>
-                          {t(`sys.result.${f.outcome}`)}
-                        </span>
-                      </div>
-                    ))}
+                    {files.map((f) => {
+                      const outcome = OUTCOME_CHIP[f.outcome] ?? UNKNOWN_OUTCOME;
+                      return (
+                        <div key={f.path} className="b4-file">
+                          <span className="b4-item-meta">{f.path}</span>
+                          <span className={`b4-chip ${outcome.tone}`}>{t(outcome.key)}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
