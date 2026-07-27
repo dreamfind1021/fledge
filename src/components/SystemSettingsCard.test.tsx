@@ -144,20 +144,26 @@ describe("SystemSettingsCard 系統設置頁（訂閱 + KMS 根目錄）", () =>
     expect(putKmsRoot).not.toHaveBeenCalled();
   });
 
-  it("儲存失敗：顯示指向出錯區塊的訊息、留在原頁", async () => {
-    saveSubscriptions.mockRejectedValue(new Error("HTTP 400"));
+  // 後端 400 的 FastAPI detail 是中文 prose（「monthly_cost 須為數字」），直接插進畫面等於讓英文
+  // 使用者看到中文，也違反 spec-b4 §5「後端錯誤不得直接顯示」——原始訊息只能進 console
+  it("儲存失敗：顯示指向出錯區塊的訊息、不外洩後端原文、留在原頁", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    saveSubscriptions.mockRejectedValue(new Error("monthly_cost 須為數字"));
     const ui = renderCard();
     addItem(ui);
     fillRow(ui, 0, "Claude", "200");
     next(ui);
 
-    await waitFor(() => expect(ui.getByText(/HTTP 400/)).toBeTruthy());
-    expect(ui.container.textContent).toContain(zh.errors.subs_failed.split("{{")[0]);
+    await waitFor(() => expect(ui.getByText(zh.errors.subs_failed)).toBeTruthy());
+    expect(ui.container.textContent).not.toContain("monthly_cost 須為數字");
+    expect(warn).toHaveBeenCalled(); // 原因沒有消失，只是改成只給開發者看
     expect(putKmsRoot).not.toHaveBeenCalled(); // 前一段失敗就不繼續送下一段
     expect(onNext).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
-  it("訂閱成功但 KMS 失敗：錯誤指向 KMS，不謊稱訂閱沒存進去", async () => {
+  it("訂閱成功但 KMS 失敗：明說訂閱已存進去，重試不重送訂閱", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     putKmsRoot.mockRejectedValue(new Error("HTTP 500"));
     const ui = renderCard();
     addItem(ui);
@@ -167,10 +173,40 @@ describe("SystemSettingsCard 系統設置頁（訂閱 + KMS 根目錄）", () =>
     });
     next(ui);
 
-    await waitFor(() => expect(ui.container.textContent).toContain(zh.errors.kms_failed.split("{{")[0]));
+    await waitFor(() => expect(ui.getByText(zh.errors.kms_failed_subs_saved)).toBeTruthy());
     expect(saveSubscriptions).toHaveBeenCalledTimes(1);
-    expect(ui.container.textContent).not.toContain(zh.errors.subs_failed.split("{{")[0]);
     expect(onNext).not.toHaveBeenCalled();
+
+    // 重試：訂閱已經是後端的現況了，只該重送 KMS（基準來自元件自己記的已存值，
+    // 不依賴 store 把 PUT 回應回吐成新的 props）
+    putKmsRoot.mockResolvedValue({ ok: true, kms_root: "/Users/x/kb" });
+    next(ui);
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(saveSubscriptions).toHaveBeenCalledTimes(1);
+    expect(putKmsRoot).toHaveBeenCalledTimes(2);
+    vi.restoreAllMocks();
+  });
+
+  // sidecar 重啟／外部改動會讓 props 換成新值。拿新 props 跟沒被碰過的表單比會判成 dirty，
+  // 然後把畫面上的舊值寫回去蓋掉較新的設定——基準必須是「後端已經有的值」而非當下 props
+  it("props 在 mount 後換成新值、表單沒被碰過：不把舊值寫回後端", async () => {
+    const ui = render(
+      <SystemSettingsCard port={1234} subscriptions={[]} kmsRoot="~/old" onPrev={onPrev} onNext={onNext} />,
+    );
+    ui.rerender(
+      <SystemSettingsCard
+        port={1234}
+        subscriptions={[{ name: "Claude", monthly_cost: 200 }]}
+        kmsRoot="~/new"
+        onPrev={onPrev}
+        onNext={onNext}
+      />,
+    );
+    next(ui);
+
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(putKmsRoot).not.toHaveBeenCalled();
+    expect(saveSubscriptions).not.toHaveBeenCalled();
   });
 
   // 後端不在時默默前進，使用者填的東西會憑空消失

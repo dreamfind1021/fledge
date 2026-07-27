@@ -164,8 +164,9 @@
     "overlapping_account_dirs": "The accounts' config folders contain one another — give each its own folder in Settings",
     "subs_name": "Name is required",
     "subs_cost": "Monthly cost must be a non-negative number",
-    "subs_failed": "Couldn't save the subscription list: {{reason}}",
-    "kms_failed": "Couldn't save the knowledge base root: {{reason}}",
+    "subs_failed": "Couldn't save the subscription list — try again in a moment",
+    "kms_failed": "Couldn't save the knowledge base root — try again in a moment",
+    "kms_failed_subs_saved": "Saved the subscription list, but couldn't save the knowledge base root — try again in a moment",
     "backend_unavailable": "The backend isn't connected yet — try again in a moment"
   }
 }

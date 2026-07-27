@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAppStore } from "../store/useAppStore";
 import { putKmsRoot, type SubscriptionItem } from "../lib/sidecar";
@@ -39,6 +39,13 @@ export function SystemSettingsCard({ port, subscriptions, kmsRoot, onPrev, onNex
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // dirty 的比較基準是「後端已經有的值」，**不是**當下的 props：sidecar 重啟或外部改動會讓 props
+  // 換成新值，拿它跟沒被碰過的表單比會判成 dirty，然後把畫面上的舊值寫回去、蓋掉較新的設定
+  // （Codex R1 #2）。存進去成功就更新基準，於是部分成功後的重試不會重送已經成功的那一段
+  // ——這也讓該行為不必依賴 store 把 PUT 回應回吐成新的 props。
+  const savedSubs = useRef(subscriptions);
+  const savedKms = useRef(kmsRoot.trim());
+
   const patchRow = (i: number, patch: Partial<SubsRow>) => {
     setError(null); // 錯誤是上一次送出的回饋，一動表單就該收掉
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -64,8 +71,8 @@ export function SystemSettingsCard({ port, subscriptions, kmsRoot, onPrev, onNex
       return;
     }
     const kmsValue = kms.trim();
-    const subsChanged = !sameSubscriptions(validated.value, subscriptions);
-    const kmsChanged = kmsValue !== kmsRoot.trim();
+    const subsChanged = !sameSubscriptions(validated.value, savedSubs.current);
+    const kmsChanged = kmsValue !== savedKms.current;
     if (!subsChanged && !kmsChanged) {
       onNext(); // 兩區都沒填（或沒改）＝整段略過
       return;
@@ -76,19 +83,27 @@ export function SystemSettingsCard({ port, subscriptions, kmsRoot, onPrev, onNex
       return;
     }
     setBusy(true);
-    let stage: "subs" | "kms" = "subs"; // 失敗訊息要指向真的出錯的那一區
+    let subsSaved = false; // 失敗訊息要指向真的出錯的那一區，且不能否認前一段已經存進去了
     try {
-      if (subsChanged) await saveSubscriptions(validated.value);
-      stage = "kms";
+      if (subsChanged) {
+        await saveSubscriptions(validated.value);
+        savedSubs.current = validated.value;
+        subsSaved = true;
+      }
       if (kmsChanged) {
         await putKmsRoot(port, kmsValue);
+        savedKms.current = kmsValue;
         // 回讀讓 store 的 config.kms_root 與記憶面板同步（比照 Settings）；
         // 回讀失敗不代表沒存進去，不能因此說儲存失敗
         await loadConfig().catch((e) => console.warn("[onboarding] config 回讀失敗", e));
       }
       onNext();
     } catch (e) {
-      setError(t(stage === "subs" ? "errors.subs_failed" : "errors.kms_failed", { reason: String(e) }));
+      // 原始訊息只進 console：後端的 FastAPI `detail` 是中文 prose（如「monthly_cost 須為數字」），
+      // 直接顯示會讓英文使用者看到中文，也違反 spec-b4 §5「後端錯誤不得直接顯示」（Codex R1 High）
+      console.warn("[onboarding] 系統設置儲存失敗", e);
+      if (subsChanged && !subsSaved) setError(t("errors.subs_failed"));
+      else setError(t(subsSaved ? "errors.kms_failed_subs_saved" : "errors.kms_failed"));
     } finally {
       setBusy(false);
     }

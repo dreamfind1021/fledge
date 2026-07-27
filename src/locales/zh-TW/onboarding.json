@@ -164,8 +164,9 @@
     "overlapping_account_dirs": "帳號的設定目錄互相包含，請到設定頁改成彼此獨立的目錄",
     "subs_name": "名稱不可空白",
     "subs_cost": "月費需為非負數字",
-    "subs_failed": "訂閱清單儲存失敗：{{reason}}",
-    "kms_failed": "知識庫根目錄儲存失敗：{{reason}}",
+    "subs_failed": "訂閱清單儲存失敗，請稍後再試",
+    "kms_failed": "知識庫根目錄儲存失敗，請稍後再試",
+    "kms_failed_subs_saved": "訂閱清單已儲存，但知識庫根目錄儲存失敗，請稍後再試",
     "backend_unavailable": "後端尚未連線，請稍後再試"
   }
 }
