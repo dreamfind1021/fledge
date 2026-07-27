@@ -87,7 +87,10 @@ describe("auth token", () => {
     await m.fetchDirTree(1, "/p");
     await m.commonConfigPlan(1, { source: "work", targets: ["personal"], entries: ["commands"] });
     await m.commonConfigApply(1, { source: "work", targets: ["personal"], entries: ["commands"], overwrite: [] });
-    expect(seen.length).toBeGreaterThanOrEqual(22);
+    await m.fetchTemplates(1);
+    await m.templatesPlan(1, "project-starter", "/p");
+    await m.templatesDeploy(1, "project-starter", "/p");
+    expect(seen.length).toBeGreaterThanOrEqual(25);
     for (const h of seen) expect(h["X-Fledge-Token"]).toBe("tok");
     setAuthToken(null);
   });
@@ -223,6 +226,67 @@ describe("common config plan/apply", () => {
     await expect(m.commonConfigApply(1234, {
       source: "work", targets: ["personal"], entries: ["commands"], overwrite: [],
     })).rejects.toMatchObject({ code: null, status: 422 });
+  });
+});
+
+describe("templates list/plan/deploy", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("list 回 allowlist 全部範本（含 available 旗標）", async () => {
+    const templates = [
+      { id: "project-starter", label: "Project starter", description: "…", source_class: "public", available: true },
+      { id: "kms-seed", label: "Knowledge base seed", description: "…", source_class: "private", available: false },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({ templates }) }) as unknown as Response));
+    const m = await import("./sidecar");
+
+    expect(await m.fetchTemplates(1234)).toEqual(templates);
+  });
+
+  it("plan／deploy 送 template 與 destination，回 state／逐檔結果", async () => {
+    const calls: Array<{ url: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      calls.push({ url, body: JSON.parse(init!.body as string) });
+      return {
+        ok: true,
+        json: async () => ({
+          template: "project-starter", destination: "/p", state: "not_installed",
+          operations: [{ path: "CLAUDE.md", type: "file", state: "missing" }],
+          results: [{ path: "CLAUDE.md", outcome: "created", error: null }],
+        }),
+      } as unknown as Response;
+    }));
+    const m = await import("./sidecar");
+
+    const plan = await m.templatesPlan(1234, "project-starter", "/p");
+    const deployed = await m.templatesDeploy(1234, "project-starter", "/p");
+
+    expect(calls[0].url).toContain("/api/setup/templates/plan");
+    expect(calls[1].url).toContain("/api/setup/templates/deploy");
+    for (const c of calls) expect(c.body).toEqual({ template: "project-starter", destination: "/p" });
+    expect(plan.state).toBe("not_installed");
+    expect(plan.operations).toEqual([{ path: "CLAUDE.md", type: "file", state: "missing" }]);
+    expect(deployed.results).toEqual([{ path: "CLAUDE.md", outcome: "created", error: null }]);
+  });
+
+  it("400 帶判別碼：throw SetupError 並保留 code，message 不含判別碼", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false, status: 400, json: async () => ({ error: "unsafe_destination" }),
+    }) as unknown as Response));
+    const m = await import("./sidecar");
+
+    await expect(m.templatesDeploy(1234, "project-starter", "/"))
+      .rejects.toMatchObject({ code: "unsafe_destination", status: 400 });
+    await expect(m.templatesPlan(1234, "project-starter", "/"))
+      .rejects.toThrow(/^(?!.*unsafe_destination).*$/);
+  });
+
+  // list 是 GET、沒有判別碼合約（比照 fetchSetupStatus）：!ok 就 throw，讓卡片顯示載入失敗
+  it("list 的 HTTP 失敗直接 throw", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 500 }) as unknown as Response));
+    const m = await import("./sidecar");
+
+    await expect(m.fetchTemplates(1234)).rejects.toThrow(/500/);
   });
 });
 

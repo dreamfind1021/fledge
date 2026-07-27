@@ -465,6 +465,17 @@
   font-family: var(--font-mono);
 }
 
+.b4-field label {
+  flex: 0 0 auto;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+
+/* 目的地列接在範本清單下面，要與清單拉開距離 */
+.b4-field-dest {
+  margin-top: 12px;
+}
+
 /* ── 說明框（登入頁講「為什麼沒有完成狀態」）── */
 .b4-note {
   background: color-mix(in srgb, var(--ai) 10%, transparent);
@@ -547,6 +558,29 @@
   white-space: nowrap;
 }
 
+/* 範本列的名稱＋說明疊成一欄；min-width 讓它在窄卡片裡能收縮（否則右側 chip 與按鈕被擠出去） */
+.b4-tpl-text {
+  min-width: 0;
+}
+
+/* ── 範本部署的逐檔結果（掛在該列下方）── */
+.b4-files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 0 10px 18px;
+}
+
+.b4-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.b4-file .b4-chip {
+  margin-left: auto;
+}
+
 .b4-item-right {
   margin-left: auto;
   display: flex;
@@ -603,6 +637,13 @@
 .b4-chip.warn {
   background: color-mix(in srgb, var(--warning) 16%, transparent);
   color: var(--warning);
+}
+
+/* 藍＝中性的進度資訊（範本「尚未部署」「部分已部署」）：既不是就緒也不是待辦，
+   更不是警示——沒有它，未部署的範本會跟未安裝的工具長得一樣 */
+.b4-chip.info {
+  background: color-mix(in srgb, var(--ai) 16%, transparent);
+  color: var(--ai);
 }
 
 /* ── 卡內小按鈕 ── */

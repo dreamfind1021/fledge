@@ -15,6 +15,8 @@ const saveSubscriptions = vi.fn<(subs: SubscriptionItem[]) => Promise<void>>();
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   putKmsRoot: (port: number, path: string) => putKmsRoot(port, path),
+  // 本頁現在含 <TemplateCard>，它 mount 時會抓範本清單；本檔測的是訂閱與 KMS 兩區，不碰網路
+  fetchTemplates: async () => [],
 }));
 vi.mock("../lib/dialog", () => ({ pickDirectory: () => pickDirectory() }));
 
