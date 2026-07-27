@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
-import { render, cleanup, waitFor } from "@testing-library/react";
+import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
 import en from "../locales/en/onboarding.json";
@@ -651,5 +651,116 @@ describe("CommonConfigCard 共通設置卡", () => {
 
     const hints = [...ui.container.querySelectorAll(".b4-hint-warn")];
     expect(hints.some((h) => h.textContent?.includes("extra"))).toBe(true);
+  });
+});
+
+// ── 設定頁版（票 29）：同一個元件，多了逐項授權、少了精靈的導覽列 ──
+describe("CommonConfigCard 設定頁版（allowOverwrite）", () => {
+  const conflictOp = (over: Partial<CommonConfigOperation> = {}) =>
+    op({ entry: "CLAUDE.md", state: "content_differs", action: "backup_and_copy", needs_overwrite: true, ...over });
+
+  const renderSettings = (props: Partial<Parameters<typeof CommonConfigCard>[0]> = {}) =>
+    render(<CommonConfigCard port={1234} accounts={accounts} allowOverwrite {...props} />);
+
+  beforeEach(async () => {
+    await i18n.changeLanguage("zh-TW");
+    checkDir.mockReset().mockResolvedValue("dir");
+    commonConfigPlan.mockReset().mockResolvedValue({ source_dir: "/Users/x/.claude", operations: [conflictOp()] });
+    commonConfigApply.mockReset().mockResolvedValue([result({ entry: "CLAUDE.md", outcome: "copied" })]);
+  });
+  afterEach(cleanup);
+
+  // 精靈刻意不給破壞性授權（spec-b4 定案 8），設定頁才給——這是兩處掛載唯一的行為差異
+  it("需授權的項目給勾選框；勾了才把該 (account, entry) 送進 overwrite", async () => {
+    const ui = renderSettings();
+    await settled(ui);
+
+    expect(ui.queryByText(zh.cc.keep)).toBeNull(); // 不再是「保留不動」
+    const box = ui.container.querySelector<HTMLInputElement>(".st-check input")!;
+    expect(box.checked).toBe(false);
+    expect(ui.container.textContent).toContain(zh.st.replaceWith.replace("{{source}}", "work"));
+
+    // 沒勾就套用＝維持非破壞性
+    fireEvent.click(ui.getByText(zh.st.apply));
+    await waitFor(() => expect(commonConfigApply).toHaveBeenCalledTimes(1));
+    expect(commonConfigApply.mock.calls[0][1].overwrite).toEqual([]);
+
+    fireEvent.click(box);
+    fireEvent.click(ui.getByText(zh.st.apply));
+    await waitFor(() => expect(commonConfigApply).toHaveBeenCalledTimes(2));
+    expect(commonConfigApply.mock.calls[1][1].overwrite).toEqual([{ account: "personal", entry: "CLAUDE.md" }]);
+  });
+
+  // ADR-0002 落點：授權以 (account, entry) 為單位而非裸 entry 名——多 target 時裸名會讓
+  // 「授權 A 帳號覆蓋 CLAUDE.md」連帶炸掉 B 帳號的
+  it("多 target：勾一個帳號的項目不會連帶授權另一個帳號的同名項", async () => {
+    commonConfigPlan.mockResolvedValue({
+      source_dir: "/Users/x/.claude",
+      operations: [conflictOp({ account: "personal" }), conflictOp({ account: "extra" })],
+    });
+    const ui = renderSettings({
+      accounts: { ...accounts, extra: { config_dir: "~/.claude-x", label: "額外" } },
+    });
+    await settled(ui);
+
+    const boxes = ui.container.querySelectorAll<HTMLInputElement>(".st-check input");
+    expect(boxes).toHaveLength(2);
+    fireEvent.click(boxes[1]); // 只授權第二個帳號
+    fireEvent.click(ui.getByText(zh.st.apply));
+
+    await waitFor(() => expect(commonConfigApply).toHaveBeenCalledTimes(1));
+    expect(commonConfigApply.mock.calls[0][1].overwrite).toEqual([{ account: "extra", entry: "CLAUDE.md" }]);
+  });
+
+  it("勾選時明示會先改名備份成什麼，並且沒有精靈的導覽列", async () => {
+    const ui = renderSettings();
+    await settled(ui);
+
+    expect(ui.container.textContent).toContain(zh.st.backupHint.split("<code>")[0]);
+    expect(ui.container.textContent).toContain(".fledge-backup-"); // 備份檔名樣式如實顯示
+    expect(ui.queryByText(zh.common.prev)).toBeNull();
+    expect(ui.queryByText(zh.common.next)).toBeNull();
+    expect(ui.queryByText(zh.common.skip)).toBeNull();
+  });
+
+  // 設定頁沒有換頁動作可以觸發重新偵測，卡片自己要有入口
+  it("「重新檢查」重新偵測", async () => {
+    const ui = renderSettings();
+    await settled(ui);
+    expect(commonConfigPlan).toHaveBeenCalledTimes(1);
+
+    commonConfigPlan.mockResolvedValue({
+      source_dir: "/Users/x/.claude",
+      operations: [op({ entry: "commands", state: "ok", action: "skip" })],
+    });
+    fireEvent.click(ui.getByText(zh.env.recheck));
+
+    await waitFor(() => expect(ui.container.textContent).toContain(zh.cc.ready));
+    expect(commonConfigPlan).toHaveBeenCalledTimes(2);
+  });
+
+  // 摺疊起來時，標題上的數字是使用者唯一看得到的訊號
+  it("回報未就緒的項目數給呼叫端（摺疊標題的待處理數）", async () => {
+    const onPendingChange = vi.fn<(n: number) => void>();
+    commonConfigPlan.mockResolvedValue({
+      source_dir: "/Users/x/.claude",
+      operations: [
+        op({ entry: "commands", state: "ok", action: "skip" }),
+        op({ entry: "plugins", state: "missing", action: "create_link" }),
+        conflictOp(),
+      ],
+    });
+    const ui = renderSettings({ onPendingChange });
+    await settled(ui);
+
+    await waitFor(() => expect(onPendingChange).toHaveBeenLastCalledWith(2)); // ok 的那項不算
+  });
+
+  it("不適用時回報 0（單帳號使用者的設定頁不該掛著待處理數字）", async () => {
+    const onPendingChange = vi.fn<(n: number) => void>();
+    const ui = renderSettings({ accounts: { work: accounts.work }, onPendingChange });
+
+    await waitFor(() => expect(ui.getByText(zh.cc.naTitle)).toBeTruthy());
+    expect(onPendingChange).toHaveBeenLastCalledWith(0);
   });
 });

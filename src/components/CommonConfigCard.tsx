@@ -22,9 +22,18 @@ interface AccountInfo {
 interface CommonConfigCardProps {
   port: number | null;
   accounts: Record<string, AccountInfo>;
-  onPrev: () => void;
-  onNext: () => void;
+  // 精靈才有導覽列；設定頁版嵌在 modal 裡，兩個都不給（票 29）
+  onPrev?: () => void;
+  onNext?: () => void;
+  /** 設定頁版：逐項授權覆蓋既有內容。精靈一律不給（spec-b4 定案 8），這是兩處掛載唯一的行為差異。 */
+  allowOverwrite?: boolean;
+  /** 回報「還沒就緒的項目數」給呼叫端（設定頁摺疊標題上的待處理數）。 */
+  onPendingChange?: (count: number) => void;
 }
+
+// 備份檔名樣式（後端 `common_config._backup`：`<原名>.fledge-backup-<時間戳>`）。
+// 授權前要讓使用者看得到「不是直接刪掉」，時間戳到套用當下才知道，故顯示樣式而非實名。
+const BACKUP_PATTERN = "*.fledge-backup-YYYYMMDD-HHMMSS";
 
 // 狀態點與 chip 共用一組色調（demo 的視覺語彙：綠＝就緒、灰＝待辦、琥珀＝會動到既有東西）
 type Tone = "ok" | "todo" | "warn";
@@ -105,7 +114,14 @@ function chipFor(op: CommonConfigOperation): Chip {
  *   向設定頁——首次引導的使用者最不清楚後果，逐項授權留給票 29 的設定頁版。
  * - **目錄不存在的帳號不列為 target**。`apply` 會 `mkdir` target dir，照送等於替只用一個帳號
  *   的使用者建出他沒要求的帳號目錄。全部都不存在時整張卡「不適用」。 */
-export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfigCardProps) {
+export function CommonConfigCard({
+  port,
+  accounts,
+  onPrev,
+  onNext,
+  allowOverwrite = false,
+  onPendingChange,
+}: CommonConfigCardProps) {
   const { t, i18n } = useTranslation("onboarding");
   // 一輪偵測的完整結果，**三個欄位一起換**。拆成獨立 state 時它們不是原子的：plan 失敗只清掉
   // plan、targets 還留著上一輪的 []，畫面就同時出現錯誤訊息與一張說「不適用」的卡（Codex R3 ⑤）
@@ -115,6 +131,10 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   // 語言就會重建它，那時清掉剛套用的結果毫無道理（Codex R2 ③）
   const [results, setResults] =
     useState<{ ctx: string; map: Record<string, CommonConfigOpResult> } | null>(null);
+  // 設定頁版的逐項授權。以 `(account, entry)` 為單位而非裸 entry 名（ADR-0002）：多 target 時
+  // 裸名會讓「授權 A 帳號覆蓋 CLAUDE.md」連帶炸掉 B 帳號的。存 pair 物件而不是把 key 拆回來，
+  // 免得帳號 key 或項目名含分隔字元時解析錯。
+  const [authorized, setAuthorized] = useState<Record<string, { account: string; entry: string }>>({});
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -219,6 +239,8 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     // 用 functional update 比對而非無條件清除：apply 剛寫進來的結果屬於當前 ctx，
     // 而 A→B→A（帳號改掉又改回來）時舊 outcome 不該復活（Codex R3 ②）
     setResults((r) => (r != null && r.ctx !== ctx ? null : r));
+    // 授權是對「這一組帳號的這些項目」給的，換了上下文就不能沿用——破壞性操作尤其不能靠猜
+    setAuthorized({});
   }, [ctx]);
 
   useEffect(() => { load(); }, [load]);
@@ -244,8 +266,14 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
         source,
         targets,
         entries: COMMON_CONFIG_ENTRIES,
-        // 精靈只做非破壞性操作（spec-b4 定案 8）：needs_overwrite 的項目後端會回 conflict 不動
-        overwrite: [],
+        // 精靈只做非破壞性操作（spec-b4 定案 8）：needs_overwrite 的項目後端會回 conflict 不動。
+        // 設定頁版才送授權，且只送**最新一輪 plan 仍然需要授權**的項目——重新偵測後那一項可能
+        // 已經不衝突了（別人改過），照送等於授權一個使用者沒看到的現況
+        overwrite: allowOverwrite
+          ? Object.values(authorized).filter((a) =>
+              ops.some((o) => o.account === a.account && o.entry === a.entry && o.needs_overwrite),
+            )
+          : [],
       });
       // 卸載也要擋：`ctxRef` 不會因為 unmount 而改變，只看它的話卸載後還會再發一次
       // checkDir／plan 請求（React 忽略 setState，但網路與檔案探測是真的跑了，Codex R3 ③）
@@ -286,7 +314,17 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
   const excluded = candidates.filter((k) => !(targets ?? []).includes(k));
   // 不適用卡要指出是哪個目錄卡住（candidates 全空＝只登記一個帳號，另一套文案）
   const unusableDirs = excluded.map((k) => accounts[k].config_dir).join(", ");
-  const showApply = !isNotApplicable && plan != null && canApply;
+  // 設定頁版的套用鍵一律在（那裡沒有「下一步」可以讓位，而且勾了授權才有得按會讓使用者
+  // 以為卡片壞了）；精靈版維持「有事可做才亮」的既有規則
+  const showApply = !isNotApplicable && plan != null && (allowOverwrite ? ops.length > 0 : canApply);
+  const hasNav = onPrev != null && onNext != null;
+
+  // 待處理＝還沒就緒的項目數（設定頁摺疊起來時，標題上的數字是唯一看得到的訊號）。
+  // 不適用或還沒偵測完就是 0——寧可不顯示，也不掛一個猜出來的數字。
+  const pendingCount = detected == null ? 0 : ops.filter((o) => o.state !== "ok").length;
+  useEffect(() => {
+    onPendingChange?.(pendingCount);
+  }, [pendingCount, onPendingChange]);
 
   const renderRow = (op: CommonConfigOperation) => {
     // 上下文對不上的結果直接視為不存在（換 sidecar／換帳號後那批 outcome 已經沒有意義）
@@ -297,13 +335,35 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
     const chip: Chip = res
       ? { key: `results.${res.outcome}`, tone: OUTCOME_TONE[res.outcome] }
       : chipFor(op);
+    const key = `${op.account}/${op.entry}`;
+    // 設定頁版：需授權的項目用勾選框取代 chip——「保留不動」在這裡是可以推翻的，
+    // 給一個沒有動作的 chip 等於把唯一的出口藏起來。已經套用過的那一輪結果優先顯示。
+    const askAuth = allowOverwrite && op.needs_overwrite && res == null;
     return (
-      <div key={`${op.account}/${op.entry}`} className="b4-item">
+      <div key={key} className="b4-item">
         <span className={`b4-dot ${chip.tone}`} />
         <span className="b4-item-name">{op.entry}</span>
         <span className="b4-item-meta">{t(STATE_TEXT[op.state], { source })}</span>
         <span className="b4-item-right">
-          <span className={`b4-chip ${chip.tone}`}>{t(chip.key)}</span>
+          {askAuth ? (
+            <label className="st-check">
+              <input
+                type="checkbox"
+                checked={authorized[key] != null}
+                onChange={(e) =>
+                  setAuthorized((a) => {
+                    const next = { ...a };
+                    if (e.target.checked) next[key] = { account: op.account, entry: op.entry };
+                    else delete next[key];
+                    return next;
+                  })
+                }
+              />
+              <span>{t("st.replaceWith", { source })}</span>
+            </label>
+          ) : (
+            <span className={`b4-chip ${chip.tone}`}>{t(chip.key)}</span>
+          )}
         </span>
       </div>
     );
@@ -311,8 +371,13 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
 
   return (
     <div>
-      <h2 className="ob-h">{t("cc.h")}</h2>
-      <p className="ob-sub">{t("cc.sub")}</p>
+      {/* 頁標題只屬於精靈那一頁；設定頁版嵌在「開發環境」區裡，區塊自己已經有標題 */}
+      {hasNav && (
+        <>
+          <h2 className="ob-h">{t("cc.h")}</h2>
+          <p className="ob-sub">{t("cc.sub")}</p>
+        </>
+      )}
 
       {error && <div className="ob-error" role="alert">{error}</div>}
       {plan === null && !isNotApplicable && loading && <p className="ob-sub">{t("cc.checking")}</p>}
@@ -350,6 +415,14 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
                   ellipsis 的窄欄，多帳號分組後會全被截掉；擺在卡頭只顯示一次且完整 */}
               <p className="b4-card-desc b4-mono">{plan.source_dir}</p>
             </div>
+            {/* 設定頁沒有換頁動作可以觸發重新偵測，卡片自己要有入口（精靈換頁時本來就會重測） */}
+            {allowOverwrite && (
+              <span className="b4-card-actions">
+                <button className="b4-btn-sm" onClick={load} disabled={loading || busy}>
+                  {t("env.recheck")}
+                </button>
+              </span>
+            )}
           </div>
 
           {/* 多帳號時逐帳號分組——同一個 entry 在不同帳號可以是不同狀態，混在一張清單裡看不出誰是誰 */}
@@ -369,15 +442,30 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
             </p>
           )}
 
-          {/* 琥珀＝我們刻意不碰，不是錯誤。沒講清楚去哪裡處理，使用者只會看到一個沒解釋的 chip */}
+          {/* 琥珀＝我們刻意不碰，不是錯誤。精靈版沒講清楚去哪裡處理，使用者只會看到一個沒解釋的
+              chip；設定頁版就是那個「哪裡」，改成說明勾選後會發生什麼（先改名備份，不是直接刪） */}
           {hasConflict && (
-            <p className="b4-hint b4-hint-warn">{t("cc.conflictHint", { source })}</p>
+            <p className="b4-hint b4-hint-warn">
+              {allowOverwrite
+                ? <Trans t={t} i18nKey="st.backupHint" values={{ name: BACKUP_PATTERN }} />
+                : t("cc.conflictHint", { source })}
+            </p>
           )}
           <p className="b4-hint"><Trans t={t} i18nKey="cc.advHint" /></p>
           {allReady && <p className="b4-hint">{t("cc.nothingToDo")}</p>}
         </div>
       )}
 
+      {/* 設定頁版沒有導覽列，套用鍵改掛在卡片下方 */}
+      {!hasNav && showApply && (
+        <div className="b4-card-foot">
+          <button onClick={apply} disabled={busy || loading} className="b4-btn-sm primary">
+            {t("st.apply")}
+          </button>
+        </div>
+      )}
+
+      {hasNav && (
       <div className="ob-actions">
         <button onClick={onPrev} className="ob-btn-ghost">{t("common.prev")}</button>
         <div className="ob-actions-right">
@@ -391,6 +479,7 @@ export function CommonConfigCard({ port, accounts, onPrev, onNext }: CommonConfi
           )}
         </div>
       </div>
+      )}
     </div>
   );
 }

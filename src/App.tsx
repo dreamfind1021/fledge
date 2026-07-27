@@ -316,7 +316,16 @@ function App() {
         <DragOverlay>{dragLabel ? <div className="drag-overlay-chip">{dragLabel}</div> : null}</DragOverlay>
       </DndContext>
       {showOnboarding && <Onboarding onClose={() => setShowOnboarding(false)} />}
-      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <Settings
+          onClose={() => setShowSettings(false)}
+          // 重跑引導：關掉設定頁再開精靈，兩個 modal 不疊在一起
+          onRerunOnboarding={() => {
+            setShowSettings(false);
+            setShowOnboarding(true);
+          }}
+        />
+      )}
       {showPicker && <ProjectPicker onClose={() => setShowPicker(false)} />}
       {pendingCloseTabId && pendingTitle !== null && (
         <CloseConfirm

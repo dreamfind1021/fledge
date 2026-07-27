@@ -5,15 +5,18 @@ import { useAppStore } from "../store/useAppStore";
 import { pickDirectory } from "../lib/dialog";
 import { putKmsRoot } from "../lib/sidecar";
 import { AccountsEditor } from "./AccountsEditor";
+import { DevEnvSection } from "./DevEnvSection";
 import { LangSwitch } from "./LangSwitch";
 import { validateSubscriptions } from "../lib/subscriptionsForm";
 import "./Settings.css";
 
 interface SettingsProps {
   onClose: () => void;
+  /** 重開全屏精靈（票 29 的「重跑引導」）。modal 狀態在 App，這裡只往上通知。 */
+  onRerunOnboarding: () => void;
 }
 
-export function Settings({ onClose }: SettingsProps) {
+export function Settings({ onClose, onRerunOnboarding }: SettingsProps) {
   const { t } = useTranslation("dashboard");
   const { t: tMem } = useTranslation("memory");
   const config = useAppStore((s) => s.config);
@@ -333,6 +336,13 @@ export function Settings({ onClose }: SettingsProps) {
               {tMem("settings.save")}
             </button>
           </div>
+
+          {/* 開發環境（票 29）：共通設置與範本兩張常用卡 + 重跑引導 */}
+          <DevEnvSection
+            port={port}
+            accounts={config?.accounts ?? {}}
+            onRerunOnboarding={onRerunOnboarding}
+          />
 
         </div>
 
