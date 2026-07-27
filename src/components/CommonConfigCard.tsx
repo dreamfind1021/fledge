@@ -44,7 +44,8 @@ type AuthMap = Record<string, { account: string; entry: string }>;
  * 少了這一步，「衝突 → 被外部修成一致 → 內容又被改成不同」的來回會讓畫面以**舊授權**預先打勾，
  * 使用者於是在沒有重新看過內容的情況下授權覆蓋（Codex R1 High）。
  *
- * 沒有變動時回傳原本的引用——這個函式跑在 effect 裡，回傳新物件會讓它自己再觸發一次。 */
+ * 沒有變動時回傳**原本的引用**：`setAuthorized` 收到同一個物件時 React 會跳過重繪
+ * （不是為了避免 effect 自我觸發——它的依賴是 `detected`，換物件也不會再觸發它一次）。 */
 function pruneAuthorized(current: AuthMap, ops: CommonConfigOperation[] | undefined): AuthMap {
   const keys = Object.keys(current);
   if (keys.length === 0) return current;
@@ -267,7 +268,11 @@ export function CommonConfigCard({
 
   // 每接受一輪新的偵測結果就重篩授權（手動重新檢查、apply 後的自動重測都算）。
   // ctx 沒變也要篩：同一組帳號裡，某項的衝突可能消失又出現，那是兩次不同的衝突。
-  useEffect(() => {
+  //
+  // **必須是 layout effect**：passive effect 要等 paint 之後才跑，於是「新 plan 已經畫出來、
+  // 套用鍵也解除停用」與「舊授權還沒篩掉」之間有一個真實窗口，那一瞬間按下套用就會送出舊授權
+  // （Codex R2 High）。授權是破壞性操作的閘門，不能靠「使用者大概沒那麼快」。
+  useLayoutEffect(() => {
     setAuthorized((a) => pruneAuthorized(a, detected?.plan?.operations));
   }, [detected]);
 
@@ -326,7 +331,10 @@ export function CommonConfigCard({
         // **授權是一次性的**：送出去就用掉了，成功失敗都算，連線錯誤也算（請求可能已經到了後端）。
         // 失敗時留著勾選，等於讓下一次套用沿用「對舊內容的授權」去蓋掉新內容——`stale` 的定義
         // 正是「寫入前發現內容又變了」。要重試就重新勾一次。
-        if (overwrite.length > 0) {
+        //
+        // 但**只能清自己那個上下文的授權**：舊 ctx 的請求回來時，使用者可能已經換了帳號並在新
+        // 上下文重新勾了同一個 pair，照刪會變成「勾了卻沒送出」（Codex R2 Medium）。
+        if (ctxRef.current === myCtx && overwrite.length > 0) {
           setAuthorized((a) => {
             const next = { ...a };
             for (const o of overwrite) delete next[`${o.account}/${o.entry}`];
@@ -366,6 +374,16 @@ export function CommonConfigCard({
     onPendingChange?.(pendingCount);
   }, [pendingCount, onPendingChange]);
 
+  // 設定頁沒有換頁動作可以觸發重新偵測，卡片自己要有入口（精靈換頁時本來就會重測）。
+  // 「不適用」的卡也要有——使用者補建了帳號目錄之後，不然只能關掉設定頁再開一次。
+  const recheckButton = allowOverwrite ? (
+    <span className="b4-card-actions">
+      <button className="b4-btn-sm" onClick={load} disabled={loading || busy}>
+        {t("env.recheck")}
+      </button>
+    </span>
+  ) : null;
+
   const renderRow = (op: CommonConfigOperation) => {
     // 上下文對不上的結果直接視為不存在（換 sidecar／換帳號後那批 outcome 已經沒有意義）
     const prev = results?.ctx === ctx ? results.map[`${op.account}/${op.entry}`] : undefined;
@@ -393,6 +411,9 @@ export function CommonConfigCard({
               <input
                 type="checkbox"
                 checked={authorized[key] != null}
+                // 送出或重新偵測途中不給改：那時的勾選要嘛馬上被「送出即用掉」清掉、
+                // 要嘛被下一輪 plan 篩掉，看起來像自己跳回去
+                disabled={busy || loading}
                 onChange={(e) =>
                   setAuthorized((a) => {
                     const next = { ...a };
@@ -438,6 +459,7 @@ export function CommonConfigCard({
                     : <Trans t={t} i18nKey="cc.naDesc" values={{ path: unusableDirs }} />}
               </p>
             </div>
+            {recheckButton}
           </div>
         </div>
       )}
@@ -456,14 +478,7 @@ export function CommonConfigCard({
                   ellipsis 的窄欄，多帳號分組後會全被截掉；擺在卡頭只顯示一次且完整 */}
               <p className="b4-card-desc b4-mono">{plan.source_dir}</p>
             </div>
-            {/* 設定頁沒有換頁動作可以觸發重新偵測，卡片自己要有入口（精靈換頁時本來就會重測） */}
-            {allowOverwrite && (
-              <span className="b4-card-actions">
-                <button className="b4-btn-sm" onClick={load} disabled={loading || busy}>
-                  {t("env.recheck")}
-                </button>
-              </span>
-            )}
+            {recheckButton}
           </div>
 
           {/* 多帳號時逐帳號分組——同一個 entry 在不同帳號可以是不同狀態，混在一張清單裡看不出誰是誰 */}

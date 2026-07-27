@@ -817,6 +817,62 @@ describe("CommonConfigCard 設定頁版（allowOverwrite）", () => {
     expect(ui.container.querySelector<HTMLInputElement>(".st-check input")!.checked).toBe(false);
   });
 
+  // 舊上下文的 apply 回來時，使用者可能已經換帳號並在新上下文重新勾了同一個 pair。
+  // 「送出即用掉」若不看上下文就照刪，會變成「勾了卻沒送出」（Codex R2 Medium）
+  it("換帳號後重新勾同一項：舊上下文的套用回應不會把新授權清掉", async () => {
+    let releaseApply = (_r: CommonConfigOpResult[]) => {};
+    commonConfigApply.mockImplementation(
+      () => new Promise<CommonConfigOpResult[]>((resolve) => { releaseApply = resolve; }),
+    );
+    const ui = renderSettings();
+    await settled(ui);
+
+    fireEvent.click(ui.container.querySelector<HTMLInputElement>(".st-check input")!);
+    fireEvent.click(ui.getByText(zh.st.apply));
+    await waitFor(() => expect(commonConfigApply).toHaveBeenCalledTimes(1));
+
+    // 換一組帳號（新的 ctx）→ 授權清空、卡片重新偵測
+    ui.rerender(
+      <CommonConfigCard
+        port={1234}
+        accounts={{ ...accounts, personal: { config_dir: "~/.claude-other", label: "私人" } }}
+        allowOverwrite
+      />,
+    );
+    await waitFor(() => expect(ui.container.querySelector<HTMLInputElement>(".st-check input")?.checked).toBe(false));
+    fireEvent.click(ui.container.querySelector<HTMLInputElement>(".st-check input")!);
+
+    // 舊上下文的回應這才回來——它只能作廢自己那一輪，不能碰新上下文的勾選
+    commonConfigApply.mockResolvedValue([result({ entry: "CLAUDE.md", outcome: "copied" })]);
+    await act(async () => { releaseApply([result({ entry: "CLAUDE.md", outcome: "copied" })]); });
+
+    expect(ui.container.querySelector<HTMLInputElement>(".st-check input")!.checked).toBe(true);
+    fireEvent.click(ui.getByText(zh.st.apply));
+    await waitFor(() => expect(commonConfigApply).toHaveBeenCalledTimes(2));
+    expect(commonConfigApply.mock.calls[1][1].overwrite).toEqual([
+      { account: "personal", entry: "CLAUDE.md" },
+    ]);
+  });
+
+  // 不適用態沒有 plan，授權也就沒有依附的對象
+  it("卡片轉為不適用（沒有 plan）：授權一併失效", async () => {
+    const ui = renderSettings();
+    await settled(ui);
+    fireEvent.click(ui.container.querySelector<HTMLInputElement>(".st-check input")!);
+
+    checkDir.mockResolvedValue("missing"); // 帳號目錄不見了
+    fireEvent.click(ui.getByText(zh.env.recheck));
+    await waitFor(() => expect(ui.getByText(zh.cc.naTitle)).toBeTruthy());
+
+    // 不適用的卡也要有重新檢查入口——使用者補建目錄後，不然只能關掉設定頁再開一次
+    checkDir.mockResolvedValue("dir");
+    fireEvent.click(ui.getByText(zh.env.recheck));
+
+    // 目錄回來、內容仍不同 → 新的一次衝突，不該沿用剛才那次授權
+    await waitFor(() => expect(ui.container.querySelector(".st-check input")).toBeTruthy());
+    expect(ui.container.querySelector<HTMLInputElement>(".st-check input")!.checked).toBe(false);
+  });
+
   it("不適用時回報 0（單帳號使用者的設定頁不該掛著待處理數字）", async () => {
     const onPendingChange = vi.fn<(n: number) => void>();
     const ui = renderSettings({ accounts: { work: accounts.work }, onPendingChange });
