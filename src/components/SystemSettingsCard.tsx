@@ -4,6 +4,7 @@ import { useAppStore } from "../store/useAppStore";
 import { putKmsRoot, type SubscriptionItem } from "../lib/sidecar";
 import { pickDirectory } from "../lib/dialog";
 import { validateSubscriptions, dropBlankRows, sameSubscriptions } from "../lib/subscriptionsForm";
+import { TemplateCard } from "./TemplateCard";
 
 interface SystemSettingsCardProps {
   port: number | null;
@@ -173,6 +174,9 @@ export function SystemSettingsCard({ port, subscriptions, kmsRoot, onPrev, onNex
           </div>
         </div>
       </div>
+
+      {/* ── 導入範本（票 28）：整張卡自帶目的地與逐列部署，可以完全不碰 ── */}
+      <TemplateCard port={port} />
 
       {/* 送出途中三個按鈕一起停用：離開這頁會讓在途的儲存變成沒有歸屬的請求，
           而 onNext 也可能被按過的略過與回來的 saveAndNext 各叫一次（＝跳兩頁） */}

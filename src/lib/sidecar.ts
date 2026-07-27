@@ -335,6 +335,69 @@ export async function commonConfigApply(
   return data.results;
 }
 
+// --- 範本部署（spec-b4 §6.5；安全權威在後端 setup/templates.py）---
+
+export interface TemplateInfo {
+  id: string;                            // allowlist key，前端只送這個
+  label: string;                         // 後端一律英文（§4.6.13）；卡片以 id 對 catalog，讀不到才退這裡
+  description: string;
+  source_class: "public" | "private";
+  available: boolean;                    // 這個 build 有沒有真的內建（manifest 讀得出來）
+}
+
+// 後端 templates.py 的三組 enum。同 CommonConfig*：以 union 承接，讓「後端新增一種狀態」
+// 在前端的映射表上編譯失敗，而不是靜默掉到 fallback 文案。
+export type TemplateFileState = "missing" | "present" | "conflict";
+export type TemplateState = "not_installed" | "partial" | "complete" | "conflict";
+export type TemplateOutcome = "created" | "skipped" | "conflict" | "stale" | "failed";
+
+export interface TemplateFileOp {
+  path: string;                          // 相對目的地
+  type: "file" | "dir";
+  state: TemplateFileState;
+}
+
+export interface TemplatePlan {
+  template: string;
+  destination: string;                   // resolved
+  state: TemplateState;
+  operations: TemplateFileOp[];
+}
+
+export interface TemplateFileResult {
+  path: string;
+  outcome: TemplateOutcome;
+  error: string | null;                  // 判別碼（失敗時）——顯示前必須映射，不得直接呈現
+}
+
+export interface TemplateDeployResult {
+  template: string;
+  destination: string;
+  results: TemplateFileResult[];
+}
+
+/** 列出 allowlist 內全部範本（未內建者 available=false 照列）。
+ *  GET 沒有判別碼合約（比照 `fetchSetupStatus`）：!ok 就 throw，讓卡片顯示載入失敗。 */
+export async function fetchTemplates(port: number): Promise<TemplateInfo[]> {
+  const resp = await fetch(`${base(port)}/api/setup/templates`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return (await resp.json()).templates as TemplateInfo[];
+}
+
+/** 唯讀預覽：回逐檔狀態與整體狀態，不動檔案系統。 */
+export function templatesPlan(port: number, template: string, destination: string): Promise<TemplatePlan> {
+  return setupPost(port, "/api/setup/templates/plan", { template, destination });
+}
+
+/** 部署範本。plan 由 server 以相同輸入重算（ADR-0002，不吃 client plan），永不覆蓋既有檔案。 */
+export function templatesDeploy(
+  port: number,
+  template: string,
+  destination: string,
+): Promise<TemplateDeployResult> {
+  return setupPost(port, "/api/setup/templates/deploy", { template, destination });
+}
+
 export interface SubscriptionItem {
   name: string;
   monthly_cost: number;

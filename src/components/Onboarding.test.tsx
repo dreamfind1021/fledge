@@ -14,6 +14,8 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   // 共通設置頁掛 CommonConfigCard 後會探帳號目錄並預覽；同樣不碰網路
   checkDir: vi.fn(async () => "dir" as const),
   commonConfigPlan: vi.fn(async () => ({ source_dir: "/Users/x/.claude", operations: [] })),
+  // 系統設置頁掛 SystemSettingsCard → TemplateCard 後會抓範本清單；外殼測試同樣不碰網路
+  fetchTemplates: vi.fn(async () => []),
 }));
 
 const account = { config_dir: "~/.claude", label: "Work" };

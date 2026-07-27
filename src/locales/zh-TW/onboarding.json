@@ -99,14 +99,39 @@
     "kmsDesc": "記憶層會讀取這個目錄下的 library / topics 作為跨專案知識來源。",
     "kmsPlaceholder": "/絕對路徑/到/知識庫",
     "tplTitle": "導入範本",
-    "tpl1": "新專案的 CLAUDE.md 與 docs/ 骨架，內容通用可自行改寫。",
-    "tpl2": "個人開發方法論文件集。",
-    "tpl3": "知識庫目錄骨架。",
-    "notDeployed": "尚未部署",
+    "tpl": {
+      "project-starter": {
+        "name": "新專案骨架",
+        "desc": "新專案的 CLAUDE.md 與 docs/ 骨架，內容通用可自行改寫。"
+      },
+      "dev-methodology": {
+        "name": "開發方法論",
+        "desc": "個人開發方法論文件集。"
+      },
+      "kms-seed": {
+        "name": "知識庫骨架",
+        "desc": "知識庫目錄骨架。"
+      }
+    },
     "notBundled": "未內建",
+    "state": {
+      "not_installed": "尚未部署",
+      "partial": "部分已部署",
+      "complete": "已部署",
+      "conflict": "目的地有衝突項目"
+    },
+    "result": {
+      "created": "已建立",
+      "skipped": "已存在，保留原檔",
+      "conflict": "同名項目型別不符，未處理",
+      "stale": "狀態已變動，未處理",
+      "failed": "處理失敗",
+      "unknown": "未知的處理結果"
+    },
     "deployTo": "部署到",
     "otherLocation": "其他位置…",
     "deploy": "部署",
+    "needDest": "請先選擇部署目的地。",
     "deployHint": "永不覆蓋：目的地已存在的同名檔案一律保留，只補缺少的部分。",
     "skipAll": "全部略過"
   },
@@ -167,6 +192,13 @@
     "subs_failed": "訂閱清單儲存失敗，請稍後再試",
     "kms_failed": "知識庫根目錄儲存失敗，請稍後再試",
     "kms_failed_subs_saved": "訂閱清單已儲存，但知識庫根目錄儲存失敗，請稍後再試",
-    "backend_unavailable": "後端尚未連線，請稍後再試"
+    "backend_unavailable": "後端尚未連線，請稍後再試",
+    "unknown_template": "找不到這個範本，請重新載入清單",
+    "template_unavailable": "這個版本沒有內建這個範本",
+    "invalid_destination": "目的地路徑無效，請重新選擇",
+    "unsafe_destination": "目的地不能是家目錄本身或它的上層，請選一個專屬的資料夾",
+    "probe_dest_failed": "無法讀取部署目的地，請確認資料夾權限後重試",
+    "template_failed": "範本部署失敗，請稍後再試",
+    "templates_failed": "範本清單載入失敗，請稍後再試"
   }
 }

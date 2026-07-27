@@ -99,14 +99,39 @@
     "kmsDesc": "The memory panel reads library/ and topics/ under this folder as cross-project knowledge.",
     "kmsPlaceholder": "/absolute/path/to/knowledge-base",
     "tplTitle": "Deploy a template",
-    "tpl1": "A CLAUDE.md and docs/ skeleton for a new project — generic, meant to be edited.",
-    "tpl2": "Personal development methodology documents.",
-    "tpl3": "Knowledge base directory skeleton.",
-    "notDeployed": "Not deployed",
+    "tpl": {
+      "project-starter": {
+        "name": "Project starter",
+        "desc": "A CLAUDE.md and docs/ skeleton for a new project — generic, meant to be edited."
+      },
+      "dev-methodology": {
+        "name": "Development methodology",
+        "desc": "Personal development methodology documents."
+      },
+      "kms-seed": {
+        "name": "Knowledge base seed",
+        "desc": "Knowledge base directory skeleton."
+      }
+    },
     "notBundled": "Not bundled",
+    "state": {
+      "not_installed": "Not deployed",
+      "partial": "Partly deployed",
+      "complete": "Deployed",
+      "conflict": "Destination has conflicting items"
+    },
+    "result": {
+      "created": "Created",
+      "skipped": "Already there — kept as is",
+      "conflict": "Name taken by a different kind of item — left alone",
+      "stale": "Changed while deploying — left alone",
+      "failed": "Failed",
+      "unknown": "Unknown result"
+    },
     "deployTo": "Deploy to",
     "otherLocation": "Somewhere else…",
     "deploy": "Deploy",
+    "needDest": "Pick a destination first.",
     "deployHint": "Never overwrites: existing files at the destination are always kept, only what's missing is added.",
     "skipAll": "Skip all"
   },
@@ -167,6 +192,13 @@
     "subs_failed": "Couldn't save the subscription list — try again in a moment",
     "kms_failed": "Couldn't save the knowledge base root — try again in a moment",
     "kms_failed_subs_saved": "Saved the subscription list, but couldn't save the knowledge base root — try again in a moment",
-    "backend_unavailable": "The backend isn't connected yet — try again in a moment"
+    "backend_unavailable": "The backend isn't connected yet — try again in a moment",
+    "unknown_template": "That template no longer exists — reload the list",
+    "template_unavailable": "This build doesn't bundle that template",
+    "invalid_destination": "That destination path isn't valid — pick another",
+    "unsafe_destination": "The destination can't be your home folder itself or one of its parents — pick a dedicated folder",
+    "probe_dest_failed": "Couldn't read the destination folder — check its permissions and try again",
+    "template_failed": "Couldn't deploy the template — try again in a moment",
+    "templates_failed": "Couldn't load the template list — try again in a moment"
   }
 }
