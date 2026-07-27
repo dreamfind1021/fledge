@@ -549,7 +549,8 @@ describe("CommonConfigCard 共通設置卡", () => {
 
     await waitFor(() => expect(ui.getByText(zh.cc.naTitle)).toBeTruthy());
     expect(commonConfigPlan).not.toHaveBeenCalled();
-    expect(ui.getByRole("alert").textContent).toContain(zh.errors.check_dir_failed.split("{{")[0]);
+    expect(ui.getByRole("alert").textContent).toBe(zh.errors.check_dir_failed);
+    expect(ui.container.textContent).not.toContain("Failed to fetch"); // 例外原文只進 console
     expect(ui.container.textContent).toContain("~/.claude-tc"); // 說明是哪個目錄沒確認到
     // 探測失敗 ≠ 目錄不存在。同一張卡上寫「偵測到 X 不存在」又跳「無法確認 X」是自相矛盾
     expect(ui.container.textContent).toContain(firstLine(zh.cc.naDescBlocked).split("<code>")[0]);
@@ -629,9 +630,15 @@ describe("CommonConfigCard 共通設置卡", () => {
     });
     await settled(ui);
 
-    const groups = [...ui.container.querySelectorAll(".b4-sec-h")];
-    // 標題要能對出「這一組是哪個帳號的哪個目錄」——只列 key 的話畫面上沒有第二處可以對照
-    expect(groups.map((g) => g.textContent)).toEqual(["personal~/.claude-tc", "extra~/.claude-x"]);
+    // 標題要能對出「這一組是哪個帳號的哪個目錄」——只列 key 的話畫面上沒有第二處可以對照。
+    // 帳號名與目錄分開查（吃整段 textContent 會斷言成 `personal~/.claude-tc` 這種黏在一起的
+    // 字串，看不出是兩個元素，改了排版就得跟著改斷言，Codex 票 29 R4 Low）
+    const groups = [...ui.container.querySelectorAll(".b4-group-head")];
+    expect(groups.map((g) => g.firstChild?.textContent)).toEqual(["personal", "extra"]);
+    expect(groups.map((g) => g.querySelector(".b4-group-path")?.textContent)).toEqual([
+      "~/.claude-tc",
+      "~/.claude-x",
+    ]);
     const lists = [...ui.container.querySelectorAll(".b4-list")];
     expect(lists).toHaveLength(2);
     // 每組只能有自己那個帳號的項目——只數清單數量的話，兩組都塞全部 operation 也會通過
@@ -639,6 +646,18 @@ describe("CommonConfigCard 共通設置卡", () => {
       expect(list.querySelectorAll(".b4-item")).toHaveLength(1);
     }
     expect(lists[0].textContent).toContain("commands");
+  });
+
+  // 只有一組的人同樣需要知道那一組是誰——分組標題若只在多 target 時才出現，單帳號使用者
+  // 就看不到自己在同步哪個目錄（元件註解已寫明會照顯示，但先前沒有測試守住）
+  it("單一 target：分組標題照樣列出帳號名與目錄", async () => {
+    const ui = renderCard();
+    await settled(ui);
+
+    const groups = [...ui.container.querySelectorAll(".b4-group-head")];
+    expect(groups).toHaveLength(1);
+    expect(groups[0].firstChild?.textContent).toBe("personal");
+    expect(groups[0].querySelector(".b4-group-path")?.textContent).toBe("~/.claude-tc");
   });
 
   // 部分帳號可用時仍會照常顯示卡片；被排除的那些不能就這樣消失，否則畫面看起來像
