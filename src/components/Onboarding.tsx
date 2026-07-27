@@ -4,12 +4,13 @@ import { useTranslation, Trans } from "react-i18next";
 import { useAppStore } from "../store/useAppStore";
 import { scanPreview } from "../lib/sidecar";
 import { pickDirectory } from "../lib/dialog";
-import { wizardSteps, clampStepIndex, progressCells, type WizardStep } from "../lib/onboardingSteps";
+import { wizardSteps, clampStepIndex, progressCells } from "../lib/onboardingSteps";
 import { FeatherMark } from "./Logo";
 import { LangSwitch } from "./LangSwitch";
 import { EnvCard } from "./EnvCard";
 import { LoginCard } from "./LoginCard";
 import { CommonConfigCard } from "./CommonConfigCard";
+import { SystemSettingsCard } from "./SystemSettingsCard";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -21,12 +22,6 @@ interface DraftRoot {
   account: string;
   count: number;
 }
-
-// 待填頁 → catalog 群名。群名沿用 demo 的簡寫（system→sys），與頁 id 不同名。
-// 內容由票 27–28 補；外殼只負責標題、說明與導覽。
-const PENDING_NS: Partial<Record<WizardStep, string>> = {
-  system: "sys",
-};
 
 export function Onboarding({ onClose }: OnboardingProps) {
   const { t } = useTranslation("onboarding");
@@ -148,7 +143,6 @@ export function Onboarding({ onClose }: OnboardingProps) {
 
   const totalProjects = draftRoots.reduce((s, r) => s + r.count, 0);
   const distinctAccounts = new Set(draftRoots.map((r) => r.account)).size;
-  const pendingNs = PENDING_NS[step];
 
   return (
     <div className="ob-overlay" ref={overlayRef}>
@@ -292,16 +286,15 @@ export function Onboarding({ onClose }: OnboardingProps) {
             />
           )}
 
-          {/* ── 系統設置：外殼就位，內容待票 27–28 ── */}
-          {pendingNs && (
-            <div>
-              <h2 className="ob-h">{t(`${pendingNs}.h`)}</h2>
-              <p className="ob-sub">{t(`${pendingNs}.sub`)}</p>
-              <div className="ob-actions">
-                <button onClick={prev} className="ob-btn-ghost">{t("common.prev")}</button>
-                <button onClick={next} className="ob-btn">{t("common.next")}</button>
-              </div>
-            </div>
+          {/* ── 系統設置（票 27）：訂閱 + 知識庫根目錄，兩區都可略過；範本卡待票 28 ── */}
+          {step === "system" && (
+            <SystemSettingsCard
+              port={port}
+              subscriptions={config?.subscriptions ?? []}
+              kmsRoot={config?.kms_root ?? ""}
+              onPrev={prev}
+              onNext={next}
+            />
           )}
 
           {/* ── 完成 ── */}
