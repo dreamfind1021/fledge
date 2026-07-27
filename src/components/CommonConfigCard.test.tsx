@@ -817,9 +817,11 @@ describe("CommonConfigCard 設定頁版（allowOverwrite）", () => {
     expect(ui.container.querySelector<HTMLInputElement>(".st-check input")!.checked).toBe(false);
   });
 
-  // 舊上下文的 apply 回來時，使用者可能已經換帳號並在新上下文重新勾了同一個 pair。
-  // 「送出即用掉」若不看上下文就照刪，會變成「勾了卻沒送出」（Codex R2 Medium）
-  it("換帳號後重新勾同一項：舊上下文的套用回應不會把新授權清掉", async () => {
+  // 這條驗的是**第二道防線（state 層不變式）**，不是使用者可達的流程：apply 在途時勾選框是
+  // disabled，真的使用者沒辦法在舊請求回來前於新上下文勾選。RTL 的 `fireEvent` 會繞過 disabled，
+  // 這裡**刻意**借它把 state 推到待驗位置，確認舊請求的 finally 不會刪掉屬於新上下文的授權
+  // （Codex R2 Medium）。留這道防線的理由：哪天把「送出途中可勾選」放開，它就會變成可達的。
+  it("舊上下文的套用回應不清掉新上下文的授權（UI 另有 disabled 擋在前面）", async () => {
     let releaseApply = (_r: CommonConfigOpResult[]) => {};
     commonConfigApply.mockImplementation(
       () => new Promise<CommonConfigOpResult[]>((resolve) => { releaseApply = resolve; }),
@@ -840,6 +842,8 @@ describe("CommonConfigCard 設定頁版（allowOverwrite）", () => {
       />,
     );
     await waitFor(() => expect(ui.container.querySelector<HTMLInputElement>(".st-check input")?.checked).toBe(false));
+    // UI 的第一道閘：送出途中真的按不動（下一行靠 fireEvent 繞過它，見上面的註解）
+    expect(ui.container.querySelector<HTMLInputElement>(".st-check input")!.disabled).toBe(true);
     fireEvent.click(ui.container.querySelector<HTMLInputElement>(".st-check input")!);
 
     // 舊上下文的回應這才回來——它只能作廢自己那一輪，不能碰新上下文的勾選

@@ -378,7 +378,7 @@ export function CommonConfigCard({
   // 「不適用」的卡也要有——使用者補建了帳號目錄之後，不然只能關掉設定頁再開一次。
   const recheckButton = allowOverwrite ? (
     <span className="b4-card-actions">
-      <button className="b4-btn-sm" onClick={load} disabled={loading || busy}>
+      <button type="button" className="b4-btn-sm" onClick={load} disabled={loading || busy}>
         {t("env.recheck")}
       </button>
     </span>
