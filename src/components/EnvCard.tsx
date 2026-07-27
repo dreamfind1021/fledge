@@ -49,8 +49,11 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
       setTools(next);
     } catch (e) {
       if (reqId.current !== myId) return;
-      // 偵測失敗要可見（沉默的空清單會被當成「什麼都沒裝」）；舊結果保留在畫面上
-      setDetectError(t("errors.status_failed", { reason: String(e) }));
+      // 偵測失敗要可見（沉默的空清單會被當成「什麼都沒裝」）；舊結果保留在畫面上。
+      // 例外原文只進 console——`String(e)` 會把 HTTP 狀態碼與 sidecar 的中文 prose
+      // 帶進畫面，違反「畫面全由 catalog 映射」（spec-b4 §5）
+      console.error("[onboarding] 工具偵測失敗", e);
+      setDetectError(t("errors.status_failed"));
     } finally {
       if (reqId.current === myId) setLoading(false);
     }
@@ -98,7 +101,7 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
       options: { path: "", kind: "install", installId: tool.id },
       meta: tool.install_command ?? "",
       mapError: (code) => (code === "unknown_install_id" ? t("errors.unknown_install_id") : null),
-      fallbackError: (reason) => t("errors.install_failed", { reason }),
+      fallbackError: () => t("errors.install_failed"),
     });
     if (ok) setExpandedId(null);   // 確認面板讓位給終端機
   };

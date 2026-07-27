@@ -56,7 +56,7 @@ export function LoginCard({ port, accounts, onPrev, onNext }: LoginCardProps) {
       options: { path: "", account: card.account, kind: "login", loginTarget: card.target },
       meta: card.title,
       mapError: (code) => (code === "unknown_account" ? t("errors.unknown_account") : null),
-      fallbackError: (reason) => t("errors.login_failed", { reason }),
+      fallbackError: () => t("errors.login_failed"),
     });
 
   return (
