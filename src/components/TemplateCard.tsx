@@ -136,8 +136,11 @@ export function TemplateCard({ port }: TemplateCardProps) {
       if (r.status === "fulfilled") map[tpl.id] = r.value;
     });
     setPlans({ ctx: myCtx, map });
-    const failed = settled.find((r) => r.status === "rejected");
-    if (failed) setError(describeError(failed.reason));
+    // 畫面只講第一個錯誤（一張卡列多條全域錯誤反而難讀），但**每一個**都要留在 console：
+    // 兩個範本各自以不同原因失敗時，只留一個等於把另一個的診斷資訊靜默吞掉（Codex R2 #1）
+    const failures = settled.filter((r) => r.status === "rejected");
+    for (const f of failures) console.warn("[templates] 預覽失敗", f.reason);
+    if (failures.length > 0) setError(describeError(failures[0].reason));
   }, [port, dest, templates, ctx, describeError]);
 
   // deploy 回來時要比對「畫面現在的上下文」，而它 closure 裡的 ctx 是送出當下那一版，故只能靠 ref。

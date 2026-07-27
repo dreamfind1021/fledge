@@ -10,6 +10,7 @@ import {
   type Project,
   type TemplateDeployResult,
   type TemplateInfo,
+  type TemplateOutcome,
   type TemplatePlan,
 } from "../lib/sidecar";
 import { TemplateCard } from "./TemplateCard";
@@ -203,27 +204,54 @@ describe("TemplateCard 範本卡（精靈版）", () => {
     );
   });
 
-  // 換目的地會讓兩輪預覽重疊：晚到的舊回應照樣寫進 state 的話，畫面會顯示上一個目的地的狀態
-  it("舊目的地的預覽晚回：不覆蓋新目的地的畫面，舊逐檔結果也不留著", async () => {
+  // 換目的地會讓兩輪預覽重疊：晚到的舊回應照樣寫進 state 的話，畫面會顯示上一個目的地的狀態。
+  // 這條**刻意不部署**——deploy 成功後的 refresh 自己就會推進 reqId，讓舊請求在換目的地之前
+  // 就已經 stale，那樣測不到 A→B 的失效（Codex R2 #2 抓到前一版正是這種假綠）
+  it("舊目的地的預覽晚回：不覆蓋新目的地的畫面", async () => {
     let releaseOld = (_p: TemplatePlan) => {};
     templatesPlan.mockImplementationOnce(() => new Promise<TemplatePlan>((resolve) => { releaseOld = resolve; }));
     const ui = renderCard();
     await settled(ui);
     await waitFor(() => expect(templatesPlan).toHaveBeenCalledTimes(1)); // 第一輪懸在半空
 
-    // 先部署一次（第一個目的地）留下逐檔結果，再換目的地
-    fireEvent.click(ui.getByText(zh.sys.deploy));
-    await waitFor(() => expect(ui.getByText(zh.sys.result.created)).toBeTruthy());
-
     templatesPlan.mockResolvedValue(plan({ destination: "/Users/x/work/llm-wiki", state: "complete" }));
     fireEvent.change(ui.container.querySelector("select")!, { target: { value: "/Users/x/work/llm-wiki" } });
     await waitFor(() => expect(rows(ui)[0].textContent).toContain(zh.sys.state.complete));
-    // 換目的地＝上一個目的地的逐檔結果不再描述畫面上的東西
-    expect(ui.queryByText(zh.sys.result.created)).toBeNull();
 
     await act(async () => { releaseOld(plan({ state: "not_installed" })); }); // 舊的這才回來
     expect(rows(ui)[0].textContent).toContain(zh.sys.state.complete);
     expect(rows(ui)[0].textContent).not.toContain(zh.sys.state.not_installed);
+  });
+
+  it("換目的地：上一個目的地的逐檔結果不留在畫面上", async () => {
+    const ui = renderCard();
+    await settled(ui);
+    fireEvent.click(ui.getByText(zh.sys.deploy));
+    await waitFor(() => expect(ui.getByText(zh.sys.result.created)).toBeTruthy());
+
+    fireEvent.change(ui.container.querySelector("select")!, { target: { value: "/Users/x/work/llm-wiki" } });
+
+    await waitFor(() => expect(ui.queryByText(zh.sys.result.created)).toBeNull());
+    expect(ui.queryByText(zh.sys.result.skipped)).toBeNull();
+  });
+
+  // outcome 是後端定義的：新增一種而前端 catalog 沒跟上時，動態組 key 會把 `sys.result.<code>`
+  // 這種技術識別字顯示給使用者。union 型別只在編譯期擋得住，runtime 要有退路
+  it("未知的逐檔 outcome：退到通用文案而不是顯示 i18n key", async () => {
+    templatesDeploy.mockResolvedValue({
+      template: "project-starter",
+      destination: "/Users/x/work/fledge",
+      // 後端新增了一種 outcome，前端型別還沒跟上——runtime 真的會拿到這個值
+      results: [{ path: "CLAUDE.md", outcome: "brand_new_outcome" as TemplateOutcome, error: null }],
+    });
+    const ui = renderCard();
+    await settled(ui);
+
+    fireEvent.click(ui.getByText(zh.sys.deploy));
+
+    await waitFor(() => expect(ui.getByText(zh.sys.result.unknown)).toBeTruthy());
+    expect(ui.container.textContent).not.toContain("sys.result.");
+    expect(ui.container.querySelector(".b4-file .b4-chip")?.className).toContain("warn");
   });
 
   // self-use build 可能同時有三個可用範本；一個壞掉不該讓另外兩個成功的狀態一起消失
