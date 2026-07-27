@@ -39,10 +39,12 @@ export function SystemSettingsCard({ port, subscriptions, kmsRoot, onPrev, onNex
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // dirty 的比較基準是「後端已經有的值」，**不是**當下的 props：sidecar 重啟或外部改動會讓 props
-  // 換成新值，拿它跟沒被碰過的表單比會判成 dirty，然後把畫面上的舊值寫回去、蓋掉較新的設定
-  // （Codex R1 #2）。存進去成功就更新基準，於是部分成功後的重試不會重送已經成功的那一段
-  // ——這也讓該行為不必依賴 store 把 PUT 回應回吐成新的 props。
+  // dirty 的比較基準＝**本卡已知、已成功持久化的 baseline**（mount 時的 config 值，之後每次存成功
+  // 就往前推），刻意**不是**當下的 props：sidecar 重啟或外部改動會讓 props 換成新值，拿它跟沒被碰過
+  // 的表單比會判成 dirty，然後把畫面上的舊值寫回去、蓋掉較新的設定（Codex R1 #2）。存進去成功才更新
+  // 基準，於是部分成功後的重試不會重送已經成功的那一段——也讓該行為不必依賴 store 把 PUT 回應回吐成
+  // 新的 props。注意 baseline 不等於「後端當下的現況」：外部改過而使用者沒碰表單時，兩者會不一致
+  // （後果是畫面陳舊，但不會寫回舊值——見 PROJECT_MAP 的已知限制）。
   const savedSubs = useRef(subscriptions);
   const savedKms = useRef(kmsRoot.trim());
 

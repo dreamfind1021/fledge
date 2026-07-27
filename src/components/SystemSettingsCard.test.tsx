@@ -187,6 +187,26 @@ describe("SystemSettingsCard 系統設置頁（訂閱 + KMS 根目錄）", () =>
     vi.restoreAllMocks();
   });
 
+  // baseline 只能在存成功之後才前進：提前更新的話，第一次失敗就會讓重試誤判「沒改」而不再送出，
+  // 使用者填的東西永遠進不去後端
+  it("訂閱第一次失敗：重試仍會再送一次訂閱", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    saveSubscriptions.mockRejectedValueOnce(new Error("HTTP 500"));
+    const ui = renderCard();
+    addItem(ui);
+    fillRow(ui, 0, "Claude", "200");
+    next(ui);
+
+    await waitFor(() => expect(ui.getByText(zh.errors.subs_failed)).toBeTruthy());
+    expect(onNext).not.toHaveBeenCalled();
+
+    next(ui); // 重試：這次 mock 會成功
+    await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+    expect(saveSubscriptions).toHaveBeenCalledTimes(2);
+    expect(saveSubscriptions).toHaveBeenLastCalledWith([{ name: "Claude", monthly_cost: 200 }]);
+    vi.restoreAllMocks();
+  });
+
   // sidecar 重啟／外部改動會讓 props 換成新值。拿新 props 跟沒被碰過的表單比會判成 dirty，
   // 然後把畫面上的舊值寫回去蓋掉較新的設定——基準必須是「後端已經有的值」而非當下 props
   it("props 在 mount 後換成新值、表單沒被碰過：不把舊值寫回後端", async () => {
