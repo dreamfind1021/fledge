@@ -1,18 +1,20 @@
 """定價表與計價。單位一律 USD per MTok；公式統一 ÷ 1_000_000（design §7）。
 
 定價更新流程：改表 → 遞增 PRICING_VERSION → L2 快取自動只重算 cost（cache.py）。
-數字來源：Claude＝claude-api 參考（2026-07 加入 sonnet-5，用標準價非促銷價）；gpt-5 系列＝LiteLLM 表釘住（2026-06-12）。
+數字來源：Claude＝claude-api 參考（2026-07 加入 sonnet-5 用標準價非促銷價、opus-5 對 Anthropic
+官方定價頁核對）；gpt-5 系列＝LiteLLM 表釘住（2026-06-12）。
 """
 from __future__ import annotations
 
 import re
 
-PRICING_VERSION = "2026-07-18.1"
+PRICING_VERSION = "2026-07-28.1"
 
 _MTOK = 1_000_000
 
 # Claude：(input, output)；cache 用統一倍率（write 5m=1.25x、1h=2x、read=0.1x input）
 CLAUDE_PRICING: dict[str, tuple[float, float]] = {
+    "claude-opus-5": (5.0, 25.0),
     "claude-opus-4-8": (5.0, 25.0),
     "claude-opus-4-7": (5.0, 25.0),
     "claude-opus-4-6": (5.0, 25.0),
