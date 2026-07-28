@@ -13,6 +13,7 @@ sidecar/dist/
 sidecar/*.spec
 sidecar/__pycache__/
 sidecar/**/__pycache__/
+__pycache__/
 sidecar/*.egg-info/
 .pytest_cache/
 
