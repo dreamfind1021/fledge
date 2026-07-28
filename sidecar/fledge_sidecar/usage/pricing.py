@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import re
 
-from fledge_sidecar.usage.pricing_table import (CLAUDE_PRICING,  # noqa: F401 —— 對外沿用 pricing.* 入口
-                                                CODEX_PRICING, TABLE_VERSION)
+from fledge_sidecar.usage.pricing_table import (CLAUDE_PRICING, CODEX_PRICING,
+                                                TABLE_VERSION)
 
 PRICING_VERSION = TABLE_VERSION
 
@@ -17,6 +17,22 @@ _MTOK = 1_000_000
 _CLAUDE_ALIASES = {"opus": "claude-opus-4-8", "sonnet": "claude-sonnet-5", "haiku": "claude-haiku-4-5"}
 _CLAUDE_DATE_SUFFIX = re.compile(r"-\d{8}$")
 _CODEX_DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+
+# ---- sync 例外清單（key → 理由）----------------------------------------------
+# 只影響 admin/sync_pricing.py 的寫入決策，不參與 runtime 查表——runtime 一律以
+# pricing_table.py 為準。理由留在這裡而非表裡，因為表整檔可重生、留不住敘事。
+
+# 刻意不跟上游現價：sync 保留表內現值，只報告差異。
+PINNED: dict[str, str] = {
+    "claude-sonnet-5": "釘標準價 $3/$15。Anthropic 官方：促銷價 $2/$10 至 2026-08-31，"
+                       "9/1 起標準價生效；上游追促銷價。靜態表不追時間，且 Net ROI 需跨月可比。",
+}
+
+# 刻意不入表：查無定價會走 missing 警示，比默默用近似價安全。
+EXCLUDED: dict[str, str] = {
+    "gpt-5.6": "OpenAI 官方定價頁只列 sol/terra/luna 三個 tier，裸 gpt-5.6 是上游自造（＝sol 價）。"
+               "若實跑 luna 會錯 5×，寧可 missing。",
+}
 
 
 def normalize_claude_model(raw: str) -> str | None:

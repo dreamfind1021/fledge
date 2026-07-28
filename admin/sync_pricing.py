@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""從 LiteLLM 的定價表重生 sidecar/fledge_sidecar/usage/pricing_table.py。
+
+    python admin/sync_pricing.py                 # 抓上游 → 印差異 → 寫表 → 掃本機用量報缺漏
+    python admin/sync_pricing.py --dry-run       # 只印差異，不寫檔
+    python admin/sync_pricing.py --from t.json   # 用本機快照（離線／重現同一次審查）
+    python admin/sync_pricing.py --no-check-local  # 跳過本機 jsonl 覆蓋率掃描
+
+離開碼：0＝表已是最新且本機模型全有價；1＝有缺漏或同步失敗（供 shell 判斷）。
+
+為何是 build-time 同步而非執行期抓取上游，見 docs/adr/0005-build-time-pricing-vendoring.md。
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+_REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO / "sidecar"))
+
+from fledge_sidecar.app_config import AppConfig  # noqa: E402
+from fledge_sidecar.usage import parser, pricing, scanner  # noqa: E402
+from fledge_sidecar.usage import pricing_table as current  # noqa: E402
+
+UPSTREAM_URL = ("https://raw.githubusercontent.com/BerriAI/litellm/main/"
+                "model_prices_and_context_window.json")
+TABLE_PATH = _REPO / "sidecar" / "fledge_sidecar" / "usage" / "pricing_table.py"
+
+# Claude cache 三層在 pricing.py 是寫死倍率而非存價——同步時驗證它仍成立
+_CACHE_MULTIPLIERS = {"cache_creation_input_token_cost": 1.25,
+                      "cache_creation_input_token_cost_above_1hr": 2.0,
+                      "cache_read_input_token_cost": 0.1}
+
+
+def fetch_upstream(local: str | None) -> dict:
+    if local:
+        return json.loads(Path(local).expanduser().read_text(encoding="utf-8"))
+    req = urllib.request.Request(UPSTREAM_URL, headers={"User-Agent": "fledge-sync-pricing"})
+    with urllib.request.urlopen(req, timeout=30) as resp:   # noqa: S310 —— 固定 https 常數 URL
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _is_bare(key: str) -> bool:
+    """只收第一方 API 的裸 key。
+
+    `/`＝vertex_ai/、azure_ai/ 等路徑式 provider；`:`＝Bedrock 版本尾綴（-v1:0）——
+    兩者都是區域／代管價，與第一方不同帶。點號式 provider 前綴（anthropic.、us.…）
+    不必在此擋，它們過不了下游的 claude-／gpt-5 前綴比對。
+    """
+    return "/" not in key and ":" not in key
+
+
+def _mtok(value: float | None) -> float:
+    """per-token → per-MTok。round 消 float 乘法噪音（5e-06*1e6 = 5.000000000000001）。"""
+    return round((value or 0.0) * 1_000_000, 6)
+
+
+def _cache_multiplier_issues(entry: dict) -> list[str]:
+    """回該款與 pricing.py 寫死倍率不符的欄位描述（上游未提供的層不算不符）。
+
+    刻意不在同步階段就印出來：退役舊款（如 claude-3-haiku 的 1.2×／claude-3-opus 的 1h 垃圾值）
+    會讓警示永久嘮叨，而沒人在跑那些模型。呼叫端只對「本機真的用過的款」發警示。
+    """
+    p_in = entry.get("input_cost_per_token") or 0.0
+    issues = []
+    for field, expected in _CACHE_MULTIPLIERS.items():
+        raw = entry.get(field)
+        if not raw:
+            continue
+        actual = round(raw / p_in, 4)
+        if abs(actual - expected) > 1e-6:
+            issues.append(f"{field} 上游 {actual}×、pricing.py 寫死 {expected}×")
+    return issues
+
+
+def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str], dict[str, list[str]]]:
+    """回 (claude_table, codex_table, notes, conflicts, cache_issues)。
+
+    表 key＝上游裸 key 餵進 Fledge 自己的 normalize——保證「表裡的 key」與
+    「runtime 查表時用的 key」由同一段程式產生，不會各自漂移。
+    """
+    claude: dict[str, tuple[float, float]] = {}
+    codex: dict[str, tuple[float, float, float]] = {}
+    seen: dict[str, dict[str, tuple]] = {}      # 正規化 key → {上游 key: price}
+    cache_issues: dict[str, list[str]] = {}     # 正規化 key → 倍率不符欄位
+    notes: list[str] = []
+    warnings: list[str] = []
+
+    for key, entry in sorted(raw.items()):
+        if not isinstance(entry, dict) or not _is_bare(key):
+            continue
+        p_in = entry.get("input_cost_per_token")
+        if not p_in:
+            continue
+        if key.startswith("claude-"):
+            norm = pricing.normalize_claude_model(key)
+            if norm is None:
+                continue
+            issues = _cache_multiplier_issues(entry)
+            if issues:
+                cache_issues[norm] = issues
+            price: tuple = (_mtok(p_in), _mtok(entry.get("output_cost_per_token")))
+            table = claude
+        elif key.startswith("gpt-5"):
+            norm = pricing.normalize_codex_model(key)
+            # 上游對 pro 系列的 cached 價不一致（有的填 0、有的填 0.1×），官方頁標「—」＝未提供。
+            # 填 0 會把 cached token 當免費＝低估，故退回 input 價（寧可高估不低估）。
+            cached = entry.get("cache_read_input_token_cost") or p_in
+            price = (_mtok(p_in), _mtok(cached), _mtok(entry.get("output_cost_per_token")))
+            table = codex
+        else:
+            continue
+
+        if norm in pricing.EXCLUDED:
+            notes.append(f"跳過 {norm}（EXCLUDED）：{pricing.EXCLUDED[norm]}")
+            continue
+        seen.setdefault(norm, {})[key] = price
+        table[norm] = price
+
+    # 同一正規化 key 被多個上游 key 指到且價格不一致 → 不猜，中止寫入
+    conflicts = [f"{norm}：{sources}" for norm, sources in seen.items()
+                 if len({v for v in sources.values()}) > 1]
+
+    # _PINNED：保留表內現值，只報差異（表內沒有才退回上游）
+    for key, reason in pricing.PINNED.items():
+        for table, cur in ((claude, current.CLAUDE_PRICING), (codex, current.CODEX_PRICING)):
+            if key not in table:
+                continue
+            held = cur.get(key)
+            if held is None:
+                warnings.append(f"{key} 標為 PINNED 但現有表沒有它 → 本次採用上游值 {table[key]}")
+                continue
+            if held != table[key]:
+                notes.append(f"保留 {key} = {held}（PINNED，上游為 {table[key]}）：{reason}")
+            table[key] = held
+
+    for key in pricing.EXCLUDED:
+        if key not in raw:
+            warnings.append(f"EXCLUDED 的 {key} 已不在上游 → 該例外可能已過期，請複核")
+    for key in pricing.PINNED:
+        if key not in claude and key not in codex:
+            warnings.append(f"PINNED 的 {key} 已不在上游 → 該例外可能已過期，請複核")
+
+    return claude, codex, notes + warnings, conflicts, cache_issues
+
+
+def render_table(claude: dict, codex: dict) -> str:
+    payload = json.dumps({"claude": claude, "codex": codex}, sort_keys=True)
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
+    version = f"{datetime.date.today().isoformat()}.{digest}"
+    lines = [
+        '"""定價表：自動生成，請勿手改（單位一律 USD per MTok）。',
+        "",
+        "由 `python admin/sync_pricing.py` 從 LiteLLM model_prices_and_context_window.json 重生；",
+        "表 key 已套用 pricing.py 的正規化（剝日期後綴），故等同 runtime 查表用的 key。",
+        "計價公式與正規化在 pricing.py；刻意偏離上游的項目與理由記在 pricing.py 的 PINNED / EXCLUDED。",
+        '"""',
+        "from __future__ import annotations",
+        "",
+        "# <生成日期>.<表內容 sha256 前 8 碼>：內容一變就變，改表不可能忘記遞增。",
+        "# cache.py 只做相等比對，不解析內容。",
+        f'TABLE_VERSION = "{version}"',
+        "",
+        "# Claude：(input, output)；cache 用統一倍率（write 5m=1.25x、1h=2x、read=0.1x input），",
+        "# 倍率由 sync 對上游逐款驗證，不符會警示。",
+        "CLAUDE_PRICING: dict[str, tuple[float, float]] = {",
+    ]
+    lines += [f'    "{k}": {v!r},' for k, v in sorted(claude.items())]
+    lines += [
+        "}",
+        "",
+        "# Codex：(input, cached_input, output)",
+        "CODEX_PRICING: dict[str, tuple[float, float, float]] = {",
+    ]
+    lines += [f'    "{k}": {v!r},' for k, v in sorted(codex.items())]
+    lines += ["}", ""]
+    return "\n".join(lines)
+
+
+def scan_local_models() -> set[str]:
+    """本機用量檔實際出現過的模型名（已正規化）。
+
+    刻意走 sidecar 自己的 scanner + parser，不自行解析 jsonl——重寫解析等於重新踩
+    「grep 到 Agent tool 參數而非 message.model」那類坑。
+    """
+    config = AppConfig.load()
+    codex_home = Path(os.environ.get("FLEDGE_CODEX_HOME") or (Path.home() / ".codex"))
+    models: set[str] = set()
+    for path in scanner.claude_files(config):
+        for entry in parser.parse_claude_file(path)[0]:
+            models.add(entry.model)
+    for path in scanner.codex_files(codex_home):
+        for entry in parser.parse_codex_file(path).entries:
+            models.add(entry.model)
+    # <synthetic> 是排除計價非查無定價；unknown-codex 是檔內缺 turn_context，不是定價缺口
+    return models - {"<synthetic>", "unknown-codex"}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="從 LiteLLM 重生 pricing_table.py")
+    ap.add_argument("--from", dest="local", help="改讀本機 JSON 快照，不連外")
+    ap.add_argument("--dry-run", action="store_true", help="只印差異不寫檔")
+    ap.add_argument("--no-check-local", action="store_true", help="跳過本機用量覆蓋率掃描")
+    args = ap.parse_args()
+
+    try:
+        raw = fetch_upstream(args.local)
+    except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
+        print(f"上游取得失敗：{exc}", file=sys.stderr)
+        return 1
+
+    claude, codex, notes, conflicts, cache_issues = build_tables(raw)
+    if conflicts:
+        print("同一模型名對到不同價格，不猜、中止寫入：", file=sys.stderr)
+        for line in conflicts:
+            print(f"  ✗ {line}", file=sys.stderr)
+        return 1
+
+    for line in notes:
+        print(f"  ℹ {line}")
+
+    added = sorted(set(claude) - set(current.CLAUDE_PRICING)) + \
+        sorted(set(codex) - set(current.CODEX_PRICING))
+    removed = sorted(set(current.CLAUDE_PRICING) - set(claude)) + \
+        sorted(set(current.CODEX_PRICING) - set(codex))
+    changed = [k for k, v in {**claude, **codex}.items()
+               if k in {**current.CLAUDE_PRICING, **current.CODEX_PRICING}
+               and {**current.CLAUDE_PRICING, **current.CODEX_PRICING}[k] != v]
+    for label, keys in (("新增", added), ("移除", removed), ("改價", changed)):
+        for k in keys:
+            print(f"  {label} {k}")
+    print(f"  表：claude {len(claude)} 款、codex {len(codex)} 款")
+
+    if not args.dry_run:
+        rendered = render_table(claude, codex)
+        tmp = TABLE_PATH.with_name(TABLE_PATH.name + ".tmp")
+        tmp.write_text(rendered, encoding="utf-8")
+        os.replace(tmp, TABLE_PATH)
+        print(f"  已寫入 {TABLE_PATH.relative_to(_REPO)}（請審 git diff 後 commit）")
+
+    if args.no_check_local:
+        return 0
+    local = scan_local_models()
+    # 倍率不符只對「本機真的用過的款」發警示——退役舊款的上游 cache 欄位常是垃圾值，
+    # 對它們永久嘮叨只會訓練人忽略警示
+    for model in sorted(local & cache_issues.keys()):
+        print(f"  ⚠ {model} 的 cache 定價與固定倍率不符：{'；'.join(cache_issues[model])}",
+              file=sys.stderr)
+    missing = sorted(m for m in local if m not in claude and m not in codex)
+    if missing:
+        print("\n本機用量出現、但新表仍查無定價的模型（上游也還沒收錄）：", file=sys.stderr)
+        for m in missing:
+            print(f"  ⚠ {m}", file=sys.stderr)
+        return 1
+    print(f"  本機用量出現過的 {len(local)} 款模型全數有價")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
