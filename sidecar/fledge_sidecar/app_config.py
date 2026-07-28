@@ -10,12 +10,21 @@ from typing import Any
 
 from fledge_sidecar.paths import resolve_best_effort
 
+# 預設**單一帳號**（票 31）：多帳號是進階用法，不預設塞給每個人——預先塞第二個帳號會讓
+# 精靈白跑一頁共通設置、共通設置卡顯示「不適用」、觀測面板多一個永遠沒資料的帳號，使用者
+# 還得自己去設定頁刪掉。第二個帳號由使用者在設定頁的 AccountsEditor 自行新增。
+# `config_dir` 用 Claude Code 的官方預設位置；`label` 留空是刻意的——UI 缺 label 時退回
+# 顯示 key（`sidebarGroups`），後端因此不必輸出任何 user-facing 文案（CLAUDE.md §4.6.13）。
+# 影響範圍：`load()` 在設定檔不存在時整份取用本表，**有 `accounts` 欄位的既有 config.json
+# 完全不受影響**。唯一的例外是設定檔存在卻缺 `accounts` 欄位——下面的 `data.get(...)` 會讓它
+# 也拿到這裡的預設（改預設前拿到的是舊的 work/personal）。那種檔案 Fledge 自己寫不出來
+# （`to_dict()` 固定輸出 accounts），只可能來自手動編輯，本就是損壞狀態；給它舊的 work/personal
+# 同樣只是另一種猜測，故不為它保留 legacy fallback（票 31，Codex R1 Medium 覆核後的裁示）。
 DEFAULT_CONFIG: dict[str, Any] = {
     "version": 1,
     "roots": [],
     "accounts": {
-        "work": {"config_dir": "~/.claude", "label": "工作"},
-        "personal": {"config_dir": "~/.claude-tc", "label": "私人"},
+        "default": {"config_dir": "~/.claude", "label": ""},
     },
     "manual_projects": [],
     "project_overrides": {},

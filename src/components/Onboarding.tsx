@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { useTranslation, Trans } from "react-i18next";
 import { useAppStore } from "../store/useAppStore";
-import { scanPreview } from "../lib/sidecar";
+import { scanPreview, DEFAULT_ACCOUNT_KEY } from "../lib/sidecar";
 import { pickDirectory } from "../lib/dialog";
 import { wizardSteps, clampStepIndex, progressCells } from "../lib/onboardingSteps";
 import { FeatherMark } from "./Logo";
@@ -30,13 +30,13 @@ export function Onboarding({ onClose }: OnboardingProps) {
   const projects = useAppStore((s) => s.projects);
   const completeOnboarding = useAppStore((s) => s.completeOnboarding);
   const loadConfig = useAppStore((s) => s.loadConfig); // onboard 失敗時向後端對帳落檔狀態
-  // 首次時 config 為 in-memory DEFAULT（accounts = work/personal）
-  const accountKeys = config ? Object.keys(config.accounts) : ["work", "personal"];
+  // 首次時 config 為 in-memory DEFAULT（票 31 起是單一帳號 default）
+  const accountKeys = config ? Object.keys(config.accounts) : [DEFAULT_ACCOUNT_KEY];
 
   const [stepIndex, setStepIndex] = useState(0);
   const [draftRoots, setDraftRoots] = useState<DraftRoot[]>([]);
   const [newPath, setNewPath] = useState("");
-  const [newAccount, setNewAccount] = useState(accountKeys[0] ?? "work");
+  const [newAccount, setNewAccount] = useState(accountKeys[0] ?? DEFAULT_ACCOUNT_KEY);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);

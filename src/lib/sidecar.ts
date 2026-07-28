@@ -403,6 +403,11 @@ export interface SubscriptionItem {
   monthly_cost: number;
 }
 
+/** 新使用者的預設帳號 key（後端 `app_config.py` 的 `DEFAULT_CONFIG`，票 31 起是單一帳號）。
+ *  前端**只在 config 尚未載入時**拿它當暫時值——帳號清單一律以 `config.accounts` 為準，
+ *  這個常數不是權威，只是避免把字面值散在各元件裡。 */
+export const DEFAULT_ACCOUNT_KEY = "default";
+
 export interface AppConfigData {
   version: number;
   roots: { path: string; default_account: string }[];
