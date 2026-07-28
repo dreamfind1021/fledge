@@ -4,6 +4,7 @@ import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
 import { useAppStore } from "../store/useAppStore";
+import { scanPreview } from "../lib/sidecar";
 import { Onboarding } from "./Onboarding";
 
 vi.mock("../lib/dialog", () => ({ pickDirectory: vi.fn() }));
@@ -57,6 +58,22 @@ describe("Onboarding 精靈外殼", () => {
   });
   afterEach(cleanup); // vitest 未開 globals → testing-library 不會自動 cleanup
 
+  // 試掃失敗是本次唯一沒有行為測試的洩漏路徑（Codex R2 Medium）。catalog 那條 parity 測試
+  // 只擋 `{{reason}}` 這個插值位置，擋不住呼叫端直接 `setError(String(e))` 或換個插值名——
+  // 每條失敗路徑都要有自己的哨兵斷言
+  it("試掃失敗：顯示通用訊息，例外原文不進畫面", async () => {
+    vi.mocked(scanPreview).mockRejectedValueOnce(new Error("SCAN-SENTINEL-500"));
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.cta).click();
+    await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
+    fireEvent.change(ui.getByPlaceholderText(zh.roots.placeholder), { target: { value: "/tmp/work" } });
+    ui.getByText(zh.roots.add).click();
+
+    await waitFor(() => expect(ui.getByText(zh.errors.scan_failed)).toBeTruthy());
+    expect(ui.container.textContent).not.toContain("SCAN-SENTINEL-500");
+  });
+
   it("根目錄頁落檔後留在精靈，直接進到下一頁（不關閉）", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
     await reachRootsWithDraft(ui);
@@ -100,7 +117,8 @@ describe("Onboarding 精靈外殼", () => {
 
     // 停在根目錄頁但已認得落檔：錯誤文案不得說「設定寫入失敗」
     await waitFor(() => expect(ui.getByText(zh.roots.created)).toBeTruthy());
-    expect(ui.container.textContent).toContain("fetchProjects failed: 500");
+    expect(ui.container.textContent).toContain(zh.errors.projects_reload_failed);
+    expect(ui.container.textContent).not.toContain("fetchProjects failed: 500"); // 原文只進 console
     expect(ui.queryByText(/設定寫入失敗/)).toBeNull();
 
     ui.getByText(zh.common.next).click(); // 主按鈕已轉為單純前進

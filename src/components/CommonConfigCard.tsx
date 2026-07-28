@@ -214,8 +214,10 @@ export function CommonConfigCard({
         blocked = statuses.some((s) => s !== "dir" && s !== "missing");
       } catch (e) {
         if (reqId.current !== myId) return;
-        // 探測不到就當不適用：對「未確認存在」的目錄送 apply 會替使用者建出目錄
-        setError(t("errors.check_dir_failed", { reason: String(e) }));
+        // 探測不到就當不適用：對「未確認存在」的目錄送 apply 會替使用者建出目錄。
+        // 原文只進 console（spec-b4 §5）
+        console.error("[onboarding] 帳號設定目錄探測失敗", e);
+        setError(t("errors.check_dir_failed"));
         setDetected({ targets: [], plan: null, blocked: true });
         return;
       }

@@ -223,7 +223,10 @@ describe("EnvCard 環境偵測卡", () => {
     fetchSetupStatus.mockRejectedValue(new Error("HTTP 500"));
     const ui = renderCard();
 
-    await waitFor(() => expect(ui.getByRole("alert").textContent).toContain("HTTP 500"));
+    await waitFor(() => expect(ui.getByRole("alert").textContent).toBe(zh.errors.status_failed));
+    // 例外原文只進 console：`HTTP 500`／`TypeError: Failed to fetch` 對使用者沒有意義，
+    // 而同族的 sidecar 錯誤是中文 prose，插進畫面等於英文使用者看到中文（spec-b4 §5）
+    expect(ui.container.textContent).not.toContain("HTTP 500");
 
     fetchSetupStatus.mockResolvedValue([node]);
     ui.getByText(zh.env.recheck).click();
@@ -320,7 +323,7 @@ describe("EnvCard 一鍵安裝", () => {
 
     fetchSetupStatus.mockRejectedValue(new Error("HTTP 500"));
     ui.getByText(zh.env.recheck).click();
-    await waitFor(() => expect(ui.getByRole("alert").textContent).toContain("HTTP 500"));
+    await waitFor(() => expect(ui.getByRole("alert").textContent).toBe(zh.errors.status_failed));
 
     createSession.mockRejectedValue(new SessionError("unknown_install_id", 400));
     await reachConfirm(ui);            // 舊清單還在，那一列仍可按安裝

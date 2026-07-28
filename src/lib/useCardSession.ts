@@ -15,7 +15,9 @@ interface StartArgs<T> {
   meta: T;
   /** 把後端判別碼（400 才有）映射成 i18n 字串；回 null 代表交給 fallback */
   mapError: (code: string | null) => string | null;
-  fallbackError: (reason: string) => string;
+  /** 沒有判別碼可映射時的通用訊息。**不收 reason**——例外原文（`createSession failed: 500`、
+   *  `TypeError: Failed to fetch`、sidecar 的中文 prose）只進 console（spec-b4 §5） */
+  fallbackError: () => string;
 }
 
 /** 精靈設置卡共用的「卡片內單一終端機 session」生命週期（環境卡的安裝、登入卡的 OAuth）。
@@ -84,9 +86,10 @@ export function useCardSession<T>(port: number | null) {
       return true;
     } catch (e) {
       if (stale()) return false;
-      // 後端判別碼不得直接顯示（spec-b4 §5）；未知形狀退回帶 reason 的通用訊息
+      // 後端判別碼不得直接顯示（spec-b4 §5）；未知形狀退回通用訊息，原文只進 console
+      console.error("[onboarding] 卡片內 session 建立失敗", e);
       const code = e instanceof SessionError ? e.code : null;
-      setError(mapError(code) ?? fallbackError(String(e)));
+      setError(mapError(code) ?? fallbackError());
       return false;
     } finally {
       // 過期的那一輪不得解除 busy——否則新一輪還在跑，按鈕卻已經放開

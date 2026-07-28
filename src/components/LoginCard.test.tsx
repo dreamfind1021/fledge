@@ -187,6 +187,20 @@ describe("LoginCard 登入卡", () => {
     expect(ui.queryByTestId("terminal")).toBeNull();
   });
 
+  // 無判別碼可映射時走 fallback。這條路徑先前把 `String(e)` 當 reason 插進畫面，於是
+  // `SessionError: createSession failed: 500`（甚至 sidecar 的中文 prose）會直接顯示出來
+  it("建立失敗且無判別碼可映射：顯示通用訊息，例外原文不進畫面", async () => {
+    createSession.mockRejectedValue(new SessionError(null, 500));
+    const ui = renderCard();
+
+    ui.getAllByText(zh.login.open)[0].click();
+
+    await waitFor(() => expect(ui.getByRole("alert")).toBeTruthy());
+    expect(ui.getByRole("alert").textContent).toBe(zh.errors.login_failed);
+    expect(ui.container.textContent).not.toContain("createSession failed");
+    expect(ui.queryByTestId("terminal")).toBeNull();
+  });
+
   it("稍後再登入：直接往下一頁，不建任何 session", () => {
     const onNext = vi.fn();
     const ui = renderCard({ onNext });

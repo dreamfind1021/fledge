@@ -90,7 +90,9 @@ export function Onboarding({ onClose }: OnboardingProps) {
       );
       setNewPath("");
     } catch (e) {
-      setError(t("errors.scan_failed", { reason: String(e) })); // 連線/後端錯誤要可見
+      // 連線/後端錯誤要可見，但原文只進 console（spec-b4 §5）
+      console.error("[onboarding] 試掃失敗", e);
+      setError(t("errors.scan_failed"));
     } finally {
       setBusy(false);
     }
@@ -135,8 +137,10 @@ export function Onboarding({ onClose }: OnboardingProps) {
         }
       }
       if (saved) setConfigCreated(true);
-      // onboard 409/400/連線錯誤要可見（Codex final review L2）；已落檔時不能謊稱寫入失敗
-      setError(t(saved ? "errors.projects_reload_failed" : "errors.onboard_failed", { reason: String(e) }));
+      // onboard 409/400/連線錯誤要可見（Codex final review L2）；已落檔時不能謊稱寫入失敗。
+      // 原文只進 console（spec-b4 §5）——`fetchProjects failed: 500` 之類對使用者沒有意義
+      console.error("[onboarding] 落檔或專案重載失敗", e);
+      setError(t(saved ? "errors.projects_reload_failed" : "errors.onboard_failed"));
     } finally {
       setBusy(false);
     }
