@@ -62,9 +62,10 @@ def test_pricing_version_mismatch_reprices_without_reparse(tmp_path: Path, monke
     l2 = tmp_path / "usage-v1.json"
     UsageCache(l2_path=l2).refresh(claude=[f], codex=[])
     old_cost = json.loads(l2.read_text(encoding="utf-8"))["files"][str(f.resolve())]["entries"][0]["cost"]
-    # 模擬定價更新：版本變 + opus 價格翻倍
+    # 模擬定價更新：版本變 + opus 五欄價全部翻倍（input, output, 5m, 1h, read）
     monkeypatch.setattr(pricing, "PRICING_VERSION", "test.2")
-    monkeypatch.setitem(pricing.CLAUDE_PRICING, "claude-opus-4-8", (10.0, 50.0))
+    monkeypatch.setitem(pricing.CLAUDE_PRICING, "claude-opus-4-8",
+                        tuple(v * 2 for v in pricing.CLAUDE_PRICING["claude-opus-4-8"]))
     cache2 = UsageCache(l2_path=l2)
     r = cache2.refresh(claude=[f], codex=[])
     assert r.parsed_files == 0                      # 不重 parse（design §9）

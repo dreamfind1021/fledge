@@ -22,10 +22,13 @@ _CODEX_DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 # 只影響 admin/sync_pricing.py 的寫入決策，不參與 runtime 查表——runtime 一律以
 # pricing_table.py 為準。理由留在這裡而非表裡，因為表整檔可重生、留不住敘事。
 
-# 刻意不跟上游現價：sync 保留表內現值，只報告差異。
-PINNED: dict[str, str] = {
-    "claude-sonnet-5": "釘標準價 $3/$15。Anthropic 官方：促銷價 $2/$10 至 2026-08-31，"
-                       "9/1 起標準價生效；上游追促銷價。靜態表不追時間，且 Net ROI 需跨月可比。",
+# 刻意不跟上游現價：key → (我們用的價, 理由)。sync 寫入這個值並報告上游差異。
+# 價與理由放在一起，是為了不依賴「前一版表的內容」——表是生成物，欄位數改了就對不上。
+PINNED: dict[str, tuple[tuple[float, ...], str]] = {
+    # (input, output, cache_5m, cache_1h, cache_read)，取自 Anthropic 官方定價頁的標準價欄
+    "claude-sonnet-5": ((3.0, 15.0, 3.75, 6.0, 0.3),
+                        "釘標準價 $3/$15。Anthropic 官方：促銷價 $2/$10 至 2026-08-31，"
+                        "9/1 起標準價生效；上游追促銷價。靜態表不追時間，且 Net ROI 需跨月可比。"),
 }
 
 # 刻意不入表：查無定價會走 missing 警示，比默默用近似價安全。
@@ -57,14 +60,17 @@ def normalize_codex_model(raw: str) -> str:
 
 def claude_cost(model: str, input_tokens: int, output_tokens: int,
                 cache_5m: int, cache_1h: int, cache_read: int) -> tuple[float, bool]:
-    """回 (cost_usd, missing)。input_tokens 不含 cache tokens（API 語義，design §7）。"""
+    """回 (cost_usd, missing)。input_tokens 不含 cache tokens（API 語義，design §7）。
+
+    cache 三層讀表內真價，不套寫死倍率——倍率(1.25/2/0.1)只對現行世代成立，
+    claude-3-haiku 實際是 1.2×/0.12×。倍率改由 sync 在上游缺該層時當推導 fallback。
+    """
     price = CLAUDE_PRICING.get(model)
     if price is None:
         return 0.0, True
-    p_in, p_out = price
+    p_in, p_out, p_5m, p_1h, p_read = price
     cost = (input_tokens * p_in + output_tokens * p_out
-            + cache_5m * 1.25 * p_in + cache_1h * 2.0 * p_in
-            + cache_read * 0.1 * p_in) / _MTOK
+            + cache_5m * p_5m + cache_1h * p_1h + cache_read * p_read) / _MTOK
     return cost, False
 
 

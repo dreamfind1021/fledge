@@ -16,6 +16,7 @@ import argparse
 import datetime
 import hashlib
 import json
+import math
 import os
 import sys
 import urllib.error
@@ -33,18 +34,26 @@ UPSTREAM_URL = ("https://raw.githubusercontent.com/BerriAI/litellm/main/"
                 "model_prices_and_context_window.json")
 TABLE_PATH = _REPO / "sidecar" / "fledge_sidecar" / "usage" / "pricing_table.py"
 
-# Claude cache 三層在 pricing.py 是寫死倍率而非存價——同步時驗證它仍成立
-_CACHE_MULTIPLIERS = {"cache_creation_input_token_cost": 1.25,
-                      "cache_creation_input_token_cost_above_1hr": 2.0,
-                      "cache_read_input_token_cost": 0.1}
+# Claude cache 三層存真價；上游沒給某層時才用這組倍率推導（現行世代皆吻合，
+# 舊款如 claude-3-haiku 實為 1.2×/0.12×，正是不能一律套倍率的原因）
+_CACHE_FALLBACK_MULTIPLIERS = (("cache_creation_input_token_cost", 1.25),
+                               ("cache_creation_input_token_cost_above_1hr", 2.0),
+                               ("cache_read_input_token_cost", 0.1))
 
 
 def fetch_upstream(local: str | None) -> dict:
+    """取上游 JSON。合法但空/非 mapping 的回應要當失敗擋下——否則會生出空表整檔覆蓋。"""
     if local:
-        return json.loads(Path(local).expanduser().read_text(encoding="utf-8"))
-    req = urllib.request.Request(UPSTREAM_URL, headers={"User-Agent": "fledge-sync-pricing"})
-    with urllib.request.urlopen(req, timeout=30) as resp:   # noqa: S310 —— 固定 https 常數 URL
-        return json.loads(resp.read().decode("utf-8"))
+        payload = json.loads(Path(local).expanduser().read_text(encoding="utf-8"))
+    else:
+        req = urllib.request.Request(UPSTREAM_URL, headers={"User-Agent": "fledge-sync-pricing"})
+        with urllib.request.urlopen(req, timeout=30) as resp:   # noqa: S310 —— 固定 https 常數 URL
+            payload = json.loads(resp.read().decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"上游回應不是 mapping（得到 {type(payload).__name__}）")
+    if not payload:
+        raise ValueError("上游回應是空 mapping —— 視為殘缺，不以空表覆蓋")
+    return payload
 
 
 def _is_bare(key: str) -> bool:
@@ -62,34 +71,25 @@ def _mtok(value: float | None) -> float:
     return round((value or 0.0) * 1_000_000, 6)
 
 
-def _cache_multiplier_issues(entry: dict) -> list[str]:
-    """回該款與 pricing.py 寫死倍率不符的欄位描述（上游未提供的層不算不符）。
+def _claude_cache_prices(entry: dict, p_in: float) -> tuple[float, float, float]:
+    """(5m write, 1h write, read) 的真價；上游缺哪層就用該層的標準倍率由 input 價推導。
 
-    刻意不在同步階段就印出來：退役舊款（如 claude-3-haiku 的 1.2×／claude-3-opus 的 1h 垃圾值）
-    會讓警示永久嘮叨，而沒人在跑那些模型。呼叫端只對「本機真的用過的款」發警示。
+    推導而非跳過，是因為缺層在上游很常見（claude-4-opus 就沒有 above_1hr），
+    而 0 會被當成「該層免費」造成低估。
     """
-    p_in = entry.get("input_cost_per_token") or 0.0
-    issues = []
-    for field, expected in _CACHE_MULTIPLIERS.items():
-        raw = entry.get(field)
-        if not raw:
-            continue
-        actual = round(raw / p_in, 4)
-        if abs(actual - expected) > 1e-6:
-            issues.append(f"{field} 上游 {actual}×、pricing.py 寫死 {expected}×")
-    return issues
+    return tuple(_mtok(entry.get(field) or p_in * multiplier)          # type: ignore[return-value]
+                 for field, multiplier in _CACHE_FALLBACK_MULTIPLIERS)
 
 
-def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str], dict[str, list[str]]]:
-    """回 (claude_table, codex_table, notes, conflicts, cache_issues)。
+def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str]]:
+    """回 (claude_table, codex_table, notes, conflicts)。
 
     表 key＝上游裸 key 餵進 Fledge 自己的 normalize——保證「表裡的 key」與
     「runtime 查表時用的 key」由同一段程式產生，不會各自漂移。
     """
-    claude: dict[str, tuple[float, float]] = {}
+    claude: dict[str, tuple[float, float, float, float, float]] = {}
     codex: dict[str, tuple[float, float, float]] = {}
     seen: dict[str, dict[str, tuple]] = {}      # 正規化 key → {上游 key: price}
-    cache_issues: dict[str, list[str]] = {}     # 正規化 key → 倍率不符欄位
     notes: list[str] = []
     warnings: list[str] = []
 
@@ -103,10 +103,8 @@ def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str], dict[str,
             norm = pricing.normalize_claude_model(key)
             if norm is None:
                 continue
-            issues = _cache_multiplier_issues(entry)
-            if issues:
-                cache_issues[norm] = issues
-            price: tuple = (_mtok(p_in), _mtok(entry.get("output_cost_per_token")))
+            price: tuple = (_mtok(p_in), _mtok(entry.get("output_cost_per_token")),
+                            *_claude_cache_prices(entry, p_in))
             table = claude
         elif key.startswith("gpt-5"):
             norm = pricing.normalize_codex_model(key)
@@ -128,14 +126,14 @@ def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str], dict[str,
     conflicts = [f"{norm}：{sources}" for norm, sources in seen.items()
                  if len({v for v in sources.values()}) > 1]
 
-    # _PINNED：保留表內現值，只報差異（表內沒有才退回上游）
-    for key, reason in pricing.PINNED.items():
-        for table, cur in ((claude, current.CLAUDE_PRICING), (codex, current.CODEX_PRICING)):
+    # PINNED：寫入我們自己決定的價，並把上游值報出來供複核
+    for key, (held, reason) in pricing.PINNED.items():
+        for table in (claude, codex):
             if key not in table:
                 continue
-            held = cur.get(key)
-            if held is None:
-                warnings.append(f"{key} 標為 PINNED 但現有表沒有它 → 本次採用上游值 {table[key]}")
+            if len(held) != len(table[key]):
+                warnings.append(f"{key} 的 PINNED 值有 {len(held)} 欄、上游有 {len(table[key])} 欄 → "
+                                f"欄位數不符，改採上游值 {table[key]}，請更新 PINNED")
                 continue
             if held != table[key]:
                 notes.append(f"保留 {key} = {held}（PINNED，上游為 {table[key]}）：{reason}")
@@ -148,7 +146,24 @@ def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str], dict[str,
         if key not in claude and key not in codex:
             warnings.append(f"PINNED 的 {key} 已不在上游 → 該例外可能已過期，請複核")
 
-    return claude, codex, notes + warnings, conflicts, cache_issues
+    return claude, codex, notes + warnings, conflicts
+
+
+def invalid_prices(claude: dict, codex: dict) -> list[str]:
+    """回價格不合法的項目描述。
+
+    上游缺 `output_cost_per_token` 會被 `_mtok` 轉成 0.0＝output token 免費，
+    那是最貴的一欄，靜默低估幅度極大。任何非有限或非正數一律擋下不寫——
+    真有上游資料爛掉的款，請人工加進 EXCLUDED 並寫理由，不由腳本猜。
+    """
+    bad = []
+    for label, table in (("claude", claude), ("codex", codex)):
+        for key, price in sorted(table.items()):
+            for value in price:
+                if not math.isfinite(value) or value <= 0:
+                    bad.append(f"{label} {key} = {price}")
+                    break
+    return bad
 
 
 def render_table(claude: dict, codex: dict) -> str:
@@ -168,9 +183,10 @@ def render_table(claude: dict, codex: dict) -> str:
         "# cache.py 只做相等比對，不解析內容。",
         f'TABLE_VERSION = "{version}"',
         "",
-        "# Claude：(input, output)；cache 用統一倍率（write 5m=1.25x、1h=2x、read=0.1x input），",
-        "# 倍率由 sync 對上游逐款驗證，不符會警示。",
-        "CLAUDE_PRICING: dict[str, tuple[float, float]] = {",
+        "# Claude：(input, output, cache_5m_write, cache_1h_write, cache_read)——三層 cache 存",
+        "# 上游真價而非倍率（倍率只對現行世代成立，claude-3-haiku 實為 1.2x/0.12x）；",
+        "# 上游缺哪層才由 sync 用 1.25x/2x/0.1x 推導。",
+        "CLAUDE_PRICING: dict[str, tuple[float, float, float, float, float]] = {",
     ]
     lines += [f'    "{k}": {v!r},' for k, v in sorted(claude.items())]
     lines += [
@@ -208,18 +224,27 @@ def main() -> int:
     ap.add_argument("--from", dest="local", help="改讀本機 JSON 快照，不連外")
     ap.add_argument("--dry-run", action="store_true", help="只印差異不寫檔")
     ap.add_argument("--no-check-local", action="store_true", help="跳過本機用量覆蓋率掃描")
+    ap.add_argument("--allow-removals", action="store_true",
+                    help="允許本次同步從表中移除既有模型（預設拒絕，防上游殘缺整批清空）")
     args = ap.parse_args()
 
     try:
         raw = fetch_upstream(args.local)
-    except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError) as exc:
+    except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
         print(f"上游取得失敗：{exc}", file=sys.stderr)
         return 1
 
-    claude, codex, notes, conflicts, cache_issues = build_tables(raw)
+    claude, codex, notes, conflicts = build_tables(raw)
+    # 整檔覆蓋是破壞性操作：所有「會生出壞表」的檢查都必須在 os.replace 之前擋掉
     if conflicts:
         print("同一模型名對到不同價格，不猜、中止寫入：", file=sys.stderr)
         for line in conflicts:
+            print(f"  ✗ {line}", file=sys.stderr)
+        return 1
+    bad = invalid_prices(claude, codex)
+    if bad:
+        print("價格非有限正數（上游缺欄或資料損壞），中止寫入：", file=sys.stderr)
+        for line in bad:
             print(f"  ✗ {line}", file=sys.stderr)
         return 1
 
@@ -238,21 +263,23 @@ def main() -> int:
             print(f"  {label} {k}")
     print(f"  表：claude {len(claude)} 款、codex {len(codex)} 款")
 
+    # 移除既有模型要顯式同意：上游殘缺／改 schema 時，表會整批縮水而 diff 看起來只是「少了幾行」
+    if removed and not args.allow_removals:
+        print(f"\n本次會移除 {len(removed)} 款既有模型；確認上游真的下架了，再加 --allow-removals 重跑。",
+              file=sys.stderr)
+        return 1
+
     if not args.dry_run:
         rendered = render_table(claude, codex)
         tmp = TABLE_PATH.with_name(TABLE_PATH.name + ".tmp")
         tmp.write_text(rendered, encoding="utf-8")
         os.replace(tmp, TABLE_PATH)
-        print(f"  已寫入 {TABLE_PATH.relative_to(_REPO)}（請審 git diff 後 commit）")
+        # relpath 而非 Path.relative_to：後者對 repo 外的路徑會拋例外（測試會把 TABLE_PATH 導到 tmp）
+        print(f"  已寫入 {os.path.relpath(TABLE_PATH, _REPO)}（請審 git diff 後 commit）")
 
     if args.no_check_local:
         return 0
     local = scan_local_models()
-    # 倍率不符只對「本機真的用過的款」發警示——退役舊款的上游 cache 欄位常是垃圾值，
-    # 對它們永久嘮叨只會訓練人忽略警示
-    for model in sorted(local & cache_issues.keys()):
-        print(f"  ⚠ {model} 的 cache 定價與固定倍率不符：{'；'.join(cache_issues[model])}",
-              file=sys.stderr)
     missing = sorted(m for m in local if m not in claude and m not in codex)
     if missing:
         print("\n本機用量出現、但新表仍查無定價的模型（上游也還沒收錄）：", file=sys.stderr)

@@ -8,29 +8,30 @@ from __future__ import annotations
 
 # <生成日期>.<表內容 sha256 前 8 碼>：內容一變就變，改表不可能忘記遞增。
 # cache.py 只做相等比對，不解析內容。
-TABLE_VERSION = "2026-07-28.dede773b"
+TABLE_VERSION = "2026-07-28.559227cd"
 
-# Claude：(input, output)；cache 用統一倍率（write 5m=1.25x、1h=2x、read=0.1x input），
-# 倍率由 sync 對上游逐款驗證，不符會警示。
-CLAUDE_PRICING: dict[str, tuple[float, float]] = {
-    "claude-3-7-sonnet": (3.0, 15.0),
-    "claude-3-haiku": (0.25, 1.25),
-    "claude-3-opus": (15.0, 75.0),
-    "claude-4-opus": (15.0, 75.0),
-    "claude-4-sonnet": (3.0, 15.0),
-    "claude-fable-5": (10.0, 50.0),
-    "claude-haiku-4-5": (1.0, 5.0),
-    "claude-opus-4": (15.0, 75.0),
-    "claude-opus-4-1": (15.0, 75.0),
-    "claude-opus-4-5": (5.0, 25.0),
-    "claude-opus-4-6": (5.0, 25.0),
-    "claude-opus-4-7": (5.0, 25.0),
-    "claude-opus-4-8": (5.0, 25.0),
-    "claude-opus-5": (5.0, 25.0),
-    "claude-sonnet-4": (3.0, 15.0),
-    "claude-sonnet-4-5": (3.0, 15.0),
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-sonnet-5": (3.0, 15.0),
+# Claude：(input, output, cache_5m_write, cache_1h_write, cache_read)——三層 cache 存
+# 上游真價而非倍率（倍率只對現行世代成立，claude-3-haiku 實為 1.2x/0.12x）；
+# 上游缺哪層才由 sync 用 1.25x/2x/0.1x 推導。
+CLAUDE_PRICING: dict[str, tuple[float, float, float, float, float]] = {
+    "claude-3-7-sonnet": (3.0, 15.0, 3.75, 6.0, 0.3),
+    "claude-3-haiku": (0.25, 1.25, 0.3, 6.0, 0.03),
+    "claude-3-opus": (15.0, 75.0, 18.75, 6.0, 1.5),
+    "claude-4-opus": (15.0, 75.0, 18.75, 30.0, 1.5),
+    "claude-4-sonnet": (3.0, 15.0, 3.75, 6.0, 0.3),
+    "claude-fable-5": (10.0, 50.0, 12.5, 20.0, 1.0),
+    "claude-haiku-4-5": (1.0, 5.0, 1.25, 2.0, 0.1),
+    "claude-opus-4": (15.0, 75.0, 18.75, 30.0, 1.5),
+    "claude-opus-4-1": (15.0, 75.0, 18.75, 30.0, 1.5),
+    "claude-opus-4-5": (5.0, 25.0, 6.25, 10.0, 0.5),
+    "claude-opus-4-6": (5.0, 25.0, 6.25, 10.0, 0.5),
+    "claude-opus-4-7": (5.0, 25.0, 6.25, 10.0, 0.5),
+    "claude-opus-4-8": (5.0, 25.0, 6.25, 10.0, 0.5),
+    "claude-opus-5": (5.0, 25.0, 6.25, 10.0, 0.5),
+    "claude-sonnet-4": (3.0, 15.0, 3.75, 6.0, 0.3),
+    "claude-sonnet-4-5": (3.0, 15.0, 3.75, 6.0, 0.3),
+    "claude-sonnet-4-6": (3.0, 15.0, 3.75, 6.0, 0.3),
+    "claude-sonnet-5": (3.0, 15.0, 3.75, 6.0, 0.3),
 }
 
 # Codex：(input, cached_input, output)
