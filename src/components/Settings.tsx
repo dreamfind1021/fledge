@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Settings as SettingsIcon, X, Folder, FolderPlus, Users, Trash2, ChartColumn, Brain } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { pickDirectory } from "../lib/dialog";
-import { putKmsRoot } from "../lib/sidecar";
+import { putKmsRoot, DEFAULT_ACCOUNT_KEY } from "../lib/sidecar";
 import { AccountsEditor } from "./AccountsEditor";
 import { DevEnvSection } from "./DevEnvSection";
 import { LangSwitch } from "./LangSwitch";
@@ -30,9 +30,9 @@ export function Settings({ onClose, onRerunOnboarding }: SettingsProps) {
   const saveSubscriptions = useAppStore((s) => s.saveSubscriptions);
 
   const [newRootPath, setNewRootPath] = useState("");
-  const [newRootAccount, setNewRootAccount] = useState("work");
+  const [newRootAccount, setNewRootAccount] = useState(DEFAULT_ACCOUNT_KEY);
   const [newManualPath, setNewManualPath] = useState("");
-  const [newManualAccount, setNewManualAccount] = useState("work");
+  const [newManualAccount, setNewManualAccount] = useState(DEFAULT_ACCOUNT_KEY);
   const [error, setError] = useState<string | null>(null);
 
   // 訂閱費編輯 state（以字串保留輸入中的值，存檔時才 parse；?? [] 兼容後端未回傳舊快取）
@@ -75,7 +75,7 @@ export function Settings({ onClose, onRerunOnboarding }: SettingsProps) {
     if (keys.length && !keys.includes(newManualAccount)) setNewManualAccount(keys[0]);
   }, [config, newRootAccount, newManualAccount]);
 
-  const accountKeys = config ? Object.keys(config.accounts) : ["work", "personal"];
+  const accountKeys = config ? Object.keys(config.accounts) : [DEFAULT_ACCOUNT_KEY];
 
   return (
     <div className="settings-overlay" onClick={onClose}>

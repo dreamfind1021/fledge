@@ -7,6 +7,12 @@ describe("accountColor", () => {
     expect(accountColor("personal")).toBe("#c084fc");
   });
 
+  // 票 31 起新使用者的預設帳號 key 是 default（不再是 work）。它扮演的是同一個角色
+  // ——「第一個帳號」——所以沿用同一個藍，側邊欄不會因為預設 key 換名而換色
+  it("default（新使用者的預設帳號）沿用 work 的藍", () => {
+    expect(accountColor("default")).toBe("#60a5fa");
+  });
+
   it("其他帳號顏色穩定（同 key 同色）且不 fallback 成 work 藍色", () => {
     const c = accountColor("team");
     expect(accountColor("team")).toBe(c); // 穩定

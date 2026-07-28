@@ -223,9 +223,9 @@ def test_common_config_apply_serialises_concurrent_calls(tmp_path: Path, monkeyp
 
 
 def test_common_config_apply_requires_initialised_config(tmp_path: Path, monkeypatch):
-    # config.json 不存在時 AppConfig.load() 會 fallback 到 DEFAULT_CONFIG
-    # （work=~/.claude、personal=~/.claude-tc）——未 onboard 的使用者一送出 apply
-    # 就會對真實 home 目錄動手。破壞性端點自己強制 readiness，不靠尚未存在的前端精靈。
+    # config.json 不存在時 AppConfig.load() 會 fallback 到 DEFAULT_CONFIG（default=~/.claude）
+    # ——未 onboard 的使用者一送出 apply 就會對真實 home 目錄動手。破壞性端點自己強制
+    # readiness，不靠尚未存在的前端精靈。
     monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(tmp_path / "nope.json"))
     client = TestClient(create_app())
     r = client.post(
@@ -234,12 +234,18 @@ def test_common_config_apply_requires_initialised_config(tmp_path: Path, monkeyp
     )
     assert r.status_code == 400
     assert r.json()["error"] == "config_not_initialized"
-    # 唯讀預覽不受影響（精靈要能在寫檔前先看狀態）
+    # 唯讀預覽不設 readiness 閘（精靈要能在寫檔前先看狀態）。預設改單一帳號後（票 31），
+    # 未 onboard 時湊不出 source→target，所以這一發會被**帳號驗證**擋下——重點是擋的理由
+    # 不是 readiness：`config_not_initialized` 只裝在會寫檔的 apply 上。
+    # 斷言精確的判別碼，不能只寫「不等於 config_not_initialized」——那樣 401／404／422
+    # 甚至整個端點壞掉都會通過，等於拿掉這條測試（Codex 票 31 R1 Medium）。
+    # plan 的正常 200 路徑由本檔其他測試涵蓋。
     r = client.post(
         "/api/setup/common-config/plan",
         json={"source": "work", "targets": ["personal"], "entries": ["commands"]},
     )
-    assert r.status_code == 200
+    assert r.status_code == 400
+    assert r.json()["error"] == "unknown_account"
 
 
 def _templates_dir(tmp_path: Path, monkeypatch) -> Path:

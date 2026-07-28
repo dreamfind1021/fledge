@@ -1,6 +1,6 @@
 # Fledge
 
-Claude Code 多帳號桌面工作台（Tauri + React 前端、FastAPI sidecar 後端）：管理雙 Claude 帳號的終端機 session、用量觀測、記憶層與開發環境引導。
+Claude Code 多帳號桌面工作台（Tauri + React 前端、FastAPI sidecar 後端）：管理一或多個 Claude 帳號的終端機 session、用量觀測、記憶層與開發環境引導。**預設是單一帳號**（`~/.claude`）；多帳號是使用者自己在設定頁加出來的進階用法。
 
 ## Language
 

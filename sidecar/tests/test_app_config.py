@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from fledge_sidecar.app_config import AppConfig, DEFAULT_CONFIG
@@ -8,6 +9,43 @@ def test_load_missing_returns_default(tmp_path: Path):
     cfg = AppConfig.load(cfg_path)
     assert cfg.roots == []
     assert cfg.accounts == DEFAULT_CONFIG["accounts"]
+
+
+def test_default_config_is_single_account(tmp_path: Path):
+    """新使用者預設只有一個帳號（票 31）——雙帳號是進階用法，不預設塞給每個人：
+    多出來的第二個帳號會讓精靈白跑一頁共通設置、觀測面板多一個永遠沒資料的帳號。
+
+    期望值**寫死**而不是比對 `DEFAULT_CONFIG`——後者是同義反覆，改了預設值也永遠綠。
+    `label` 空字串是刻意的：UI 缺 label 時退回顯示 key（`sidebarGroups`），於是後端
+    不必輸出任何 user-facing 文案（CLAUDE.md §4.6.13），顯示名交給使用者自己設。"""
+    cfg = AppConfig.load(tmp_path / "config.json")
+    assert cfg.accounts == {"default": {"config_dir": "~/.claude", "label": ""}}
+
+
+def test_existing_config_keeps_its_own_accounts(tmp_path: Path):
+    """票 31 的成立前提：改預設**不能動到既有使用者**。有 `accounts` 欄位的設定檔一律原樣載入，
+    即使它用的是已經不再是預設的 work/personal。"""
+    cfg_path = tmp_path / "config.json"
+    legacy = {
+        "work": {"config_dir": "~/.claude", "label": "工作"},
+        "personal": {"config_dir": "~/.claude-tc", "label": "私人"},
+    }
+    cfg_path.write_text(
+        json.dumps({"version": 1, "roots": [], "accounts": legacy}), encoding="utf-8"
+    )
+    assert AppConfig.load(cfg_path).accounts == legacy
+
+
+def test_existing_config_without_accounts_field_gets_default(tmp_path: Path):
+    """設定檔存在卻缺 `accounts`：會拿到當前預設，而不是舊的 work/personal。
+
+    這是 `load()` 唯一一處「檔案存在也會碰到 DEFAULT_CONFIG」的路徑（Codex 票 31 R1 Medium）。
+    Fledge 自己寫不出這種檔案（`to_dict()` 固定輸出 accounts），只可能來自手動編輯——本就是
+    損壞狀態，給它舊預設同樣只是另一種猜測，故**刻意不為它保留 legacy fallback**。
+    這條測試是要讓這個取捨被看見：哪天有人想改成別的行為，會先撞到這裡。"""
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text(json.dumps({"version": 1, "roots": []}), encoding="utf-8")
+    assert AppConfig.load(cfg_path).accounts == {"default": {"config_dir": "~/.claude", "label": ""}}
 
 
 def test_save_then_load_roundtrip(tmp_path: Path):

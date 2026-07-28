@@ -132,8 +132,8 @@ def test_onboard_writes_multiple_roots(tmp_path: Path, monkeypatch):
     r2 = tmp_path / "r2"; r2.mkdir()
     client = TestClient(create_app())
     resp = client.post("/api/config/onboard", json={"roots": [
-        {"path": str(r1), "default_account": "work"},
-        {"path": str(r2), "default_account": "personal"},
+        {"path": str(r1), "default_account": "default"},
+        {"path": str(r2), "default_account": "default"},
     ]})
     assert resp.status_code == 200
     assert [r["path"] for r in resp.json()["roots"]] == [str(r1.resolve()), str(r2.resolve())]
@@ -145,8 +145,8 @@ def test_onboard_dedup_same_batch(tmp_path: Path, monkeypatch):
     dup = tmp_path / "dup"; dup.mkdir()
     client = TestClient(create_app())
     resp = client.post("/api/config/onboard", json={"roots": [
-        {"path": str(dup), "default_account": "work"},
-        {"path": str(dup), "default_account": "personal"},
+        {"path": str(dup), "default_account": "default"},
+        {"path": str(dup), "default_account": "default"},
     ]})
     assert [r["path"] for r in resp.json()["roots"]] == [str(dup.resolve())]  # 同批重複只留第一個
 
