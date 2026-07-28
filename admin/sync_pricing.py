@@ -45,6 +45,10 @@ _CACHE_FALLBACK_MULTIPLIERS = (("cache_creation_input_token_cost", 1.25),
 # 存在時信任明顯錯誤的上游」這種自相矛盾。容忍 2× 是為了容納真實的小幅偏離
 # （claude-3-haiku 的 5m 1.2× 對 1.25×、read 0.12× 對 0.1× 都在範圍內）。
 _CACHE_RATIO_TOLERANCE = 2.0
+# Codex 的 cached input 標準折扣。實測上游 28 款裡 26 款精確等於 0.1×，是普遍規則；
+# 缺值的那兩款（gpt-5-pro 無欄位、gpt-5.2-pro 為 0）沒有理由自成一格——官方頁對四個 pro
+# 都標「—」，只因上游資料有沒有缺就給出相差 10 倍的待遇，是規則不一致而非定價差異。
+_CODEX_CACHED_MULTIPLIER = 0.1
 
 
 def fetch_upstream(local: str | None) -> dict:
@@ -77,25 +81,33 @@ def _mtok(value: float | None) -> float:
     return round((value or 0.0) * 1_000_000, 6)
 
 
+def _cache_layer_price(entry: dict, p_in: float, field: str, multiplier: float,
+                       key: str) -> tuple[float, str | None]:
+    """單一 cache 層的價：上游真價優先，缺值或明顯偏離標準倍率則改用推導值並回報。
+
+    兩源共用同一條規則。「缺值就推導、有值但離譜也推導」必須一致——否則會出現
+    「缺席時信任自己的推導、存在時信任壞掉的上游」的自相矛盾（Codex 審查 round 3/4）。
+    推導而非留 0，是因為 0 會被當成「該層免費」造成低估。
+    """
+    raw = entry.get(field)
+    derived = p_in * multiplier
+    if raw and (1 / _CACHE_RATIO_TOLERANCE) <= (raw / derived) <= _CACHE_RATIO_TOLERANCE:
+        return _mtok(raw), None
+    note = (f"{key}：{field} 是 input 的 {raw / p_in:.4g}×（標準 {multiplier}×），"
+            f"超出合理範圍 → 改用推導價 {_mtok(derived)}") if raw else None
+    return _mtok(derived), note
+
+
 def _claude_cache_prices(entry: dict, p_in: float,
                          key: str) -> tuple[tuple[float, float, float], list[str]]:
-    """回 ((5m write, 1h write, read), 異常說明)。
-
-    上游缺該層、或該層明顯偏離標準倍率（＝資料損壞）時改用倍率推導。推導而非跳過，
-    是因為缺層在上游很常見（claude-4-opus 就沒有 above_1hr），而 0 會被當成
-    「該層免費」造成低估。
-    """
+    """(5m write, 1h write, read) 三層價 + 異常說明。缺層在上游很常見（claude-4-opus
+    就沒有 above_1hr），故一律走 `_cache_layer_price`。"""
     prices, notes = [], []
     for field, multiplier in _CACHE_FALLBACK_MULTIPLIERS:
-        raw = entry.get(field)
-        derived = p_in * multiplier
-        if raw and (1 / _CACHE_RATIO_TOLERANCE) <= (raw / derived) <= _CACHE_RATIO_TOLERANCE:
-            prices.append(_mtok(raw))
-            continue
-        if raw:
-            notes.append(f"{key}：{field} 是 input 的 {raw / p_in:.4g}×（標準 {multiplier}×），"
-                         f"超出合理範圍 → 改用推導價 {_mtok(derived)}")
-        prices.append(_mtok(derived))
+        price, note = _cache_layer_price(entry, p_in, field, multiplier, key)
+        prices.append(price)
+        if note:
+            notes.append(note)
     return (prices[0], prices[1], prices[2]), notes
 
 
@@ -128,10 +140,11 @@ def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str]]:
             table = claude
         elif key.startswith("gpt-5"):
             norm = pricing.normalize_codex_model(key)
-            # 上游對 pro 系列的 cached 價不一致（有的填 0、有的填 0.1×），官方頁標「—」＝未提供。
-            # 填 0 會把 cached token 當免費＝低估，故退回 input 價（寧可高估不低估）。
-            cached = entry.get("cache_read_input_token_cost") or p_in
-            price = (_mtok(p_in), _mtok(cached), _mtok(entry.get("output_cost_per_token")))
+            cached, note = _cache_layer_price(entry, p_in, "cache_read_input_token_cost",
+                                              _CODEX_CACHED_MULTIPLIER, key)
+            if note:
+                warnings.append(note)
+            price = (_mtok(p_in), cached, _mtok(entry.get("output_cost_per_token")))
             table = codex
         else:
             continue

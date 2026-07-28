@@ -65,13 +65,27 @@ def test_only_bare_first_party_keys_enter_table():
     assert "gpt-4o" not in codex and "claude-noprice" not in claude
 
 
-def test_missing_cached_price_falls_back_to_input_not_free():
+def test_missing_codex_cached_price_is_derived_not_free_and_not_input(monkeypatch):
+    """缺值一律按 0.1× 推導（Codex 審查 round 4）。
+
+    留 0 會把 cached token 當免費＝低估；退回 input 價則讓「上游剛好有值」與
+    「上游剛好沒值」的同 tier 模型差 10 倍——官方對四個 pro 同樣標「—」，
+    差異來自資料缺漏而非定價。
+    """
     _, codex, _, _ = sync.build_tables(UPSTREAM)
-    # 上游填 0 與整個沒有該欄，都代表「未提供」——當免費會低估，故退回 input 價
-    assert codex["gpt-5.9"] == (5.0, 5.0, 30.0)
-    assert codex["gpt-5.9-pro"] == (30.0, 30.0, 180.0)
-    # 有真值時照收
-    assert codex["gpt-5.9-mini"] == (0.75, 0.075, 4.5)
+    assert codex["gpt-5.9"] == (5.0, 0.5, 30.0)          # 上游填 0
+    assert codex["gpt-5.9-pro"] == (30.0, 3.0, 180.0)     # 上游整個沒有該欄
+    assert codex["gpt-5.9-mini"] == (0.75, 0.075, 4.5)    # 上游有真值 → 照收
+
+
+def test_implausible_codex_cached_price_is_replaced_by_derived():
+    """兩源共用同一條合理性規則：cached 價離譜時同樣改用推導值並報告。"""
+    _, codex, notes, _ = sync.build_tables({
+        "gpt-5.9-junk": {"input_cost_per_token": 5e-06, "output_cost_per_token": 3e-05,
+                         "cache_read_input_token_cost": 4e-06},   # 0.8× input，標準 0.1×
+    })
+    assert codex["gpt-5.9-junk"] == (5.0, 0.5, 30.0)
+    assert any("超出合理範圍" in n for n in notes)
 
 
 def test_same_normalized_key_with_different_prices_is_a_conflict():
