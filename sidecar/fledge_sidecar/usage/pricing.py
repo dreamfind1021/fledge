@@ -1,59 +1,41 @@
-"""定價表與計價。單位一律 USD per MTok；公式統一 ÷ 1_000_000（design §7）。
+"""計價公式與模型名正規化。定價表在 pricing_table.py（公式統一 ÷ 1_000_000，design §7）。
 
-定價更新流程：改表 → 遞增 PRICING_VERSION → L2 快取自動只重算 cost（cache.py）。
-數字來源：Claude＝claude-api 參考（2026-07 加入 sonnet-5 用標準價非促銷價、opus-5 對 Anthropic
-官方定價頁核對）；gpt-5 系列＝LiteLLM 表釘住（2026-06-12）。
+定價更新流程：改 pricing_table.py → 遞增 `TABLE_VERSION` → L2 快取自動只重算 cost（cache.py）。
 """
 from __future__ import annotations
 
 import re
 
-PRICING_VERSION = "2026-07-28.1"
+from fledge_sidecar.usage.pricing_table import (CLAUDE_PRICING, CODEX_PRICING,
+                                                TABLE_VERSION)
+
+PRICING_VERSION = TABLE_VERSION
 
 _MTOK = 1_000_000
 
-# Claude：(input, output)；cache 用統一倍率（write 5m=1.25x、1h=2x、read=0.1x input）
-CLAUDE_PRICING: dict[str, tuple[float, float]] = {
-    "claude-opus-5": (5.0, 25.0),
-    "claude-opus-4-8": (5.0, 25.0),
-    "claude-opus-4-7": (5.0, 25.0),
-    "claude-opus-4-6": (5.0, 25.0),
-    "claude-opus-4-5": (5.0, 25.0),
-    "claude-sonnet-5": (3.0, 15.0),  # 標準價；促銷價 $2/$10 至 2026-08-31，靜態表不追時間故用標準價
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-sonnet-4-5": (3.0, 15.0),
-    "claude-haiku-4-5": (1.0, 5.0),
-    "claude-fable-5": (10.0, 50.0),
-}
 # 別名＝同代正價近似（opus 4.x 全代同價，誤差可忽略）；裸別名指向各系列最新款
 _CLAUDE_ALIASES = {"opus": "claude-opus-4-8", "sonnet": "claude-sonnet-5", "haiku": "claude-haiku-4-5"}
 _CLAUDE_DATE_SUFFIX = re.compile(r"-\d{8}$")
-
-# Codex：(input, cached_input, output)
-CODEX_PRICING: dict[str, tuple[float, float, float]] = {
-    "gpt-5.5": (5.0, 0.5, 30.0),
-    "gpt-5.4": (2.5, 0.25, 15.0),
-    "gpt-5.3": (1.75, 0.175, 14.0),
-    "gpt-5.2": (1.75, 0.175, 14.0),
-    "gpt-5.1": (1.25, 0.125, 10.0),
-    "gpt-5": (1.25, 0.125, 10.0),
-    # 尺寸變體（LiteLLM 2026-06-12 釘價）——與全尺寸版本不同價格帶
-    "gpt-5.1-codex-mini": (0.25, 0.025, 2.0),
-    "gpt-5-mini": (0.25, 0.025, 2.0),
-    "gpt-5-nano": (0.05, 0.005, 0.4),
-    "gpt-5.4-mini": (0.75, 0.075, 4.5),
-    "gpt-5.4-nano": (0.2, 0.02, 1.25),
-    # gpt-5.6 改用 sol/terra/luna tier 命名（LiteLLM 2026-07-18 釘價）——tier＝獨立價格帶；
-    # 刻意不加裸 "gpt-5.6"（＝sol 同價），否則未知 tier 會 walk 到它默默用 sol 價計
-    "gpt-5.6-sol": (5.0, 0.5, 30.0),
-    "gpt-5.6-terra": (2.5, 0.25, 15.0),
-    "gpt-5.6-luna": (1.0, 0.1, 6.0),
-}
 _CODEX_DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
-# 獨立價格帶後綴（尺寸 mini/nano、tier sol/terra/luna）不是同系列變體——prefix walk
-# 不得跨越，否則未知變體會被默默用其他價格帶計（nano 差 25×），
-# 違反 design §7 寧可標示不完整不默默算錯
-_CODEX_SIZE_SEGMENTS = {"mini", "nano", "sol", "terra", "luna"}
+
+# ---- sync 例外清單（key → 理由）----------------------------------------------
+# 只影響 admin/sync_pricing.py 的寫入決策，不參與 runtime 查表——runtime 一律以
+# pricing_table.py 為準。理由留在這裡而非表裡，因為表整檔可重生、留不住敘事。
+
+# 刻意不跟上游現價：key → (我們用的價, 理由)。sync 寫入這個值並報告上游差異。
+# 價與理由放在一起，是為了不依賴「前一版表的內容」——表是生成物，欄位數改了就對不上。
+PINNED: dict[str, tuple[tuple[float, ...], str]] = {
+    # (input, output, cache_5m, cache_1h, cache_read)，取自 Anthropic 官方定價頁的標準價欄
+    "claude-sonnet-5": ((3.0, 15.0, 3.75, 6.0, 0.3),
+                        "釘標準價 $3/$15。Anthropic 官方：促銷價 $2/$10 至 2026-08-31，"
+                        "9/1 起標準價生效；上游追促銷價。靜態表不追時間，且 Net ROI 需跨月可比。"),
+}
+
+# 刻意不入表：查無定價會走 missing 警示，比默默用近似價安全。
+EXCLUDED: dict[str, str] = {
+    "gpt-5.6": "OpenAI 官方定價頁只列 sol/terra/luna 三個 tier，裸 gpt-5.6 是上游自造（＝sol 價）。"
+               "若實跑 luna 會錯 5×，寧可 missing。",
+}
 
 
 def normalize_claude_model(raw: str) -> str | None:
@@ -66,33 +48,29 @@ def normalize_claude_model(raw: str) -> str | None:
 
 
 def normalize_codex_model(raw: str) -> str:
-    """去 ISO 日期後綴；再逐段去尾比對表 key（gpt-5.1-codex-max → gpt-5.1）。
+    """只去 ISO 日期後綴。查無 → 保留原名，計價層回 missing。
 
-    去尾段若是獨立價格帶後綴（mini/nano/sol/terra/luna）則停止——未知變體走 missing 而非錯價。
+    刻意不做 prefix walk：`-pro` 與全尺寸差 12×（gpt-5.4-pro $30/$180 vs gpt-5.4 $2.5/$15）、
+    `-nano` 差 25×，而「哪些後綴是獨立價格帶」是追不完的 allowlist（sol/terra/luna 之後又有
+    spark）。表由 admin/sync_pricing.py 從上游整批同步，變體本來就都在表內；表外的未知款
+    寧可 missing 也不猜（design §7 寧可標示不完整不默默算錯）。
     """
-    name = _CODEX_DATE_SUFFIX.sub("", raw)
-    probe = name
-    while probe:
-        if probe in CODEX_PRICING:
-            return probe
-        if "-" not in probe:
-            break
-        probe, dropped = probe.rsplit("-", 1)
-        if dropped in _CODEX_SIZE_SEGMENTS:
-            break  # 不跨價格帶：未知獨立價格帶款（mini/nano/sol/terra/luna）回 missing 而非錯價
-    return name  # 查無 → 保留原名，計價層回 missing
+    return _CODEX_DATE_SUFFIX.sub("", raw)
 
 
 def claude_cost(model: str, input_tokens: int, output_tokens: int,
                 cache_5m: int, cache_1h: int, cache_read: int) -> tuple[float, bool]:
-    """回 (cost_usd, missing)。input_tokens 不含 cache tokens（API 語義，design §7）。"""
+    """回 (cost_usd, missing)。input_tokens 不含 cache tokens（API 語義，design §7）。
+
+    cache 三層讀表內真價，不套寫死倍率——倍率(1.25/2/0.1)只對現行世代成立，
+    claude-3-haiku 實際是 1.2×/0.12×。倍率改由 sync 在上游缺該層時當推導 fallback。
+    """
     price = CLAUDE_PRICING.get(model)
     if price is None:
         return 0.0, True
-    p_in, p_out = price
+    p_in, p_out, p_5m, p_1h, p_read = price
     cost = (input_tokens * p_in + output_tokens * p_out
-            + cache_5m * 1.25 * p_in + cache_1h * 2.0 * p_in
-            + cache_read * 0.1 * p_in) / _MTOK
+            + cache_5m * p_5m + cache_1h * p_1h + cache_read * p_read) / _MTOK
     return cost, False
 
 

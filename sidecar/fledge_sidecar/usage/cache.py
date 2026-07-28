@@ -22,7 +22,10 @@ from fledge_sidecar.usage.parser import (CodexFileResult, UsageEntry,
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+# 2：`UsageEntry.model` 的語義變了——舊版 codex 正規化會 prefix walk（gpt-5.3-codex-spark
+# 存成 gpt-5.3），原始名不可回復。`pricing_version` 擋不住這種漂移：_reprice 吃的是已經
+# 走過 walk 的存檔名，而未變動的來源檔不會重 parse，那筆會永遠停在錯的價格帶。
+SCHEMA_VERSION = 2
 
 
 @dataclass

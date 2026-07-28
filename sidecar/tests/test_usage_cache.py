@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from fledge_sidecar.usage import pricing
-from fledge_sidecar.usage.cache import UsageCache
+from fledge_sidecar.usage.cache import SCHEMA_VERSION, UsageCache
 
 
 def _write_claude(tmp_path: Path, name: str, n: int = 1) -> Path:
@@ -62,13 +62,42 @@ def test_pricing_version_mismatch_reprices_without_reparse(tmp_path: Path, monke
     l2 = tmp_path / "usage-v1.json"
     UsageCache(l2_path=l2).refresh(claude=[f], codex=[])
     old_cost = json.loads(l2.read_text(encoding="utf-8"))["files"][str(f.resolve())]["entries"][0]["cost"]
-    # 模擬定價更新：版本變 + opus 價格翻倍
+    # 模擬定價更新：版本變 + opus 五欄價全部翻倍（input, output, 5m, 1h, read）
     monkeypatch.setattr(pricing, "PRICING_VERSION", "test.2")
-    monkeypatch.setitem(pricing.CLAUDE_PRICING, "claude-opus-4-8", (10.0, 50.0))
+    monkeypatch.setitem(pricing.CLAUDE_PRICING, "claude-opus-4-8",
+                        tuple(v * 2 for v in pricing.CLAUDE_PRICING["claude-opus-4-8"]))
     cache2 = UsageCache(l2_path=l2)
     r = cache2.refresh(claude=[f], codex=[])
     assert r.parsed_files == 0                      # 不重 parse（design §9）
     assert abs(r.entries[0].cost - old_cost * 2) < 1e-12   # cost 已按新價重算
+
+
+def test_old_schema_l2_with_walked_model_name_is_rebuilt(tmp_path: Path):
+    """舊 schema 存的是 prefix walk 後的名字，原始名不可回復 → 只能整份重建。
+
+    Codex 審查 round 2 finding：來源檔未變動時不會重 parse，而 _reprice 吃的是存檔名，
+    所以 `pricing_version` 擋不住這種語義漂移——會用 gpt-5.3 的價一直算下去。
+    """
+    f = _write_codex(tmp_path, "rollout-spark.jsonl", "gpt-5.3-codex-spark")
+    l2 = tmp_path / "usage-v1.json"
+    st = f.stat()
+    # 手工偽造一份「舊版寫的」L2：schema 1 + walk 後的 model 名 + 已計價
+    l2.write_text(json.dumps({
+        "version": 1, "pricing_version": pricing.PRICING_VERSION, "generation": 7,
+        "files": {str(f.resolve()): {
+            "size": st.st_size, "mtime_ns": st.st_mtime_ns, "source": "codex", "skipped": 0,
+            "rate_limits": None, "rate_limits_ts": 0.0,
+            "entries": [{"ts": 1.0, "source": "codex", "model": "gpt-5.3",
+                         "input_tokens": 1000, "output_tokens": 50, "cache_read_tokens": 400,
+                         "cache_create_5m": 0, "cache_create_1h": 0, "cost": 1.4,
+                         "project": "/p", "session_id": "cs", "dedup_key": "",
+                         "sidechain": False, "missing_pricing": False}]}},
+    }), encoding="utf-8")
+
+    r = UsageCache(l2_path=l2).refresh(claude=[], codex=[f])
+    assert r.parsed_files == 1                       # schema 不符 → 整份丟掉重 parse
+    assert r.entries[0].model == "gpt-5.3-codex-spark"   # 原始名，不再被 walk 成 gpt-5.3
+    assert r.entries[0].missing_pricing is True and r.entries[0].cost == 0.0
 
 
 def test_new_codex_model_stale_l2_repriced_without_reparse(tmp_path: Path, monkeypatch):
@@ -150,7 +179,7 @@ def test_corrupt_l2_binary_garbage_rebuilds(tmp_path: Path):
     c = UsageCache(l2_path=l2)                        # 不得拋例外（design §9 不擋啟動）
     r = c.refresh(claude=[f], codex=[])
     assert r.parsed_files == 1
-    assert json.loads(l2.read_text(encoding="utf-8"))["version"] == 1  # 已重建
+    assert json.loads(l2.read_text(encoding="utf-8"))["version"] == SCHEMA_VERSION  # 已重建
 
 
 def test_corrupt_l2_structural_rebuilds_and_save_guard_survives(tmp_path: Path):
@@ -160,7 +189,7 @@ def test_corrupt_l2_structural_rebuilds_and_save_guard_survives(tmp_path: Path):
     c = UsageCache(l2_path=l2)
     r = c.refresh(claude=[f], codex=[])               # _save_l2 guard 也不得炸
     assert r.parsed_files == 1
-    assert json.loads(l2.read_text(encoding="utf-8"))["version"] == 1
+    assert json.loads(l2.read_text(encoding="utf-8"))["version"] == SCHEMA_VERSION
 
 
 def test_schema_mismatch_rebuild_actually_persists(tmp_path: Path):
@@ -171,7 +200,7 @@ def test_schema_mismatch_rebuild_actually_persists(tmp_path: Path):
     c = UsageCache(l2_path=l2)
     c.refresh(claude=[f], codex=[])
     disk = json.loads(l2.read_text(encoding="utf-8"))
-    assert disk["version"] == 1 and disk["generation"] >= 1
+    assert disk["version"] == SCHEMA_VERSION and disk["generation"] >= 1
 
 
 def test_removed_file_and_codex_rate_limits_passthrough(tmp_path: Path):
@@ -208,7 +237,7 @@ def test_l2_file_mode_owner_only(tmp_path: Path):
 
 
 def test_refresh_exposes_claude_by_file_shallow_snapshot(tmp_path):
-    from fledge_sidecar.usage.cache import UsageCache
+    from fledge_sidecar.usage.cache import SCHEMA_VERSION, UsageCache
     f = tmp_path / "p.jsonl"
     f.write_text('{"timestamp":"2026-06-15T00:00:00Z","message":{"id":"m1",'
                  '"model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5}},'

@@ -51,7 +51,8 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `routes/config.py` | `GET /api/config`（附 is_first_run）+ 細粒度寫入（roots/manual/overrides/accounts；add 類 canonicalize+驗存在、移除/改帳號類只 canonicalize）+ `POST .../onboard` + `POST .../check-dir`（回 `status` 判別碼）+ `PUT .../subscriptions`（訂閱費清單，name 非空/cost 有限非負）+ `PUT .../kms-root`（KmsRootBody Pydantic、`_config_lock`、回 `{ok,kms_root}`、不驗目錄存在）；account CRUD（級聯 reassign、key grammar、至少留1），鎖 + 驗證 | `router` |
 | `routes/usage.py` | `GET /usage/dashboard?days=`（數據儀表板成本面板）：single-flight 掃描（25s stale gate、error 立即 retry、days 變更視為 stale）＋`asyncio.to_thread` 不卡 event loop＋last-good 語義（掃描中回舊資料標 scanning、冷掃 202+Retry-After、冷掃失敗 error-only 200）；模組級 `_state`（snapshot/cache/scanning）。另 `GET /usage/codex`：Codex 實時額度（呼 `api/codex_usage`）＋ `CODEX_USAGE_MIN_INTERVAL_SEC`(60s) 合併 floor（`_codex_state`），失敗回 typed unavailable 不 fallback 舊快照 | `router`, `reset_state_for_tests()` |
 | `api/codex_usage.py` | Codex 實時額度抓取（api/ 層唯一對外出口）：讀 `~/.codex/auth.json` 的 `access_token`+`account_id`→GET `chatgpt.com/backend-api/codex/usage`（Bearer+`chatgpt-account-id`，8s timeout）→正規化 `primary/secondary_window`→`{used_percent,window_minutes,resets_at}`；**token 只進 header 絕不 log/回傳**，任何例外 redaction 成 typed 失敗（no_auth/unauthorized/network/bad_response），不外洩 raw exception | `fetch_codex_usage()`, `normalize_usage()`, `USAGE_URL` |
-| `usage/pricing.py` | 定價表（Claude＋gpt-5 系列含 mini/nano 尺寸帶與 gpt-5.6 sol/terra/luna tier 帶）＋模型名正規化（別名/日期後綴/`<synthetic>`→None/價格帶不跨價）＋兩源計價（USD per MTok ÷1e6、cache 三層倍率、cached⊆input）；`PRICING_VERSION` 供 L2 重算 | `PRICING_VERSION`, `CLAUDE_PRICING`, `CODEX_PRICING`, `normalize_*_model()`, `claude_cost()`, `codex_cost()` |
+| `usage/pricing.py` | 計價公式與模型名正規化（別名/日期後綴/`<synthetic>`→None；**不做 prefix walk**，表外未知款一律 missing）＋兩源計價（USD per MTok ÷1e6、cache 三層讀表內真價、cached⊆input）；`PRICING_VERSION` 引用表的 `TABLE_VERSION` 供 L2 重算。`PINNED`（key→(價, 理由)）／`EXCLUDED`（key→理由）是刻意偏離上游的例外清單，只被 `admin/sync_pricing.py` 讀、不參與 runtime 查表 | `PRICING_VERSION`, `PINNED`, `EXCLUDED`, `normalize_*_model()`, `claude_cost()`, `codex_cost()` |
+| `usage/pricing_table.py` | 定價表本體（**自動生成，勿手改**）：`admin/sync_pricing.py` 從 LiteLLM 整檔重生。Claude 五欄（input／output／cache 5m／cache 1h／cache read）、Codex 三欄（input／cached／output）。表 key 已套用 pricing.py 的正規化，故等同 runtime 查表用的 key；`TABLE_VERSION` = 生成日期 + 表內容 sha256[:8]，內容一變就變 | `TABLE_VERSION`, `CLAUDE_PRICING`, `CODEX_PRICING` |
 | `usage/parser.py` | 兩格式逐行解析→瘦條目 `UsageEntry`（內容層不拋例外：壞行/壞值跳過計數；I/O 例外由呼叫端 wrap）：claude（快篩純最佳化、cache precedence nested 優先、dedup_key、sidechain）＋codex rollout（last/累計差分 clamp、turn_context model、session_meta cwd、rate_limits 末筆） | `UsageEntry`, `CodexFileResult`, `parse_claude_file()`, `parse_codex_file()` |
 | `usage/scanner.py` | 兩源檔案發現（回傳一律 realpath）：claude＝各帳號 config_dir/projects 遞迴＋realpath 去重，另回 realpath→account_key 對應表（tie-break 按 account_key 排序取第一、不依 dict 序）；codex＝sessions/archived 的 per-session canonical selection（active>mtime_ns>size>路徑全序；首行窺視 session_id、_PEEK_LIMIT 1MiB） | `claude_files()`, `claude_account_map()`, `_scan_claude()`, `codex_files()` |
 | `usage/cache.py` | L1 記憶體＋L2 磁碟瘦條目快取：(size, mtime_ns) 失效、bounded ThreadPool 平行 parse、`threading.Lock` 序列化、L2 損壞寬 catch 重建、pricing_version 變更只重算 cost 不重 parse、generation 防舊蓋新（同 schema 代才比較）、變動才落盤、atomic write；`RefreshResult` 另暴露 `claude_by_file`（realpath→entries shallow snapshot、只含 claude，防 route/測試 mutate 污染 L1） | `UsageCache`, `FileCacheEntry`, `RefreshResult`, `SCHEMA_VERSION` |
@@ -150,7 +151,8 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `test_config_routes.py` | config 寫入 endpoints（鎖/驗證/防呆/持久化） |
 | `test_pty_bridge.py` | PTY round-trip、env override、env_remove 剔除、並發、`close()` 失敗時的 handle 去留（仍活著留、已死或問不出狀態丟）與 `on_close` 時序（被放回時不收尾 usage span、重試成功才收且只收一次） |
 | `test_sessions.py` | session 建立 + WS echo + resize + 模式 A + flow control（`_apply_flow_control` 單測 + pause 真閘住 PTY→WS/roundtrip/text 不入 PTY/壞 frame 不斷線/paused EOF→4001）+ kind=install/login（allowlist 命令/未知 install_id 400/不注入帳號 env/login 注入帳號 env/codex login/未知帳號 400/未知欄位 422） |
-| `test_usage_pricing.py` | 定價正規化（別名/後綴/synthetic/尺寸帶）＋兩源計價公式 |
+| `test_usage_pricing.py` | 定價正規化（別名/後綴/synthetic/表外未知款不猜價）＋兩源計價公式 |
+| `test_sync_pricing.py` | `admin/sync_pricing.py` 的表建構與渲染（假上游 dict、不連外也不掃本機）：裸 key 過濾／日期版合併／同名不同價視為衝突／PINNED 保值／EXCLUDED 不入表／cached 缺失退回 input 價／渲染結果可 exec 回原表／版本隨內容變 |
 | `test_usage_parser.py` | 兩格式解析（容錯/cache precedence/差分 clamp/壞 ts/中文 cwd/rate_limits 末筆） |
 | `test_usage_scanner.py` | realpath 去重（symlink 帳號）＋codex canonical 三層 tier＋fallback |
 | `test_codex_usage.py` | Codex 實時額度（normalize_usage 欄位映射/缺鍵→bad_response、fetch no_auth/401→unauthorized/URLError→network/壞 JSON；opener 注入不打真網路、token 進 header） |
@@ -187,6 +189,11 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `vitest.config.ts` | 前端 vitest 設定（store lifecycle 測試）；掛 `setupFiles` |
 | `vitest.setup.ts` | 測試端環境 shim：Node 25 在 globalThis 放無方法的 `localStorage` 空殼並蓋掉 jsdom Storage，讓任何讀寫 localStorage 的模組一 import 就 TypeError；偵測到空殼才換上 in-memory Storage（正式執行環境不經過此檔） |
 
+### admin/ — 維運腳本
+| 檔案 | 用途 |
+|------|------|
+| `sync_pricing.py` | 從 LiteLLM 的 `model_prices_and_context_window.json` 重生 `usage/pricing_table.py`（手動執行，不在 runtime 連外——理由見 ADR-0005）。只收第一方裸 key（濾掉 `vertex_ai/`、Bedrock `-v1:0` 等區域價）；表 key 用 pricing.py 自己的 normalize 產生；cache 價一律「上游真價優先，缺值或偏離標準倍率逾 2 倍（＝資料損壞）才推導並報告」，兩源共用同一條規則（Claude 三層 1.25/2/0.1、Codex cached 0.1）。**寫檔前的阻斷條件**（整檔覆蓋是破壞性的）：上游非空 mapping、同一正規化名不得對到不同價、每個價須為有限正數（缺 `output` 會變 0＝output 免費）、移除既有模型需 `--allow-removals`。寫檔後掃本機用量報「仍查無定價」的模型。`--dry-run`／`--from <json>`／`--no-check-local`／`--allow-removals` |
+
 ### docs/agents/ — Agent skills 設定（mattpocock engineering skills 讀取）
 | 檔案 | 用途 |
 |------|------|
@@ -215,7 +222,8 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `sidecar/pyproject.toml`（新增套件） | `build_binary.sh`（PyInstaller hidden imports） |
 | `src/components/Sidebar.tsx`（分組邏輯變更） | `src/lib/sidebarGroups.ts`、`src/lib/sidebarGroups.test.ts` |
 | `store/useAppStore.ts`（Tab 模型變更） | `src/App.tsx`（共用 isLiveClaudeTab predicate）、`src/components/TabBar.tsx`、`src/components/Terminal.tsx` |
-| `sidecar/.../usage/pricing.py`（定價表/正規化變更） | **儀表板所有成本數字**；改表必升 `PRICING_VERSION`（L2 自動重算）；`test_usage_pricing.py` |
+| `sidecar/.../usage/pricing.py`（正規化/公式/例外清單變更） | **儀表板所有成本數字**；`test_usage_pricing.py`；改 `PINNED`／`EXCLUDED` 後要重跑 `admin/sync_pricing.py` 讓表跟上。**改 `normalize_*_model` 必須升 `usage/cache.py` 的 `SCHEMA_VERSION`**——L2 存的是正規化後的 model 名，`pricing_version` 只觸發重算不重 parse，舊名會用新表繼續算下去 |
+| `sidecar/.../usage/pricing_table.py`（定價數字變更） | **儀表板所有成本數字**；不得手改——跑 `python admin/sync_pricing.py` 重生（`TABLE_VERSION` 自動隨內容變，L2 只重算 cost 不重 parse） |
 | `sidecar/.../usage/parser.py`（UsageEntry 欄位變更） | `usage/cache.py`（L2 序列化 roundtrip——欄位變更需升 `SCHEMA_VERSION`）、`usage/aggregator.py` |
 | `sidecar/.../routes/usage.py`（payload shape 變更） | `src/lib/sidecar.ts`（`UsageDashboard`/`CodexUsage` 型別）、`src/components/Dashboard.tsx`、`test_usage_routes.py` |
 | `sidecar/.../api/codex_usage.py`（端點/回傳合約變更） | `routes/usage.py`（`/usage/codex`）、`src/lib/sidecar.ts`（`CodexUsage`）、`Dashboard.tsx`（`CodexPanel`）、`test_codex_usage.py` |

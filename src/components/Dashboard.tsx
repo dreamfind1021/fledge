@@ -73,7 +73,10 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
         <div className="dash-error">{t("state.error", { msg: data.scan_meta.error ?? "" })}</div>
       )}
       {data.scan_meta.missing_pricing.length > 0 && (
-        <div className="dash-warn">{t("state.missingPricing", { count: data.scan_meta.missing_pricing.length })}</div>
+        // 列出模型名而非個數：看到名字才知道要 sync 什麼（admin/sync_pricing.py）
+        <div className="dash-warn">{t("state.missingPricing", {
+          models: data.scan_meta.missing_pricing.join(t("state.listSeparator")),
+        })}</div>
       )}
       <KpiBar kpi={data.kpi} t={t} />
       <div className="dash-row dash-row-usage">

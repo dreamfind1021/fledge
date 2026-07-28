@@ -30,10 +30,11 @@ def test_claude_cost_unknown_model_is_zero_and_missing():
     assert cost == 0.0 and missing is True
 
 
-def test_normalize_codex_strips_date_suffix_and_prefix_matches():
+def test_normalize_codex_only_strips_date_suffix():
     assert pricing.normalize_codex_model("gpt-5.5-2026-04-23") == "gpt-5.5"
-    assert pricing.normalize_codex_model("gpt-5.1-codex-max") == "gpt-5.1"
     assert pricing.normalize_codex_model("unknown-codex") == "unknown-codex"
+    # 不做 prefix walk：變體名原樣保留，由表決定有沒有價
+    assert pricing.normalize_codex_model("gpt-5.1-codex-max") == "gpt-5.1-codex-max"
 
 
 def test_codex_cost_cached_subset_of_input():
@@ -50,7 +51,7 @@ def test_pricing_version_exists():
 
 
 def test_normalize_codex_size_variants_never_get_fullsize_price():
-    # 已知 mini/nano → 自己的價格帶；未知 mini/nano → missing（不得 walk 到全尺寸價）
+    # 已知 mini/nano → 自己的價格帶；未知 mini/nano → missing（不得落到全尺寸價）
     assert pricing.normalize_codex_model("gpt-5.1-codex-mini") == "gpt-5.1-codex-mini"
     assert pricing.normalize_codex_model("gpt-5-nano") == "gpt-5-nano"
     name = pricing.normalize_codex_model("gpt-5.5-mini")   # 表中無此款
@@ -70,9 +71,10 @@ def test_normalize_codex_gpt56_tiers_have_own_price_bands():
         assert abs(cost - (0.6 * p_in + 0.4 * p_cached + 0.1 * p_out)) < 1e-9, model
 
 
-def test_normalize_codex_tier_suffix_never_crosses_band():
-    # 未知 tier 款（表中無）不得 walk 到其他價格帶（比照 mini/nano 護欄）
-    name = pricing.normalize_codex_model("gpt-5.5-sol")
-    assert pricing.codex_cost(name, 1000, 0, 0) == (0.0, True)
-    # spark 刻意沿用 walk 映射 gpt-5.3——三欄同價（$1.75/$0.175/$14，2026-07-18 查證）
-    assert pricing.normalize_codex_model("gpt-5.3-codex-spark") == "gpt-5.3"
+def test_normalize_codex_unknown_variant_is_missing_not_guessed():
+    # 表外的變體一律 missing——不得落到同系列其他價格帶（pro 差 12×、nano 差 25×）
+    for raw in ("gpt-5.5-sol",          # 未知 tier
+                "gpt-5.3-codex-spark",  # 未知 tier（上游無此 key，無從查證真價）
+                "gpt-5.9-pro"):         # 未來款
+        name = pricing.normalize_codex_model(raw)
+        assert pricing.codex_cost(name, 1000, 0, 0) == (0.0, True), raw
