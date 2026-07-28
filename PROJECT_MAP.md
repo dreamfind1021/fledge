@@ -222,7 +222,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `sidecar/pyproject.toml`（新增套件） | `build_binary.sh`（PyInstaller hidden imports） |
 | `src/components/Sidebar.tsx`（分組邏輯變更） | `src/lib/sidebarGroups.ts`、`src/lib/sidebarGroups.test.ts` |
 | `store/useAppStore.ts`（Tab 模型變更） | `src/App.tsx`（共用 isLiveClaudeTab predicate）、`src/components/TabBar.tsx`、`src/components/Terminal.tsx` |
-| `sidecar/.../usage/pricing.py`（正規化/公式/例外清單變更） | **儀表板所有成本數字**；`test_usage_pricing.py`；改 `PINNED`／`EXCLUDED` 後要重跑 `admin/sync_pricing.py` 讓表跟上 |
+| `sidecar/.../usage/pricing.py`（正規化/公式/例外清單變更） | **儀表板所有成本數字**；`test_usage_pricing.py`；改 `PINNED`／`EXCLUDED` 後要重跑 `admin/sync_pricing.py` 讓表跟上。**改 `normalize_*_model` 必須升 `usage/cache.py` 的 `SCHEMA_VERSION`**——L2 存的是正規化後的 model 名，`pricing_version` 只觸發重算不重 parse，舊名會用新表繼續算下去 |
 | `sidecar/.../usage/pricing_table.py`（定價數字變更） | **儀表板所有成本數字**；不得手改——跑 `python admin/sync_pricing.py` 重生（`TABLE_VERSION` 自動隨內容變，L2 只重算 cost 不重 parse） |
 | `sidecar/.../usage/parser.py`（UsageEntry 欄位變更） | `usage/cache.py`（L2 序列化 roundtrip——欄位變更需升 `SCHEMA_VERSION`）、`usage/aggregator.py` |
 | `sidecar/.../routes/usage.py`（payload shape 變更） | `src/lib/sidecar.ts`（`UsageDashboard`/`CodexUsage` 型別）、`src/components/Dashboard.tsx`、`test_usage_routes.py` |
