@@ -17,10 +17,6 @@ _MTOK = 1_000_000
 _CLAUDE_ALIASES = {"opus": "claude-opus-4-8", "sonnet": "claude-sonnet-5", "haiku": "claude-haiku-4-5"}
 _CLAUDE_DATE_SUFFIX = re.compile(r"-\d{8}$")
 _CODEX_DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
-# 獨立價格帶後綴（尺寸 mini/nano、tier sol/terra/luna）不是同系列變體——prefix walk
-# 不得跨越，否則未知變體會被默默用其他價格帶計（nano 差 25×），
-# 違反 design §7 寧可標示不完整不默默算錯
-_CODEX_SIZE_SEGMENTS = {"mini", "nano", "sol", "terra", "luna"}
 
 
 def normalize_claude_model(raw: str) -> str | None:
@@ -33,21 +29,14 @@ def normalize_claude_model(raw: str) -> str | None:
 
 
 def normalize_codex_model(raw: str) -> str:
-    """去 ISO 日期後綴；再逐段去尾比對表 key（gpt-5.1-codex-max → gpt-5.1）。
+    """只去 ISO 日期後綴。查無 → 保留原名，計價層回 missing。
 
-    去尾段若是獨立價格帶後綴（mini/nano/sol/terra/luna）則停止——未知變體走 missing 而非錯價。
+    刻意不做 prefix walk：`-pro` 與全尺寸差 12×（gpt-5.4-pro $30/$180 vs gpt-5.4 $2.5/$15）、
+    `-nano` 差 25×，而「哪些後綴是獨立價格帶」是追不完的 allowlist（sol/terra/luna 之後又有
+    spark）。表由 admin/sync_pricing.py 從上游整批同步，變體本來就都在表內；表外的未知款
+    寧可 missing 也不猜（design §7 寧可標示不完整不默默算錯）。
     """
-    name = _CODEX_DATE_SUFFIX.sub("", raw)
-    probe = name
-    while probe:
-        if probe in CODEX_PRICING:
-            return probe
-        if "-" not in probe:
-            break
-        probe, dropped = probe.rsplit("-", 1)
-        if dropped in _CODEX_SIZE_SEGMENTS:
-            break  # 不跨價格帶：未知獨立價格帶款（mini/nano/sol/terra/luna）回 missing 而非錯價
-    return name  # 查無 → 保留原名，計價層回 missing
+    return _CODEX_DATE_SUFFIX.sub("", raw)
 
 
 def claude_cost(model: str, input_tokens: int, output_tokens: int,
