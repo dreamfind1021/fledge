@@ -39,6 +39,12 @@ TABLE_PATH = _REPO / "sidecar" / "fledge_sidecar" / "usage" / "pricing_table.py"
 _CACHE_FALLBACK_MULTIPLIERS = (("cache_creation_input_token_cost", 1.25),
                                ("cache_creation_input_token_cost_above_1hr", 2.0),
                                ("cache_read_input_token_cost", 0.1))
+# 但「上游有給」不等於「上游是對的」：實際遇過 claude-3-haiku 的 1h write 是 input 的 24×、
+# claude-3-opus 是 0.4×（標準 2×），兩者都是上游對退役舊款的資料損壞。偏離標準倍率超過
+# 這個倍數就視同上游沒給、改用推導值並報告——否則會出現「缺席時信任自己的推導、
+# 存在時信任明顯錯誤的上游」這種自相矛盾。容忍 2× 是為了容納真實的小幅偏離
+# （claude-3-haiku 的 5m 1.2× 對 1.25×、read 0.12× 對 0.1× 都在範圍內）。
+_CACHE_RATIO_TOLERANCE = 2.0
 
 
 def fetch_upstream(local: str | None) -> dict:
@@ -71,14 +77,26 @@ def _mtok(value: float | None) -> float:
     return round((value or 0.0) * 1_000_000, 6)
 
 
-def _claude_cache_prices(entry: dict, p_in: float) -> tuple[float, float, float]:
-    """(5m write, 1h write, read) 的真價；上游缺哪層就用該層的標準倍率由 input 價推導。
+def _claude_cache_prices(entry: dict, p_in: float,
+                         key: str) -> tuple[tuple[float, float, float], list[str]]:
+    """回 ((5m write, 1h write, read), 異常說明)。
 
-    推導而非跳過，是因為缺層在上游很常見（claude-4-opus 就沒有 above_1hr），
-    而 0 會被當成「該層免費」造成低估。
+    上游缺該層、或該層明顯偏離標準倍率（＝資料損壞）時改用倍率推導。推導而非跳過，
+    是因為缺層在上游很常見（claude-4-opus 就沒有 above_1hr），而 0 會被當成
+    「該層免費」造成低估。
     """
-    return tuple(_mtok(entry.get(field) or p_in * multiplier)          # type: ignore[return-value]
-                 for field, multiplier in _CACHE_FALLBACK_MULTIPLIERS)
+    prices, notes = [], []
+    for field, multiplier in _CACHE_FALLBACK_MULTIPLIERS:
+        raw = entry.get(field)
+        derived = p_in * multiplier
+        if raw and (1 / _CACHE_RATIO_TOLERANCE) <= (raw / derived) <= _CACHE_RATIO_TOLERANCE:
+            prices.append(_mtok(raw))
+            continue
+        if raw:
+            notes.append(f"{key}：{field} 是 input 的 {raw / p_in:.4g}×（標準 {multiplier}×），"
+                         f"超出合理範圍 → 改用推導價 {_mtok(derived)}")
+        prices.append(_mtok(derived))
+    return (prices[0], prices[1], prices[2]), notes
 
 
 def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str]]:
@@ -103,8 +121,10 @@ def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str]]:
             norm = pricing.normalize_claude_model(key)
             if norm is None:
                 continue
+            cache_prices, anomalies = _claude_cache_prices(entry, p_in, key)
+            warnings.extend(anomalies)
             price: tuple = (_mtok(p_in), _mtok(entry.get("output_cost_per_token")),
-                            *_claude_cache_prices(entry, p_in))
+                            *cache_prices)
             table = claude
         elif key.startswith("gpt-5"):
             norm = pricing.normalize_codex_model(key)

@@ -192,7 +192,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 ### admin/ — 維運腳本
 | 檔案 | 用途 |
 |------|------|
-| `sync_pricing.py` | 從 LiteLLM 的 `model_prices_and_context_window.json` 重生 `usage/pricing_table.py`（手動執行，不在 runtime 連外——理由見 ADR-0005）。只收第一方裸 key（濾掉 `vertex_ai/`、Bedrock `-v1:0` 等區域價）；表 key 用 pricing.py 自己的 normalize 產生；Claude 的 cache 三層存上游真價、缺哪層才用 1.25/2/0.1 推導。**寫檔前的阻斷條件**（整檔覆蓋是破壞性的）：上游非空 mapping、同一正規化名不得對到不同價、每個價須為有限正數（缺 `output` 會變 0＝output 免費）、移除既有模型需 `--allow-removals`；Codex 的 `cached` 價缺失或為 0 視為上游未提供而退回 input 價。寫檔後掃本機用量報「仍查無定價」的模型。`--dry-run`／`--from <json>`／`--no-check-local`／`--allow-removals` |
+| `sync_pricing.py` | 從 LiteLLM 的 `model_prices_and_context_window.json` 重生 `usage/pricing_table.py`（手動執行，不在 runtime 連外——理由見 ADR-0005）。只收第一方裸 key（濾掉 `vertex_ai/`、Bedrock `-v1:0` 等區域價）；表 key 用 pricing.py 自己的 normalize 產生；Claude 的 cache 三層存上游真價，**缺該層或偏離標準倍率逾 2 倍（＝上游資料損壞）才用 1.25/2/0.1 推導並報告**。**寫檔前的阻斷條件**（整檔覆蓋是破壞性的）：上游非空 mapping、同一正規化名不得對到不同價、每個價須為有限正數（缺 `output` 會變 0＝output 免費）、移除既有模型需 `--allow-removals`；Codex 的 `cached` 價缺失或為 0 視為上游未提供而退回 input 價。寫檔後掃本機用量報「仍查無定價」的模型。`--dry-run`／`--from <json>`／`--no-check-local`／`--allow-removals` |
 
 ### docs/agents/ — Agent skills 設定（mattpocock engineering skills 讀取）
 | 檔案 | 用途 |

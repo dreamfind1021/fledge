@@ -115,6 +115,31 @@ def test_claude_cache_layers_use_upstream_price_and_derive_only_what_is_missing(
     #                                        ↑ 上游真價   ↑ 缺 → 由 2× 推導
 
 
+def test_implausible_upstream_cache_price_is_replaced_by_derived(monkeypatch):
+    """正數不等於合理（Codex 審查 round 3 finding）。
+
+    上游對退役舊款的 cache 欄位會壞掉：claude-3-haiku 的 1h write 是 input 的 24×、
+    claude-3-opus 是 0.4×（標準 2×）。invalid_prices 只擋非正數，攔不到這種。
+    """
+    claude, _, notes, _ = sync.build_tables({
+        "claude-junk-hi": _claude(2.5e-07, 1.25e-06, c1h=6e-06),    # 1h = 24× input
+        "claude-junk-lo": _claude(1.5e-05, 7.5e-05, c1h=6e-06),     # 1h = 0.4× input
+    })
+    assert claude["claude-junk-hi"][3] == 0.5      # 2× input，非上游的 6.0
+    assert claude["claude-junk-lo"][3] == 30.0     # 2× input，非上游的 6.0
+    assert sum("超出合理範圍" in n for n in notes) == 2   # 兩者都要出聲，不得靜默替換
+
+
+def test_plausible_deviation_from_standard_multiplier_is_kept():
+    """閘值不得矯枉過正：真實存在的小幅偏離仍要照收上游真價。"""
+    claude, _, _, _ = sync.build_tables({
+        # claude-3-haiku 的真實情況：5m 是 1.2×（非 1.25×）、read 是 0.12×（非 0.1×）
+        "claude-mild-9": _claude(2.5e-07, 1.25e-06, c5m=3e-07, cread=3e-08),
+    })
+    assert claude["claude-mild-9"] == (0.25, 1.25, 0.3, 0.5, 0.03)
+    #                                              ↑ 1.2×   ↑ 缺→推導  ↑ 0.12×
+
+
 def test_empty_or_non_mapping_upstream_is_refused(tmp_path):
     """合法但殘缺的 JSON 不得生出空表整檔覆蓋（Codex 審查 finding #1）。"""
     for payload in ("{}", "[]", "null"):
