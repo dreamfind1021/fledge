@@ -44,11 +44,16 @@ export function isUsableConfig(raw: unknown): raw is AppConfigData {
   if (!everyItemOk(raw.manual_projects, ["path", "account"])) return false;
   if (!everyValueOk(raw.project_overrides, ["account"])) return false;
 
-  // 選用欄位：未提供合法（舊前端快取無此欄），提供了型別就必須對
+  // 選用欄位：未提供合法（舊前端快取無此欄），提供了型別就必須對。
+  // 元素內的具名欄位同樣只在存在時驗——`subscriptions` 也走後端的 `data.get(…, [])`
+  // 原樣收下，要求欄位必存會重演 label 那條的鎖死問題。
   if (raw.subscriptions !== undefined) {
     if (!Array.isArray(raw.subscriptions)) return false;
     const ok = raw.subscriptions.every(
-      (s) => isRecord(s) && typeof s.name === "string" && typeof s.monthly_cost === "number",
+      (s) =>
+        isRecord(s) &&
+        (s.name === undefined || typeof s.name === "string") &&
+        (s.monthly_cost === undefined || typeof s.monthly_cost === "number"),
     );
     if (!ok) return false;
   }
