@@ -25,6 +25,16 @@ _Avoid_: shared file、sync item
 **Canonical（路徑語意）**:
 僅指路徑正規化（expand→absolute→resolve symlink）。不用於描述帳號角色——帳號角色用 source/target。
 
+### 啟動
+
+**Splash（啟動畫面）**:
+每次啟動時蓋在主視窗內的品牌畫面（webview 內 overlay，非獨立視窗）。蓋住整段啟動序列，到「序列跑完且滿足最短顯示時間」才淡出——淡出瞬間底下已是可用的 UI。**只在 app 啟動出現一次**：淡出後即使後端斷線重啟也不再現（那走頂部 banner）。啟動失敗時就地轉為錯誤態並提供重試，不交還給底下的空殼 UI。
+_Avoid_: loading 畫面（它是品牌展示，不只是等待指示）、開機畫面
+
+**Startup sequence（啟動序列）**:
+從取得 sidecar port 到 app 可用的整串步驟（port → token → health → 設定 → 專案清單／首次引導）。是**可重跑的單一單元**，不是散在元件生命週期裡的一次性副作用——重試就是重跑它。
+_Avoid_: 初始化、boot（後者在本專案指 Tauri 進程啟動）
+
 ### 引導與設置
 
 **First run（首次啟動）**:

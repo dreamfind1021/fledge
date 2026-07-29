@@ -1,11 +1,14 @@
 """專案掃描：根目錄 depth=1 掃描 + Claude Code 用過記錄合併。spec §5。"""
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 from typing import Any
 
-from fledge_sidecar.app_config import AppConfig
+from fledge_sidecar.app_config import AppConfig, usable_entry
+
+logger = logging.getLogger(__name__)
 
 
 def encode_cc_project_dir(abs_path: str) -> str:
@@ -57,9 +60,17 @@ def scan_all(config: AppConfig) -> tuple[list[dict[str, Any]], bool]:
     permission_error = False
 
     # 優先級 1：根目錄掃描（逐 root best-effort）
+    #
+    # 欄位一律用 .get()：手動編輯或損壞的 config 可能讓元素缺欄位，而直接索引會讓**一筆**壞資料
+    # 讓整個 /api/projects 回 500——使用者拿到空工作區與持續的載入失敗，且未必能從設定頁刪掉
+    # 那筆。跳過畸形項目、其餘照常掃出，與本函式對 PermissionError 的既有處理一致。
     for root in config.roots:
+        if not usable_entry(root, "path", "default_account"):
+            logger.warning("跳過畸形的 root：%r", root)
+            continue
+        path, account = root["path"], root["default_account"]
         try:
-            for proj in scan_root(Path(root["path"]).expanduser(), root["default_account"]):
+            for proj in scan_root(Path(path).expanduser(), account):
                 by_path[proj["path"]] = proj
         except PermissionError:
             permission_error = True
@@ -67,7 +78,7 @@ def scan_all(config: AppConfig) -> tuple[list[dict[str, Any]], bool]:
     # 優先級 1.5：套用 project_overrides（永久改帳號；spec §7）——在 recent 之前
     for proj in by_path.values():
         override = config.project_overrides.get(proj["path"])
-        if override:
+        if override and override.get("account"):
             proj["account"] = override["account"]
 
     # 優先級 2：補 recent 標籤——跨帳號 union：取所有帳號 config_dir 的最新 mtime（spec §2.3）。
@@ -90,6 +101,10 @@ def scan_all(config: AppConfig) -> tuple[list[dict[str, Any]], bool]:
     # 優先級 3：手動加入（獨立分組；也套 override，否則對 manual 設預設帳號會無效）
     manual: list[dict[str, Any]] = []
     for m in config.manual_projects:
+        if not usable_entry(m, "path", "account"):
+            logger.warning("跳過畸形的 manual project：%r", m)
+            continue
+        raw_account = m["account"]
         p = str(Path(m["path"]).expanduser())
         if p in by_path:
             continue  # 已在 root 掃出，不重複列（避免重複 row / React key 衝突；Codex review）
@@ -98,7 +113,7 @@ def scan_all(config: AppConfig) -> tuple[list[dict[str, Any]], bool]:
             {
                 "name": Path(p).name,
                 "path": p,
-                "account": override["account"] if override else m["account"],
+                "account": (override or {}).get("account") or raw_account,
                 "source": "manual",
                 "root": None,
                 "recent": None,

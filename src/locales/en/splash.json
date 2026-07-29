@@ -1,0 +1,14 @@
+{
+  "wait": {
+    "hint": "First launch takes longer than usual"
+  },
+  "errors": {
+    "startup_failed": "Backend service failed to start",
+    "startup_fix": "Fledge needs its local service to run. Retrying restarts it; if this keeps happening, reopen Fledge."
+  },
+  "actions": {
+    "retry": "Retry",
+    "retrying": "Retrying…",
+    "details": "Details"
+  }
+}

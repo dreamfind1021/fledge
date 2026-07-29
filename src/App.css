@@ -93,6 +93,23 @@
   border-top: 1px solid color-mix(in srgb, var(--warning) 38%, transparent);
 }
 
+/* 底部 banner 堆疊容器：兩條底部 warning（專案載入失敗／權限）可能同時出現。
+   .app-banner 是 fixed 但只給 left/right，anchor 由 variant 提供——沒有容器的話兩條會
+   疊在同一位置互相遮蔽，而降級錯誤正是最需要露出操作按鈕的時候。
+   容器負責定位，內部 banner 改回文件流由 flex 依序排。 */
+.app-banner-stack--bottom {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 399;
+  display: flex;
+  flex-direction: column;
+}
+.app-banner-stack--bottom .app-banner {
+  position: static;
+}
+
 .app-banner--warning .app-banner-icon {
   color: var(--warning);
 }

@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from fledge_sidecar.paths import resolve_best_effort
+
+logger = logging.getLogger(__name__)
 
 # 預設**單一帳號**（票 31）：多帳號是進階用法，不預設塞給每個人——預先塞第二個帳號會讓
 # 精靈白跑一頁共通設置、共通設置卡顯示「不適用」、觀測面板多一個永遠沒資料的帳號，使用者
@@ -38,6 +41,17 @@ def default_config_path() -> Path:
     if override:
         return Path(override)
     return Path.home() / ".fledge" / "config.json"
+
+
+def usable_entry(item: Any, *fields: str) -> bool:
+    """config 內的 root／manual 元素是否可安全消費：本身是 dict，且指定欄位皆為非空字串。
+
+    型別也要驗、不只有無：truthy 的非字串（如 `{"path": {"a": 1}}`）會讓 `Path()` 拋 TypeError。
+    這裡是 `load()` 與 `project_scanner` 共用的單一判準——兩邊各寫一份必然長歪（Codex PR-gate
+    抓到過 load 只驗 path、scanner 驗 path+account 的不對稱，導致畸形項目佔用去重鍵）。"""
+    return isinstance(item, dict) and all(
+        isinstance(item.get(f), str) and item[f] for f in fields
+    )
 
 
 def _migrate_path(raw: str) -> str:
@@ -74,26 +88,48 @@ class AppConfig:
 
         # 自我遷移：把既有 roots/manual/override key canonicalize 成與 scanner 一致的
         # resolved path，並依 canonical 去重（symlink 別名會撞同一路徑）。下次 save 持久化。
-        migrated_roots: list[dict[str, str]] = []
+        # 逐項容錯：設定檔可能被手動編輯或損壞，元素若不是 dict 或欄位型別不對，
+        # 直接 .get()／{**r} 會 AttributeError／TypeError——**一筆**壞資料就讓整個
+        # GET /api/config 回 500，連同一份檔案裡合法的項目一起失效。
+        #
+        # 但畸形元素**原樣保留、不丟棄**：所有寫入端點都是 load() → 改一個欄位 → save()，
+        # 而 save() 以 to_dict() 整份覆蓋。丟掉的話，使用者只是改個 label 就會讓那些資料
+        # 永久消失且無備份——不可逆的資料遺失比讀取失敗更嚴重。它們只是不參與
+        # canonicalize 與去重（否則會佔用去重鍵、把同路徑的**合法**項目擠掉），
+        # 消費端（project_scanner）自己會跳過。
+        migrated_roots: list[dict[str, Any]] = []
         seen_roots: set[str] = set()
         for r in data.get("roots", []):
-            cp = _migrate_path(r.get("path", ""))
+            if not usable_entry(r, "path", "default_account"):
+                logger.warning("保留但不使用畸形的 root：%r", r)
+                migrated_roots.append(r)
+                continue
+            cp = _migrate_path(r["path"])
             if cp in seen_roots:
                 continue
             seen_roots.add(cp)
             migrated_roots.append({**r, "path": cp})
 
-        migrated_manual: list[dict[str, str]] = []
+        migrated_manual: list[dict[str, Any]] = []
         seen_manual: set[str] = set()
         for m in data.get("manual_projects", []):
-            cp = _migrate_path(m.get("path", ""))
+            if not usable_entry(m, "path", "account"):
+                logger.warning("保留但不使用畸形的 manual project：%r", m)
+                migrated_manual.append(m)
+                continue
+            cp = _migrate_path(m["path"])
             if cp in seen_manual:
                 continue
             seen_manual.add(cp)
             migrated_manual.append({**m, "path": cp})
 
-        migrated_overrides: dict[str, dict[str, str]] = {}
+        migrated_overrides: dict[str, Any] = {}
         for k, v in data.get("project_overrides", {}).items():
+            if not isinstance(k, str) or not isinstance(v, dict):
+                logger.warning("保留但不使用畸形的 project_override：%r → %r", k, v)
+                if isinstance(k, str):
+                    migrated_overrides[k] = v  # 原樣保留（key 非字串則無法當 dict key 用）
+                continue
             migrated_overrides[_migrate_path(k)] = v  # 兩舊 key 撞同一新 key → 後者覆蓋
 
         return cls(

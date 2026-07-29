@@ -10,7 +10,7 @@ import "./Workspace.css";
 // TabBar + 終端機合成一體的工作區面板（merged-panel）。
 // ⚠ 終端機區塊保留「全 tab 同時 mount + display 切換」——這是 xterm scrollback
 // 跨 tab 切換不被銷毀的唯一原因；勿改成「只 render active tab 的 Terminal」。
-export function Workspace({ connError }: { connError: string | null }) {
+export function Workspace() {
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const port = useAppStore((s) => s.port);
@@ -24,15 +24,10 @@ export function Workspace({ connError }: { connError: string | null }) {
         <TabBar />
         <div className="ws-term-area" ref={setDropRef}>
           {port == null ? (
-            /* 連線中 / 連線失敗（backend 尚未就緒）*/
+            /* 尚未拿到 port。啟動期間 Splash 蓋在上面，所以這只會出現在
+               「sidecar 中途掛掉」的空窗——致命的啟動失敗已由 Splash 的錯誤態承擔。 */
             <div className="ws-status">
-              {connError ? (
-                <span className="ws-conn-error">
-                  {`無法連線到 sidecar：${connError}。請重新啟動 app。`}
-                </span>
-              ) : (
-                <span className="ws-connecting-text">連線中…</span>
-              )}
+              <span className="ws-connecting-text">連線中…</span>
             </div>
           ) : (
             // 用穩定順序（by id）渲染、與 TabBar 顯示順序解耦：分頁拖曳排序（reorderTabs）只改

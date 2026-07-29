@@ -217,3 +217,81 @@ def test_load_migrates_override_key(tmp_path: Path):
     reloaded = AppConfig.load(cfg_path)
     assert str(real.resolve()) in reloaded.project_overrides
     assert reloaded.project_overrides[str(real.resolve())] == {"account": "personal"}  # value 不丟失
+
+
+# ── 畸形元素的容錯（Codex PR-gate R3）──
+# load() 的自我遷移原本對每個 root/manual 直接 r.get()／{**r}，元素若不是 dict 就 AttributeError／
+# TypeError——**一筆**壞資料讓整個 GET /api/config 回 500，連同一份 config 裡合法的項目一起失效。
+# scan_all 的逐項跳過因此形同虛設：請求根本到不了那裡。
+
+
+def _write(tmp_path, payload: dict) -> Path:
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(payload), encoding="utf-8")
+    return p
+
+
+def test_load_keeps_malformed_root_without_breaking_valid_ones(tmp_path: Path):
+    """畸形元素原樣保留（不丟棄，見 round-trip 測試），合法元素照常 canonicalize。"""
+    p = _write(tmp_path, {"roots": [None, {"path": "/tmp/ok", "default_account": "work"}]})
+    cfg = AppConfig.load(p)
+    assert None in cfg.roots
+    assert [r["default_account"] for r in cfg.roots if isinstance(r, dict)] == ["work"]
+
+
+def test_load_keeps_root_with_non_string_path_uncanonicalized(tmp_path: Path):
+    """truthy 但非字串的 path 不得進 _migrate_path（Path() 會拋 TypeError），原值保留。"""
+    p = _write(tmp_path, {"roots": [{"path": {"a": 1}, "default_account": "work"}]})
+    cfg = AppConfig.load(p)
+    assert cfg.roots == [{"path": {"a": 1}, "default_account": "work"}]
+
+
+def test_load_keeps_malformed_manual_without_breaking_valid_ones(tmp_path: Path):
+    p = _write(tmp_path, {"manual_projects": [["bad"], {"path": "/tmp/m", "account": "work"}]})
+    cfg = AppConfig.load(p)
+    assert ["bad"] in cfg.manual_projects
+    assert [m["account"] for m in cfg.manual_projects if isinstance(m, dict)] == ["work"]
+
+
+def test_load_keeps_malformed_override_without_breaking_valid_ones(tmp_path: Path):
+    p = _write(tmp_path, {"project_overrides": {"/a": "not-a-dict", "/b": {"account": "work"}}})
+    cfg = AppConfig.load(p)
+    assert cfg.project_overrides["/a"] == "not-a-dict"
+    assert any(isinstance(v, dict) and v.get("account") == "work" for v in cfg.project_overrides.values())
+
+
+def test_load_save_roundtrip_preserves_malformed_entries(tmp_path: Path):
+    """畸形元素必須原樣保留、能 round-trip。
+
+    所有 config 寫入端點都是 load() → 改一個欄位 → save()，而 save() 以 to_dict() 整份覆蓋。
+    若 load() 把畸形元素丟掉，使用者只是改個 label 或訂閱費，那些資料就**永久消失**且無備份——
+    改動前它們雖然會讓 API 回 500，但檔案裡還在、還救得回來。不可逆的資料遺失比讀取失敗更嚴重。"""
+    payload = {
+        "roots": [None, {"path": "/tmp/ok", "default_account": "work"}],
+        "manual_projects": [{"path": {"bad": 1}, "account": "work"}],
+        "project_overrides": {"/a": "not-a-dict"},
+    }
+    p = _write(tmp_path, payload)
+    cfg = AppConfig.load(p)
+    cfg.kms_root = "/somewhere"  # 模擬「與那些元素無關的一次寫入」
+    cfg.save()
+
+    after = json.loads(p.read_text(encoding="utf-8"))
+    assert None in after["roots"]
+    assert {"path": {"bad": 1}, "account": "work"} in after["manual_projects"]
+    assert after["project_overrides"]["/a"] == "not-a-dict"
+
+
+def test_load_malformed_entry_does_not_crowd_out_valid_duplicate(tmp_path: Path):
+    """畸形項目不得佔用去重鍵。
+
+    缺 default_account 但 path 合法的項目若先進 seen_roots，後面同路徑的**合法**項目會被
+    去重丟掉；scanner 又會跳過留下的畸形項目——結果是合法專案整個消失，而且無聲無息。"""
+    p = _write(tmp_path, {
+        "roots": [
+            {"path": "/tmp/dup"},                              # 畸形（缺 default_account）
+            {"path": "/tmp/dup", "default_account": "work"},   # 合法，同路徑
+        ],
+    })
+    cfg = AppConfig.load(p)
+    assert any(r.get("default_account") == "work" for r in cfg.roots), "合法項目不該被畸形項目擠掉"

@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AlertTriangle } from "lucide-react";
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
-import { waitForSidecarPort, waitForSidecarToken, setAuthToken, fetchHealth, rawHealth, restartSidecar } from "./lib/sidecar";
+import { fetchHealth, rawHealth, restartSidecar } from "./lib/sidecar";
 import { getTerminal } from "./lib/terminalRegistry";
 import { formatPathsForPaste } from "./lib/dropPath";
 import { useAppStore } from "./store/useAppStore";
@@ -12,6 +13,7 @@ import { Workspace } from "./components/Workspace";
 import { Settings } from "./components/Settings";
 import { ProjectPicker } from "./components/ProjectPicker";
 import { Onboarding } from "./components/Onboarding";
+import { Splash } from "./components/Splash";
 import "./App.css";
 
 // 關閉存活 session 的確認框（app 內 modal——window.confirm 在 Tauri webview 不彈）。
@@ -88,7 +90,10 @@ function dropPathsToActiveTerminal(paths: string[]): void {
 }
 
 function App() {
-  const [connError, setConnError] = useState<string | null>(null);
+  const { t } = useTranslation("app");
+  const [splashDone, setSplashDone] = useState(false);
+  // 專案掃描失敗（非致命）的呈現由 App 持有：它是「這一次啟動的結果」，不是要跨元件訂閱的狀態
+  const [projectsError, setProjectsError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -100,8 +105,7 @@ function App() {
   const markAllTabsEnded = useAppStore((s) => s.markAllTabsEnded);
   const port = useAppStore((s) => s.port);
   const setPort = useAppStore((s) => s.setPort);
-  const loadProjects = useAppStore((s) => s.loadProjects);
-  const loadConfig = useAppStore((s) => s.loadConfig);
+  const bootstrap = useAppStore((s) => s.bootstrap);
   const setActive = useAppStore((s) => s.setActive);
   const closeTab = useAppStore((s) => s.closeTab);
   const requestCloseTab = useAppStore((s) => s.requestCloseTab);
@@ -150,36 +154,29 @@ function App() {
     }
   };
 
-  // 啟動：拿 port → 等 server ready（health gate）→ 載入專案清單
-  useEffect(() => {
-    (async () => {
-      try {
-        const p = await waitForSidecarPort();
-        // 先拿 token 並 setAuthToken，之後所有受保護請求才帶得了 header（fail-closed 下無 token = 全 401）。
-        const token = await waitForSidecarToken();
-        setAuthToken(token);
-        // sidecar 先印 FLEDGE_PORT 再啟 uvicorn（~0.5s gap）；先 fetchHealth retry 到 200
-        // 再 loadProjects，否則 GET /api/projects 會撞 server startup（連線被拒、sidebar 空）。
-        const h0 = await fetchHealth(p);
-        useAppStore.getState().setClaudeFound(h0.claude_found);
-        setPort(p); // 最後才設 → 觸發 5s health poll effect 時 token 必已 set
-        await loadConfig();
-        // 先判首次再決定要不要載專案：首次直接進 onboarding、跳過 loadProjects（避免閃空 sidebar）；
-        // onboarding 完成時 completeOnboarding 內會 loadProjects。非首次才正常載入。
-        if (useAppStore.getState().config?.is_first_run) {
-          setShowSettings(false); // 清掉 sidecar 啟動等待期間使用者可能開的 modal（Codex F-6）
-          setShowPicker(false);
-          setShowOnboarding(true);
-        } else {
-          await loadProjects();
-        }
-      } catch (e) {
-        // 逾時／連線失敗：顯示可見錯誤（完整重連／重啟留 Plan 04 的錯誤處理）
-        console.error("sidecar 連線失敗", e);
-        setConnError(String(e));
+  // 啟動序列的唯一消費路徑（design §4.1.5）。
+  //
+  // ⚠ 不變式：bootstrap 的回傳值只有這裡會處理，所以**所有**觸發啟動的入口都必須經過它——
+  // 初次掛載的 effect 如此，Splash 的重試也如此。曾經讓 Splash 直接呼叫 bootstrap，結果是
+  // 重試成功時 firstRun 沒人接（淡出到一個還沒設定過的主畫面）、projectsError 也沒人接。
+  const runStartup = useCallback(
+    async (opts?: { restart?: boolean }) => {
+      setProjectsError(null); // 每次開跑先清上一輪
+      const r = await bootstrap(opts);
+      if (!r) return; // null＝失敗；狀態已在 store，由 Splash 呈現錯誤與重試
+      setProjectsError(r.projectsError);
+      if (r.firstRun) {
+        setShowSettings(false); // 清掉 sidecar 啟動等待期間使用者可能開的 modal（Codex F-6）
+        setShowPicker(false);
+        setShowOnboarding(true);
       }
-    })();
-  }, [setPort, loadProjects, loadConfig]);
+    },
+    [bootstrap],
+  );
+
+  useEffect(() => {
+    void runStartup();
+  }, [runStartup]);
 
   // 快捷鍵：Cmd+W 關當前（執行中先確認）、Cmd+1~9 切 tab
   useEffect(() => {
@@ -195,6 +192,9 @@ function App() {
       // 先擋掉 Tauri/webview 對這些 meta key 的預設（Cmd+W 關視窗、Cmd+R reload…），
       // 再決定是否執行 app 邏輯——否則 modal 開時 bail 會讓 Cmd+W 直接關掉整個程式。
       e.preventDefault();
+      // ⚠ 這道 gate 必須在 preventDefault 之後：放在 handler 開頭直接 return 的話，事件會落回
+      // Tauri 預設行為，Splash 期間按 Cmd+W 會直接關掉整個 app。
+      if (!splashDone) return;
       if (showOnboarding) return; // onboarding 強制完成，期間吃掉所有 meta 快捷鍵（Codex F-6）
       // 確認框「實際顯示時」才吃掉 meta 快捷鍵（用 pendingTitle 而非 raw id，避免懸空 id 在 cleanup effect
       // 執行前那一 render tick 仍鎖死快捷鍵——與下方 render 的顯示條件一致）。Enter/Esc 交給框自己處理。
@@ -226,7 +226,7 @@ function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [requestCloseTab, setActive, showSettings, showPicker, showOnboarding, pendingCloseTabId, pendingTitle]);
+  }, [requestCloseTab, setActive, showSettings, showPicker, showOnboarding, pendingCloseTabId, pendingTitle, splashDone]);
 
   // 懸空清理：pending 指向的 tab 若已消失或不再是 live session（pendingTitle 回 null，如 sidecar 重啟 markAllTabsEnded），
   // 清掉 pendingCloseTabId——否則框不顯示卻仍讓上面的守門吃掉 Cmd+W/R/1-9，造成快捷鍵被靜默鎖死（Codex Area 3）。
@@ -240,9 +240,9 @@ function App() {
   // 用 useLayoutEffect：paint 前同步更新旗標，避免「modal 開啟到旗標寫入」之間的 drop 漏判（Codex 階段3）。
   useLayoutEffect(() => {
     const open =
-      showSettings || showPicker || showOnboarding || (pendingCloseTabId !== null && pendingTitle !== null);
+      !splashDone || showSettings || showPicker || showOnboarding || (pendingCloseTabId !== null && pendingTitle !== null);
     setModalOpen(open);
-  }, [showSettings, showPicker, showOnboarding, pendingCloseTabId, pendingTitle, setModalOpen]);
+  }, [splashDone, showSettings, showPicker, showOnboarding, pendingCloseTabId, pendingTitle, setModalOpen]);
 
   // 每 5s raw health poll → 餵 backendStatus 狀態機（suspect/down + up-hysteresis）
   useEffect(() => {
@@ -304,17 +304,40 @@ function App() {
           <button onClick={() => { import("@tauri-apps/plugin-opener").then((m) => m.openUrl("https://docs.claude.com/en/docs/claude-code/setup")).catch(() => {}); }} className="app-banner-btn--warning">安裝說明</button>
         </div>
       )}
-      {permissionError && (
-        <div className="app-banner app-banner--warning app-banner--warning-bottom" role="status">
-          <span className="app-banner-icon"><AlertTriangle size={15} /></span>
-          <span className="app-banner-msg">無法讀取部分資料夾。請到「系統設定 → 隱私權與安全性 → 檔案與資料夾／App 管理」允許 Fledge。</span>
+      {/* 底部 banner 堆疊：兩條可能同時出現，交給容器排序而非各自 fixed 疊在一起 */}
+      {(projectsError || permissionError) && (
+        <div className="app-banner-stack--bottom">
+          {projectsError && (
+            <div className="app-banner app-banner--warning app-banner--warning-bottom" role="status">
+              <span className="app-banner-icon"><AlertTriangle size={15} /></span>
+              <span className="app-banner-msg">{t("banners.projects_failed")}</span>
+              <button
+                onClick={() => {
+                  setProjectsError(null);
+                  void useAppStore.getState().loadProjects().catch((e) => setProjectsError(String(e)));
+                }}
+                className="app-banner-btn--warning"
+              >
+                {t("banners.rescan")}
+              </button>
+            </div>
+          )}
+          {permissionError && (
+            <div className="app-banner app-banner--warning app-banner--warning-bottom" role="status">
+              <span className="app-banner-icon"><AlertTriangle size={15} /></span>
+              <span className="app-banner-msg">無法讀取部分資料夾。請到「系統設定 → 隱私權與安全性 → 檔案與資料夾／App 管理」允許 Fledge。</span>
+            </div>
+          )}
         </div>
       )}
       <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragStart={onDragStart} onDragEnd={onDragEnd}>
         <Sidebar onOpenPicker={() => setShowPicker(true)} onOpenSettings={() => setShowSettings(true)} />
-        <Workspace connError={connError} />
+        <Workspace />
         <DragOverlay>{dragLabel ? <div className="drag-overlay-chip">{dragLabel}</div> : null}</DragOverlay>
       </DndContext>
+      {!splashDone && (
+        <Splash onDone={() => setSplashDone(true)} onRetry={() => void runStartup({ restart: true })} />
+      )}
       {showOnboarding && <Onboarding onClose={() => setShowOnboarding(false)} />}
       {showSettings && (
         <Settings

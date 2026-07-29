@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // sidecar.ts 頂部 import @tauri-apps/api/core 的 invoke；node 環境下 mock 掉以免載入失敗
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+import { invoke } from "@tauri-apps/api/core";
 import {
   scanPreview,
   checkDir,
@@ -10,6 +11,8 @@ import {
   setAuthToken,
   fetchUsageDashboard,
   fetchDirTree,
+  waitForSidecarPort,
+  fetchConfig,
 } from "./sidecar";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -61,7 +64,9 @@ describe("auth token", () => {
     const seen: Array<Record<string, string>> = [];
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
       seen.push((init?.headers ?? {}) as Record<string, string>);
-      return { ok: true, json: async () => ({ projects: [], permission_error: false, status: "ok", path: "", count: 0, version: "", ok: true, claude_found: false, session_id: "s", kpi: {}, results: [] }) } as unknown as Response;
+      // config 四個必要欄位是為了通過 fetchConfig 的 shape guard（design §4.1.3）——
+      // 本測試驗的是 token header，不是 config 內容，給合法空殼即可。
+      return { ok: true, json: async () => ({ projects: [], permission_error: false, status: "ok", path: "", count: 0, version: "", ok: true, claude_found: false, session_id: "s", kpi: {}, results: [], accounts: {}, roots: [], manual_projects: [], project_overrides: {} }) } as unknown as Response;
     }));
     const m = await import("./sidecar");
     await m.fetchHealth(1);
@@ -347,5 +352,70 @@ describe("fetchDirTree", () => {
     const res = await fetchDirTree(1234, "/p/x");
     expect(res.status).toBe("missing");
     spy.mockRestore();
+  });
+});
+
+describe("waitForSidecarPort", () => {
+  beforeEach(() => {
+    vi.mocked(invoke).mockReset();
+  });
+
+  it("拿到 port 就回傳", async () => {
+    vi.mocked(invoke).mockImplementation(((cmd: string) =>
+      Promise.resolve(cmd === "sidecar_port" ? 4321 : null)) as typeof invoke);
+    await expect(waitForSidecarPort(1000)).resolves.toBe(4321);
+  });
+
+  // design §4.6：spawn 失敗時 Rust 端存了原因，前端不該空等到逾時才報通用訊息
+  it("spawn 失敗時立即 throw 該原文，不等到逾時", async () => {
+    vi.mocked(invoke).mockImplementation(((cmd: string) =>
+      Promise.resolve(
+        cmd === "sidecar_spawn_error"
+          ? "spawn /path/to/fledge-sidecar failed: No such file or directory"
+          : null,
+      )) as typeof invoke);
+    const started = Date.now();
+    await expect(waitForSidecarPort(5000)).rejects.toThrow(/No such file or directory/);
+    expect(Date.now() - started).toBeLessThan(2000); // 遠早於 maxWait
+  });
+
+  it("port 與 spawn error 都沒有時，等到逾時才 throw", async () => {
+    vi.mocked(invoke).mockImplementation((() => Promise.resolve(null)) as typeof invoke);
+    await expect(waitForSidecarPort(400)).rejects.toThrow(/did not start/i);
+  });
+});
+
+describe("fetchConfig shape guard", () => {
+  const good = {
+    version: 1,
+    roots: [],
+    accounts: { default: { config_dir: "~/.claude", label: "預設" } },
+    manual_projects: [],
+    project_overrides: {},
+    ui: { theme: "nightfall" },
+  };
+
+  it("合法 config 正常回傳", async () => {
+    mockFetch(good);
+    await expect(fetchConfig(1234)).resolves.toMatchObject({ version: 1 });
+  });
+
+  // design §4.1.3：畸形 config 必須在這一層擋下，否則 UI 會在 Splash 淡出後才崩潰
+  it("accounts 的值為 null 時 throw，不讓它流進 store", async () => {
+    mockFetch({ ...good, accounts: { work: null } });
+    await expect(fetchConfig(1234)).rejects.toThrow(/config/i);
+  });
+
+  it("manual_projects 為 null 時 throw", async () => {
+    mockFetch({ ...good, manual_projects: null });
+    await expect(fetchConfig(1234)).rejects.toThrow(/config/i);
+  });
+
+  // Codex PR-gate：既有契約允許 accounts[*] 缺 label（sidebarGroups 以 key fallback、後端
+  // load() 原樣收下不補欄位）。若 guard 把缺席當致命，這種歷史 config 的使用者會永久卡在
+  // 啟動畫面——重試讀回的是同一份檔案，救不了。
+  it("缺 label 的歷史 config 仍正常載入（不得因驗證變嚴而鎖死使用者）", async () => {
+    mockFetch({ ...good, accounts: { work: { config_dir: "~/.claude" } } });
+    await expect(fetchConfig(1234)).resolves.toMatchObject({ version: 1 });
   });
 });
