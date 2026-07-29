@@ -23,11 +23,31 @@ import {
   setAccountLabel,
   removeAccount,
   putSubscriptions,
+  waitForSidecarPort,
+  waitForSidecarToken,
+  setAuthToken,
+  fetchHealth,
+  restartSidecar,
 } from "../lib/sidecar";
 
 // loadProjects 的 request-id：只套用最新一次 loadProjects 的結果，
 // 防並發 config 寫入各自觸發的 loadProjects 互相蓋成 stale（Codex review）。
 let loadProjectsSeq = 0;
+
+// 啟動序列的去重閘（design §4.1.2）。module scope 而非 store 欄位——它是「有沒有一次執行
+// 正在進行」的執行期事實，不是 UI 要訂閱的狀態。
+//
+// StrictMode 下 effect 會跑兩次，沒有它第二次呼叫會把已 ready 的狀態打回 running、splash 閃
+// 第二次。回傳「同一個 promise 物件」而非 null，兩個呼叫端才會拿到相同答案、firstRun 不會漏。
+let bootstrapInFlight: Promise<BootstrapResult | null> | null = null;
+
+export interface BootstrapResult {
+  firstRun: boolean;
+  /** loadProjects 的非致命失敗原文；由 App 承接顯示，不進 store（design §4.1.4）。 */
+  projectsError: string | null;
+}
+
+export type StartupPhase = "running" | "ready" | "failed";
 
 export interface Tab {
   id: string; // 前端產生的 tab id（非 sessionId）
@@ -49,6 +69,10 @@ interface AppState {
   config: AppConfigData | null;
   backendStatus: BackendStatus;
   backendOkStreak: number;
+  startup: StartupPhase;
+  /** 啟動失敗的技術原文（英文）；只餵 Splash 的「詳細資訊」與 console，不進文案插值。 */
+  startupError: string | null;
+  bootstrap: (opts?: { restart?: boolean }) => Promise<BootstrapResult | null>;
   permissionError: boolean;
   claudeFound: boolean;
   pendingCloseTabId: string | null;
@@ -99,6 +123,69 @@ export const useAppStore = create<AppState>((set, get) => ({
   claudeFound: true,
   pendingCloseTabId: null,
   modalOpen: false,
+  // 初始即 running（不設 idle）：app 一掛載就在跑序列，多一個 idle 只會讓 Splash 有一幀
+  // 渲染在「什麼都還沒開始」的狀態。
+  startup: "running",
+  startupError: null,
+
+  // 啟動序列：取 port → token → health → config →（首次跳過／否則載專案）。design §4.1。
+  //
+  // ⚠ 刻意不是 async 函式：async 的 `return bootstrapInFlight` 會產生一個「採納」該結果的新
+  // promise，identity 不再相等，去重就失效了。
+  bootstrap: (opts) => {
+    if (bootstrapInFlight) return bootstrapInFlight;
+
+    const run = async (): Promise<BootstrapResult | null> => {
+      try {
+        // ⚠ 狀態必須在 restart 之前就切走：restartSidecar 在 Rust 端同步等新 port、最長 30s，
+        // 若等它回來才設 running，這段期間 startup 仍是 failed，Splash 會一直顯示「可按的重試」
+        // 而不是 disabled 的「重試中…」——使用者無從判斷操作有沒有被受理，還會連點。
+        // ⚠ 狀態必須在 restart 之前就切走：restartSidecar 在 Rust 端同步等新 port、最長 30s，
+        // 若等它回來才設 running，這段期間 startup 仍是 failed，Splash 會一直顯示「可按的重試」
+        // 而不是 disabled 的「重試中…」——使用者無從判斷操作有沒有被受理，還會連點。
+        set({ startup: "running", startupError: null });
+        // 重試才 restart：先 kill 殘屍再重 spawn，失敗會立即回 Err（不空等 30s）
+        if (opts?.restart) await restartSidecar();
+
+        const port = await waitForSidecarPort();
+        const token = await waitForSidecarToken();
+        setAuthToken(token);
+        const health = await fetchHealth(port);
+        set({ claudeFound: health.claude_found });
+        // 最後才設 port → 觸發 5s health poll 的 effect 時 token 必已 set
+        set({ port });
+        await get().loadConfig();
+
+        const firstRun = get().config?.is_first_run === true;
+        let projectsError: string | null = null;
+        if (!firstRun) {
+          // 專案掃描失敗不致命：config 已載入，設定頁與加根目錄都還走得通。
+          // 升級成滿版阻斷會比現況更糟，所以在這裡局部攔下、由回傳值帶給 App 顯示 banner。
+          try {
+            await get().loadProjects();
+          } catch (e) {
+            console.error("loadProjects 失敗（不阻斷啟動）", e);
+            projectsError = String(e);
+          }
+        }
+        set({ startup: "ready" });
+        return { firstRun, projectsError };
+      } catch (e) {
+        console.error("啟動序列失敗", e);
+        set({ startup: "failed", startupError: String(e) });
+        return null;
+      }
+    };
+
+    // 存的是 .finally() 之後的 promise，identity 才與呼叫端拿到的一致；
+    // 且只在 identity 相符時清除——否則會清掉別人的那一輪，或讓下一次重試撿到舊結果。
+    let p: Promise<BootstrapResult | null>;
+    p = run().finally(() => {
+      if (bootstrapInFlight === p) bootstrapInFlight = null;
+    });
+    bootstrapInFlight = p;
+    return p;
+  },
 
   setPort: (port) => set({ port }),
 
