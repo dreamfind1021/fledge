@@ -34,3 +34,8 @@ describe("blockingReason", () => {
     );
   });
 });
+
+it("後端多出未知的 dir_status 時不阻斷、也不會把 i18n key 印到畫面上", () => {
+  // 動態組 key（`dir_${s}`）會產生 catalog 沒有的 key，i18n 對查不到的 key 是印出 key 原文
+  expect(blockingReason({ ...OK, dir_status: "brand_new" as never })).toBeNull();
+});
