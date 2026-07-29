@@ -295,3 +295,29 @@ def test_load_malformed_entry_does_not_crowd_out_valid_duplicate(tmp_path: Path)
     })
     cfg = AppConfig.load(p)
     assert any(r.get("default_account") == "work" for r in cfg.roots), "合法項目不該被畸形項目擠掉"
+
+
+def test_backup_dir_absent_from_existing_config(tmp_path: Path):
+    """既有的 config.json 沒有這個欄位——載入後要是空字串，不是 KeyError。
+    這是「新增欄位不得弄壞既有使用者」的最低門檻。"""
+    p = _write(tmp_path, {})
+    assert AppConfig.load(p).backup_dir == ""
+
+
+def test_backup_dir_roundtrip_preserves_tilde(tmp_path: Path):
+    """存 raw（含 ~），不在寫入時展開——與 kms_root 同構，展開留到 runtime。
+    順帶驗證前後空白被 trim（使用者貼路徑時很容易帶到）。"""
+    p = _write(tmp_path, {})
+    cfg = AppConfig.load(p)
+    cfg.set_backup_dir("  ~/backups  ")
+    cfg.save()
+    assert AppConfig.load(p).backup_dir == "~/backups"
+
+
+def test_backup_dir_empty_string_clears(tmp_path: Path):
+    p = _write(tmp_path, {})
+    cfg = AppConfig.load(p)
+    cfg.set_backup_dir("~/backups")
+    cfg.set_backup_dir("")
+    cfg.save()
+    assert AppConfig.load(p).backup_dir == ""
