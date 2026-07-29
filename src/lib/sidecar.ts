@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isUsableConfig } from "./appConfigGuard";
 
 // per-launch 認證 token；App 啟動時由 setAuthToken 設一次，跨 restart 不變。
 let authToken: string | null = null;
@@ -26,15 +27,20 @@ export async function waitForSidecarToken(maxWaitMs = 10000): Promise<string> {
 
 /** 輪詢 Tauri command 直到 sidecar port 就緒（最多等 maxWaitMs）。
  *
- * 預設 30s：PyInstaller onefile sidecar 在 Tauri（dev、unsigned）下被 spawn 後
- * 約需 ~15s 才 listening（疑 macOS 對 unsigned binary 的驗證；直接 spawn 僅 ~5s）。
- * Plan 05 簽名/打包後啟動可縮短，屆時再調回較短上限。
+ * 預設 30s：裝完首次開啟時 macOS 要驗證 onedir 內數百個 dylib，sidecar 需 ~14s 才 listening；
+ * 驗證結果被 cache，之後每次約 0.2s。
+ *
+ * spawn 失敗（binary 遺失、無執行權限）時 port 永遠不會來，等滿 30s 只是浪費使用者時間，
+ * 還把「哪個路徑的 binary 出問題」這種精確原因換成通用逾時訊息。故每輪一併查 Rust 端記下的
+ * spawn 錯誤，有值就立刻帶原文失敗（design §4.6）。
  */
 export async function waitForSidecarPort(maxWaitMs = 30000): Promise<number> {
   const start = Date.now();
   while (Date.now() - start < maxWaitMs) {
     const port = await invoke<number | null>("sidecar_port");
     if (port != null) return port;
+    const spawnError = await invoke<string | null>("sidecar_spawn_error");
+    if (spawnError) throw new Error(spawnError);
     await new Promise((r) => setTimeout(r, 200));
   }
   throw new Error("Sidecar did not start in time");
@@ -427,7 +433,11 @@ export interface AppConfigData {
 export async function fetchConfig(port: number): Promise<AppConfigData> {
   const resp = await fetch(`${base(port)}/api/config`, { headers: authHeaders() });
   if (!resp.ok) throw new Error(`fetchConfig failed: ${resp.status}`);
-  return resp.json();
+  const raw = await resp.json();
+  // 畸形內容擋在這一層：放行的話啟動會被判為成功、Splash 淡出，然後才在 Sidebar 的
+  // Object.keys 或設定頁的 .filter 炸開——使用者面對的是崩潰畫面而不是有重試鈕的錯誤態。
+  if (!isUsableConfig(raw)) throw new Error("fetchConfig: unusable config shape");
+  return raw;
 }
 
 async function configWrite(
