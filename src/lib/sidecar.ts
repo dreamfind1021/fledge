@@ -423,6 +423,7 @@ export interface AppConfigData {
   ui: { theme: string };
   // 後端 to_dict 總是回傳；標選用是為相容舊前端快取（無此欄視為未設），讀取端一律 ?? "" 兜底
   kms_root?: string;  // KMS（Obsidian 知識庫）根目錄，raw 含 ~；未設為空字串
+  backup_dir?: string;  // 備份輸出目錄，raw 含 ~；未設為空字串（刻意沒有預設值）
   subscriptions?: SubscriptionItem[];  // 後端 to_dict 總是回傳此欄；舊前端快取若無此欄視為空陣列
   // startup-only metadata：僅 GET /api/config 與 onboard 回應帶（設定檔不存在為 true）。
   // 其他 config write 不帶 → 寫入後此欄位為 undefined 屬正常；只在 App 啟動讀一次決定是否進
@@ -518,6 +519,45 @@ export async function putKmsRoot(port: number, path: string): Promise<{ ok: bool
     }
     throw new Error(detail);
   }
+  return resp.json();
+}
+
+// ── 備份 ──────────────────────────────────────────────────────────────────────
+
+export interface BackupStatus {
+  configured: boolean;
+  backup_dir: string;   // raw（含 ~），未設定時為空字串
+  /** `invalid` 只出現在這條 wire 契約上（設定檔被手動塞了相對路徑），不是 probe_dir 的四態之一 */
+  dir_status: "dir" | "missing" | "not_dir" | "denied" | "invalid";
+}
+
+/** 備份端點的判別碼錯誤。理由同 `SetupError`：`code` 只放欄位、不進 message，
+ *  否則 `String(e)` 會讓後端判別碼繞過 i18n 直接出現在畫面上。 */
+export class BackupError extends Error {
+  constructor(public readonly code: string | null, public readonly status: number) {
+    super(`backup request failed: ${status}`);
+    this.name = "BackupError";
+  }
+}
+
+export async function fetchBackupStatus(port: number): Promise<BackupStatus> {
+  const resp = await fetch(`${base(port)}/api/backup/status`, { headers: authHeaders() });
+  if (!resp.ok) throw new BackupError(await readErrorCode(resp), resp.status);
+  return resp.json();
+}
+
+// 這支回的是 `{"error": code}`（不是 kms-root 那種 `detail` prose）：判別碼要能被 i18n
+// 映射，不能是後端寫死的中文（CLAUDE.md §4.6.13）。
+export async function putBackupDir(
+  port: number,
+  path: string,
+): Promise<{ ok: boolean; backup_dir: string }> {
+  const resp = await fetch(`${base(port)}/api/config/backup-dir`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ path }),
+  });
+  if (!resp.ok) throw new BackupError(await readErrorCode(resp), resp.status);
   return resp.json();
 }
 

@@ -1,0 +1,17 @@
+{
+  "title": "Backup",
+  "intro": "Backs up your Claude ecosystem: the skills and scripts you wrote, command history, session history, and images you pasted into conversations. Caches and runtime state are left out. Credentials are never included — but the bundle still identifies you, so don't publish it.",
+  "chooseLocation": "Choose backup location",
+  "change": "Change",
+  "location": "Backup location",
+  "blocked": {
+    "not_configured": "Choose where backups should go. Keeping them on the same disk as the originals is no protection at all.",
+    "dir_invalid": "The saved location is not a valid absolute path. Choose it again.",
+    "dir_missing": "That folder no longer exists.",
+    "dir_not_dir": "That path is not a folder.",
+    "dir_denied": "Fledge cannot read that folder."
+  },
+  "errors": {
+    "saveFailed": "Could not save the backup location."
+  }
+}

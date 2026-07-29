@@ -8,7 +8,9 @@ import memoryZhTW from "./locales/zh-TW/memory.json";
 import memoryEn from "./locales/en/memory.json";
 import sidebarZhTW from "./locales/zh-TW/sidebar.json";
 import sidebarEn from "./locales/en/sidebar.json";
+import backupZhTW from "./locales/zh-TW/backup.json";
 import onboardingZhTW from "./locales/zh-TW/onboarding.json";
+import backupEn from "./locales/en/backup.json";
 import onboardingEn from "./locales/en/onboarding.json";
 import splashZhTW from "./locales/zh-TW/splash.json";
 import splashEn from "./locales/en/splash.json";
@@ -31,8 +33,8 @@ const osLang = typeof navigator !== "undefined" && navigator.language.toLowerCas
 
 i18n.use(initReactI18next).init({
   resources: {
-    "zh-TW": { dashboard: zhTW, memory: memoryZhTW, sidebar: sidebarZhTW, onboarding: onboardingZhTW, splash: splashZhTW, app: appZhTW },
-    en: { dashboard: en, memory: memoryEn, sidebar: sidebarEn, onboarding: onboardingEn, splash: splashEn, app: appEn },
+    "zh-TW": { dashboard: zhTW, memory: memoryZhTW, sidebar: sidebarZhTW, onboarding: onboardingZhTW, backup: backupZhTW, splash: splashZhTW, app: appZhTW },
+    en: { dashboard: en, memory: memoryEn, sidebar: sidebarEn, onboarding: onboardingEn, backup: backupEn, splash: splashEn, app: appEn },
   },
   lng: stored ?? osLang,
   fallbackLng: "en",

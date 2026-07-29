@@ -1,0 +1,58 @@
+/* 備份卡。容器與標頭沿用 Onboarding.css 的 b4-card 家族，這裡只放備份專屬的版面。 */
+
+.bk-card {
+  margin-top: 10px;
+}
+
+/* 路徑列：標籤、路徑、動作各佔一段；路徑吃掉剩餘寬度並在過長時省略，
+   不讓一條深路徑把按鈕擠出卡片外 */
+.bk-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.bk-row-label {
+  font-size: 12px;
+  color: var(--dim);
+  flex: 0 0 auto;
+}
+
+.bk-path {
+  font-size: 11.5px;
+  color: var(--dim);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 7px;
+  flex: 1 1 auto;
+  min-width: 0;              /* flex 子項預設 min-width:auto，不設就不會縮、也不會省略 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 阻斷態：說明獨佔一行（可能兩三句），路徑與按鈕排在下面 */
+.bk-blocked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.bk-blocked-msg {
+  flex: 1 0 100%;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  color: var(--warn, var(--dim));
+}
+
+.bk-error {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 8px 0 0;
+  color: var(--danger, var(--dim));
+}

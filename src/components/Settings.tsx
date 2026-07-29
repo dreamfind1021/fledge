@@ -5,6 +5,7 @@ import { useAppStore } from "../store/useAppStore";
 import { pickDirectory } from "../lib/dialog";
 import { putKmsRoot, DEFAULT_ACCOUNT_KEY } from "../lib/sidecar";
 import { AccountsEditor } from "./AccountsEditor";
+import { BackupCard } from "./BackupCard";
 import { DevEnvSection } from "./DevEnvSection";
 import { LangSwitch } from "./LangSwitch";
 import { validateSubscriptions } from "../lib/subscriptionsForm";
@@ -343,6 +344,10 @@ export function Settings({ onClose, onRerunOnboarding }: SettingsProps) {
             accounts={config?.accounts ?? {}}
             onRerunOnboarding={onRerunOnboarding}
           />
+
+          {/* 備份（票 02）：常駐顯示備份位置與其狀態。刻意不自動備份、不提醒——
+              這是「有一個固定的落腳處」而不是「催使用者」。 */}
+          <BackupCard port={port} />
 
         </div>
 

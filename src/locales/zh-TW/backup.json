@@ -1,0 +1,17 @@
+{
+  "title": "備份",
+  "intro": "備份的是你的 Claude 生態：自己寫的 skill 與腳本、指令歷史、session 歷史、對話中貼入的圖片。快取與執行期狀態不收。永不含憑證——但備份包仍帶有可識別你的資訊，不要公開。",
+  "chooseLocation": "選擇備份位置",
+  "change": "更改",
+  "location": "備份位置",
+  "blocked": {
+    "not_configured": "選一個存放備份的位置。跟原始資料放同一顆碟等於沒有保護。",
+    "dir_invalid": "已存的位置不是有效的絕對路徑，請重新選擇。",
+    "dir_missing": "這個資料夾已經不存在了。",
+    "dir_not_dir": "這個路徑不是資料夾。",
+    "dir_denied": "Fledge 讀不到這個資料夾。"
+  },
+  "errors": {
+    "saveFailed": "備份位置存不進去。"
+  }
+}

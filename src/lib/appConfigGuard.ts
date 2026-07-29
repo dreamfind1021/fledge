@@ -70,6 +70,9 @@ export function isUsableConfig(raw: unknown): raw is AppConfigData {
     if (!ok) return false;
   }
   if (raw.kms_root !== undefined && typeof raw.kms_root !== "string") return false;
+  // backup_dir 只驗型別，**不驗是不是合法的備份位置**：那是 route 的責任。搬進這裡的話，
+  // 一個事後才變得不合法的值（例如新增了包住它的帳號）會直接擋死整個 app 的啟動。
+  if (raw.backup_dir !== undefined && typeof raw.backup_dir !== "string") return false;
 
   return true;
 }
