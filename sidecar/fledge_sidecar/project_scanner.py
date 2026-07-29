@@ -53,6 +53,15 @@ def _recent_mtime(config_dir: Path, project_path: str) -> float | None:
     return max(f.stat().st_mtime for f in jsonls)
 
 
+def _usable_entry(item: Any, *fields: str) -> bool:
+    """元素本身是 dict，且指定欄位都是非空字串。
+    型別也要驗、不只有無：truthy 的非字串（如 `{"path": {"a": 1}}`）會讓 `Path()` 拋 TypeError。
+    `AppConfig.load()` 已擋掉大部分，但 scan_all 不能假設呼叫端一定經過 load。"""
+    return isinstance(item, dict) and all(
+        isinstance(item.get(f), str) and item[f] for f in fields
+    )
+
+
 def scan_all(config: AppConfig) -> tuple[list[dict[str, Any]], bool]:
     """合併三來源（spec §5.1）。回 (projects, permission_error)：
     任一 root/recent 讀取撞 PermissionError（macOS TCC）→ 跳過該項、permission_error=True。"""
@@ -65,10 +74,10 @@ def scan_all(config: AppConfig) -> tuple[list[dict[str, Any]], bool]:
     # 讓整個 /api/projects 回 500——使用者拿到空工作區與持續的載入失敗，且未必能從設定頁刪掉
     # 那筆。跳過畸形項目、其餘照常掃出，與本函式對 PermissionError 的既有處理一致。
     for root in config.roots:
-        path, account = root.get("path"), root.get("default_account")
-        if not path or not account:
-            logger.warning("跳過缺欄位的 root：%r", root)
+        if not _usable_entry(root, "path", "default_account"):
+            logger.warning("跳過畸形的 root：%r", root)
             continue
+        path, account = root["path"], root["default_account"]
         try:
             for proj in scan_root(Path(path).expanduser(), account):
                 by_path[proj["path"]] = proj
@@ -101,11 +110,11 @@ def scan_all(config: AppConfig) -> tuple[list[dict[str, Any]], bool]:
     # 優先級 3：手動加入（獨立分組；也套 override，否則對 manual 設預設帳號會無效）
     manual: list[dict[str, Any]] = []
     for m in config.manual_projects:
-        raw_path, raw_account = m.get("path"), m.get("account")
-        if not raw_path or not raw_account:
-            logger.warning("跳過缺欄位的 manual project：%r", m)
+        if not _usable_entry(m, "path", "account"):
+            logger.warning("跳過畸形的 manual project：%r", m)
             continue
-        p = str(Path(raw_path).expanduser())
+        raw_account = m["account"]
+        p = str(Path(m["path"]).expanduser())
         if p in by_path:
             continue  # 已在 root 掃出，不重複列（避免重複 row / React key 衝突；Codex review）
         override = config.project_overrides.get(p)

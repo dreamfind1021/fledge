@@ -217,3 +217,39 @@ def test_load_migrates_override_key(tmp_path: Path):
     reloaded = AppConfig.load(cfg_path)
     assert str(real.resolve()) in reloaded.project_overrides
     assert reloaded.project_overrides[str(real.resolve())] == {"account": "personal"}  # value 不丟失
+
+
+# ── 畸形元素的容錯（Codex PR-gate R3）──
+# load() 的自我遷移原本對每個 root/manual 直接 r.get()／{**r}，元素若不是 dict 就 AttributeError／
+# TypeError——**一筆**壞資料讓整個 GET /api/config 回 500，連同一份 config 裡合法的項目一起失效。
+# scan_all 的逐項跳過因此形同虛設：請求根本到不了那裡。
+
+
+def _write(tmp_path, payload: dict) -> Path:
+    p = tmp_path / "config.json"
+    p.write_text(json.dumps(payload), encoding="utf-8")
+    return p
+
+
+def test_load_skips_non_dict_root_but_keeps_valid_ones(tmp_path: Path):
+    p = _write(tmp_path, {"roots": [None, {"path": "/tmp/ok", "default_account": "work"}]})
+    cfg = AppConfig.load(p)
+    assert [r["default_account"] for r in cfg.roots] == ["work"]
+
+
+def test_load_skips_root_with_non_string_path(tmp_path: Path):
+    p = _write(tmp_path, {"roots": [{"path": {"a": 1}, "default_account": "work"}]})
+    cfg = AppConfig.load(p)
+    assert cfg.roots == []
+
+
+def test_load_skips_non_dict_manual_but_keeps_valid_ones(tmp_path: Path):
+    p = _write(tmp_path, {"manual_projects": [["bad"], {"path": "/tmp/m", "account": "work"}]})
+    cfg = AppConfig.load(p)
+    assert [m["account"] for m in cfg.manual_projects] == ["work"]
+
+
+def test_load_skips_non_dict_override(tmp_path: Path):
+    p = _write(tmp_path, {"project_overrides": {"/a": "not-a-dict", "/b": {"account": "work"}}})
+    cfg = AppConfig.load(p)
+    assert [v["account"] for v in cfg.project_overrides.values()] == ["work"]

@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from fledge_sidecar.paths import resolve_best_effort
+
+logger = logging.getLogger(__name__)
 
 # 預設**單一帳號**（票 31）：多帳號是進階用法，不預設塞給每個人——預先塞第二個帳號會讓
 # 精靈白跑一頁共通設置、共通設置卡顯示「不適用」、觀測面板多一個永遠沒資料的帳號，使用者
@@ -74,9 +77,24 @@ class AppConfig:
 
         # 自我遷移：把既有 roots/manual/override key canonicalize 成與 scanner 一致的
         # resolved path，並依 canonical 去重（symlink 別名會撞同一路徑）。下次 save 持久化。
+        # 逐項容錯：設定檔可能被手動編輯或損壞。元素若不是 dict、或 path 不是字串，
+        # 直接 .get()／{**r} 會 AttributeError／TypeError——**一筆**壞資料就讓整個
+        # GET /api/config 回 500，連同一份檔案裡合法的項目一起失效，使用者也無從自救。
+        # 跳過畸形項目並記 warning，讓其餘設定照常可用。
+        def _usable(item: Any, kind: str) -> bool:
+            if not isinstance(item, dict):
+                logger.warning("跳過非物件的 %s：%r", kind, item)
+                return False
+            if not isinstance(item.get("path", ""), str):
+                logger.warning("跳過 path 非字串的 %s：%r", kind, item)
+                return False
+            return True
+
         migrated_roots: list[dict[str, str]] = []
         seen_roots: set[str] = set()
         for r in data.get("roots", []):
+            if not _usable(r, "root"):
+                continue
             cp = _migrate_path(r.get("path", ""))
             if cp in seen_roots:
                 continue
@@ -86,6 +104,8 @@ class AppConfig:
         migrated_manual: list[dict[str, str]] = []
         seen_manual: set[str] = set()
         for m in data.get("manual_projects", []):
+            if not _usable(m, "manual project"):
+                continue
             cp = _migrate_path(m.get("path", ""))
             if cp in seen_manual:
                 continue
@@ -94,6 +114,9 @@ class AppConfig:
 
         migrated_overrides: dict[str, dict[str, str]] = {}
         for k, v in data.get("project_overrides", {}).items():
+            if not isinstance(k, str) or not isinstance(v, dict):
+                logger.warning("跳過畸形的 project_override：%r → %r", k, v)
+                continue
             migrated_overrides[_migrate_path(k)] = v  # 兩舊 key 撞同一新 key → 後者覆蓋
 
         return cls(

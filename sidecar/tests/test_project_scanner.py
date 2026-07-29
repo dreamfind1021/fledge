@@ -201,3 +201,22 @@ def test_scan_all_skips_manual_missing_fields(tmp_path: Path):
     )
     projects, _ = scan_all(config)
     assert [p["name"] for p in projects] == ["m2"]  # 缺 account 的那筆跳過
+
+
+def test_scan_all_skips_non_dict_and_non_string_path_elements(tmp_path: Path):
+    """scan_all 不能假設呼叫端一定經過 AppConfig.load()：直接建 AppConfig 的路徑（測試、
+    未來的其他呼叫端）仍可能帶入非 dict 元素或 truthy 非字串 path，後者會讓 Path() 拋 TypeError。"""
+    ok = tmp_path / "ok"
+    (ok / "proj").mkdir(parents=True)
+    config = AppConfig(
+        path=tmp_path / "config.json",
+        roots=[
+            None,                                             # 非 dict
+            {"path": {"a": 1}, "default_account": "work"},     # truthy 但非字串
+            {"path": str(ok), "default_account": "work"},      # 合法
+        ],
+        accounts={"work": {"config_dir": str(tmp_path / ".c"), "label": ""}},
+        manual_projects=[None, {"path": ["x"], "account": "work"}],
+    )
+    projects, _ = scan_all(config)
+    assert [p["name"] for p in projects] == ["proj"]
