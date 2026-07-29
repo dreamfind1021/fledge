@@ -10,6 +10,10 @@ import sidebarZhTW from "./locales/zh-TW/sidebar.json";
 import sidebarEn from "./locales/en/sidebar.json";
 import onboardingZhTW from "./locales/zh-TW/onboarding.json";
 import onboardingEn from "./locales/en/onboarding.json";
+import splashZhTW from "./locales/zh-TW/splash.json";
+import splashEn from "./locales/en/splash.json";
+import appZhTW from "./locales/zh-TW/app.json";
+import appEn from "./locales/en/app.json";
 
 // Storage 可能不存在或拋 SecurityError（被停用、隱私模式）。這行在 module 層跑，
 // 拋出去就是 import 期崩潰＝整個 app 開不起來，所以讀不到一律當沒設定、退回 OS 偵測。
@@ -27,8 +31,8 @@ const osLang = typeof navigator !== "undefined" && navigator.language.toLowerCas
 
 i18n.use(initReactI18next).init({
   resources: {
-    "zh-TW": { dashboard: zhTW, memory: memoryZhTW, sidebar: sidebarZhTW, onboarding: onboardingZhTW },
-    en: { dashboard: en, memory: memoryEn, sidebar: sidebarEn, onboarding: onboardingEn },
+    "zh-TW": { dashboard: zhTW, memory: memoryZhTW, sidebar: sidebarZhTW, onboarding: onboardingZhTW, splash: splashZhTW, app: appZhTW },
+    en: { dashboard: en, memory: memoryEn, sidebar: sidebarEn, onboarding: onboardingEn, splash: splashEn, app: appEn },
   },
   lng: stored ?? osLang,
   fallbackLng: "en",

@@ -1,0 +1,14 @@
+{
+  "wait": {
+    "hint": "首次啟動需要較長時間"
+  },
+  "errors": {
+    "startup_failed": "後端服務啟動失敗",
+    "startup_fix": "Fledge 需要本機服務才能運作。重試會重新啟動它；若持續失敗，請重新開啟 Fledge。"
+  },
+  "actions": {
+    "retry": "重試",
+    "retrying": "重試中…",
+    "details": "詳細資訊"
+  }
+}

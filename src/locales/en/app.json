@@ -1,0 +1,6 @@
+{
+  "banners": {
+    "projects_failed": "Couldn't load the project list. Everything else still works.",
+    "rescan": "Rescan"
+  }
+}
