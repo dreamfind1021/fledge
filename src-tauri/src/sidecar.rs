@@ -14,6 +14,10 @@ pub struct SidecarState {
     pub restart_in_progress: Mutex<bool>,
     /// per app-launch 認證 token；初次與 restart 都用同一個。
     pub token: Mutex<Option<String>>,
+    /// 最近一次 spawn 失敗的原因（binary 遺失、無執行權限…）。
+    /// 存起來給前端查：spawn 失敗時 port 永遠不會來，沒有這個前端只能空等到逾時，
+    /// 還把精確原因換成通用訊息。restart 前會清掉。
+    pub spawn_error: Mutex<Option<String>>,
 }
 
 /// 生成 per-launch 認證 token（uuid v4、CSPRNG）。
@@ -171,7 +175,12 @@ fn login_shell_path() -> Option<String> {
 /// 啟動 Python sidecar（dev/prod 統一用 std::process::Command，只差 program/args）：
 /// - dev（debug）：venv python -m fledge_sidecar（跳過解壓開銷）
 /// - prod（release）：bundle 內 onedir sidecar exe（resource_dir）
-pub fn spawn_sidecar(app: &AppHandle) {
+///
+/// 回 `Result` 而非 panic：`.claude/tauri-rust.md` §4 允許 startup 用 `expect` fail-fast，但那適用於
+/// 「壞掉就無從補救」的前置條件。sidecar spawn 失敗（binary 遺失、無執行權限、被系統阻擋）是
+/// **使用者可修復且值得被告知**的狀態——panic 會讓 webview 根本起不來，啟動畫面的錯誤態與重試
+/// 按鈕就永遠到不了，而那正是它們存在的理由。
+pub fn spawn_sidecar(app: &AppHandle) -> Result<(), String> {
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
 
@@ -182,13 +191,15 @@ pub fn spawn_sidecar(app: &AppHandle) {
         .lock()
         .unwrap()
         .clone()
-        .expect("FLEDGE_TOKEN 須在 spawn 前由 setup 設定");
+        // 錯誤字串一律英文：它們會出現在啟動畫面的「詳細資訊」供使用者截圖回報，
+        // 跨語言回報時英文比較有用（註解仍中文，見 CLAUDE.md）。
+        .ok_or_else(|| "FLEDGE_TOKEN must be set by setup before spawn".to_string())?;
 
     #[cfg(debug_assertions)]
     let (program, args): (std::path::PathBuf, Vec<&str>) = (
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .expect("src-tauri 應有上層 project root")
+            .ok_or_else(|| "src-tauri should have a parent project root".to_string())?
             .join("sidecar/.venv/bin/python"),
         vec!["-m", "fledge_sidecar"],
     );
@@ -196,7 +207,7 @@ pub fn spawn_sidecar(app: &AppHandle) {
     let (program, args): (std::path::PathBuf, Vec<&str>) = (
         app.path()
             .resource_dir()
-            .expect("resource_dir 應可解析")
+            .map_err(|e| format!("resource_dir unavailable: {e}"))?
             .join("fledge-sidecar")
             .join("fledge-sidecar"),
         vec![],
@@ -212,9 +223,15 @@ pub fn spawn_sidecar(app: &AppHandle) {
     if let Some(path) = login_shell_path() {
         cmd.env("PATH", path);
     }
-    let mut child = cmd.spawn().expect("failed to spawn sidecar");
+    // 錯誤訊息帶完整路徑：使用者展開 Splash 的「詳細資訊」時，要一眼看出是哪個 binary 出問題
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("spawn {} failed: {e}", program.display()))?;
 
-    let stdout = child.stdout.take().expect("child stdout");
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "sidecar stdout unavailable".to_string())?;
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
             handle_sidecar_line(&app_handle, &line);
@@ -223,6 +240,13 @@ pub fn spawn_sidecar(app: &AppHandle) {
     let pid = child.id();
     *app.state::<SidecarState>().child.lock().unwrap() = Some(child);
     write_pidfile(pid);
+    Ok(())
+}
+
+/// 前端查最近一次 spawn 失敗的原因；沒有失敗回 None。
+#[tauri::command]
+pub fn sidecar_spawn_error(state: State<SidecarState>) -> Option<String> {
+    state.spawn_error.lock().unwrap().clone()
 }
 
 /// app 退出時呼叫：kill 當前 sidecar 子進程 + 移除 pidfile（dev/prod 同一路徑）。
@@ -340,7 +364,13 @@ pub fn restart_sidecar(app: AppHandle) -> Result<u16, String> {
     let _guard = RestartGuard(&state.restart_in_progress);
     kill_current_child(&state);
     *state.port.lock().unwrap() = None;
-    spawn_sidecar(&app); // 非同步把新 port 寫進 state.port
+    // 清掉上一輪的失敗原因，否則前端會撿到舊錯誤、以為這次也失敗了
+    *state.spawn_error.lock().unwrap() = None;
+    // spawn 失敗就立刻回報，不進下面的 30s 等待——沒有子進程，port 永遠不會來
+    if let Err(e) = spawn_sidecar(&app) {
+        *state.spawn_error.lock().unwrap() = Some(e.clone());
+        return Err(e);
+    }
 
     let mut waited = 0u32;
     loop {
