@@ -27,6 +27,18 @@ function fieldsOk(item: unknown, fields: string[]): boolean {
   return fields.every((f) => item[f] === undefined || typeof item[f] === "string");
 }
 
+/** 數字或「能安全轉成有限數字的字串」。
+ *
+ * 對齊後端的實際契約而非型別直覺：寫入端點 `routes/config.py` 會 `float()` 正規化後才存，
+ * 所以經 app 寫入的一定是數字；但 `usage/aggregator.py` 是 `float(s.get("monthly_cost") or 0)`，
+ * 手動編輯進去的數值字串它照吃、整份 config 在後端完全可用。只認 number 會把這種使用者
+ * 鎖在啟動畫面外。反過來非數值字串仍要擋——`float("abc")` 會讓 aggregator 拋例外。 */
+function isNumberLike(v: unknown): boolean {
+  if (typeof v === "number") return Number.isFinite(v);
+  if (typeof v === "string") return v.trim() !== "" && Number.isFinite(Number(v));
+  return false;
+}
+
 function everyValueOk(v: unknown, fields: string[]): boolean {
   return isRecord(v) && Object.values(v).every((item) => fieldsOk(item, fields));
 }
@@ -53,7 +65,7 @@ export function isUsableConfig(raw: unknown): raw is AppConfigData {
       (s) =>
         isRecord(s) &&
         (s.name === undefined || typeof s.name === "string") &&
-        (s.monthly_cost === undefined || typeof s.monthly_cost === "number"),
+        (s.monthly_cost === undefined || isNumberLike(s.monthly_cost)),
     );
     if (!ok) return false;
   }

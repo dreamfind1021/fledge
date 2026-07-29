@@ -145,3 +145,59 @@ def test_scan_all_recent_union_across_accounts(tmp_path, monkeypatch):
     projects, _ = project_scanner.scan_all(cfg)
     proj = next(p for p in projects if p["path"] == proj_path)
     assert proj["recent"] == 200.0
+
+
+# ── 畸形 config 的容錯（前端 appConfigGuard 的對應面）──
+# 手動編輯或損壞的 config 可能讓元素缺欄位。以往這裡是直接索引（root["default_account"]、
+# m["account"]、override["account"]），一筆壞資料就讓整個 /api/projects 回 500——使用者
+# 得到空工作區與持續的載入失敗，且未必能從設定頁刪掉那筆。改為逐項 best-effort：
+# 跳過畸形項目、其餘照常掃出，與本函式對 PermissionError 的既有處理一致。
+
+
+def test_scan_all_skips_root_missing_default_account(tmp_path: Path):
+    (tmp_path / "good").mkdir()
+    config = AppConfig(
+        path=tmp_path / "config.json",
+        roots=[{"path": str(tmp_path)}],  # 缺 default_account
+        accounts={"default": {"config_dir": str(tmp_path / ".c"), "label": ""}},
+    )
+    projects, _ = scan_all(config)
+    assert projects == []  # 跳過該 root，不 raise
+
+
+def test_scan_all_keeps_valid_roots_when_one_is_malformed(tmp_path: Path):
+    ok_root = tmp_path / "ok"
+    (ok_root / "proj").mkdir(parents=True)
+    config = AppConfig(
+        path=tmp_path / "config.json",
+        roots=[{"path": str(tmp_path / "broken")}, {"path": str(ok_root), "default_account": "work"}],
+        accounts={"work": {"config_dir": str(tmp_path / ".c"), "label": ""}},
+    )
+    projects, _ = scan_all(config)
+    assert [p["name"] for p in projects] == ["proj"]  # 壞的那筆不拖垮好的
+
+
+def test_scan_all_ignores_override_missing_account(tmp_path: Path):
+    (tmp_path / "proj").mkdir()
+    config = AppConfig(
+        path=tmp_path / "config.json",
+        roots=[{"path": str(tmp_path), "default_account": "work"}],
+        accounts={"work": {"config_dir": str(tmp_path / ".c"), "label": ""}},
+        # 刻意用 truthy 但缺 account 的 dict：空 dict 會被 `if override:` 擋掉，測不到硬化
+        project_overrides={str((tmp_path / "proj").resolve()): {"note": "x"}},
+    )
+    projects, _ = scan_all(config)
+    assert [p["account"] for p in projects] == ["work"]  # 當作沒有 override
+
+
+def test_scan_all_skips_manual_missing_fields(tmp_path: Path):
+    (tmp_path / "m1").mkdir()
+    (tmp_path / "m2").mkdir()
+    config = AppConfig(
+        path=tmp_path / "config.json",
+        roots=[],
+        accounts={"work": {"config_dir": str(tmp_path / ".c"), "label": ""}},
+        manual_projects=[{"path": str(tmp_path / "m1")}, {"path": str(tmp_path / "m2"), "account": "work"}],
+    )
+    projects, _ = scan_all(config)
+    assert [p["name"] for p in projects] == ["m2"]  # 缺 account 的那筆跳過

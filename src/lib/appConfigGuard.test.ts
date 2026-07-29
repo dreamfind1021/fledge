@@ -82,7 +82,12 @@ describe("isUsableConfig", () => {
     expect(isUsableConfig({ ...base(), subscriptions: [] })).toBe(true);
     expect(isUsableConfig({ ...base(), subscriptions: [{ name: "Max", monthly_cost: 100 }] })).toBe(true);
     expect(isUsableConfig({ ...base(), subscriptions: {} })).toBe(false);
-    expect(isUsableConfig({ ...base(), subscriptions: [{ name: "Max", monthly_cost: "100" }] })).toBe(false);
+    // Codex PR-gate R2：後端 aggregator 是 float(s.get("monthly_cost") or 0)，數值字串照吃、
+    // 整份 config 在後端完全可用——只認 number 會把手動編輯過的使用者鎖在啟動畫面外。
+    expect(isUsableConfig({ ...base(), subscriptions: [{ name: "Max", monthly_cost: "100" }] })).toBe(true);
+    // 但非數值字串仍要擋：float("abc") 會讓 aggregator 拋例外
+    expect(isUsableConfig({ ...base(), subscriptions: [{ name: "Max", monthly_cost: "abc" }] })).toBe(false);
+    expect(isUsableConfig({ ...base(), subscriptions: [{ name: "Max", monthly_cost: "" }] })).toBe(false);
     // 同 label 那條：欄位缺席是既有契約允許的，不得升格成致命
     expect(isUsableConfig({ ...base(), subscriptions: [{ name: "Max" }] })).toBe(true);
     expect(isUsableConfig({ ...base(), subscriptions: [null] })).toBe(false); // 元素 null 會 throw
@@ -122,7 +127,9 @@ describe("guard 的界線（雙向防護）", () => {
     expect(isUsableConfig({ ...base(), ...patch })).toBe(false);
   });
 
-  // 必須放行：這些是既有契約允許的形狀，擋下等於鎖死使用者（重試讀回同一份檔案，救不了）
+  // 必須放行：這些是既有契約允許的形狀，擋下等於鎖死使用者（重試讀回同一份檔案，救不了）。
+  // 缺欄位的 root/manual/override 之所以安全，是因為後端 project_scanner 會逐項跳過畸形元素
+  // （Codex PR-gate R2 指出原本會 KeyError→/api/projects 500，已修根因）。
   it.each([
     ["account 缺 label（sidebarGroups 以 key fallback）", { accounts: { w: { config_dir: "~/.c" } } }],
     ["account 缺 config_dir（顯示空值，不 throw）", { accounts: { w: { label: "x" } } }],
