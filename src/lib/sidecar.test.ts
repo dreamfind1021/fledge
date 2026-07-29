@@ -410,4 +410,12 @@ describe("fetchConfig shape guard", () => {
     mockFetch({ ...good, manual_projects: null });
     await expect(fetchConfig(1234)).rejects.toThrow(/config/i);
   });
+
+  // Codex PR-gate：既有契約允許 accounts[*] 缺 label（sidebarGroups 以 key fallback、後端
+  // load() 原樣收下不補欄位）。若 guard 把缺席當致命，這種歷史 config 的使用者會永久卡在
+  // 啟動畫面——重試讀回的是同一份檔案，救不了。
+  it("缺 label 的歷史 config 仍正常載入（不得因驗證變嚴而鎖死使用者）", async () => {
+    mockFetch({ ...good, accounts: { work: { config_dir: "~/.claude" } } });
+    await expect(fetchConfig(1234)).resolves.toMatchObject({ version: 1 });
+  });
 });

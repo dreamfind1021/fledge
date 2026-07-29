@@ -33,10 +33,19 @@ describe("isUsableConfig", () => {
     expect(isUsableConfig({ ...base(), accounts: { work: null } })).toBe(false);
   });
 
-  it("accounts 的值缺 config_dir 或 label 不通過", () => {
-    expect(isUsableConfig({ ...base(), accounts: { w: { label: "只有 label" } } })).toBe(false);
-    expect(isUsableConfig({ ...base(), accounts: { w: { config_dir: "~/.c" } } })).toBe(false);
+  // Codex PR-gate：既有契約允許欄位缺席（sidebarGroups 的 `meta?.label || key` 就是為此而設，
+  // 後端 load() 也原樣收下不補欄位）。把缺席升格成致命會讓歷史 config 的使用者永久卡在啟動畫面。
+  it("accounts 的值缺 label 仍通過（既有契約允許，UI 有 key fallback）", () => {
+    expect(isUsableConfig({ ...base(), accounts: { w: { config_dir: "~/.c" } } })).toBe(true);
+  });
+
+  it("accounts 的值缺 config_dir 仍通過（不會 throw，只是顯示空值）", () => {
+    expect(isUsableConfig({ ...base(), accounts: { w: { label: "只有 label" } } })).toBe(true);
+  });
+
+  it("accounts 的值欄位型別錯不通過", () => {
     expect(isUsableConfig({ ...base(), accounts: { w: { config_dir: 1, label: "型別錯" } } })).toBe(false);
+    expect(isUsableConfig({ ...base(), accounts: { w: { config_dir: "~/.c", label: 9 } } })).toBe(false);
   });
 
   // roots：AccountsEditor:48 .filter、Settings:112 r.default_account
@@ -46,22 +55,25 @@ describe("isUsableConfig", () => {
     expect(isUsableConfig({ ...base(), roots: {} })).toBe(false);
   });
 
-  it("roots 元素缺 path 或 default_account 不通過", () => {
-    expect(isUsableConfig({ ...base(), roots: [{ path: "/p" }] })).toBe(false);
-    expect(isUsableConfig({ ...base(), roots: [{ default_account: "d" }] })).toBe(false);
-    expect(isUsableConfig({ ...base(), roots: [null] })).toBe(false);
+  it("roots 元素為 null 不通過，缺欄位或型別錯依規則", () => {
+    expect(isUsableConfig({ ...base(), roots: [null] })).toBe(false);      // 存取欄位會 throw
+    expect(isUsableConfig({ ...base(), roots: [{ path: "/p" }] })).toBe(true);   // 缺席合法
+    expect(isUsableConfig({ ...base(), roots: [{ path: 1 }] })).toBe(false);     // 型別錯
   });
 
   // manual_projects：AccountsEditor:49 .filter
-  it("manual_projects 為 null 或元素畸形不通過", () => {
+  it("manual_projects 為 null 不通過（.filter 會 throw）", () => {
     expect(isUsableConfig({ ...base(), manual_projects: null })).toBe(false);
-    expect(isUsableConfig({ ...base(), manual_projects: [{ path: "/m" }] })).toBe(false);
+    expect(isUsableConfig({ ...base(), manual_projects: [{ path: "/m" }] })).toBe(true);
+    expect(isUsableConfig({ ...base(), manual_projects: [{ account: 3 }] })).toBe(false);
   });
 
   // project_overrides：AccountsEditor:50 Object.values
-  it("project_overrides 非 record 或值缺 account 不通過", () => {
+  it("project_overrides 非 record 不通過，值型別錯不通過", () => {
     expect(isUsableConfig({ ...base(), project_overrides: [] })).toBe(false);
-    expect(isUsableConfig({ ...base(), project_overrides: { "/o": {} } })).toBe(false);
+    expect(isUsableConfig({ ...base(), project_overrides: { "/o": {} } })).toBe(true);
+    expect(isUsableConfig({ ...base(), project_overrides: { "/o": null } })).toBe(false);
+    expect(isUsableConfig({ ...base(), project_overrides: { "/o": { account: 1 } } })).toBe(false);
   });
 
   // subscriptions／kms_root 是選用欄位：未提供合法（舊快取），提供則型別必須對
