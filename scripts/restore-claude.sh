@@ -115,23 +115,63 @@ def roots():
 
 
 def key(path):
-    # realpath 對既有前綴解 symlink、對不存在的部分做字面正規化；轉小寫是因為 APFS
-    # 預設不分大小寫（~/.claude 與 ~/.CLAUDE 是同一個目錄但字串不等）。
-    return os.path.realpath(path).lower()
+    """字面正規化（展開 ~、轉絕對、消掉 . 與 ..），**不解析 symlink**。與 sidecar 的
+    `expand_and_validate` 同語意。
+
+    **不可以改用 realpath**：dest 是「在 root 底下、但指向外面」的 symlink 時，realpath
+    會判它不在 root 內而放行，可是腳本的 staging 建在 `dirname(DEST)`——那個父目錄仍在
+    來源樹裡面。**也不轉小寫**：case-sensitive volume 上 /X 與 /x 是兩個不同的目錄，
+    無條件折疊會讓 GUI 說可以、腳本卻拒絕。大小寫別名交給下面的 inode 身分處理。"""
+    return os.path.abspath(os.path.expanduser(path))
+
+
+def identity(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def same_dir(a, b):
+    """逐行對齊 `paths.same_dir`：字串相等涵蓋尚不存在的目錄，inode 身分涵蓋大小寫別名。"""
+    if a == b:
+        return True
+    ident = identity(a)
+    return ident is not None and ident == identity(b)
+
+
+def is_same_or_within(inner, outer):
+    """逐行對齊 `paths.is_same_or_within`：先字面比對（涵蓋尚不存在的目錄），不中再以
+    inode 身分逐層上溯。
+
+    `rstrip(os.sep)` 不可省：root 是 "/" 時不 rstrip 會組出 "//"，任何絕對路徑都不以它
+    開頭，那個 root 等於完全沒守（`config_dir: "/"` 帳號 API 收得下，那時 sidecar 判
+    inside_source、腳本卻放行）。"""
+    base = outer.rstrip(os.sep)
+    if inner == base or inner.startswith(base + os.sep):
+        return True
+    outer_id = identity(outer)
+    if outer_id is None:
+        return False
+    current = inner
+    while True:
+        if identity(current) == outer_id:
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
 
 
 dest_key = key(dest)
-if dest_key == key(os.sep):
+if dest_key == os.sep:
     fail("不能展開到檔案系統根目錄。")
-if dest_key == key(home):
+# 家目錄「本身」才擋，落在它底下是正常的（預設展開位置就在 home 下）
+if same_dir(dest_key, key(home)):
     fail("不能展開到家目錄本身，請選一個專用的資料夾。")
 for root in roots():
-    # 與 paths.is_within_root 同一個寫法：先 rstrip 再接 os.sep。root 是 "/" 時不 rstrip
-    # 會組出 "//"，任何絕對路徑都不以它開頭——整個 root 等於沒守（`config_dir: "/"` 只要
-    # 帳號 API 收得下就會出現，那時 sidecar 判 inside_source、腳本卻放行）。
-    root_key = key(root)
-    base = root_key.rstrip(os.sep)
-    if dest_key == root_key or dest_key.startswith(base + os.sep):
+    if is_same_or_within(dest_key, key(root)):
         fail(
             "%s 在現役的 Claude 資料（%s）裡面。" % (dest, root),
             "展開到那裡會把一份完整副本折回備份來源。換一個 Claude 目錄以外的位置。",

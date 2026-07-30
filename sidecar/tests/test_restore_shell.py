@@ -487,3 +487,42 @@ def test_root_source_blocks_everything_like_the_sidecar(tmp_path: Path):
     assert proc.returncode != 0
     assert not dest.exists()
     assert restore_mod.check_dest(str(dest), ["/"]) == "inside_source"   # 兩層同一個答案
+
+
+def test_case_alias_is_recognised_by_identity_not_by_case_folding(tmp_path: Path):
+    """兩層對大小寫的處理必須一致：無條件轉小寫會在 case-sensitive volume 上過嚴（GUI 說
+    可以、腳本卻拒絕），所以改走 inode 身分。
+
+    **刻意用空的別名目錄，並斷言擋下的理由**：拿 home 的別名去測會過，但那是「非空即拒絕」
+    先擋下的，與身分判定無關——斷言通過的理由與它宣稱的不同，就是假綠（這條原本就是這樣
+    寫的，靠 mutant 才發現）。"""
+    import pytest
+
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    work = home / ".claude-work"
+    work.mkdir()                       # 空目錄：非空檢查不會搶先擋下
+    _config_with_account(home, work)
+    alias = home / ".CLAUDE-WORK"
+    if not alias.is_dir():
+        pytest.skip("此卷區分大小寫，沒有大小寫別名可測")
+
+    proc = _run([str(bundle), "-o", str(alias)], home)
+    assert proc.returncode != 0
+    assert "現役的 Claude 資料" in proc.stderr, proc.stderr
+
+
+def test_case_alias_of_home_itself_is_refused_as_home(tmp_path: Path):
+    """`same_dir` 的 inode 那半。同樣要斷言理由——只看 returncode 的話，「非空即拒絕」
+    會讓這條在身分判定壞掉時照樣通過。"""
+    import pytest
+
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    alias = str(home).replace("home", "HOME")
+    if not Path(alias).is_dir():
+        pytest.skip("此卷區分大小寫，沒有大小寫別名可測")
+
+    proc = _run([str(bundle), "-o", alias], home)
+    assert proc.returncode != 0
+    assert "家目錄" in proc.stderr, proc.stderr
