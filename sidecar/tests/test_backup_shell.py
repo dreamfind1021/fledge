@@ -176,3 +176,100 @@ def test_backup_succeeds_when_no_extra_paths_exist(tmp_path: Path):
     proc = _run(["-o", str(out)], home)
     assert proc.returncode == 0, proc.stderr
     assert list(out.glob("claude-backup-*.tar.gz"))
+
+
+# ── 原子發布與殘骸回收（票 06）──────────────────────────────────────────────
+
+
+def _fake_bin(tmp_path: Path, name: str, body: str) -> Path:
+    """造一個假的外部命令，用 PATH 前置注入。"""
+    d = tmp_path / "fakebin"
+    d.mkdir(exist_ok=True)
+    f = d / name
+    f.write_text(body, encoding="utf-8")
+    f.chmod(0o755)
+    return d
+
+
+def _dying_tar(tmp_path: Path) -> Path:
+    """假的 tar：**先把輸出檔建出來再失敗**——模擬磁碟滿／被 signal 中斷這種
+    「已經開始寫才死」的情境。直接 exit 1 的假 tar 不會產生檔案，那樣測到的是
+    假綠：它證明不了原子發布，只證明了「沒寫就沒有殘骸」。"""
+    return _fake_bin(
+        tmp_path, "tar", '#!/bin/sh\ncase "$1" in *c*) echo garbage > "$2" ;; esac\nexit 1\n'
+    )
+
+
+def test_no_bundle_name_when_tar_fails(tmp_path: Path):
+    """原子發布的核心：打包失敗時，輸出目錄不得出現任何看起來像完整備份包的檔案。
+
+    腳本 `set -e` 之下 `tar czf` 自己失敗就直接退出，**到不了**後面的 `tar tzf` 驗證與
+    刪除分支；trap 又只清 staging。留下的殘骸檔名完全合法，卡片會顯示成「0 天前」配
+    正常色——正是整份設計要防的假安全感。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home, extra_env={"PATH": f"{_dying_tar(tmp_path)}:{os.environ['PATH']}"})
+    assert proc.returncode != 0
+    assert list(out.glob("claude-backup-*.tar.gz")) == []
+
+
+def test_partial_is_cleaned_when_tar_fails(tmp_path: Path):
+    """trap 也要清掉半成品，否則每次失敗都在備份碟留一份。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    _run(["-o", str(out)], home, extra_env={"PATH": f"{_dying_tar(tmp_path)}:{os.environ['PATH']}"})
+    assert list(out.glob(".claude-backup-*.partial")) == []
+
+
+def test_bundle_appears_only_after_verification(tmp_path: Path):
+    """成功路徑：最終檔名一出現就代表內容已通過 `tar tzf` 驗證。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    assert subprocess.run(["tar", "tzf", str(bundle)], capture_output=True).returncode == 0
+    assert list(out.glob(".claude-backup-*.partial")) == []
+
+
+def test_stale_partial_is_reclaimed(tmp_path: Path):
+    """SIGKILL／斷電時 trap 不會執行，殘骸會累積並吃掉備份碟的空間。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    stale = out / ".claude-backup-20200101-0000.tar.gz.partial"
+    stale.write_bytes(b"x")
+    old = os.path.getmtime(stale) - 48 * 3600
+    os.utime(stale, (old, old))
+    _run(["-o", str(out)], home)
+    assert not stale.exists()
+
+
+def test_fresh_partial_is_kept(tmp_path: Path):
+    """未超齡的不能刪：可能是另一個正在跑的實例。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    fresh = out / ".claude-backup-20260730-0900.tar.gz.partial"
+    fresh.write_bytes(b"x")
+    _run(["-o", str(out)], home)
+    assert fresh.exists()
+
+
+def test_unrelated_files_are_never_deleted(tmp_path: Path):
+    """只刪自己產生的格式。命名不符的一律不動，即使它很舊——破壞性操作的基本原則。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    keepers = [
+        out / "important.tar.gz.partial",
+        out / "claude-backup-20200101-0000.tar.gz",       # 完整備份包，不是殘骸
+        out / ".claude-backup-nonsense.tar.gz.partial",   # 時間戳形狀不符
+    ]
+    for f in keepers:
+        f.write_bytes(b"x")
+        old = os.path.getmtime(f) - 48 * 3600
+        os.utime(f, (old, old))
+    _run(["-o", str(out)], home)
+    for f in keepers:
+        assert f.exists(), f.name

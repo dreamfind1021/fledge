@@ -197,12 +197,26 @@ fi
 # ── 打包 ────────────────────────────────────────────────────────────────────
 mkdir -p "${OUT_DIR}"
 out="${OUT_DIR}/claude-backup-${stamp}.tar.gz"
+# 驗證通過前寫的名字：前導 `.` 加 `.partial` 後綴，兩重都不符合「完整備份包」的形狀，
+# 所以半成品永遠不會被 UI 當成一次成功的備份（原子發布）。
+partial="${OUT_DIR}/.claude-backup-${stamp}.tar.gz.partial"
 [ -e "${out}" ] && { echo "輸出檔已存在，不覆蓋：${out}" >&2; exit 1; }
+[ -e "${partial}" ] && { echo "同時間戳的半成品已存在：${partial}" >&2; exit 1; }
+
+# 回收超齡殘骸：SIGKILL、程序崩潰或斷電時下面的 trap 不會執行，殘骸會一直累積，
+# 吃掉的正是要拿來放備份的空間。**嚴格命名 + 24 小時年齡閘**——只刪本腳本自己產生的
+# 格式，且不誤刪另一個正在跑的實例。命名不符的一律不動，即使它很舊。
+find "${OUT_DIR}" -maxdepth 1 -type f \
+  -name '.claude-backup-????????-????.tar.gz.partial' -mmin +1440 -delete 2>/dev/null || true
 
 # staging 用 APFS clone（同卷零成本、瞬間完成），tar 再打包它。
-# stage 路徑由本腳本 mkdir 產生、含 PID，trap 只清這一個。
+# stage 路徑由本腳本 mkdir 產生、含 PID，trap 只清這一個；partial 同理。
 stage="${OUT_DIR}/.staging-$$"
-cleanup() { [ -n "${stage:-}" ] && [ -d "${stage}" ] && rm -rf "${stage}"; }
+cleanup() {
+  [ -n "${stage:-}" ] && [ -d "${stage}" ] && rm -rf "${stage}"
+  [ -n "${partial:-}" ] && [ -f "${partial}" ] && rm -f "${partial}"
+  return 0   # trap 的回傳值會變成腳本的結束碼；上面任一 [ ] 為假都會讓成功的備份回非零
+}
 trap cleanup EXIT
 mkdir -p "${stage}/accounts"
 
@@ -257,14 +271,16 @@ json.dump({
 }, open(out_path, "w"), indent=2, ensure_ascii=False)
 PY
 
-tar czf "${out}" -C "${stage}" accounts fledge manifest.json $([ -d "${stage}/extra" ] && echo extra)
+tar czf "${partial}" -C "${stage}" accounts fledge manifest.json $([ -d "${stage}/extra" ] && echo extra)
 
-# ── 驗證：讀得回來才算數 ────────────────────────────────────────────────────
-if ! tar tzf "${out}" > /dev/null 2>&1; then
-  echo "打包後驗證失敗，刪除半成品：${out}" >&2
-  rm -f "${out}"
+# ── 驗證：讀得回來才算數，通過了才叫得出最終名 ──────────────────────────────
+if ! tar tzf "${partial}" > /dev/null 2>&1; then
+  echo "打包後驗證失敗，刪除半成品：${partial}" >&2
+  rm -f "${partial}"
   exit 1
 fi
+# 同目錄改名是原子的：最終名一出現，就代表內容已經通過驗證。
+mv "${partial}" "${out}"
 entries=$(tar tzf "${out}" | wc -l | tr -d ' ')
 
 echo

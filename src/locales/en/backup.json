@@ -10,6 +10,8 @@
   "bundles": "Existing backups",
   "showAll": "Show all {{count}}",
   "preview": "Preview what gets backed up",
+  "runNow": "Back up now",
+  "lastAttemptFailed": "The last attempt did not finish",
   "blocked": {
     "dir_denied": "Fledge cannot read that folder.",
     "dir_missing": "That folder no longer exists.",

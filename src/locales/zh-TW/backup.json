@@ -10,6 +10,8 @@
   "bundles": "既有備份包",
   "showAll": "顯示全部 {{count}} 份",
   "preview": "預覽會收什麼",
+  "runNow": "立即備份",
+  "lastAttemptFailed": "上次備份未完成",
   "blocked": {
     "dir_denied": "Fledge 讀不到這個資料夾。",
     "dir_missing": "這個資料夾已經不存在了。",

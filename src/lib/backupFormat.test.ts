@@ -10,6 +10,7 @@ const OK: BackupStatus = {
   containment: "ok",
   script_available: true,
   python3_available: true,
+  last_attempt_failed: false,
   bundles: [],
   last_backup_ts: null,
   days_since: 3,

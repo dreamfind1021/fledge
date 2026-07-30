@@ -40,6 +40,7 @@ const OK: BackupStatus = {
   containment: "ok",
   script_available: true,
   python3_available: true,
+  last_attempt_failed: false,
   bundles: [
     { name: "claude-backup-20260727-1432.tar.gz", created_ts: 1785220320, size_bytes: 168820736 },
   ],
@@ -224,4 +225,41 @@ it("session 建起來後掛上卡內終端機", async () => {
   fireEvent.click(await screen.findByRole("button", { name: zh.preview }));
   const term = await screen.findByTestId("terminal");
   expect(term.getAttribute("data-session")).toBe("session-1");
+});
+
+describe("BackupCard 立即備份", () => {
+  it("送出 run 模式", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.runNow }));
+    await waitFor(() => expect(createSession).toHaveBeenCalled());
+    expect(createSession.mock.calls[0][1]).toEqual({
+      path: "",
+      kind: "backup",
+      backupMode: "run",
+    });
+  });
+
+  it("執行中兩顆按鈕都停用——一次只跑一個", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.runNow }));
+    await waitFor(() => expect(screen.queryByTestId("terminal")).toBeTruthy());
+    expect(screen.getByRole("button", { name: zh.runNow }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: zh.preview }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("last_attempt_failed 時多一行提示，但不停用備份", async () => {
+    mockStatus({ last_attempt_failed: true });
+    render(<BackupCard port={1} />);
+    await screen.findByText(zh.lastAttemptFailed);
+    expect(screen.getByRole("button", { name: zh.runNow }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("沒有殘骸時不顯示未完成提示", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    await screen.findByRole("button", { name: zh.runNow });
+    expect(screen.queryByText(zh.lastAttemptFailed)).toBeNull();
+  });
 });

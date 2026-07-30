@@ -39,7 +39,8 @@ const CODE_KEY: Record<string, string> = {
  * 機制存在卻不在日常迴圈裡等於沒有保護。它刻意只是**常駐可見指標**：不自動備份、不排程、
  * 不提醒、主畫面不加任何元素（設計決策，見 spec §3）。
  *
- * 本票（02）只做「選位置與看狀態」，不執行備份。 */
+ * 卡片本身是一條**有序的決策鏈**：旗標可能同時成立，取第一個成立的阻斷原因、只顯示它，
+ * 順序與後端 spawn 前擋下的順序一致——使用者看到的修復指引，就是後端下一個會擋的東西。 */
 export function BackupCard({ port }: { port: number | null }) {
   const { t } = useTranslation("backup");
   const [status, setStatus] = useState<BackupStatus | null>(null);
@@ -160,6 +161,10 @@ export function BackupCard({ port }: { port: number | null }) {
                 ? t("today")
                 : t("daysAgo", { count: status.days_since })}
           </p>
+          {/* 正交的修飾，不是狀態：它不停用任何東西——使用者要做的正是再按一次備份 */}
+          {status.last_attempt_failed && (
+            <p className="bk-warn">{t("lastAttemptFailed")}</p>
+          )}
           <div className="bk-row">
             <span className="bk-row-label">{t("location")}</span>
             <code className="b4-mono bk-path">{status.backup_dir}</code>
@@ -175,6 +180,14 @@ export function BackupCard({ port }: { port: number | null }) {
               disabled={starting || running !== null}
             >
               {t("preview")}
+            </button>
+            <button
+              type="button"
+              className="settings-btn-primary"
+              onClick={() => void startRun("run")}
+              disabled={starting || running !== null}
+            >
+              {t("runNow")}
             </button>
           </div>
           <BundleList bundles={status.bundles} />

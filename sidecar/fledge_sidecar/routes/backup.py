@@ -35,6 +35,7 @@ def backup_status() -> dict:
         "bundles": [],
         "last_backup_ts": None,
         "days_since": None,
+        "last_attempt_failed": False,
     }
     if not raw:
         return payload
@@ -60,4 +61,5 @@ def backup_status() -> dict:
     ]
     payload["last_backup_ts"] = found[0].created_ts if found else None
     payload["days_since"] = bundles_mod.days_since(payload["last_backup_ts"], datetime.now())
+    payload["last_attempt_failed"] = bundles_mod.last_attempt_failed(abs_path, found)
     return payload

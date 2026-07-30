@@ -165,3 +165,14 @@ def test_env_flags_reported_even_when_unconfigured(tmp_path: Path, monkeypatch):
     body = TestClient(create_app()).get("/api/backup/status").json()
     assert body["configured"] is False
     assert body["python3_available"] is False
+
+
+def test_reports_last_attempt_failed(tmp_path: Path, monkeypatch):
+    out = tmp_path / "backups"
+    out.mkdir()
+    (out / "claude-backup-20260727-1432.tar.gz").write_bytes(b"x")
+    (out / ".claude-backup-20260729-0900.tar.gz.partial").write_bytes(b"x")
+    _setup(tmp_path, monkeypatch, backup_dir=str(out))
+    body = TestClient(create_app()).get("/api/backup/status").json()
+    assert body["last_attempt_failed"] is True
+    assert body["days_since"] is not None   # 仍然照常回報上次成功的備份

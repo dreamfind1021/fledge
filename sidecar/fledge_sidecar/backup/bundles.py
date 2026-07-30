@@ -14,6 +14,9 @@ from dataclasses import dataclass
 from datetime import datetime
 
 _BUNDLE_RE = re.compile(r"^claude-backup-(\d{8})-(\d{4})\.tar\.gz$")
+# 腳本在驗證通過前寫的名字。前導 `.` 與 `.partial` 後綴兩重都不符合 _BUNDLE_RE，
+# 所以半成品永遠不會被當成一次成功的備份。
+_PARTIAL_RE = re.compile(r"^\.claude-backup-(\d{8})-(\d{4})\.tar\.gz\.partial$")
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,28 @@ def list_bundles(directory: str) -> list[Bundle]:
 
     out.sort(key=lambda b: b.created_ts, reverse=True)
     return out
+
+
+def last_attempt_failed(directory: str, bundles: list[Bundle]) -> bool:
+    """有比最新備份包還新的 `.partial` 殘骸 ＝ 上一次嘗試沒跑完。
+
+    腳本的 trap 對 SIGKILL、程序崩潰與斷電不會執行，殘骸是真的會留下來的。讓它沉默，
+    使用者會看到「N 天前」而不知道最近那次其實失敗了——整份設計的主軸是不給假安全感，
+    失敗當然也不能靜悄悄。"""
+    newest = bundles[0].created_ts if bundles else 0.0
+    try:
+        entries = list(os.scandir(directory))
+    except OSError:
+        return False
+
+    for entry in entries:
+        m = _PARTIAL_RE.match(entry.name)
+        if m is None:
+            continue  # 命名不符的不是我們的殘骸，不能拿它宣稱備份失敗
+        stamp = _parse_stamp(m.group(1), m.group(2))
+        if stamp is not None and stamp.timestamp() > newest:
+            return True
+    return False
 
 
 def days_since(last_ts: float | None, now: datetime) -> int | None:

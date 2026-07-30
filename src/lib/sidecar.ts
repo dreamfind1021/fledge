@@ -544,6 +544,9 @@ export interface BackupStatus {
   bundles: BackupBundle[];              // 倒序（新到舊）
   last_backup_ts: number | null;        // 從未備份為 null
   days_since: number | null;            // 本地時區的日曆日差；從未備份為 null（不是 0）
+  /** 有比最新備份包還新的 .partial 殘骸＝上一次沒跑完。**不阻斷任何操作**——
+   *  使用者要做的正是再按一次備份 */
+  last_attempt_failed: boolean;
 }
 
 /** 備份端點的判別碼錯誤。理由同 `SetupError`：`code` 只放欄位、不進 message，

@@ -112,3 +112,11 @@
   gap: 8px;
   margin-top: 10px;
 }
+
+/* 「上次備份未完成」：接在天數主行下方的一行提醒。不是阻斷態，用 warning 而非 error */
+.bk-warn {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 4px 0 0;
+  color: var(--warning);
+}
