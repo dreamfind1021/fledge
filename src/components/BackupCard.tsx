@@ -195,6 +195,12 @@ export function BackupCard({ port }: { port: number | null }) {
               {t("runNow")}
             </button>
           </div>
+          {/* 設定頁是條件掛載的 modal，關掉它會卸載本元件 → `useCardSession` 的 cleanup
+              呼叫 closeSession → 後端 close(force=True) 終止子程序，備份就這樣被靜默取消。
+              把 job 生命週期搬出元件是另一個量級的工程（要有 job registry 與重新連線），
+              與這張卡的範圍不相稱；改用這個 codebase 對同一情境既有的做法：明講會中斷
+              （比照 EnvCard 的 installHint、LoginCard 的 leaveHint）。 */}
+          {busy && <p className="b4-hint bk-hint">{t("leaveHint")}</p>}
           <BundleList bundles={status.bundles} />
         </>
       )}

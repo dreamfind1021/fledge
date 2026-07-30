@@ -328,3 +328,27 @@ describe("BackupCard 執行中的位置變更", () => {
     );
   });
 });
+
+describe("BackupCard 離開提示", () => {
+  it("執行中提醒關閉設定會中斷——設定頁是條件掛載的 modal，卸載會殺掉子程序", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.runNow }));
+    await screen.findByText(zh.leaveHint);
+  });
+
+  it("沒在跑就不顯示", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    await screen.findByRole("button", { name: zh.runNow });
+    expect(screen.queryByText(zh.leaveHint)).toBeNull();
+  });
+
+  it("跑完就收起來", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.runNow }));
+    fireEvent.click(await screen.findByTestId("end-session"));
+    await waitFor(() => expect(screen.queryByText(zh.leaveHint)).toBeNull());
+  });
+});

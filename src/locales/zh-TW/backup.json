@@ -12,6 +12,7 @@
   "preview": "預覽會收什麼",
   "runNow": "立即備份",
   "lastAttemptFailed": "上次備份未完成",
+  "leaveHint": "備份進行中，關閉設定會中斷它。",
   "blocked": {
     "dir_denied": "Fledge 讀不到這個資料夾。",
     "dir_missing": "這個資料夾已經不存在了。",

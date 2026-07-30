@@ -237,7 +237,7 @@ def test_stale_partial_is_reclaimed(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     out = tmp_path / "out"
     out.mkdir()
-    stale = out / ".claude-backup-20200101-0000-12345.tar.gz.partial"
+    stale = out / ".claude-backup-20200101-0000-12345-678.tar.gz.partial"
     stale.write_bytes(b"x")
     old = os.path.getmtime(stale) - 48 * 3600
     os.utime(stale, (old, old))
@@ -250,7 +250,7 @@ def test_fresh_partial_is_kept(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     out = tmp_path / "out"
     out.mkdir()
-    fresh = out / ".claude-backup-20260730-0900-12345.tar.gz.partial"
+    fresh = out / ".claude-backup-20260730-0900-12345-678.tar.gz.partial"
     fresh.write_bytes(b"x")
     _run(["-o", str(out)], home)
     assert fresh.exists()
@@ -376,3 +376,69 @@ def test_publish_never_clobbers_existing_bundle(tmp_path: Path):
         return  # 跨過了分鐘邊界，這次沒撞名，不適用
     assert existing.read_bytes() == original, "既有備份包被覆寫了"
     assert list(out.glob(".claude-backup-*.partial")) == [], "失敗後留下半成品"
+
+
+def test_reclaim_only_deletes_our_exact_naming(tmp_path: Path):
+    """回收只刪本腳本自己產生的命名——**這條真的執行 shell 的回收路徑**。
+
+    先前那條同名主張寫在 `test_partial_without_pid_segment_is_not_our_residue` 的 docstring
+    裡，但它只呼叫了 Python 的 `last_attempt_failed()`，從來沒跑過腳本，是假綠（Codex 抓到）。
+    兩邊的命名認定必須等價：sidecar 的 `_PARTIAL_RE` 只認 `-<數字>-<數字>`，
+    find 的 glob `-*` 卻會匹配 `-`、`-imported`。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+
+    ours = out / ".claude-backup-20200101-0000-12345-678.tar.gz.partial"
+    theirs = [
+        out / ".claude-backup-20200101-0000-.tar.gz.partial",          # 空 PID 段
+        out / ".claude-backup-20200101-0000-imported.tar.gz.partial",  # 字母 PID 段
+        out / ".claude-backup-20200101-0000-12345.tar.gz.partial",     # 舊格式（缺隨機段）
+        out / ".claude-backup-nonsense.tar.gz.partial",                # 時間戳形狀不符
+        out / "important.tar.gz.partial",
+    ]
+    for f in [ours, *theirs]:
+        f.write_bytes(b"x")
+        old = os.path.getmtime(f) - 48 * 3600
+        os.utime(f, (old, old))
+
+    _run(["-o", str(out)], home)
+    assert not ours.exists(), "自己的超齡殘骸應該被回收"
+    for f in theirs:
+        assert f.exists(), f"{f.name} 不是本腳本產生的格式，不該被刪"
+
+
+def test_publish_falls_back_when_hard_link_unsupported(tmp_path: Path):
+    """hard link 不可用的檔案系統（exFAT、部分 SMB 掛載）仍要能發布。
+
+    不能把所有 `ln` 失敗都報成「輸出檔已存在」——那會讓使用者朝完全錯誤的方向排查，
+    而真正的原因是 Operation not supported／權限／quota。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    broken_ln = _fake_bin(
+        tmp_path, "ln", '#!/bin/sh\necho "ln: Operation not supported" >&2\nexit 1\n'
+    )
+    proc = _run(["-o", str(out)], home, extra_env={"PATH": f"{broken_ln}:{os.environ['PATH']}"})
+    assert proc.returncode == 0, proc.stderr
+    assert len(list(out.glob("claude-backup-*.tar.gz"))) == 1
+    assert "Operation not supported" in proc.stderr, "退回 rename 時要把真正的原因說出來"
+    assert list(out.glob(".claude-backup-*.partial")) == []
+
+
+def test_publish_still_refuses_to_clobber_when_ln_unsupported(tmp_path: Path):
+    """退回 rename 之後仍不得覆寫既有備份包——rename 沒有 no-clobber 語意，
+    所以那條路徑必須先確認目標不存在。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    broken_ln = _fake_bin(
+        tmp_path, "ln", '#!/bin/sh\necho "ln: Operation not supported" >&2\nexit 1\n'
+    )
+    env = {"PATH": f"{broken_ln}:{os.environ['PATH']}"}
+    _run(["-o", str(out)], home, extra_env=env)
+    (existing,) = list(out.glob("claude-backup-*.tar.gz"))
+    original = existing.read_bytes()
+
+    proc = _run(["-o", str(out)], home, extra_env=env)   # 同分鐘再跑一次
+    if proc.returncode == 0:
+        return  # 跨過分鐘邊界，沒撞名
+    assert existing.read_bytes() == original, "既有備份包被覆寫了"

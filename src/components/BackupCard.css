@@ -120,3 +120,8 @@
   margin: 4px 0 0;
   color: var(--warning);
 }
+
+/* 「關閉設定會中斷」提示：執行中才出現，接在動作列下方 */
+.bk-hint {
+  margin: 8px 0 0;
+}

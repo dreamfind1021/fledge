@@ -14,10 +14,11 @@ from dataclasses import dataclass
 from datetime import datetime
 
 _BUNDLE_RE = re.compile(r"^claude-backup-(\d{8})-(\d{4})\.tar\.gz$")
-# 腳本在驗證通過前寫的名字：`.claude-backup-<stamp>-<pid>.tar.gz.partial`。前導 `.` 與
+# 腳本在驗證通過前寫的名字：`.claude-backup-<stamp>-<pid>-<rand>.tar.gz.partial`。前導 `.` 與
 # `.partial` 後綴兩重都不符合 _BUNDLE_RE，所以半成品永遠不會被當成一次成功的備份。
-# PID 段是為了讓同分鐘啟動的兩個備份不共用同一個檔案（見腳本的原子發布註解）。
-_PARTIAL_RE = re.compile(r"^\.claude-backup-(\d{8})-(\d{4})-\d+\.tar\.gz\.partial$")
+# PID 與隨機段是為了讓同分鐘啟動的兩個備份不共用同一個檔案——光靠 PID 只在單機成立
+# （網路掛載上兩台主機可能同分鐘拿到相同 PID）。腳本的回收邏輯用同一組認定。
+_PARTIAL_RE = re.compile(r"^\.claude-backup-(\d{8})-(\d{4})-\d+-\d+\.tar\.gz\.partial$")
 
 
 @dataclass(frozen=True)
