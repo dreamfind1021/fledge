@@ -843,3 +843,280 @@ def test_apply_logs_destructive_outcomes(tmp_path: Path, caplog):
         cc.apply(cc.plan(g, ["commands"]), overwrite=[])          # → conflict
     assert any(r.levelname == "INFO" for r in caplog.records)
     assert any(r.levelname == "WARNING" and "conflict" in r.getMessage() for r in caplog.records)
+
+
+# ── repair（票 08：移機／還原後的斷鏈修復）──────────────────────────────
+# 修復會刪除並重建 symlink，是破壞性操作。本組測試全程只用假 HOME 與 tmp 目錄：
+# 真實的 ~/.claude、~/.claude-tc 不出現在任何一條路徑上，連「舊機器路徑」都造在
+# tmp_path 內（刻意不建立）。這個 repo 有過驗收腳本 rm -rf 掉使用者目錄的前科。
+
+
+def _restored_home(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+    """還原後的現場：HOME 指到 tmp_path 內的假 home，兩個帳號目錄都在其中。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    src = home / ".claude"
+    src.mkdir()
+    tgt = home / ".claude-tc"
+    tgt.mkdir()
+    return src, tgt
+
+
+def _old_machine(tmp_path: Path, entry: str) -> Path:
+    """舊機器上的絕對路徑（如 /Users/<舊使用者>/.claude/skills）。本機不存在——
+    刻意不建立，連過去就是備份包帶回來的那種斷鏈。"""
+    return tmp_path / "old-home" / ".claude" / entry
+
+
+def test_repair_relinks_broken_links_to_this_machine(tmp_path: Path, monkeypatch):
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    (src / "skills").mkdir()
+    (src / "skills" / "a.md").write_text("real skill", encoding="utf-8")
+    (tgt / "skills").symlink_to(_old_machine(tmp_path, "skills"))
+
+    g = _graph(str(src), str(tgt))
+    p = cc.plan(g, ["skills"])
+    assert [op.state for op in p.operations] == ["broken_link"]
+
+    res = cc.repair(p)
+
+    assert [(r.account, r.entry, r.outcome) for r in res.results] == [
+        ("personal", "skills", "relinked")]
+    # 指向本機 source 帳號的字面路徑，而不是把舊指向抄過來
+    assert os.readlink(tgt / "skills") == str(src.resolve() / "skills")
+    assert (tgt / "skills" / "a.md").read_text(encoding="utf-8") == "real skill"  # 真的讀得到
+
+
+def test_repair_does_not_rewrite_a_deliberate_alternate_link(tmp_path: Path, monkeypatch):
+    # wrong_link 只代表「沒指向目前的 source entry」，分不出「備份帶回的舊機連結」與
+    # 「使用者刻意指到別處、目前仍然有效的設置」。relink 不需 overwrite 授權，收進 repair
+    # 就等於免授權改寫後者——那類連結交給共通設置卡（看得到逐項狀態才按套用＝人工授權）。
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    (src / "commands").mkdir()
+    (src / "commands" / "a.md").write_text("source copy", encoding="utf-8")
+    mine = tmp_path / "dotfiles" / "commands"
+    mine.mkdir(parents=True)
+    (mine / "a.md").write_text("MY OWN", encoding="utf-8")
+    (tgt / "commands").symlink_to(mine)
+
+    g = _graph(str(src), str(tgt))
+    p = cc.plan(g, ["commands"])
+    assert [op.state for op in p.operations] == ["wrong_link"]
+    before = os.lstat(tgt / "commands").st_ino
+
+    res = cc.repair(p)
+
+    assert res.results[0].outcome == "skipped"
+    assert os.readlink(tgt / "commands") == str(mine)        # 指向原封不動
+    assert os.lstat(tgt / "commands").st_ino == before
+    assert (tgt / "commands" / "a.md").read_text(encoding="utf-8") == "MY OWN"
+    assert not list(tgt.glob("*.fledge-backup-*"))
+
+
+def test_repair_does_not_rebuild_links_that_are_already_correct(tmp_path: Path, monkeypatch):
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    (src / "skills").mkdir()
+    (tgt / "skills").symlink_to(src.resolve() / "skills")
+
+    g = _graph(str(src), str(tgt))
+    p = cc.plan(g, ["skills"])
+    assert [op.state for op in p.operations] == ["ok"]
+    before = os.lstat(tgt / "skills").st_ino    # 重建過的 symlink 會換 inode
+
+    res = cc.repair(p)
+
+    assert res.results[0].outcome == "skipped"
+    assert os.lstat(tgt / "skills").st_ino == before
+    assert not list(tgt.glob("*.fledge-backup-*"))   # 連隔離改名都沒發生過
+
+
+def test_repair_leaves_broken_links_outside_the_allowlist_untouched(tmp_path: Path, monkeypatch):
+    # 不在共通設置清單內的斷鏈可能是使用者自建的，我們沒有立場替他決定該指去哪
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    (src / "skills").mkdir()
+    (tgt / "skills").symlink_to(_old_machine(tmp_path, "skills"))
+    mine = tgt / "my-notes"
+    mine.symlink_to(_old_machine(tmp_path, "my-notes"))
+    mine_before = os.readlink(mine)
+
+    res = cc.repair(cc.plan(_graph(str(src), str(tgt)), ["skills"]))
+
+    assert [(r.entry, r.outcome) for r in res.results] == [("skills", "relinked")]
+    assert mine.is_symlink()
+    assert os.readlink(mine) == mine_before      # 連結本身原封不動
+    assert not mine.exists()                     # 仍是斷鏈——沒有被「順手修好」
+    assert not list(tgt.glob("*.fledge-backup-*"))
+
+
+def test_repair_refuses_when_source_account_dir_is_gone(tmp_path: Path, monkeypatch):
+    # 還原了 target 卻沒還原 source（或還原到別的位置）時，逐項回「source_missing 已跳過」
+    # 只是把同一個原因講六遍。前提不成立就整批停手，一個乾淨的判別碼。
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    (src / "skills").mkdir()
+    (tgt / "skills").symlink_to(_old_machine(tmp_path, "skills"))
+    p = cc.plan(_graph(str(src), str(tgt)), ["skills"])
+    assert [op.state for op in p.operations] == ["broken_link"]
+
+    (src / "skills").rmdir()
+    src.rmdir()
+
+    with pytest.raises(ValueError, match="source_dir_missing"):
+        cc.repair(p)
+    # 沒有拿不存在的 source 去重建連結——那只會把斷鏈換成另一條斷鏈
+    assert os.readlink(tgt / "skills") == str(_old_machine(tmp_path, "skills"))
+    assert not list(tgt.glob("*.fledge-backup-*"))
+
+
+def test_repair_refuses_when_source_dir_is_not_a_usable_directory(tmp_path: Path, monkeypatch):
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    (src / "skills").mkdir()
+    (tgt / "skills").symlink_to(_old_machine(tmp_path, "skills"))
+    p = cc.plan(_graph(str(src), str(tgt)), ["skills"])
+
+    # (a) 位置被實體檔占住：join 出來的 source entry 永遠不會存在
+    (src / "skills").rmdir()
+    src.rmdir()
+    src.write_text("not a dir", encoding="utf-8")
+    with pytest.raises(ValueError, match="source_dir_unusable"):
+        cc.repair(p)
+
+    # (b) 被換成指向別處的 symlink：isdir 仍為真，但已不是 plan 驗過的那個目錄。
+    #     放行等於把 target 的連結指進一個沒經過 build_account_graph 的目錄。
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "skills").mkdir(parents=True)
+    src.unlink()
+    src.symlink_to(elsewhere)
+    with pytest.raises(ValueError, match="source_dir_unusable"):
+        cc.repair(p)
+
+    assert os.readlink(tgt / "skills") == str(_old_machine(tmp_path, "skills"))
+
+
+def test_repair_reports_every_entry_and_only_touches_broken_ones(tmp_path: Path, monkeypatch):
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    second = src.parent / ".claude-work"
+    second.mkdir()
+    for name in ("commands", "plugins", "skills", "projects"):
+        (src / name).mkdir()
+    (src / "settings.json").write_text("{}", encoding="utf-8")
+    (src / "CLAUDE.md").write_text("source rules", encoding="utf-8")
+
+    (tgt / "commands").symlink_to(_old_machine(tmp_path, "commands"))   # broken_link
+    (tgt / "plugins").mkdir()                                          # real_dir
+    (tgt / "plugins" / "mine.md").write_text("MINE", encoding="utf-8")
+    # skills 不存在 → missing
+    (tgt / "settings.json").symlink_to(src.resolve() / "settings.json")  # ok
+    (tgt / "CLAUDE.md").write_text("target rules", encoding="utf-8")     # content_differs
+    (tgt / "projects").symlink_to(_old_machine(tmp_path, "projects"))    # broken_link
+    (second / "commands").symlink_to(_old_machine(tmp_path, "commands"))
+
+    accounts = {
+        "work": {"config_dir": str(src)},
+        "personal": {"config_dir": str(tgt)},
+        "extra": {"config_dir": str(second)},
+    }
+    g = cc.build_account_graph(accounts, "work", ["personal", "extra"])
+    p = cc.plan(g, [s.name for s in cc.ENTRY_SPECS])
+
+    res = cc.repair(p)
+
+    assert [(r.account, r.entry, r.outcome) for r in res.results] == [
+        ("personal", "commands", "relinked"),
+        ("personal", "plugins", "skipped"),
+        ("personal", "skills", "skipped"),
+        ("personal", "settings.json", "skipped"),
+        ("personal", "CLAUDE.md", "skipped"),
+        ("personal", "projects", "relinked"),   # 進階項也在 allowlist 內，同樣修得回來
+        ("extra", "commands", "relinked"),      # 失敗與否逐帳號獨立，兩個 target 都處理
+        ("extra", "plugins", "skipped"),
+        ("extra", "skills", "skipped"),
+        ("extra", "settings.json", "skipped"),
+        ("extra", "CLAUDE.md", "skipped"),
+        ("extra", "projects", "skipped"),
+    ]
+    # 沒被修的每一項都必須原封不動：repair 不做「備份後覆蓋」那類需要授權的動作
+    assert (tgt / "plugins" / "mine.md").read_text(encoding="utf-8") == "MINE"
+    assert not (tgt / "plugins").is_symlink()
+    assert (tgt / "CLAUDE.md").read_text(encoding="utf-8") == "target rules"
+    assert not (tgt / "skills").exists() and not (tgt / "skills").is_symlink()
+    for d in (tgt, second):
+        assert not list(d.glob("*.fledge-backup-*"))
+
+
+def test_repair_continues_after_one_entry_fails(tmp_path: Path, monkeypatch):
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    (src / "commands").mkdir()
+    (src / "skills").mkdir()
+    (tgt / "commands").symlink_to(_old_machine(tmp_path, "commands"))
+    (tgt / "skills").symlink_to(_old_machine(tmp_path, "skills"))
+    p = cc.plan(_graph(str(src), str(tgt)), ["commands", "skills"])
+
+    real_symlink = cc.os.symlink
+
+    def _fail_first(source, target, **kw):
+        if target.endswith("commands"):
+            raise PermissionError(13, "Permission denied")
+        return real_symlink(source, target, **kw)
+
+    monkeypatch.setattr(cc.os, "symlink", _fail_first)
+    res = cc.repair(p)
+
+    by_entry = {r.entry: r for r in res.results}
+    assert by_entry["commands"].outcome == "failed"
+    assert by_entry["commands"].error == "permission_denied"   # 穩定判別碼，不是 OSError 原文
+    assert by_entry["skills"].outcome == "relinked"            # 一項失敗不影響其餘
+    assert os.readlink(tgt / "skills") == str(src.resolve() / "skills")
+
+
+def test_repair_does_not_relink_when_state_changed_after_plan(tmp_path: Path, monkeypatch):
+    # TOCTOU：plan→repair 之間斷鏈位置被換成實體檔。relink 不需 overwrite 授權，
+    # 誤刪就是無授權的資料破壞——重探測不符一律停手。
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    (src / "commands").mkdir()
+    (tgt / "commands").symlink_to(_old_machine(tmp_path, "commands"))
+    p = cc.plan(_graph(str(src), str(tgt)), ["commands"])
+    assert p.operations[0].state == "broken_link"
+
+    (tgt / "commands").unlink()
+    (tgt / "commands").write_text("appeared after plan", encoding="utf-8")
+
+    res = cc.repair(p)
+
+    assert res.results[0].outcome == "stale"
+    assert (tgt / "commands").read_text(encoding="utf-8") == "appeared after plan"
+
+
+def test_repair_refuses_operation_whose_path_is_not_in_the_graph(tmp_path: Path, monkeypatch):
+    # repair 是 C 直接呼叫的入口，op-in-graph 檢查必須在這條路徑上也成立
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    (src / "commands").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "commands").symlink_to(_old_machine(tmp_path, "commands"))
+    rogue = cc.Operation("personal", "commands", str(outside / "commands"),
+                         "broken_link", "relink", False)
+    p = cc.Plan(source_dir=str(src.resolve()),
+                targets={"personal": str(tgt.resolve())}, operations=[rogue])
+
+    r = cc.repair(p).results[0]
+
+    assert r.outcome == "failed"
+    assert r.error == "operation_not_in_graph"
+    assert os.readlink(outside / "commands") == str(_old_machine(tmp_path, "commands"))
+
+
+def test_repair_refuses_when_source_dir_cannot_be_read(tmp_path: Path, monkeypatch):
+    # 防呆不得 fail-open：探測不出 source 的內容時一律不動，而不是照著 plan 動手
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    (src / "skills").mkdir()
+    (tgt / "skills").symlink_to(_old_machine(tmp_path, "skills"))
+    p = cc.plan(_graph(str(src), str(tgt)), ["skills"])
+
+    src.chmod(0o000)
+    try:
+        with pytest.raises(ValueError, match="source_dir_unusable"):
+            cc.repair(p)
+    finally:
+        src.chmod(0o700)          # 還原，否則 tmp_path 清不掉
+    assert os.readlink(tgt / "skills") == str(_old_machine(tmp_path, "skills"))
