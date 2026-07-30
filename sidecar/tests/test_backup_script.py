@@ -131,9 +131,13 @@ def test_python3_probe_is_bounded(monkeypatch):
 # ── 打包 ──────────────────────────────────────────────────────────────────────
 
 
-def test_pyinstaller_spec_bundles_script_and_extra_paths():
-    """漏收任一個都會讓打包版的備份卡永遠停用，而 dev 完全看不出來。"""
-    spec = Path(__file__).resolve().parents[1] / "fledge-sidecar.spec"
-    body = spec.read_text(encoding="utf-8")
-    assert SCRIPT_FILENAME in body
-    assert EXTRA_PATHS_FILENAME in body
+def test_build_script_bundles_script_and_extra_paths():
+    """漏收任一個都會讓打包版的備份卡永遠停用，而 dev 環境完全看不出來。
+
+    斷言的是 `build_binary.sh` 而**不是 `.spec`**：後者是 `pyinstaller --clean --noconfirm`
+    每次重新產生的產物（且被 gitignore），改它不會影響打包。曾經把測試寫在 `.spec` 上，
+    結果是一條永遠綠、卻證明不了任何事的測試。"""
+    build = Path(__file__).resolve().parents[1] / "build_binary.sh"
+    body = build.read_text(encoding="utf-8")
+    for filename in (SCRIPT_FILENAME, EXTRA_PATHS_FILENAME):
+        assert f"--add-data \"../scripts/{filename}:scripts\"" in body, filename
