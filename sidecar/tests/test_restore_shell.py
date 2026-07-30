@@ -408,3 +408,60 @@ def test_home_with_a_quote_still_reads_the_accounts(tmp_path: Path):
     # 正常位置仍可用（證明不是因為整個腳本壞掉才失敗）
     ok = _run([str(bundle), "-o", str(home / "restored")], home)
     assert ok.returncode == 0, ok.stderr
+
+
+# ── 與 sidecar 的規則等價（Codex R3）────────────────────────────────────────
+# 規則寫兩份必然漂移，而漂移的具體樣態就是「GUI 擋、腳本放行」或反過來。
+
+
+def test_malformed_account_falls_back_like_the_sidecar(tmp_path: Path):
+    """缺 `config_dir` 的畸形 account，`source_roots` 會把它當成 `~/.claude`。腳本若改成
+    「略過」，就會出現「GUI 判 inside_source 擋下、直接跑腳本卻放行」。"""
+    home, live = _fake_home(tmp_path)
+    custom = home / ".claude-work"
+    custom.mkdir()
+    (home / ".fledge" / "config.json").write_text(
+        json.dumps({"version": 1, "roots": [], "accounts": {
+            "work": {"config_dir": str(custom), "label": ""},
+            "broken": {"label": "缺 config_dir"},
+        }}), encoding="utf-8")
+    bundle = _make_bundle(tmp_path, home)
+
+    before = _snapshot(live)
+    proc = _run([str(bundle), "-o", str(live / "restored")], home)
+    assert proc.returncode != 0, "畸形 account 退回的 ~/.claude 必須照樣守住"
+    assert _snapshot(live) == before
+    assert _run([str(bundle), "-o", str(custom / "restored")], home).returncode != 0
+
+
+def test_path_with_a_newline_is_not_split_into_two_roots(tmp_path: Path):
+    """含換行的 `config_dir`：前一版把 root 清單以換行序列化再逐行切割，會把一個路徑拆成
+    兩個 root，其內的 DEST 因此匹配不到任何一個——資料與分隔符混用的典型繞過。"""
+    home = tmp_path / "home"
+    live = home / "live\nname"
+    (live / "skills").mkdir(parents=True)
+    (live / "skills" / "demo.md").write_text("live", encoding="utf-8")
+    (home / ".fledge").mkdir()
+    _config_with_account(home, live)
+    bundle = _make_bundle(tmp_path, home)
+
+    proc = _run([str(bundle), "-o", str(live / "restored")], home)
+    assert proc.returncode != 0
+    assert not (live / "restored").exists()
+
+
+def test_refuses_when_config_is_not_a_regular_file(tmp_path: Path):
+    """目錄、壞掉的 symlink 這類「存在但讀不懂」的狀態，不能因為 `-f` 為假就退回預設。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    cfg = home / ".fledge" / "config.json"
+    dest = tmp_path / "restored"
+
+    cfg.unlink()
+    cfg.mkdir()
+    assert _run([str(bundle), "-o", str(dest)], home).returncode != 0, "目錄"
+    cfg.rmdir()
+
+    cfg.symlink_to(tmp_path / "nowhere")
+    assert _run([str(bundle), "-o", str(dest)], home).returncode != 0, "壞掉的 symlink"
+    assert not dest.exists()

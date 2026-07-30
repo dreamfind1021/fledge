@@ -56,93 +56,83 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_JSON="${HOME}/.fledge/config.json"
 EXTRA_PATHS_FILE="${SCRIPT_DIR}/backup-extra-paths.txt"
 
-live_roots() {
-  # 現役來源＝所有帳號的 config_dir ∪ 共用清單檔。清單檔與 backup-claude.sh 共用同一份
-  # ——各存一份必然漂移，而漂移的後果是新來源不在防呆的認定裡。
-  local accounts=""
-  if [ -f "${CONFIG_JSON}" ]; then
-    # **設定檔存在卻讀不懂就整個停手**，不退回預設值：那等於在「使用者有自訂帳號目錄，
-    # 但我們讀不到是哪些」時只守 ~/.claude，其餘來源全裸——判斷不出來時一律不動手，
-    # 而不是照做（防呆不得 fail-open）。
-    #
-    # 路徑走 argv 而非插值進程式碼：HOME 含單引號時插值會讓整段 Python 變成語法錯誤，
-    # 而那個錯誤會被當成「沒有帳號」——正是防呆最不該有的失敗方向。
-    accounts="$(python3 -c '
-import json, sys
-cfg = json.load(open(sys.argv[1]))
-accounts = cfg.get("accounts")
-if not isinstance(accounts, dict):
-    raise SystemExit(2)
-for acc in accounts.values():
-    if not isinstance(acc, dict):
-        continue
-    d = (acc.get("config_dir") or "").strip()
-    if d:
-        print(d)
-' "${CONFIG_JSON}")" || {
-      echo "讀不懂 ${CONFIG_JSON}（損壞、沒有權限，或格式不符）。" >&2
-      echo "無從得知哪些目錄是現役資料，因此不展開——修好設定檔或先把它移開再試。" >&2
-      return 1
-    }
-  fi
-  if [ -n "${accounts}" ]; then
-    printf '%s\n' "${accounts}"
-  else
-    # 設定檔**不存在**（或裡面一個帳號都沒有）時退回預設位置。移機到新機器上還沒設定過
-    # Fledge 正是最常見的還原情境，而那時候 ~/.claude 一樣是現役目錄。
-    #
-    # **只在這個 fallback 裡加它、不無條件加**：sidecar 的 `source_roots` 只看登記的帳號，
-    # 無條件多守一個 root 會讓「帳號都不在 ~/.claude 的使用者選了 ~/.claude/x」變成 GUI 說
-    # 可以、按下去卻被腳本擋——兩層規則不一致比少守一個預設目錄更糟。
-    echo "~/.claude"
-  fi
-  if [ -f "${EXTRA_PATHS_FILE}" ]; then
-    while IFS= read -r line || [ -n "${line}" ]; do
-      line="${line#"${line%%[![:space:]]*}"}"     # 去前導空白
-      case "${line}" in ''|'#'*) continue ;; esac
-      echo "${line}"
-    done < "${EXTRA_PATHS_FILE}"
-  fi
-}
-
-phys() {
-  # 實體路徑（跟隨 symlink）。DEST 通常還不存在，所以取最近的既有祖先再把剩下的接回去。
-  local p="$1" rest=""
-  while [ ! -d "${p}" ]; do
-    case "${p}" in ''|'/'|'.'|'..') break ;; esac
-    rest="/$(basename "${p}")${rest}"
-    p="$(dirname "${p}")"
-  done
-  printf '%s%s' "$(cd "${p}" 2>/dev/null && pwd -P || printf '%s' "${p}")" "${rest}"
-}
-
-# 比對前一律轉小寫：APFS 預設不分大小寫，~/.claude 與 ~/.CLAUDE 是同一個目錄但字串不等。
-# 誤判方向是「多擋一個其實可用的位置」，對防呆來說是安全的那一邊。
-lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
-
+# 判定整段收在**一個 Python 區塊**裡，不在 bash 與 python 之間傳路徑清單。前一版把 root
+# 清單以換行序列化再由 `read` 逐行切割，含換行的路徑會被拆成兩個 root（資料與分隔符混用）；
+# 而規則寫兩份（bash 一份、`containment.py` 一份）也必然漂移——R3 抓到的三條 finding 全是
+# 同一個根因。判定所需的東西全部走 argv 傳進去，回傳只有「擋不擋、為什麼」。
 if [ "${DIFF_ONLY}" = false ]; then
-  dest_phys="$(phys "${DEST}")"
-  dest_key="$(lower "${dest_phys}")"
-  if [ "${dest_phys}" = "/" ]; then
-    echo "拒絕執行：不能展開到檔案系統根目錄。" >&2; exit 1
-  fi
-  if [ "${dest_key}" = "$(lower "$(phys "${HOME}")")" ]; then
-    echo "拒絕執行：不能展開到家目錄本身，請選一個專用的資料夾。" >&2; exit 1
-  fi
-  # **先取回清單再迭代**，不用 `< <(live_roots)`：process substitution 會吞掉 `live_roots`
-  # 的結束碼，於是「讀不懂設定檔」這個刻意的失敗會被無聲降級成「沒有任何來源」。
-  roots_list="$(live_roots)" || exit 1
-  while IFS= read -r root; do
-    [ -n "${root}" ] || continue
-    root_key="$(lower "$(phys "$(expand_home "${root}")")")"
-    # pattern 兩側都加引號＝字面比對：路徑可能含 * ? [ 這些 glob 元字元
-    case "${dest_key}" in
-      "${root_key}"|"${root_key}"/*)
-        echo "拒絕執行：${DEST} 在現役的 Claude 資料（${root}）裡面。" >&2
-        echo "展開到那裡會把一份完整副本折回備份來源。換一個 Claude 目錄以外的位置。" >&2
-        exit 1 ;;
-    esac
-  done <<< "${roots_list}"
+  python3 -c '
+import json, os, sys
+
+dest, config_json, extra_file, home = sys.argv[1:5]
+
+
+def fail(msg, hint=""):
+    print("拒絕執行：" + msg, file=sys.stderr)
+    if hint:
+        print(hint, file=sys.stderr)
+    raise SystemExit(1)
+
+
+def roots():
+    """現役來源。**與 sidecar 的 `backup/containment.py::source_roots` 逐條對齊**——
+    兩層規則不等價的後果是 GUI 說可以、直接跑腳本卻放行（或反過來）。"""
+    out = []
+    # lexists 而非 isfile：目錄、壞掉的 symlink、FIFO 都算「存在但讀不懂」，那時候我們不
+    # 知道使用者的自訂帳號目錄有哪些，只能停手。只有真的不存在才退回預設。
+    if os.path.lexists(config_json):
+        try:
+            with open(config_json) as fh:
+                cfg = json.load(fh)
+            accounts = cfg["accounts"] if isinstance(cfg, dict) else None
+            if not isinstance(accounts, dict):
+                raise ValueError("accounts 不是物件")
+            for acc in accounts.values():
+                if not isinstance(acc, dict):
+                    raise ValueError("account 不是物件")
+                # 缺 config_dir 的畸形 account 退回預設帳號目錄，**不是略過**：
+                # source_roots 的 `acc.get("config_dir") or "~/.claude"` 就是這個語意，
+                # 略過會讓 GUI 擋 ~/.claude 而腳本放行。
+                out.append(os.path.expanduser(acc.get("config_dir") or "~/.claude"))
+        except (OSError, ValueError) as exc:
+            fail(
+                "讀不懂 %s（%s）。" % (config_json, exc),
+                "無從得知哪些目錄是現役資料，因此不展開——修好設定檔或先把它移開再試。",
+            )
+    else:
+        # 設定檔不存在：移機到新機器上還沒設定過 Fledge 正是最常見的還原情境，
+        # 而那時候 ~/.claude 一樣是現役目錄。
+        out.append(os.path.expanduser("~/.claude"))
+    try:
+        with open(extra_file) as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    out.append(os.path.expanduser(line))
+    except OSError:
+        pass          # 清單檔讀不到只會讓防呆變寬鬆一格，不該讓整個還原壞掉
+    return out
+
+
+def key(path):
+    # realpath 對既有前綴解 symlink、對不存在的部分做字面正規化；轉小寫是因為 APFS
+    # 預設不分大小寫（~/.claude 與 ~/.CLAUDE 是同一個目錄但字串不等）。
+    return os.path.realpath(path).lower()
+
+
+dest_key = key(dest)
+if dest_key == key(os.sep):
+    fail("不能展開到檔案系統根目錄。")
+if dest_key == key(home):
+    fail("不能展開到家目錄本身，請選一個專用的資料夾。")
+for root in roots():
+    root_key = key(root)
+    if dest_key == root_key or dest_key.startswith(root_key + os.sep):
+        fail(
+            "%s 在現役的 Claude 資料（%s）裡面。" % (dest, root),
+            "展開到那裡會把一份完整副本折回備份來源。換一個 Claude 目錄以外的位置。",
+        )
+' "${DEST}" "${CONFIG_JSON}" "${EXTRA_PATHS_FILE}" "${HOME}"
 fi
 
 # ── 展開 ────────────────────────────────────────────────────────────────────
