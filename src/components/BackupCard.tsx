@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { blockingReason, formatSize, freshnessLevel } from "../lib/backupFormat";
+import {
+  blockingReason,
+  formatBundleTime,
+  formatSize,
+  freshnessLevel,
+} from "../lib/backupFormat";
 import { pickDirectory } from "../lib/dialog";
 import {
   fetchBackupStatus,
@@ -142,7 +147,7 @@ function BundleList({ bundles }: { bundles: BackupBundle[] }) {
       <div className="bk-bundles-title">{t("bundles")}</div>
       {shown.map((b) => (
         <div key={b.name} className="bk-bundle">
-          <span className="bk-bundle-time">{new Date(b.created_ts * 1000).toLocaleString()}</span>
+          <span className="bk-bundle-time">{formatBundleTime(b.created_ts)}</span>
           <span className="bk-bundle-size">{formatSize(b.size_bytes)}</span>
         </div>
       ))}

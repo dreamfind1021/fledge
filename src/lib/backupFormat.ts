@@ -28,6 +28,18 @@ export function formatSize(bytes: number): string {
   return unit === 0 ? `${value} B` : `${value.toFixed(1)} ${SIZE_UNITS[unit]}`;
 }
 
+/** 備份包時間的顯示格式。**刻意不顯示秒**：備份包的時間戳來自檔名（`…-HHMM`），
+ *  精度只到分鐘，秒永遠是 00——印出來等於宣稱一個我們沒有的精度。 */
+export function formatBundleTime(createdTs: number, locale?: string): string {
+  return new Date(createdTs * 1000).toLocaleString(locale, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 /** 卡片目前的阻斷原因；`null` 代表可以正常呈現。 */
 export type BlockingReason =
   | "not_configured"

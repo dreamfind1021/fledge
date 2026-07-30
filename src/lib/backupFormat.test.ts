@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockingReason, formatSize, freshnessLevel } from "./backupFormat";
+import { blockingReason, formatBundleTime, formatSize, freshnessLevel } from "./backupFormat";
 import type { BackupStatus } from "./sidecar";
 
 // 標註成 BackupStatus 而非 `as const`：後者會把欄位推成唯讀字面型別，展開覆寫時對不上。
@@ -94,5 +94,19 @@ describe("formatSize", () => {
 
   it("超過 GB 不再往上跳單位（備份包不會有 TB 級）", () => {
     expect(formatSize(5 * 1024 ** 4)).toMatch(/GB$/);
+  });
+});
+
+describe("formatBundleTime", () => {
+  const ts = new Date(2026, 6, 29, 23, 0, 0).getTime() / 1000;   // 2026-07-29 23:00 本地時間
+
+  it("不顯示秒——備份包時間戳來自檔名，精度只到分鐘，秒永遠是 00", () => {
+    expect(formatBundleTime(ts, "zh-TW")).not.toMatch(/:00:00/);
+  });
+
+  it("仍帶得出日期與時分", () => {
+    const out = formatBundleTime(ts, "zh-TW");
+    expect(out).toMatch(/2026/);
+    expect(out).toMatch(/11:00|23:00/);
   });
 });
