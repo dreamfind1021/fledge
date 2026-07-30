@@ -193,7 +193,9 @@ export function RestoreCard({
   }, [selected, loadPlan, setSessionError]);
 
   const onRun = useCallback(async () => {
-    if (selected === null || plan === null) return;
+    // 同一條不變式在 handler 裡再驗一次：按鈕的 disabled 擋不住程式化呼叫，而這裡送錯
+    // 的後果是內容被解進錯誤命名的目錄（使用者事後分不出那是哪一份備份）。
+    if (selected === null || plan === null || plan.bundle !== selected) return;
     setFinished(false);
     setRepairResults(null);
     setRepairError(null);
@@ -232,8 +234,12 @@ export function RestoreCard({
 
   const blocked = restoreBlocking(status);
   const busy = starting || (running !== null && !finished);
-  const destProblem = plan !== null ? destMessageKey(plan.dest_status) : null;
-  const canRun = !busy && selected !== null && plan !== null && plan.dest_status === "ok";
+  // **plan 必須綁在它是為哪一份備份包算出來的**：換備份包後新預覽回來之前，舊 plan 還在
+  // state 裡，`canRun` 會維持啟用而 `onRun` 會把**新** bundle 配上**舊** dest 送出去——
+  // 後端分別驗 bundle 與 dest 都合法，於是新的備份包被解進一個以另一份時間戳命名的目錄。
+  const ready = plan !== null && plan.bundle === selected ? plan : null;
+  const destProblem = ready !== null ? destMessageKey(ready.dest_status) : null;
+  const canRun = !busy && selected !== null && ready !== null && ready.dest_status === "ok";
 
   return (
     <div className="b4-card rs-card">
@@ -267,7 +273,7 @@ export function RestoreCard({
 
           <div className="rs-row">
             <span className="rs-label">{t("destLabel")}</span>
-            <code className="b4-mono rs-path">{plan?.dest ?? "…"}</code>
+            <code className="b4-mono rs-path">{ready?.dest ?? "…"}</code>
             {/* 執行中不得改位置：session 建立時後端已把當時的位置固定進 argv */}
             <button
               type="button"

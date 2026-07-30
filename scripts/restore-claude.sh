@@ -59,22 +59,43 @@ EXTRA_PATHS_FILE="${SCRIPT_DIR}/backup-extra-paths.txt"
 live_roots() {
   # 現役來源＝所有帳號的 config_dir ∪ 共用清單檔。清單檔與 backup-claude.sh 共用同一份
   # ——各存一份必然漂移，而漂移的後果是新來源不在防呆的認定裡。
+  local accounts=""
   if [ -f "${CONFIG_JSON}" ]; then
-    python3 -c "
-import json, os
-try:
-    cfg = json.load(open(os.path.expanduser('${CONFIG_JSON}')))
-except Exception:
-    raise SystemExit(0)
-for acc in cfg.get('accounts', {}).values():
-    d = (acc.get('config_dir') or '').strip()
+    # **設定檔存在卻讀不懂就整個停手**，不退回預設值：那等於在「使用者有自訂帳號目錄，
+    # 但我們讀不到是哪些」時只守 ~/.claude，其餘來源全裸——判斷不出來時一律不動手，
+    # 而不是照做（防呆不得 fail-open）。
+    #
+    # 路徑走 argv 而非插值進程式碼：HOME 含單引號時插值會讓整段 Python 變成語法錯誤，
+    # 而那個錯誤會被當成「沒有帳號」——正是防呆最不該有的失敗方向。
+    accounts="$(python3 -c '
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+accounts = cfg.get("accounts")
+if not isinstance(accounts, dict):
+    raise SystemExit(2)
+for acc in accounts.values():
+    if not isinstance(acc, dict):
+        continue
+    d = (acc.get("config_dir") or "").strip()
     if d:
         print(d)
-" 2>/dev/null || true
+' "${CONFIG_JSON}")" || {
+      echo "讀不懂 ${CONFIG_JSON}（損壞、沒有權限，或格式不符）。" >&2
+      echo "無從得知哪些目錄是現役資料，因此不展開——修好設定檔或先把它移開再試。" >&2
+      return 1
+    }
   fi
-  # 設定檔讀不到（或裡面沒有帳號）時仍然守住預設位置。**這不是 fail-open**：移機到新機器
-  # 上還沒設定過 Fledge 正是最常見的還原情境，而那時候 ~/.claude 一樣是現役目錄。
-  echo "~/.claude"
+  if [ -n "${accounts}" ]; then
+    printf '%s\n' "${accounts}"
+  else
+    # 設定檔**不存在**（或裡面一個帳號都沒有）時退回預設位置。移機到新機器上還沒設定過
+    # Fledge 正是最常見的還原情境，而那時候 ~/.claude 一樣是現役目錄。
+    #
+    # **只在這個 fallback 裡加它、不無條件加**：sidecar 的 `source_roots` 只看登記的帳號，
+    # 無條件多守一個 root 會讓「帳號都不在 ~/.claude 的使用者選了 ~/.claude/x」變成 GUI 說
+    # 可以、按下去卻被腳本擋——兩層規則不一致比少守一個預設目錄更糟。
+    echo "~/.claude"
+  fi
   if [ -f "${EXTRA_PATHS_FILE}" ]; then
     while IFS= read -r line || [ -n "${line}" ]; do
       line="${line#"${line%%[![:space:]]*}"}"     # 去前導空白
@@ -108,6 +129,9 @@ if [ "${DIFF_ONLY}" = false ]; then
   if [ "${dest_key}" = "$(lower "$(phys "${HOME}")")" ]; then
     echo "拒絕執行：不能展開到家目錄本身，請選一個專用的資料夾。" >&2; exit 1
   fi
+  # **先取回清單再迭代**，不用 `< <(live_roots)`：process substitution 會吞掉 `live_roots`
+  # 的結束碼，於是「讀不懂設定檔」這個刻意的失敗會被無聲降級成「沒有任何來源」。
+  roots_list="$(live_roots)" || exit 1
   while IFS= read -r root; do
     [ -n "${root}" ] || continue
     root_key="$(lower "$(phys "$(expand_home "${root}")")")"
@@ -118,7 +142,7 @@ if [ "${DIFF_ONLY}" = false ]; then
         echo "展開到那裡會把一份完整副本折回備份來源。換一個 Claude 目錄以外的位置。" >&2
         exit 1 ;;
     esac
-  done < <(live_roots)
+  done <<< "${roots_list}"
 fi
 
 # ── 展開 ────────────────────────────────────────────────────────────────────

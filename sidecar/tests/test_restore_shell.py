@@ -319,3 +319,92 @@ def test_missing_shared_list_file_is_not_fatal(tmp_path: Path):
         env={**os.environ, "HOME": str(home)}, timeout=120,
     )
     assert proc.returncode == 0, proc.stderr
+
+
+def _config_with_account(home: Path, config_dir: Path) -> None:
+    (home / ".fledge" / "config.json").write_text(
+        json.dumps({"version": 1, "roots": [],
+                    "accounts": {"work": {"config_dir": str(config_dir), "label": ""}}}),
+        encoding="utf-8")
+
+
+def test_root_set_matches_the_sidecar_when_config_is_readable(tmp_path: Path):
+    """腳本的來源認定要**等於** sidecar 的 `source_roots`（登記的帳號 ∪ 共用清單），
+    不能無條件多守一個 `~/.claude`——那會讓「帳號都不在 ~/.claude 的使用者選了
+    ~/.claude/x」變成 GUI 說可以、按下去卻被腳本擋。兩層規則不一致比少守一個預設目錄更糟。"""
+    home, _ = _fake_home(tmp_path)
+    other = home / ".claude-work"
+    other.mkdir()
+    _config_with_account(home, other)
+    bundle = _make_bundle(tmp_path, home)
+
+    proc = _run([str(bundle), "-o", str(home / ".claude" / "restored")], home)
+    assert proc.returncode == 0, proc.stderr          # 未登記＝不在來源集合裡
+    proc = _run([str(bundle), "-o", str(other / "restored")], home)
+    assert proc.returncode != 0                       # 登記的那個仍然擋
+
+
+def test_falls_back_to_default_dir_when_config_is_unreadable(tmp_path: Path):
+    """設定檔缺席（移機到新機還沒設定 Fledge，最常見的還原情境）時仍守住 `~/.claude`。
+    **這不是 fail-open**：判斷不出來時不是放行，而是退回一個必然成立的預設。"""
+    home, live = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    (home / ".fledge" / "config.json").unlink()
+
+    before = _snapshot(live)
+    proc = _run([str(bundle), "-o", str(live / "restored")], home)
+    assert proc.returncode != 0
+    assert _snapshot(live) == before
+
+
+def test_refuses_when_config_exists_but_cannot_be_understood(tmp_path: Path):
+    """設定檔存在卻讀不懂就整個停手，不退回預設值（Codex R2 finding 1）。
+
+    退回 `~/.claude` 等於在「使用者有自訂帳號目錄、但我們讀不到是哪些」時只守一個目錄、
+    其餘來源全裸——判斷不出來時一律不動手，而不是照做。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    cfg = home / ".fledge" / "config.json"
+    dest = tmp_path / "restored"
+
+    for payload in ('{"accounts": ', '{"accounts": []}', 'not json at all'):
+        cfg.write_text(payload, encoding="utf-8")
+        proc = _run([str(bundle), "-o", str(dest)], home)
+        assert proc.returncode != 0, payload
+        assert not dest.exists(), payload
+
+
+def test_refuses_when_config_is_unreadable(tmp_path: Path):
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    cfg = home / ".fledge" / "config.json"
+    cfg.chmod(0o000)
+    try:
+        proc = _run([str(bundle), "-o", str(tmp_path / "restored")], home)
+        assert proc.returncode != 0
+    finally:
+        cfg.chmod(0o600)   # 還原否則 tmp_path 清不掉
+
+
+def test_home_with_a_quote_still_reads_the_accounts(tmp_path: Path):
+    """HOME 含單引號時，設定檔路徑若被插值進 Python 程式碼會變成語法錯誤，而那個錯誤
+    會被當成「沒有帳號」——防呆最不該有的失敗方向。路徑必須走 argv。
+
+    備份包在**正常** HOME 下產生：`backup-claude.sh` 至今仍用插值寫法，含單引號的 HOME
+    會讓它自己 SyntaxError（既有缺陷，不在本票範圍，已另外回報）。這裡要驗的是還原端。"""
+    plain, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, plain)
+
+    home = tmp_path / "ho'me"
+    live = home / ".claude"
+    (live / "skills").mkdir(parents=True)
+    (live / "skills" / "demo.md").write_text("live", encoding="utf-8")
+    (home / ".fledge").mkdir()
+    _config_with_account(home, live)
+
+    proc = _run([str(bundle), "-o", str(live / "restored")], home)
+    assert proc.returncode != 0, "帳號讀得到就該擋下來源樹內的位置"
+    assert not (live / "restored").exists()
+    # 正常位置仍可用（證明不是因為整個腳本壞掉才失敗）
+    ok = _run([str(bundle), "-o", str(home / "restored")], home)
+    assert ok.returncode == 0, ok.stderr

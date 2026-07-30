@@ -122,6 +122,26 @@ describe("RestoreCard", () => {
     await waitFor(() => expect(restorePlan).toHaveBeenCalledWith(1, OLDER, undefined));
   });
 
+  it("換備份包後、新預覽回來前不得執行", async () => {
+    // 舊 plan 還在 state 裡時按下執行，會把**新** bundle 配上**舊** dest 送出去——後端
+    // 分別驗 bundle 與 dest 都合法，於是新的備份包被解進以另一份時間戳命名的目錄，
+    // 使用者事後分不出那是哪一份備份（Codex R2 finding 2）。
+    mockStatus();
+    render(<RestoreCard port={1} accounts={TWO_ACCOUNTS} />);
+    await ready();
+
+    restorePlan.mockImplementationOnce(() => new Promise(() => {}));   // 第二份的預覽卡住不回
+    fireEvent.click(screen.getAllByRole("radio")[1]);
+    await waitFor(() => expect(restorePlan).toHaveBeenCalledWith(1, OLDER, undefined));
+
+    const run = screen.getByRole("button", { name: zh.run }) as HTMLButtonElement;
+    expect(run.disabled).toBe(true);
+    // fireEvent 會繞過 disabled 照樣觸發 handler，所以 handler 自己也要擋
+    fireEvent.click(run);
+    await waitFor(() => expect(screen.queryByText("/home/me/.claude-restore-20260727-1432")).toBeNull());
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["not_configured", zh.blocked.not_configured, { configured: false }],
     ["dir_unusable", zh.blocked.dir_unusable, { dir_status: "missing" as const }],
