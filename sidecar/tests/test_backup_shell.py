@@ -273,3 +273,31 @@ def test_unrelated_files_are_never_deleted(tmp_path: Path):
     _run(["-o", str(out)], home)
     for f in keepers:
         assert f.exists(), f.name
+
+
+def test_no_match_does_not_add_empty_item(tmp_path: Path):
+    """回歸：零匹配時 matched 不得多出一個空元素。
+
+    `printf '%s\\0' ${pat}` 在沒有引數時仍會輸出一次空字串，於是 `"${dir}/${item}"`
+    變成 `"${dir}/"`——掃描對整個帳號目錄 du，打包則 `cp -Rc` 整棵帳號目錄，把
+    ADR-0004 判定不收的 sessions/、cache/ 全收進備份包。原本的測試只檢查「有沒有留下
+    字面 pattern」，抓不到這個。"""
+    home, config_dir = _fake_home(tmp_path)
+    (config_dir / "cache").mkdir()
+    (config_dir / "cache" / "junk.bin").write_bytes(b"x" * 4096)
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    listing = subprocess.run(
+        ["tar", "tzf", str(bundle)], capture_output=True, text=True, timeout=60
+    ).stdout
+    assert "cache/junk.bin" not in listing, "零匹配的空項目讓整個帳號目錄被收進去了"
+
+
+def test_scan_output_has_no_blank_item_row(tmp_path: Path):
+    """同一個 bug 在掃描階段的樣子：一行「收」後面接空白項目名。"""
+    home, _ = _fake_home(tmp_path)
+    proc = _run(["--list", "-o", str(tmp_path / "out")], home)
+    blank_rows = [ln for ln in proc.stdout.splitlines() if ln.strip().startswith("收") and len(ln.split()) < 3]
+    assert blank_rows == [], blank_rows

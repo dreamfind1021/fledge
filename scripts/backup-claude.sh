@@ -59,7 +59,11 @@ expand_globs() {
   for pat in "${ASSET_GLOBS[@]}"; do
     while IFS= read -r -d '' f; do
       matched+=("$(basename "${f}")")
-    done < <(cd "${dir}" 2>/dev/null && shopt -s nullglob && printf '%s\0' ${pat})
+    done < <(cd "${dir}" 2>/dev/null && shopt -s nullglob && for g in ${pat}; do printf '%s\0' "${g}"; done)
+    # 用 for 迴圈而不是 `printf '%s\0' ${pat}`：**printf 帶格式字串但沒有引數時仍會輸出
+    # 一次空字串**，於是零匹配會讓 matched 多一個空元素，`"${dir}/${item}"` 變成
+    # `"${dir}/"`——掃描階段對整個帳號目錄 du，打包階段 `cp -Rc` 整棵帳號目錄，
+    # 把 ADR-0004 判定不收的 sessions/、cache/ 全部收進備份包。
   done
 }
 

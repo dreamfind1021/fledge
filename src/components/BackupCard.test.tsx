@@ -28,8 +28,19 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
 vi.mock("../lib/dialog", () => ({ pickDirectory: () => pickDirectory() }));
 // xterm 進 jsdom 會炸（canvas/WebGL）；本卡只需驗「終端機有沒有被掛上、掛在哪個 session」
 vi.mock("./Terminal", () => ({
-  Terminal: ({ sessionId, tabId }: { sessionId: string; tabId: string }) => (
-    <div data-testid="terminal" data-session={sessionId} data-tab={tabId} />
+  Terminal: ({
+    sessionId,
+    tabId,
+    onEnded,
+  }: {
+    sessionId: string;
+    tabId: string;
+    onEnded?: () => void;
+  }) => (
+    <div data-testid="terminal" data-session={sessionId} data-tab={tabId}>
+      {/* 讓測試能模擬 PTY EOF */}
+      <button type="button" data-testid="end-session" onClick={() => onEnded?.()} />
+    </div>
   ),
 }));
 
@@ -247,6 +258,40 @@ describe("BackupCard 立即備份", () => {
     await waitFor(() => expect(screen.queryByTestId("terminal")).toBeTruthy());
     expect(screen.getByRole("button", { name: zh.runNow }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByRole("button", { name: zh.preview }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("跑完後按鈕解除停用，但終端機留在原地讓人看輸出", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.runNow }));
+    fireEvent.click(await screen.findByTestId("end-session"));   // 模擬 PTY EOF
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: zh.runNow }).hasAttribute("disabled")).toBe(false),
+    );
+    expect(screen.getByRole("button", { name: zh.preview }).hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByTestId("terminal")).toBeTruthy();
+  });
+
+  it("跑完後回讀狀態——天數與清單不能停在舊值", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.runNow }));
+    await waitFor(() => expect(fetchBackupStatus).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId("end-session"));
+    await waitFor(() => expect(fetchBackupStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it("預覽跑完後仍能按立即備份（不必重開設定頁）", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.preview }));
+    fireEvent.click(await screen.findByTestId("end-session"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: zh.runNow }).hasAttribute("disabled")).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: zh.runNow }));
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+    expect(createSession.mock.calls[1][1]).toMatchObject({ backupMode: "run" });
   });
 
   it("last_attempt_failed 時多一行提示，但不停用備份", async () => {

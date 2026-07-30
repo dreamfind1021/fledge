@@ -45,6 +45,9 @@ export function BackupCard({ port }: { port: number | null }) {
   const { t } = useTranslation("backup");
   const [status, setStatus] = useState<BackupStatus | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  // 跑完之後終端機**刻意留在原地**（輸出要看得到，比照 EnvCard），所以不能用「還有沒有
+  // session」判斷忙碌與否——那會讓按鈕在跑完後永遠鎖著。用 PTY EOF 當結束訊號。
+  const [finished, setFinished] = useState(false);
   // latest-request-wins：sidecar 重啟換 port 會讓新舊請求重疊，晚到的舊回應若照樣寫進
   // state，畫面會退回上一輪的結果（比照 EnvCard 的 reqId）
   const reqId = useRef(0);
@@ -105,6 +108,7 @@ export function BackupCard({ port }: { port: number | null }) {
   const startRun = useCallback(
     async (mode: "list" | "run") => {
       setSaveError(null);
+      setFinished(false);
       // 前端只送 kind 與 backup_mode——永不送命令字串也不送路徑（沿用 kind=install 的
       // allowlist 不變式）。path 傳空字串是因為備份不屬於任何專案，後端固定跑在 home。
       const created = await start({
@@ -120,19 +124,17 @@ export function BackupCard({ port }: { port: number | null }) {
     [start, t, refresh],
   );
 
-  // session 收掉＝這一輪跑完，回讀讓天數歸零、新備份包出現在清單。
-  // 判的是**轉換**（有 → 無）而不是「現在是 null」：後者在掛載時就成立，會讓每次
-  // 開卡片都多打一次請求。
-  const hadSession = useRef(false);
-  useEffect(() => {
-    if (hadSession.current && running === null) void refresh();
-    hadSession.current = running !== null;
-  }, [running, refresh]);
+  const onSessionEnded = useCallback(() => {
+    setFinished(true);
+    void refresh();   // 天數歸零、剛產生的備份包出現在清單
+  }, [refresh]);
 
   // 讀不到狀態時整張卡不出現：這裡沒有使用者能採取的行動，留一個空殼只是噪音
   if (status === null) return null;
 
   const blocked = blockingReason(status);
+  // 「有 session 掛著」不等於「還在跑」：跑完的終端機仍留著給人看輸出
+  const busy = starting || (running !== null && !finished);
 
   return (
     <div className="b4-card bk-card">
@@ -177,7 +179,7 @@ export function BackupCard({ port }: { port: number | null }) {
               type="button"
               className="settings-btn-ghost"
               onClick={() => void startRun("list")}
-              disabled={starting || running !== null}
+              disabled={busy}
             >
               {t("preview")}
             </button>
@@ -185,7 +187,7 @@ export function BackupCard({ port }: { port: number | null }) {
               type="button"
               className="settings-btn-primary"
               onClick={() => void startRun("run")}
-              disabled={starting || running !== null}
+              disabled={busy}
             >
               {t("runNow")}
             </button>
@@ -206,6 +208,7 @@ export function BackupCard({ port }: { port: number | null }) {
           sessionId={running.sessionId}
           tabId={running.tabId}
           title={t(running.meta.mode === "list" ? "preview" : "runNow")}
+          onEnded={onSessionEnded}
         />
       )}
     </div>
