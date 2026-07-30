@@ -465,3 +465,25 @@ def test_refuses_when_config_is_not_a_regular_file(tmp_path: Path):
     cfg.symlink_to(tmp_path / "nowhere")
     assert _run([str(bundle), "-o", str(dest)], home).returncode != 0, "壞掉的 symlink"
     assert not dest.exists()
+
+
+def test_root_source_blocks_everything_like_the_sidecar(tmp_path: Path):
+    """`config_dir` 是 `/` 時（帳號 API 只拒空白與相對路徑，這個值收得下），整個檔案系統
+    都算現役來源。`root + os.sep` 不先 rstrip 會組出 `//`，任何絕對路徑都不以它開頭——
+    等於那個 root 完全沒守，而 sidecar 的 `is_within_root` 先 rstrip 所以會擋。
+
+    這條同時是**跨層對帳**：同一組輸入，腳本與 `check_dest()` 必須給同一個答案。"""
+    from fledge_sidecar.backup import restore as restore_mod
+
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)      # 先用正常設定產包，再把 config 改成 "/"
+    (home / ".fledge" / "config.json").write_text(
+        json.dumps({"version": 1, "roots": [],
+                    "accounts": {"work": {"config_dir": "/", "label": ""}}}),
+        encoding="utf-8")
+
+    dest = tmp_path / "restored"
+    proc = _run([str(bundle), "-o", str(dest)], home)
+    assert proc.returncode != 0
+    assert not dest.exists()
+    assert restore_mod.check_dest(str(dest), ["/"]) == "inside_source"   # 兩層同一個答案

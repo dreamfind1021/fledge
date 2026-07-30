@@ -126,8 +126,12 @@ if dest_key == key(os.sep):
 if dest_key == key(home):
     fail("不能展開到家目錄本身，請選一個專用的資料夾。")
 for root in roots():
+    # 與 paths.is_within_root 同一個寫法：先 rstrip 再接 os.sep。root 是 "/" 時不 rstrip
+    # 會組出 "//"，任何絕對路徑都不以它開頭——整個 root 等於沒守（`config_dir: "/"` 只要
+    # 帳號 API 收得下就會出現，那時 sidecar 判 inside_source、腳本卻放行）。
     root_key = key(root)
-    if dest_key == root_key or dest_key.startswith(root_key + os.sep):
+    base = root_key.rstrip(os.sep)
+    if dest_key == root_key or dest_key.startswith(base + os.sep):
         fail(
             "%s 在現役的 Claude 資料（%s）裡面。" % (dest, root),
             "展開到那裡會把一份完整副本折回備份來源。換一個 Claude 目錄以外的位置。",
