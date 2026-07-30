@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-OUT_DIR="${FLEDGE_BACKUP_DIR:-/Users/tc/NAS/work/claude-backups}"
+OUT_DIR="${FLEDGE_BACKUP_DIR:-}"
 CONFIG_JSON="${HOME}/.fledge/config.json"
 LIST_ONLY=false
 
@@ -30,10 +30,38 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# 沒有輸出目錄就停：舊版寫死的預設值只對開發者那台機器有意義，公開 repo 不能留它。
+# GUI 一律傳 -o；CLI 使用者請自行指定或設 FLEDGE_BACKUP_DIR。
+if [ -z "${OUT_DIR}" ]; then
+  echo "未指定輸出目錄。用 -o <目錄> 或設定 FLEDGE_BACKUP_DIR。" >&2
+  exit 1
+fi
+
 # ── 備份清單（ADR-0004 的判定結果）───────────────────────────────────────────
 # 資產：使用者寫的東西、以及使用者選擇保留的工作歷史
 ASSET_DIRS=(skills commands scripts plugins projects file-history image-cache paste-cache jobs)
 ASSET_FILES=(CLAUDE.md settings.json settings.local.json .claude.json history.jsonl)
+
+# 需要萬用字元展開的資產。**不能直接塞進 ASSET_FILES**：下面三處用法（掃描的 -e 測試、
+# 未分類判定的字串相等、打包的複製）都是引號包住的字面比對，字面的 `settings.json.bak.*`
+# 三處都不會匹配——結果是既沒收到檔案、`?` 警示也沒消掉，比什麼都不做更糟。
+#
+# `settings.json.bak.<時間戳>` 是共通設置把 settings.json 換成 symlink 前，那份使用者
+# 手寫設定的唯一副本：丟了回不來，按 ADR-0004 的可再生性判準它是資產。
+ASSET_GLOBS=(settings.json.bak.*)
+
+# 對某個帳號目錄展開 ASSET_GLOBS，結果放進全域 matched 陣列。
+# 局部開 nullglob：零匹配時得到空陣列，而不是留下字面 pattern。掃描／複製／未分類判定
+# 三處共用同一份結果，避免「列出來了卻沒收進去」這種只在打開備份包時才會發現的失敗。
+expand_globs() {
+  local dir="$1" pat f
+  matched=()
+  for pat in "${ASSET_GLOBS[@]}"; do
+    while IFS= read -r -d '' f; do
+      matched+=("$(basename "${f}")")
+    done < <(cd "${dir}" 2>/dev/null && shopt -s nullglob && printf '%s\0' ${pat})
+  done
+}
 
 # 明確判定「不收」的。列在這裡不是為了跳過（不在 ASSET_* 就不會收），而是為了讓
 # 「出現了清單上沒有的新東西」能被偵測出來——Claude Code 加目錄時要有人重新判定。
@@ -43,9 +71,19 @@ KNOWN_SKIP=(
   daemon-auth-cooldown .last-cleanup .last-update-result.json .DS_Store .claude.json.backup
 )
 
-# 帳號目錄之外的資產。skill 真身可以放在 config_dir 外、再從 skills/ 用 symlink 指過去
-# （~/.agents/skills 就是這樣），只備 config_dir 會收到一條指向空氣的連結。
-EXTRA_PATHS=(~/.agents)
+# 帳號目錄之外的資產。清單放在共用檔而非寫死在這裡：sidecar 的 containment 防呆要讀
+# 同一份（它決定備份輸出目錄不得落在哪些目錄裡），各存一份就會漂移——只改 bash 的話，
+# 新來源會被打包但 containment 不知道它，使用者就能把備份設進那個來源裡。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+EXTRA_PATHS_FILE="${SCRIPT_DIR}/backup-extra-paths.txt"
+EXTRA_PATHS=()
+if [ -f "${EXTRA_PATHS_FILE}" ]; then
+  while IFS= read -r line || [ -n "${line}" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"     # 去前導空白
+    case "${line}" in ''|'#'*) continue ;; esac
+    EXTRA_PATHS+=("${line}")
+  done < "${EXTRA_PATHS_FILE}"
+fi
 
 expand_home() { case "$1" in "~/"*) echo "${HOME}/${1#\~/}" ;; "~") echo "${HOME}" ;; *) echo "$1" ;; esac; }
 
@@ -80,7 +118,8 @@ while IFS=$'\t' read -r key raw_dir; do
     continue
   fi
   plan_lines+=("  [${key}] ${dir}")
-  for item in "${ASSET_DIRS[@]}" "${ASSET_FILES[@]}"; do
+  expand_globs "${dir}"   # 掃描／未分類判定共用這一份展開結果
+  for item in "${ASSET_DIRS[@]}" "${ASSET_FILES[@]}" ${matched[@]+"${matched[@]}"}; do
     [ -e "${dir}/${item}" ] || continue
     kb=$(du -sk "${dir}/${item}" 2>/dev/null | cut -f1 || echo 0)
     total_kb=$((total_kb + kb))
@@ -102,7 +141,7 @@ while IFS=$'\t' read -r key raw_dir; do
             other=$(expand_home "${other_raw}")
             case "${target}" in "${other}"/*) covered=true ;; esac
           done <<< "${accounts}"
-          for extra in "${EXTRA_PATHS[@]}"; do
+          for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
             case "${target}" in "$(expand_home "${extra}")"*) covered=true ;; esac
           done
           [ "${covered}" = true ] || {
@@ -119,7 +158,7 @@ while IFS=$'\t' read -r key raw_dir; do
     [ -e "${path}" ] || continue
     name=$(basename "${path}")
     known=false
-    for k in "${ASSET_DIRS[@]}" "${ASSET_FILES[@]}" "${KNOWN_SKIP[@]}"; do
+    for k in "${ASSET_DIRS[@]}" "${ASSET_FILES[@]}" "${KNOWN_SKIP[@]}" ${matched[@]+"${matched[@]}"}; do
       [ "${name}" = "${k}" ] && { known=true; break; }
     done
     case "${name}" in *.tmp.*|*.backup.*) known=true ;; esac
@@ -130,7 +169,7 @@ while IFS=$'\t' read -r key raw_dir; do
   done
 done <<< "${accounts}"
 
-for extra in "${EXTRA_PATHS[@]}"; do
+for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   p=$(expand_home "${extra}")
   [ -e "${p}" ] || continue
   kb=$(du -sk "${p}" 2>/dev/null | cut -f1 || echo 0)
@@ -173,7 +212,8 @@ while IFS=$'\t' read -r key raw_dir; do
   dir=$(expand_home "${raw_dir}")
   [ -d "${dir}" ] || continue
   mkdir -p "${stage}/accounts/${key}"
-  for item in "${ASSET_DIRS[@]}" "${ASSET_FILES[@]}"; do
+  expand_globs "${dir}"   # 這是另一個迴圈，要重新展開；沿用掃描那輪的結果會拿到別的帳號的檔名
+  for item in "${ASSET_DIRS[@]}" "${ASSET_FILES[@]}" ${matched[@]+"${matched[@]}"}; do
     [ -e "${dir}/${item}" ] || continue
     # -R 遞迴且不跟隨 symlink（連結存連結本身）；-c 走 APFS clonefile，跨卷時自動退回一般複製
     cp -Rc "${dir}/${item}" "${stage}/accounts/${key}/" 2>/dev/null \
@@ -181,7 +221,7 @@ while IFS=$'\t' read -r key raw_dir; do
   done
 done <<< "${accounts}"
 
-for extra in "${EXTRA_PATHS[@]}"; do
+for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   p=$(expand_home "${extra}")
   [ -e "${p}" ] || continue
   mkdir -p "${stage}/extra"
@@ -191,8 +231,13 @@ done
 mkdir -p "${stage}/fledge"
 cp "${CONFIG_JSON}" "${stage}/fledge/config.json"
 
-extra_json=$(printf '%s\n' "${EXTRA_PATHS[@]}" | while read -r e; do
-  p=$(expand_home "${e}"); [ -e "${p}" ] && echo "$(basename "${p}")	${p}"
+# 用 `|| continue` 而不是 `[ -e ] && echo`：後者在「所有 EXTRA_PATHS 都不存在」時會讓
+# 迴圈以非零狀態結束，command substitution 跟著非零，`set -e` 就在**做完所有工作之後**
+# 把腳本殺掉。有 ~/.agents 的機器永遠踩不到，沒有的機器每次備份都在最後一刻失敗。
+extra_json=$(printf '%s\n' ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"} | while read -r e; do
+  p=$(expand_home "${e}")
+  [ -e "${p}" ] || continue
+  printf '%s\t%s\n' "$(basename "${p}")" "${p}"
 done)
 python3 - "${stage}/manifest.json" "${stamp}" "${extra_json}" <<'PY'
 import json, os, sys, platform
