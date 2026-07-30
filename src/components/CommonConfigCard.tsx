@@ -57,7 +57,7 @@ function pruneAuthorized(current: AuthMap, ops: CommonConfigOperation[] | undefi
 }
 
 // 狀態點與 chip 共用一組色調（demo 的視覺語彙：綠＝就緒、灰＝待辦、琥珀＝會動到既有東西）
-type Tone = "ok" | "todo" | "warn";
+export type Tone = "ok" | "todo" | "warn";
 
 interface Chip {
   key: string;
@@ -107,7 +107,9 @@ const ACTION_CHIP: Record<CommonConfigAction, Chip> = {
   backup_and_copy: { key: "cc.keep", tone: "warn" },
 };
 
-const OUTCOME_TONE: Record<CommonConfigOutcome, Tone> = {
+/** 逐項結果 → chip 色調。還原卡的斷鏈修復共用這一份：同一個 outcome 在兩張卡代表同一件事，
+ *  各留一份必然漂移（同一個 `failed` 在一邊是警示色、另一邊是中性色）。 */
+export const OUTCOME_TONE: Record<CommonConfigOutcome, Tone> = {
   created: "ok",
   relinked: "ok",
   copied: "ok",

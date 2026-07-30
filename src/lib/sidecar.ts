@@ -138,7 +138,7 @@ export async function scanPreview(
   return { path: data.path, count: data.count, status: data.status };
 }
 
-export type SessionKind = "claude" | "terminal" | "install" | "login" | "backup";
+export type SessionKind = "claude" | "terminal" | "install" | "login" | "backup" | "restore";
 
 export interface CreateSessionOptions {
   // 工作目錄兼歸屬標記。install 沒有所屬專案（後端固定跑在 home、只把它當 project_path 記錄），
@@ -149,6 +149,10 @@ export interface CreateSessionOptions {
   installId?: string;                   // kind=install 必填；後端據此查 TOOL_SPECS 取命令
   loginTarget?: "claude" | "codex";     // kind=login 用
   backupMode?: "list" | "run";          // kind=backup 必填；後端據此決定跑不跑 --list
+  /** kind=restore 必填。**是備份包名不是路徑**——後端拿它過 `list_bundles` 的 allowlist
+   *  才變成路徑（沿用 install 只送 `install_id` 的不變式）。 */
+  restoreBundle?: string;
+  restoreDest?: string;                 // kind=restore 選填；未給＝後端算的預設展開位置
 }
 
 /** 建立 session 失敗。`code` 是後端的英文判別碼（400 才有），呼叫端據此映射 i18n 字串。
@@ -173,7 +177,8 @@ async function readErrorCode(resp: Response): Promise<string | null> {
 }
 
 export async function createSession(port: number, opts: CreateSessionOptions): Promise<string> {
-  const { path, account, kind = "claude", installId, loginTarget, backupMode } = opts;
+  const { path, account, kind = "claude", installId, loginTarget, backupMode,
+          restoreBundle, restoreDest } = opts;
   // 安全不變式（spec §5）：body 只放 allowlist key（install_id），永遠不含命令字串。
   // 未給的欄位一律不放進 body——後端 extra="forbid" 只擋未知欄位，但少送等於用後端預設，
   // 也讓「安裝不帶 account」這件事在 wire 上看得出來。
@@ -182,6 +187,8 @@ export async function createSession(port: number, opts: CreateSessionOptions): P
   if (installId !== undefined) body.install_id = installId;
   if (loginTarget !== undefined) body.login_target = loginTarget;
   if (backupMode !== undefined) body.backup_mode = backupMode;
+  if (restoreBundle !== undefined) body.restore_bundle = restoreBundle;
+  if (restoreDest !== undefined) body.restore_dest = restoreDest;
 
   const resp = await fetch(`${base(port)}/api/sessions`, {
     method: "POST",
@@ -262,6 +269,14 @@ export const COMMON_CONFIG_ENTRIES = [
   "commands", "plugins", "skills", "settings.json", "CLAUDE.md",
 ] as const;
 
+/** 修復斷鏈時要送的 entry 清單＝上面那份**再加上 `projects`**。
+ *
+ *  `projects` 是共通設置的進階項（預設不勾，所以不在 `COMMON_CONFIG_ENTRIES` 裡），但它在
+ *  後端 `ENTRY_SPECS` 內。移機後現況已存在的 `projects` 連結同樣是斷鏈，不送它就永遠修不回來
+ *  ——這正是後端把 `projects` 收進 allowlist 的理由。修復只重建斷鏈、不建立新連結，所以
+ *  多送它不會替沒用過這個進階項的使用者無中生有。 */
+export const RESTORE_REPAIR_ENTRIES = [...COMMON_CONFIG_ENTRIES, "projects"] as const;
+
 // 後端 common_config.py 的三組 enum。以 union 而非 string 承接，讓「後端新增一種狀態」
 // 在前端的映射表上編譯失敗，而不是靜默掉到某個 fallback 文案。
 export type CommonConfigState =
@@ -339,6 +354,19 @@ export async function commonConfigApply(
   };
   const data = await setupPost<{ results: CommonConfigOpResult[] }>(
     port, "/api/setup/common-config/apply", body,
+  );
+  return data.results;
+}
+
+/** 修復共通設置的斷鏈（票 08 的 `repair`，還原後使用）。**沒有 `overwrite` 參數**——
+ *  repair 從不做破壞既有內容的動作（只重建目標不存在的連結），後端連那個欄位都不收。 */
+export async function commonConfigRepair(
+  port: number,
+  req: CommonConfigRequest,
+): Promise<CommonConfigOpResult[]> {
+  const data = await setupPost<{ results: CommonConfigOpResult[] }>(
+    port, "/api/setup/common-config/repair",
+    { source: req.source, targets: req.targets, entries: [...req.entries] },
   );
   return data.results;
 }
@@ -540,6 +568,8 @@ export interface BackupStatus {
    *  不是後端 `check_backup_dir()` 的回傳值之一 */
   containment: "ok" | "inside_source" | "is_home" | "is_root" | "invalid";
   script_available: boolean;
+  /** 還原腳本是另一個檔案：打包漏收它時「備份可用、還原不可用」，所以旗標分開 */
+  restore_script_available: boolean;
   python3_available: boolean;
   bundles: BackupBundle[];              // 倒序（新到舊）
   last_backup_ts: number | null;        // 從未備份為 null
@@ -576,6 +606,44 @@ export async function putBackupDir(
     body: JSON.stringify({ path }),
   });
   if (!resp.ok) throw new BackupError(await readErrorCode(resp), resp.status);
+  return resp.json();
+}
+
+// --- 還原（安全權威在後端 backup/restore.py；本層只轉送名字與位置）---
+
+/** 展開位置的判定。以 union 承接後端的 `DestVerdict`，讓「後端新增一種狀態」在前端的
+ *  映射表上編譯失敗，而不是靜默掉到某個 fallback 文案。 */
+export type RestoreDestStatus =
+  | "ok" | "is_root" | "is_home" | "inside_source" | "not_empty" | "not_dir" | "denied";
+
+export interface RestorePlan {
+  bundle: string;
+  dest: string;                  // 絕對路徑（未指定時是後端算的預設位置）
+  dest_status: RestoreDestStatus;
+}
+
+/** 還原端點的判別碼錯誤。理由同 `BackupError`：`code` 只放欄位、不進 message。 */
+export class RestoreError extends Error {
+  constructor(public readonly code: string | null, public readonly status: number) {
+    super(`restore request failed: ${status}`);
+    this.name = "RestoreError";
+  }
+}
+
+/** 唯讀預覽：這份備份包會解到哪裡、那個位置能不能用。不動檔案系統。 */
+export async function restorePlan(
+  port: number,
+  bundle: string,
+  dest?: string,
+): Promise<RestorePlan> {
+  const body: Record<string, unknown> = { bundle };
+  if (dest !== undefined) body.dest = dest;
+  const resp = await fetch(`${base(port)}/api/restore/plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
   return resp.json();
 }
 

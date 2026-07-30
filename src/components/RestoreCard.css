@@ -1,0 +1,148 @@
+/* 還原卡。容器與標頭沿用 Onboarding.css 的 b4-card 家族，這裡只放還原專屬的版面；
+   量測與命名比照相鄰的 BackupCard.css，兩張卡並排時不該有視覺落差。 */
+
+.rs-card {
+  margin-top: 10px;
+}
+
+.rs-label {
+  font-size: 11.5px;
+  color: var(--dim);
+  flex: 0 0 auto;
+}
+
+/* 阻斷態只有一句說明：能修的動作都在上面那張備份卡，這裡不重複放按鈕 */
+.rs-blocked-msg {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 10px 0 0;
+  color: var(--warning);
+}
+
+/* 備份包選擇 */
+.rs-bundles {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.rs-bundle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  padding: 3px 0;
+  cursor: pointer;
+}
+
+.rs-bundle input {
+  flex: 0 0 auto;
+  cursor: inherit;
+}
+
+.rs-bundle-time {
+  color: var(--text);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 大小靠右對齊成一欄；等寬數字讓不同長度的數值不會左右跳動 */
+.rs-bundle-size {
+  color: var(--dim);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 展開位置列：路徑吃掉剩餘寬度並在過長時省略，不讓一條深路徑把按鈕擠出卡片外 */
+.rs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.rs-path {
+  font-size: 11.5px;
+  color: var(--dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 7px;
+  flex: 1 1 auto;
+  min-width: 0;              /* flex 子項預設 min-width:auto，不設就不會縮、也不會省略 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rs-warn {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 6px 0 0;
+  color: var(--warning);
+}
+
+.rs-error {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 8px 0 0;
+  color: var(--error);
+}
+
+.rs-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.rs-hint {
+  margin: 8px 0 0;
+}
+
+/* 斷鏈修復區：與上方的展開流程用分隔線隔開——它是展開完成後的另一個動作，
+   而且是這張卡裡唯一會寫入現役目錄的東西 */
+.rs-links {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.rs-links-msg {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 6px 0 8px;
+  color: var(--dim);
+}
+
+.rs-links button {
+  margin-top: 8px;
+}
+
+.rs-results {
+  margin-top: 10px;
+}
+
+.rs-result {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.rs-result-name {
+  color: var(--text);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* chip 本體的樣式在 Onboarding.css 的 .b4-chip 家族（與共通設置卡共用），這裡只定位 */
+.rs-result .b4-chip {
+  flex: 0 0 auto;
+}
