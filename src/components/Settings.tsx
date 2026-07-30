@@ -6,9 +6,9 @@ import { pickDirectory } from "../lib/dialog";
 import { putKmsRoot, DEFAULT_ACCOUNT_KEY } from "../lib/sidecar";
 import { AccountsEditor } from "./AccountsEditor";
 import { BackupCard } from "./BackupCard";
-import { RestoreCard } from "./RestoreCard";
 import { DevEnvSection } from "./DevEnvSection";
 import { LangSwitch } from "./LangSwitch";
+import { RestoreCard } from "./RestoreCard";
 import { validateSubscriptions } from "../lib/subscriptionsForm";
 import "./Settings.css";
 

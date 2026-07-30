@@ -39,6 +39,14 @@ const CODE_KEY: Record<string, string> = {
   dest_denied: "dest.denied",
 };
 
+/** 與 `CommonConfigCard`／`DevEnvSection`／`LoginCard` 同一份形狀。維持各卡自宣告的既有
+ *  慣例（抽成共用型別要動三個已驗收的元件，與這張票的範圍不相稱），但欄位必須一致：
+ *  `label` 在 `AppConfigData.accounts` 裡是必填，宣告成選填等於自己引入一個新慣例。 */
+interface AccountInfo {
+  config_dir: string;
+  label: string;
+}
+
 type LinkScan =
   | { phase: "scanning" }
   | { phase: "done"; broken: number }
@@ -55,7 +63,7 @@ export function RestoreCard({
   accounts,
 }: {
   port: number | null;
-  accounts: Record<string, { config_dir: string; label?: string }>;
+  accounts: Record<string, AccountInfo>;
 }) {
   const { t } = useTranslation("restore");
   const [status, setStatus] = useState<BackupStatus | null>(null);
@@ -163,9 +171,17 @@ export function RestoreCard({
     }
   }, [port, accountsSig]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // **掛載就掃，不是等展開完成**（Codex 對抗式審查 finding 2）：還原只把備份包解到獨立的
+  // DEST，展開這個動作本身不可能讓現役目錄冒出斷鏈——斷鏈真正出現的時刻是使用者把設定
+  // 手動搬回現役目錄之後，而那一刻通常不在這張卡裡。綁在展開後只會讓它幾乎永遠說「沒有
+  // 斷鏈」。順帶化解另一件事：它不再依賴「這次展開成功了嗎」，而 PTY EOF 本來就不帶結束碼。
+  useEffect(() => {
+    void scanLinks();
+  }, [scanLinks]);
+
   const onSessionEnded = useCallback(() => {
     setFinished(true);
-    void scanLinks();   // 展開完成後才檢查斷鏈（票 09：修復是展開之後的可選一步）
+    void scanLinks();   // 跑完重測一次：使用者可能在展開途中動過現役目錄
   }, [scanLinks]);
 
   const onChooseDest = useCallback(async () => {
@@ -179,7 +195,6 @@ export function RestoreCard({
   const onRun = useCallback(async () => {
     if (selected === null || plan === null) return;
     setFinished(false);
-    setScan(null);
     setRepairResults(null);
     setRepairError(null);
     // 前端只送備份包**名字**與展開位置，永不送命令字串（沿用 kind=install 的 allowlist

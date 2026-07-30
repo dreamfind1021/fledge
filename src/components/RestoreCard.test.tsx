@@ -62,8 +62,8 @@ const OK: BackupStatus = {
 };
 
 const TWO_ACCOUNTS = {
-  work: { config_dir: "~/.claude" },
-  personal: { config_dir: "~/.claude-tc" },
+  work: { config_dir: "~/.claude", label: "工作" },
+  personal: { config_dir: "~/.claude-tc", label: "私人" },
 };
 
 function mockStatus(overrides: Partial<BackupStatus> = {}) {
@@ -177,27 +177,30 @@ describe("RestoreCard", () => {
     expect(screen.queryByText(/unknown_bundle/)).toBeNull();
   });
 
-  it("跑完才檢查斷鏈——沒有斷鏈時只回報，不給修復鍵", async () => {
+  it("掛載就檢查現役共通設置——不必先跑任何東西", async () => {
+    // 還原只把備份包解到獨立的 DEST，展開本身不可能讓現役目錄冒出斷鏈；斷鏈出現的時刻是
+    // 使用者把設定搬回現役目錄之後。綁在展開後只會讓它幾乎永遠說「沒有斷鏈」。
+    mockStatus();
+    render(<RestoreCard port={1} accounts={TWO_ACCOUNTS} />);
+    await screen.findByText(zh.links.none);
+    expect(commonConfigPlan).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: zh.links.repair })).toBeNull();
+  });
+
+  it("展開跑完會重測一次", async () => {
     mockStatus();
     render(<RestoreCard port={1} accounts={TWO_ACCOUNTS} />);
     await ready();
+    await waitFor(() => expect(commonConfigPlan).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole("button", { name: zh.run }));
-    await screen.findByTestId("terminal");
-    expect(commonConfigPlan).not.toHaveBeenCalled();   // 展開完成前不掃
-
-    fireEvent.click(screen.getByTestId("end-session"));
-    await screen.findByText(zh.links.none);
-    expect(screen.queryByRole("button", { name: zh.links.repair })).toBeNull();
+    fireEvent.click(await screen.findByTestId("end-session"));
+    await waitFor(() => expect(commonConfigPlan).toHaveBeenCalledTimes(2));
   });
 
   it("偵測到斷鏈時提供修復入口，且不自動執行", async () => {
     mockStatus();
     commonConfigPlan.mockResolvedValue(planOf("broken_link"));
     render(<RestoreCard port={1} accounts={TWO_ACCOUNTS} />);
-    await ready();
-    fireEvent.click(screen.getByRole("button", { name: zh.run }));
-    await screen.findByTestId("terminal");
-    fireEvent.click(screen.getByTestId("end-session"));
 
     await screen.findByRole("button", { name: zh.links.repair });
     // **不自動執行**：修復會改寫 symlink，是破壞性操作，要使用者明確按下去
@@ -212,10 +215,6 @@ describe("RestoreCard", () => {
       { account: "personal", entry: "skills", outcome: "skipped", backup_path: null, error: null },
     ]);
     render(<RestoreCard port={1} accounts={TWO_ACCOUNTS} />);
-    await ready();
-    fireEvent.click(screen.getByRole("button", { name: zh.run }));
-    await screen.findByTestId("terminal");
-    fireEvent.click(screen.getByTestId("end-session"));
     fireEvent.click(await screen.findByRole("button", { name: zh.links.repair }));
 
     await waitFor(() => expect(commonConfigRepair).toHaveBeenCalled());
@@ -231,13 +230,10 @@ describe("RestoreCard", () => {
 
   it("只有一個帳號時說沒有共通設置可查，不去問後端", async () => {
     mockStatus();
-    render(<RestoreCard port={1} accounts={{ work: { config_dir: "~/.claude" } }} />);
-    await ready();
-    fireEvent.click(screen.getByRole("button", { name: zh.run }));
-    await screen.findByTestId("terminal");
-    fireEvent.click(screen.getByTestId("end-session"));
+    render(<RestoreCard port={1} accounts={{ work: { config_dir: "~/.claude", label: "" } }} />);
 
     await screen.findByText(zh.links.notApplicable);
     expect(commonConfigPlan).not.toHaveBeenCalled();
   });
+
 });

@@ -23,10 +23,10 @@
     "denied": "Fledge cannot read that folder."
   },
   "links": {
-    "title": "Shared setup links",
+    "title": "Shared setup check (your live directories)",
     "scanning": "Checking…",
-    "none": "No broken links — the shared setup points at this machine.",
-    "found": "{{count}} shared setup link(s) point at a path that no longer exists. This is expected after moving machines: backups store the links themselves, not the files they point at.",
+    "none": "No broken links — your live shared setup points at this machine.",
+    "found": "{{count}} link(s) in your live shared setup point at a path that no longer exists. This checks your current directories, not the backup you just unpacked — it happens once you move an old machine's setup back into place: a backup stores the links themselves, not the files they point at.",
     "repair": "Repoint them to this machine",
     "repairing": "Repointing…",
     "notApplicable": "Only one account is registered, so there is no shared setup to check."
