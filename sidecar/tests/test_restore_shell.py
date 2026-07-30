@@ -1,0 +1,245 @@
+"""`scripts/restore-claude.sh` 的行為契約。
+
+一律用假的 HOME 與自己造的備份包——**絕不碰真實的 Claude 目錄，也不對真實備份目錄寫入**
+（票 09 的硬性要求）。還原的核心不變式是「不寫任何現役目錄」，測試自己也守同一條線：
+所有路徑都在 tmp_path 底下，連「現役目錄」都是造出來的。
+"""
+import json
+import os
+import subprocess
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+SCRIPT = REPO / "scripts" / "restore-claude.sh"
+BACKUP_SCRIPT = REPO / "scripts" / "backup-claude.sh"
+
+
+def _fake_home(tmp_path: Path) -> tuple[Path, Path]:
+    """假 HOME：一個帳號目錄（＝待比對的「現役目錄」）+ 一份 Fledge config。"""
+    home = tmp_path / "home"
+    config_dir = home / ".claude"
+    (config_dir / "skills").mkdir(parents=True)
+    (config_dir / "skills" / "demo.md").write_text("live", encoding="utf-8")
+    (config_dir / "settings.json").write_text("{}", encoding="utf-8")
+    fledge = home / ".fledge"
+    fledge.mkdir()
+    (fledge / "config.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "roots": [],
+                "accounts": {"default": {"config_dir": str(config_dir), "label": ""}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return home, config_dir
+
+
+def _make_bundle(tmp_path: Path, home: Path) -> Path:
+    """用**真正的備份腳本**產一份備份包。手工造 tar 只能證明「restore 讀得懂我造的東西」，
+    跑真的產生端才連兩支腳本的相容性（`accounts/<key>/` 佈局、manifest 欄位）一起鎖住。"""
+    out = tmp_path / "bundles"
+    env = {**os.environ, "HOME": str(home)}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    proc = subprocess.run(
+        ["/bin/bash", str(BACKUP_SCRIPT), "-o", str(out)],
+        capture_output=True, text=True, env=env, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    return bundle
+
+
+def _run(args: list[str], home: Path, extra_env: dict | None = None):
+    env = {**os.environ, "HOME": str(home)}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    env.update(extra_env or {})
+    return subprocess.run(
+        ["/bin/bash", str(SCRIPT), *args],
+        capture_output=True, text=True, env=env, timeout=120,
+    )
+
+
+def _snapshot(root: Path) -> dict[str, bytes | str]:
+    """現役目錄的內容快照，用來證明還原沒寫進去。"""
+    out: dict[str, bytes | str] = {}
+    for p in sorted(root.rglob("*")):
+        rel = str(p.relative_to(root))
+        if p.is_symlink():
+            out[rel] = f"link:{os.readlink(p)}"
+        elif p.is_file():
+            out[rel] = p.read_bytes()
+        else:
+            out[rel] = "dir"
+    return out
+
+
+def _fake_bin(tmp_path: Path, name: str, body: str) -> Path:
+    d = tmp_path / "fakebin"
+    d.mkdir(exist_ok=True)
+    f = d / name
+    f.write_text(body, encoding="utf-8")
+    f.chmod(0o755)
+    return d
+
+
+# ── 備份包來源必須明確 ────────────────────────────────────────────────────────
+
+
+def test_no_personal_path_left_in_script():
+    """公開 repo 不能留開發者的個人路徑（原本第 19 行寫死了一個備份目錄）。"""
+    assert "/Users/tc" not in SCRIPT.read_text(encoding="utf-8")
+
+
+def test_fails_without_bundle_or_backup_dir(tmp_path: Path):
+    """既沒給備份包、也沒給 FLEDGE_BACKUP_DIR → 明確報錯。
+
+    移除硬編碼預設值後不能默默去某個對這台機器以外沒有意義的路徑找包；`backup-claude.sh`
+    的輸出目錄早已改成必填，兩支腳本要一致。"""
+    home, _ = _fake_home(tmp_path)
+    proc = _run([], home)
+    assert proc.returncode != 0
+    assert proc.stderr.strip() != ""
+
+
+def test_picks_newest_bundle_from_env_dir(tmp_path: Path):
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    dest = tmp_path / "restored"
+    proc = _run(["-o", str(dest)], home,
+                extra_env={"FLEDGE_BACKUP_DIR": str(bundle.parent)})
+    assert proc.returncode == 0, proc.stderr
+    assert (dest / "manifest.json").is_file()
+
+
+# ── 展開的原子性（驗收 #4）────────────────────────────────────────────────────
+
+
+def _dying_tar(tmp_path: Path) -> Path:
+    """假的 tar：**先在解壓目標裡寫東西再失敗**——模擬壞包／磁碟滿／被中斷這種「已經開始
+    解才死」的情境。直接 exit 1 的假 tar 不會產生任何檔案，那樣測到的是假綠：它證明不了
+    原子性，只證明了「沒寫就沒有殘骸」。`tar xzf <包> -C <目錄>` → $4 是目標目錄。"""
+    return _fake_bin(
+        tmp_path, "tar",
+        '#!/bin/sh\ncase "$1" in *x*) mkdir -p "$4" 2>/dev/null;'
+        ' echo garbage > "$4/half-extracted" ;; esac\nexit 1\n',
+    )
+
+
+def test_dest_is_not_created_when_extraction_fails(tmp_path: Path):
+    """解壓失敗時 DEST 必須根本不存在——留一棵解到一半的樹，使用者會拿它當還原結果，
+    而它缺的正是他要找的那些檔案。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    dest = tmp_path / "restored"
+    proc = _run([str(bundle), "-o", str(dest)], home,
+                extra_env={"PATH": f"{_dying_tar(tmp_path)}:{os.environ['PATH']}"})
+    assert proc.returncode != 0
+    assert not dest.exists()
+
+
+def test_no_staging_residue_when_extraction_fails(tmp_path: Path):
+    """半套目錄也不能留在 DEST 旁邊：每次失敗都留一份會慢慢吃掉磁碟。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    dest = tmp_path / "sub" / "restored"
+    _run([str(bundle), "-o", str(dest)], home,
+         extra_env={"PATH": f"{_dying_tar(tmp_path)}:{os.environ['PATH']}"})
+    leftovers = [p.name for p in (tmp_path / "sub").iterdir()] if (tmp_path / "sub").exists() else []
+    assert leftovers == [], leftovers
+
+
+def test_bundle_without_manifest_is_rejected_and_leaves_nothing(tmp_path: Path):
+    """不完整的備份包（缺 manifest.json）要明確說明，且不留下半套目錄。
+
+    manifest 是差異報告的唯一依據；缺了它，比對根本無從進行——與其解出一棵沒用的樹再
+    報錯，不如在發布前就擋下。"""
+    home, _ = _fake_home(tmp_path)
+    junk = tmp_path / "junk"
+    (junk / "accounts" / "default").mkdir(parents=True)
+    (junk / "accounts" / "default" / "x.md").write_text("x", encoding="utf-8")
+    bundle = tmp_path / "claude-backup-20260101-1200.tar.gz"
+    subprocess.run(["tar", "czf", str(bundle), "-C", str(junk), "."], check=True, timeout=60)
+
+    dest = tmp_path / "restored"
+    proc = _run([str(bundle), "-o", str(dest)], home)
+    assert proc.returncode != 0
+    assert "manifest" in (proc.stderr + proc.stdout)
+    assert not dest.exists()
+
+
+def test_refuses_non_empty_dest_without_touching_it(tmp_path: Path):
+    """展開目標非空一律拒絕——絕不往既有內容上疊。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    dest = tmp_path / "restored"
+    dest.mkdir()
+    (dest / "mine.txt").write_text("MINE", encoding="utf-8")
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+    assert proc.returncode != 0
+    assert (dest / "mine.txt").read_text(encoding="utf-8") == "MINE"
+    assert list(dest.iterdir()) == [dest / "mine.txt"]
+
+
+def test_empty_existing_dest_is_usable(tmp_path: Path):
+    """使用者用系統選擇器挑位置時，挑到的必然是**已存在**的目錄；空的就該能用，
+    否則整個「選一個位置」的動作在 GUI 裡不可能成功。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    dest = tmp_path / "restored"
+    dest.mkdir()
+    proc = _run([str(bundle), "-o", str(dest)], home)
+    assert proc.returncode == 0, proc.stderr
+    assert (dest / "manifest.json").is_file()
+
+
+# ── 展開 + 差異報告（驗收 #1／#2）────────────────────────────────────────────
+
+
+def test_extracts_and_reports_three_kinds_of_difference(tmp_path: Path):
+    home, live = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    # 備份之後動現役目錄，造出三類差異各一
+    (live / "skills" / "demo.md").write_text("changed after backup", encoding="utf-8")
+    (live / "skills" / "added-later.md").write_text("new", encoding="utf-8")
+    (live / "settings.json").unlink()
+
+    dest = tmp_path / "restored"
+    proc = _run([str(bundle), "-o", str(dest)], home)
+    assert proc.returncode == 0, proc.stderr
+
+    assert (dest / "accounts" / "default" / "skills" / "demo.md").is_file()
+    out = proc.stdout
+    assert "只在備份裡有" in out          # settings.json 被刪掉了
+    assert "只在現役有" in out            # added-later.md
+    assert "兩邊都有但不同" in out        # demo.md 大小變了
+    assert "settings.json" in out
+
+
+def test_live_directory_is_never_written(tmp_path: Path):
+    """驗收 #1／#6：現役目錄完全未被寫入。內容快照逐項比對，不只看「還在不在」。"""
+    home, live = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    (live / "skills" / "demo.md").write_text("changed after backup", encoding="utf-8")
+    before = _snapshot(live)
+
+    proc = _run([str(bundle), "-o", str(tmp_path / "restored")], home)
+    assert proc.returncode == 0, proc.stderr
+    assert _snapshot(live) == before
+
+
+def test_diff_only_reuses_an_existing_extraction(tmp_path: Path):
+    """--diff-only 不重解：大包重解一次要十幾秒，而使用者常常只是想再看一次差異。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    dest = tmp_path / "restored"
+    assert _run([str(bundle), "-o", str(dest)], home).returncode == 0
+    marker = dest / "accounts" / "default" / "skills" / "demo.md"
+    marker.write_text("touched", encoding="utf-8")   # 重解的話這個記號會被蓋掉
+
+    proc = _run(["--diff-only", "-o", str(dest)], home)
+    assert proc.returncode == 0, proc.stderr
+    assert marker.read_text(encoding="utf-8") == "touched"
+    assert "兩邊都有但不同" in proc.stdout

@@ -49,15 +49,16 @@ VERIFY_ARGS=(--staged-root "$STAGE" --manifest "$STAGE/artifact-manifest.json")
 .venv/bin/python ../scripts/verify_templates_artifact.py "${VERIFY_ARGS[@]}"
 
 # onedir（取代 onefile）
-# 備份腳本與它的來源清單檔：兩者**必須落在同一個目的地資料夾**（backup/script.py 的
+# 備份／還原腳本與共用來源清單檔：三者**必須落在同一個目的地資料夾**（backup/script.py 的
 # scripts_root 與 containment.load_extra_paths 都由此取檔），漏收任一個都會讓打包版的
-# 備份卡永遠停用，而 dev 環境完全看不出來。
+# 備份卡永遠停用（或還原按下去就失敗），而 dev 環境完全看不出來。
 # 注意：`.spec` 是本命令產生的**產物**（--clean --noconfirm 每次重寫），改它沒有用——
 # 打包的真實輸入是這裡的 --add-data。
 pyinstaller --onedir --name fledge-sidecar --clean --noconfirm \
   --add-data "build/templates:templates" \
   --add-data "../scripts/backup-claude.sh:scripts" \
   --add-data "../scripts/backup-extra-paths.txt:scripts" \
+  --add-data "../scripts/restore-claude.sh:scripts" \
   fledge_sidecar/__main__.py
 
 # nested ad-hoc 簽章：-depth 深度優先；file 探測真 Mach-O，避免亂簽 script。

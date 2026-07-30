@@ -3,6 +3,7 @@ from pathlib import Path
 
 from fledge_sidecar.backup.containment import EXTRA_PATHS_FILENAME, extra_paths_file
 from fledge_sidecar.backup.script import (
+    RESTORE_SCRIPT_FILENAME,
     SCRIPT_FILENAME,
     backup_script_path,
     build_argv,
@@ -139,5 +140,7 @@ def test_build_script_bundles_script_and_extra_paths():
     結果是一條永遠綠、卻證明不了任何事的測試。"""
     build = Path(__file__).resolve().parents[1] / "build_binary.sh"
     body = build.read_text(encoding="utf-8")
-    for filename in (SCRIPT_FILENAME, EXTRA_PATHS_FILENAME):
+    # 還原腳本一併鎖住：漏收它的話打包版按下還原會直接失敗，而 dev 環境（讀 repo 的
+    # scripts/）完全看不出來——與備份腳本是同一種只在打包版現形的失效。
+    for filename in (SCRIPT_FILENAME, EXTRA_PATHS_FILENAME, RESTORE_SCRIPT_FILENAME):
         assert f"--add-data \"../scripts/{filename}:scripts\"" in body, filename

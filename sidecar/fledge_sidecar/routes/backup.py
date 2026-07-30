@@ -13,7 +13,12 @@ from fastapi import APIRouter
 from fledge_sidecar.app_config import AppConfig
 from fledge_sidecar.backup import bundles as bundles_mod
 from fledge_sidecar.backup.containment import check_backup_dir, source_roots
-from fledge_sidecar.backup.script import python3_available, script_available, scripts_root
+from fledge_sidecar.backup.script import (
+    python3_available,
+    restore_script_available,
+    script_available,
+    scripts_root,
+)
 from fledge_sidecar.paths import expand_and_validate, probe_dir
 
 router = APIRouter()
@@ -31,6 +36,8 @@ def backup_status() -> dict:
         # 環境前提與 backup_dir 無關，未設定位置時也要如實回報——否則使用者選完位置
         # 才第一次得知「這台機器根本跑不了備份」。
         "script_available": script_available(),
+        # 還原腳本是另一個檔案：打包漏收它時「備份可用、還原不可用」，旗標必須分開才說得清
+        "restore_script_available": restore_script_available(),
         "python3_available": python3_available(),
         "bundles": [],
         "last_backup_ts": None,

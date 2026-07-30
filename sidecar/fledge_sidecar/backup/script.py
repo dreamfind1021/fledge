@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 SCRIPT_FILENAME = "backup-claude.sh"
+RESTORE_SCRIPT_FILENAME = "restore-claude.sh"
 
 # python3 探測的執行上限（秒）。比照 setup/env_detect.py 的 _VERSION_TIMEOUT：
 # status route 每次都會探，不能讓它卡住整張卡片。
@@ -38,6 +39,14 @@ def backup_script_path() -> str:
 
 def script_available() -> bool:
     return os.path.isfile(backup_script_path())
+
+
+def restore_script_path() -> str:
+    return os.path.join(scripts_root(), RESTORE_SCRIPT_FILENAME)
+
+
+def restore_script_available() -> bool:
+    return os.path.isfile(restore_script_path())
 
 
 def build_argv(backup_dir_abs: str, mode: str) -> list[str]:

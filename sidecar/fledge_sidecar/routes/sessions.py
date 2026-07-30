@@ -16,10 +16,12 @@ from pydantic import BaseModel, ConfigDict
 
 from fledge_sidecar.app_config import AppConfig
 from fledge_sidecar.auth import require_ws_token
+from fledge_sidecar.backup import restore
 from fledge_sidecar.backup.containment import check_backup_dir, source_roots
 from fledge_sidecar.backup.script import (
     build_argv,
     python3_available,
+    restore_script_available,
     script_available,
     scripts_root,
 )
@@ -62,10 +64,12 @@ class CreateSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")  # 未知欄位（如注入 "command"）→ 422
     path: str
     account: str = ""  # install kind 不需帳號；其餘 kind 會驗證
-    kind: Literal["claude", "terminal", "install", "login", "backup"] = "claude"
+    kind: Literal["claude", "terminal", "install", "login", "backup", "restore"] = "claude"
     install_id: str | None = None   # kind=install 必填
     login_target: Literal["claude", "codex"] = "claude"  # kind=login 用
     backup_mode: Literal["list", "run"] | None = None    # kind=backup 必填
+    restore_bundle: str | None = None   # kind=restore 必填（**備份包名，不是路徑**）
+    restore_dest: str | None = None     # kind=restore 選填，未給＝後端算的預設展開位置
 
 
 class ResizeRequest(BaseModel):
@@ -139,6 +143,29 @@ def _backup_blocked(config: AppConfig) -> str | None:
     return None
 
 
+def _restore_blocked(config: AppConfig, bundle: str, dest: str | None) -> str | None:
+    """kind=restore 的 spawn 前閘。同 `_backup_blocked`：**route 才是安全邊界，不是 UI**。
+
+    順序即優先序，與還原卡顯示阻斷原因的順序一致：備份目錄（沒有它就沒有備份包可選）→
+    環境前提 → 備份包 → 展開位置。`dest_*` 的判別碼與 `check_dest` 的 verdict 同名，
+    前端以顯式表映射（動態組 i18n key 會讓沒見過的狀態變成畫面上的 key 原文）。"""
+    try:
+        backup_dir = restore.resolve_backup_dir(config)
+    except ValueError as exc:
+        return str(exc)
+    if not restore_script_available():
+        return "restore_script_missing"
+    if not python3_available():
+        return "python3_missing"
+    try:
+        restore.bundle_path(backup_dir, bundle)      # allowlist：名字不在清單內就擋
+        dest_abs = restore.resolve_dest(dest, bundle)
+    except ValueError as exc:
+        return str(exc)
+    verdict = restore.check_dest(dest_abs, source_roots(config, scripts_root()))
+    return None if verdict == "ok" else f"dest_{verdict}"
+
+
 def _unattributed_session(command: list[str], project_path: str) -> dict:
     """開一個不綁帳號的 session（安裝、codex 登入）：跑在 home、不注入帳號 env 且主動剔除
     `CLAUDE_CONFIG_DIR`（即便 sidecar 自身環境有），不進活動歸屬。
@@ -177,6 +204,24 @@ def create_session(req: CreateSessionRequest):
         # backup_mode，永不送命令字串也不送路徑（沿用 kind=install 的 allowlist 不變式）。
         abs_dir = expand_and_validate(config.backup_dir.strip())
         return _unattributed_session(build_argv(abs_dir, req.backup_mode), req.path)
+
+    # --- kind=restore：同 backup 的系統層工作。**展開的是備份包、寫的是獨立的新位置，
+    #     這條路沒有任何寫入現役目錄的能力**（票 09 驗收 #6）。修復共通設置斷鏈是另一條
+    #     路（POST /api/setup/common-config/repair），要使用者明確按下去。---
+    if req.kind == "restore":
+        if not (req.restore_bundle or "").strip():
+            return JSONResponse(status_code=400, content={"error": "restore_bundle_required"})
+        blocked = _restore_blocked(config, req.restore_bundle, req.restore_dest)
+        if blocked is not None:
+            return JSONResponse(status_code=400, content={"error": blocked})
+        # argv 由後端組：前端只送**備份包名**與展開位置，備份包名還要過 list_bundles 的
+        # allowlist 才變成路徑（沿用 kind=install 只送 install_id 的不變式）。
+        backup_dir = restore.resolve_backup_dir(config)
+        argv = restore.build_restore_argv(
+            restore.bundle_path(backup_dir, req.restore_bundle),
+            restore.resolve_dest(req.restore_dest, req.restore_bundle),
+        )
+        return _unattributed_session(argv, req.path)
 
     # --- codex 登入是全域的（不分帳號，B-1 收尾票已確認）→ 與 install 同樣不綁帳號 ---
     if req.kind == "login" and req.login_target == "codex":

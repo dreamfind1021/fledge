@@ -370,3 +370,95 @@ def test_templates_map_probe_failures_to_a_code(tmp_path: Path, monkeypatch):
         r = client.post(path, json={"template": "project-starter", "destination": str(dest)})
         assert r.status_code == 500, path
         assert r.json()["error"] == "probe_failed", path
+
+
+# ── 共通設置的斷鏈修復（票 08 的 repair，票 09 的還原卡從這裡進入）────────────
+
+
+def _broken_link(tgt: Path, name: str = "commands") -> Path:
+    """target 帳號裡一條指向「舊機器路徑」的斷鏈。那個路徑刻意不建立。"""
+    link = tgt / name
+    link.symlink_to(tgt.parent / "old-home" / ".claude" / name)
+    return link
+
+
+def test_common_config_repair_relinks_broken_links(tmp_path: Path, monkeypatch):
+    src, tgt = _config_with_accounts(tmp_path, monkeypatch)
+    (src / "commands").mkdir()
+    (src / "commands" / "a.md").write_text("A", encoding="utf-8")
+    link = _broken_link(tgt)
+
+    body = TestClient(create_app()).post(
+        "/api/setup/common-config/repair",
+        json={"source": "work", "targets": ["personal"], "entries": ["commands"]},
+    ).json()
+
+    assert body["results"][0]["outcome"] == "relinked"
+    assert link.resolve() == (src / "commands").resolve()
+    assert (link / "a.md").read_text(encoding="utf-8") == "A"
+
+
+def test_common_config_repair_leaves_everything_else_alone(tmp_path: Path, monkeypatch):
+    """修復只碰斷鏈：實體檔要原封不動，且**不需要 overwrite 授權欄位**——repair 從不做
+    破壞既有內容的動作，所以端點連那個欄位都不收。"""
+    src, tgt = _config_with_accounts(tmp_path, monkeypatch)
+    (src / "commands").mkdir()
+    (tgt / "commands").mkdir()
+    (tgt / "commands" / "mine.md").write_text("MINE", encoding="utf-8")
+
+    r = TestClient(create_app()).post(
+        "/api/setup/common-config/repair",
+        json={"source": "work", "targets": ["personal"], "entries": ["commands"]},
+    )
+    assert r.json()["results"][0]["outcome"] == "skipped"
+    assert (tgt / "commands" / "mine.md").read_text(encoding="utf-8") == "MINE"
+    assert not (tgt / "commands").is_symlink()
+    assert not list(tgt.glob("*.fledge-backup-*"))
+
+
+def test_common_config_repair_rejects_overwrite_field(tmp_path: Path, monkeypatch):
+    _config_with_accounts(tmp_path, monkeypatch)
+    r = TestClient(create_app()).post(
+        "/api/setup/common-config/repair",
+        json={"source": "work", "targets": ["personal"], "entries": ["commands"],
+              "overwrite": [{"account": "personal", "entry": "commands"}]},
+    )
+    assert r.status_code == 422
+
+
+def test_common_config_repair_reports_unusable_source(tmp_path: Path, monkeypatch):
+    """source 帳號目錄不在時整批停手並回判別碼——不是逐項回「已跳過」，那看不出該修什麼。"""
+    src, tgt = _config_with_accounts(tmp_path, monkeypatch)
+    _broken_link(tgt)
+    src.rmdir()
+    r = TestClient(create_app()).post(
+        "/api/setup/common-config/repair",
+        json={"source": "work", "targets": ["personal"], "entries": ["commands"]},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"] == "source_dir_missing"
+
+
+def test_common_config_repair_requires_initialised_config(tmp_path: Path, monkeypatch):
+    """與 apply 同一道 readiness 閘：config.json 不存在時 AppConfig.load() 會 fallback 到
+    DEFAULT_CONFIG（default=~/.claude），修復是會寫檔的動作，不能對真實 home 目錄動手。"""
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(tmp_path / "nope.json"))
+    r = TestClient(create_app()).post(
+        "/api/setup/common-config/repair",
+        json={"source": "work", "targets": ["personal"], "entries": ["commands"]},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"] == "config_not_initialized"
+
+
+def test_common_config_repair_rejects_unknown_inputs(tmp_path: Path, monkeypatch):
+    _config_with_accounts(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    for payload, code in (
+        ({"source": "ghost", "targets": ["personal"], "entries": ["commands"]}, "unknown_account"),
+        ({"source": "work", "targets": ["personal"], "entries": ["evil"]}, "unknown_entry"),
+        ({"source": "work", "targets": ["work"], "entries": ["commands"]}, "source_in_targets"),
+    ):
+        r = client.post("/api/setup/common-config/repair", json=payload)
+        assert r.status_code == 400, payload
+        assert r.json()["error"] == code, payload

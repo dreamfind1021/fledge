@@ -7,16 +7,16 @@
 # 資料」的風險。
 #
 # 用法：
-#   scripts/restore-claude.sh                      # 用最新的備份包
-#   scripts/restore-claude.sh <備份包.tar.gz>      # 指定備份包
-#   scripts/restore-claude.sh -o <展開目錄> ...    # 指定展開位置
-#   scripts/restore-claude.sh --diff-only ...      # 只比差異，不展開（用既有的展開目錄）
+#   scripts/restore-claude.sh <備份包.tar.gz>        # 指定備份包
+#   scripts/restore-claude.sh -o <展開目錄> ...      # 指定展開位置
+#   scripts/restore-claude.sh --diff-only -o <目錄>  # 只比差異，不展開（用既有的展開目錄）
 #
-# 環境變數：FLEDGE_BACKUP_DIR 覆寫預設備份目錄。
+# 備份包來源：直接給 .tar.gz 路徑，或設 FLEDGE_BACKUP_DIR 用該目錄裡最新的一份。
+# 兩者都沒有就報錯——不預設任何路徑（寫死的預設值只對某一台機器有意義）。
 
 set -euo pipefail
 
-BACKUP_DIR="${FLEDGE_BACKUP_DIR:-/Users/tc/NAS/work/claude-backups}"
+BACKUP_DIR="${FLEDGE_BACKUP_DIR:-}"
 BUNDLE=""
 DEST=""
 DIFF_ONLY=false
@@ -25,16 +25,21 @@ while [ $# -gt 0 ]; do
   case "$1" in
     -o) DEST="$2"; shift 2 ;;
     --diff-only) DIFF_ONLY=true; shift ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) BUNDLE="$1"; shift ;;
   esac
 done
 
-if [ -z "${BUNDLE}" ]; then
+# --diff-only 不需要備份包（它讀既有展開目錄裡的 manifest），其餘情況都要。
+if [ -z "${BUNDLE}" ] && [ "${DIFF_ONLY}" = false ]; then
+  [ -n "${BACKUP_DIR}" ] || {
+    echo "未指定備份包。給一個 .tar.gz 路徑，或設定 FLEDGE_BACKUP_DIR。" >&2; exit 1; }
   BUNDLE=$(ls -1t "${BACKUP_DIR}"/claude-backup-*.tar.gz 2>/dev/null | head -1 || true)
   [ -n "${BUNDLE}" ] || { echo "在 ${BACKUP_DIR} 找不到任何備份包。" >&2; exit 1; }
 fi
-[ -f "${BUNDLE}" ] || { echo "找不到備份包：${BUNDLE}" >&2; exit 1; }
+if [ "${DIFF_ONLY}" = false ]; then
+  [ -f "${BUNDLE}" ] || { echo "找不到備份包：${BUNDLE}" >&2; exit 1; }
+fi
 
 DEST="${DEST:-${HOME}/.claude-restore-$(basename "${BUNDLE}" .tar.gz | sed 's/^claude-backup-//')}"
 
@@ -48,9 +53,37 @@ if [ "${DIFF_ONLY}" = false ]; then
     echo "換一個位置：$0 -o <別的目錄> ${BUNDLE}" >&2
     exit 1
   fi
-  mkdir -p "${DEST}"
+  parent="$(dirname "${DEST}")"
+  mkdir -p "${parent}"
+
+  # **先解到 staging，驗過才整棵改名成 DEST。** tar 中途失敗（壞包、磁碟滿、被中斷）時
+  # DEST 必須根本不存在——留一棵解到一半的樹，使用者會拿它當還原結果，而它缺的正是他要
+  # 找的那些檔案。staging 名含 PID 與隨機段（同一分鐘的兩次還原不共用）、放在 DEST 的
+  # 父目錄以確保同一個檔案系統（跨卷 mv 不是原子的）。
+  staging="${parent}/.$(basename "${DEST}").fledge-restore-$$-${RANDOM}.partial"
+  cleanup() {
+    # 只刪自己這一輪 mkdir 出來的那一個目錄。**不做超齡回收**：staging 在使用者挑的位置
+    # 旁邊（常是家目錄），為了清殘骸而在那裡遞迴刪除，風險與收益不成比例。
+    [ -n "${staging:-}" ] && [ -d "${staging}" ] && rm -rf "${staging}"
+    return 0   # trap 的回傳值會變成腳本的結束碼；上面任一 [ ] 為假都會讓成功的還原回非零
+  }
+  trap cleanup EXIT
+  mkdir -p "${staging}"
+
   echo "展開 $(basename "${BUNDLE}") → ${DEST}"
-  tar xzf "${BUNDLE}" -C "${DEST}"
+  tar xzf "${BUNDLE}" -C "${staging}"
+
+  # 備份包必須自帶 manifest.json：它是差異報告的唯一依據，缺了它比對無從進行。
+  # 在**發布前**檢查，不完整的包因此不會留下任何半套目錄。
+  [ -f "${staging}/manifest.json" ] || {
+    echo "這不是一份完整的備份包（缺 manifest.json）：${BUNDLE}" >&2; exit 1; }
+
+  # DEST 已存在但為空（使用者用系統選擇器挑的位置必然已存在）時，mv 會把 staging 塞進
+  # 它底下變成 DEST/<staging名>。先 rmdir 掉——只有真的空才會成功，非空在上面已擋掉。
+  if [ -d "${DEST}" ]; then
+    rmdir "${DEST}"
+  fi
+  mv "${staging}" "${DEST}"
 fi
 
 MANIFEST="${DEST}/manifest.json"
