@@ -147,7 +147,13 @@ if [ "${DIFF_ONLY}" = false ]; then
   mkdir -p "${staging}"
 
   echo "展開 $(basename "${BUNDLE}") → ${DEST}"
-  tar xzf "${BUNDLE}" -C "${staging}"
+  # tar 自己的錯誤（`gzip: stdin: unexpected end of file` 之類）留著給人看，但要在後面補一句
+  # 說得出「這代表什麼」的話——驗收要的是「明確說明」，而系統原文只說了「解壓失敗」。
+  if ! tar xzf "${BUNDLE}" -C "${staging}"; then
+    echo "備份包解不開，多半是它本身損壞（傳輸中斷、儲存媒介出錯）：${BUNDLE}" >&2
+    echo "換一份備份包再試；上面那行是 tar 的原始錯誤。" >&2
+    exit 1
+  fi
 
   # 備份包必須自帶 manifest.json：它是差異報告的唯一依據，缺了它比對無從進行。
   # 在**發布前**檢查，不完整的包因此不會留下任何半套目錄。

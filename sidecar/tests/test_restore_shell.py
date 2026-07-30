@@ -137,6 +137,8 @@ def test_dest_is_not_created_when_extraction_fails(tmp_path: Path):
                 extra_env={"PATH": f"{_dying_tar(tmp_path)}:{os.environ['PATH']}"})
     assert proc.returncode != 0
     assert not dest.exists()
+    # 驗收 #4 要的是「明確說明」：tar 的原文只說解壓失敗，說不出那代表備份包壞了
+    assert "損壞" in proc.stderr
 
 
 def test_no_staging_residue_when_extraction_fails(tmp_path: Path):
