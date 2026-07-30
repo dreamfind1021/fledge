@@ -3,26 +3,43 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/backup.json";
-import { BackupError, type BackupStatus } from "../lib/sidecar";
+import {
+  BackupError,
+  SessionError,
+  type BackupStatus,
+  type CreateSessionOptions,
+} from "../lib/sidecar";
 import { BackupCard } from "./BackupCard";
 
 // mock 樣板照既有的 CommonConfigCard.test.tsx：importOriginal 保留其他匯出，只替換要控的幾支
 const fetchBackupStatus = vi.fn<(port: number) => Promise<BackupStatus>>();
 const putBackupDir = vi.fn<(port: number, path: string) => Promise<unknown>>();
 const pickDirectory = vi.fn<() => Promise<string | null>>();
+const createSession = vi.fn<(port: number, opts: CreateSessionOptions) => Promise<string>>();
+const closeSession = vi.fn<(port: number, id: string) => Promise<void>>();
 
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   fetchBackupStatus: (port: number) => fetchBackupStatus(port),
   putBackupDir: (port: number, path: string) => putBackupDir(port, path),
+  createSession: (port: number, opts: CreateSessionOptions) => createSession(port, opts),
+  closeSession: (port: number, id: string) => closeSession(port, id),
 }));
 vi.mock("../lib/dialog", () => ({ pickDirectory: () => pickDirectory() }));
+// xterm 進 jsdom 會炸（canvas/WebGL）；本卡只需驗「終端機有沒有被掛上、掛在哪個 session」
+vi.mock("./Terminal", () => ({
+  Terminal: ({ sessionId, tabId }: { sessionId: string; tabId: string }) => (
+    <div data-testid="terminal" data-session={sessionId} data-tab={tabId} />
+  ),
+}));
 
 const OK: BackupStatus = {
   configured: true,
   backup_dir: "/out/backups",
   dir_status: "dir",
   containment: "ok",
+  script_available: true,
+  python3_available: true,
   bundles: [
     { name: "claude-backup-20260727-1432.tar.gz", created_ts: 1785220320, size_bytes: 168820736 },
   ],
@@ -38,6 +55,8 @@ beforeEach(async () => {
   await i18n.changeLanguage("zh-TW");   // 固定語言，斷言才對得上 catalog
   vi.clearAllMocks();
   putBackupDir.mockResolvedValue({ ok: true, backup_dir: "/picked" });
+  createSession.mockResolvedValue("session-1");
+  closeSession.mockResolvedValue(undefined);
 });
 afterEach(cleanup);   // vitest 無 globals，cleanup 要自己掛
 
@@ -159,4 +178,50 @@ describe("BackupCard 天數與清單", () => {
     fireEvent.click(expand);
     expect(screen.getAllByText("1.0 KB")).toHaveLength(7);
   });
+});
+
+describe("BackupCard 執行", () => {
+  it("按預覽只送 kind 與 backup_mode——不含命令字串也不含路徑", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.preview }));
+    await waitFor(() => expect(createSession).toHaveBeenCalled());
+    const [, opts] = createSession.mock.calls[0];
+    expect(opts).toEqual({ path: "", kind: "backup", backupMode: "list" });
+    expect(JSON.stringify(opts)).not.toMatch(/backup-claude|\/Users|bash/);
+  });
+
+  it("掛載時只讀一次狀態——「session 收掉就回讀」不能在初次掛載也觸發", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    await screen.findByRole("button", { name: zh.preview });
+    expect(fetchBackupStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["script_available", zh.blocked.script_missing],
+    ["python3_available", zh.blocked.python3_missing],
+  ] as const)("%s 為否時說明原因並且沒有預覽鈕", async (flag, message) => {
+    mockStatus({ [flag]: false });
+    render(<BackupCard port={1} />);
+    await screen.findByText(message);
+    expect(screen.queryByRole("button", { name: zh.preview })).toBeNull();
+  });
+
+  it("後端擋下時顯示 i18n 文案，不外洩判別碼", async () => {
+    mockStatus();
+    createSession.mockRejectedValue(new SessionError("python3_missing", 400));
+    render(<BackupCard port={1} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.preview }));
+    await screen.findByText(zh.blocked.python3_missing);
+    expect(screen.queryByText(/python3_missing$/)).toBeNull();
+  });
+});
+
+it("session 建起來後掛上卡內終端機", async () => {
+  mockStatus();
+  render(<BackupCard port={1} />);
+  fireEvent.click(await screen.findByRole("button", { name: zh.preview }));
+  const term = await screen.findByTestId("terminal");
+  expect(term.getAttribute("data-session")).toBe("session-1");
 });

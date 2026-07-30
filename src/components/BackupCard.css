@@ -105,3 +105,10 @@
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
 }
+
+/* 動作列：與路徑列之間留白，按鈕靠左（不是 modal 的確認鍵，不該靠右） */
+.bk-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}

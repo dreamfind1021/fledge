@@ -16,6 +16,14 @@ from pydantic import BaseModel, ConfigDict
 
 from fledge_sidecar.app_config import AppConfig
 from fledge_sidecar.auth import require_ws_token
+from fledge_sidecar.backup.containment import check_backup_dir, source_roots
+from fledge_sidecar.backup.script import (
+    build_argv,
+    python3_available,
+    script_available,
+    scripts_root,
+)
+from fledge_sidecar.paths import expand_and_validate, probe_dir
 from fledge_sidecar.pty_bridge import PtyBridge
 from fledge_sidecar.setup.install_specs import get_install_command
 from fledge_sidecar.usage import account_activity
@@ -54,9 +62,10 @@ class CreateSessionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")  # 未知欄位（如注入 "command"）→ 422
     path: str
     account: str = ""  # install kind 不需帳號；其餘 kind 會驗證
-    kind: Literal["claude", "terminal", "install", "login"] = "claude"
+    kind: Literal["claude", "terminal", "install", "login", "backup"] = "claude"
     install_id: str | None = None   # kind=install 必填
     login_target: Literal["claude", "codex"] = "claude"  # kind=login 用
+    backup_mode: Literal["list", "run"] | None = None    # kind=backup 必填
 
 
 class ResizeRequest(BaseModel):
@@ -105,6 +114,31 @@ def _apply_flow_control(text: str, flow_gate: asyncio.Event) -> None:
         logger.debug("flow control 忽略未知 type: %r", msg_type)
 
 
+def _backup_blocked(config: AppConfig) -> str | None:
+    """spawn 前的閘：回判別碼代表擋下、`None` 代表放行。
+
+    前端本來就 disable 按鈕，這層是防繞過——**route 才是安全邊界，不是 UI**。
+    順序即優先序，且與備份卡顯示阻斷原因的順序一致：使用者看到的修復指引，
+    就是後端下一個會擋的東西。"""
+    raw = (config.backup_dir or "").strip()
+    if not raw:
+        return "backup_dir_not_set"
+    try:
+        abs_dir = expand_and_validate(raw)
+    except ValueError:
+        return "backup_dir_invalid"
+    verdict = check_backup_dir(abs_dir, source_roots(config, scripts_root()))
+    if verdict != "ok":
+        return f"backup_dir_{verdict}"
+    if probe_dir(abs_dir) != "dir":
+        return "backup_dir_unusable"
+    if not script_available():
+        return "backup_script_missing"
+    if not python3_available():
+        return "python3_missing"
+    return None
+
+
 def _unattributed_session(command: list[str], project_path: str) -> dict:
     """開一個不綁帳號的 session（安裝、codex 登入）：跑在 home、不注入帳號 env 且主動剔除
     `CLAUDE_CONFIG_DIR`（即便 sidecar 自身環境有），不進活動歸屬。
@@ -131,6 +165,18 @@ def create_session(req: CreateSessionRequest):
         if cmd is None:
             return JSONResponse(status_code=400, content={"error": "unknown_install_id"})
         return _unattributed_session([_login_shell(), "-lc", cmd], req.path)
+
+    # --- kind=backup：與 install 同一類（系統層工作，不屬於任何帳號也不屬於任何專案）---
+    if req.kind == "backup":
+        if req.backup_mode is None:
+            return JSONResponse(status_code=400, content={"error": "backup_mode_required"})
+        blocked = _backup_blocked(config)
+        if blocked is not None:
+            return JSONResponse(status_code=400, content={"error": blocked})
+        # argv 全部由後端從 config 與 backup_script_path() 組出來——前端只送 kind 與
+        # backup_mode，永不送命令字串也不送路徑（沿用 kind=install 的 allowlist 不變式）。
+        abs_dir = expand_and_validate(config.backup_dir.strip())
+        return _unattributed_session(build_argv(abs_dir, req.backup_mode), req.path)
 
     # --- codex 登入是全域的（不分帳號，B-1 收尾票已確認）→ 與 install 同樣不綁帳號 ---
     if req.kind == "login" and req.login_target == "codex":

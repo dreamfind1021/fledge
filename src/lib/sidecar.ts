@@ -138,7 +138,7 @@ export async function scanPreview(
   return { path: data.path, count: data.count, status: data.status };
 }
 
-export type SessionKind = "claude" | "terminal" | "install" | "login";
+export type SessionKind = "claude" | "terminal" | "install" | "login" | "backup";
 
 export interface CreateSessionOptions {
   // 工作目錄兼歸屬標記。install 沒有所屬專案（後端固定跑在 home、只把它當 project_path 記錄），
@@ -148,6 +148,7 @@ export interface CreateSessionOptions {
   kind?: SessionKind;
   installId?: string;                   // kind=install 必填；後端據此查 TOOL_SPECS 取命令
   loginTarget?: "claude" | "codex";     // kind=login 用
+  backupMode?: "list" | "run";          // kind=backup 必填；後端據此決定跑不跑 --list
 }
 
 /** 建立 session 失敗。`code` 是後端的英文判別碼（400 才有），呼叫端據此映射 i18n 字串。
@@ -172,7 +173,7 @@ async function readErrorCode(resp: Response): Promise<string | null> {
 }
 
 export async function createSession(port: number, opts: CreateSessionOptions): Promise<string> {
-  const { path, account, kind = "claude", installId, loginTarget } = opts;
+  const { path, account, kind = "claude", installId, loginTarget, backupMode } = opts;
   // 安全不變式（spec §5）：body 只放 allowlist key（install_id），永遠不含命令字串。
   // 未給的欄位一律不放進 body——後端 extra="forbid" 只擋未知欄位，但少送等於用後端預設，
   // 也讓「安裝不帶 account」這件事在 wire 上看得出來。
@@ -180,6 +181,7 @@ export async function createSession(port: number, opts: CreateSessionOptions): P
   if (account !== undefined) body.account = account;
   if (installId !== undefined) body.install_id = installId;
   if (loginTarget !== undefined) body.login_target = loginTarget;
+  if (backupMode !== undefined) body.backup_mode = backupMode;
 
   const resp = await fetch(`${base(port)}/api/sessions`, {
     method: "POST",
@@ -537,6 +539,8 @@ export interface BackupStatus {
   /** `invalid` 只出現在這條 wire 契約上（設定檔被手動塞了相對路徑），
    *  不是後端 `check_backup_dir()` 的回傳值之一 */
   containment: "ok" | "inside_source" | "is_home" | "is_root" | "invalid";
+  script_available: boolean;
+  python3_available: boolean;
   bundles: BackupBundle[];              // 倒序（新到舊）
   last_backup_ts: number | null;        // 從未備份為 null
   days_since: number | null;            // 本地時區的日曆日差；從未備份為 null（不是 0）

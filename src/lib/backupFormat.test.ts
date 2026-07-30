@@ -8,6 +8,8 @@ const OK: BackupStatus = {
   backup_dir: "/out",
   dir_status: "dir",
   containment: "ok",
+  script_available: true,
+  python3_available: true,
   bundles: [],
   last_backup_ts: null,
   days_since: 3,
@@ -108,5 +110,32 @@ describe("formatBundleTime", () => {
     const out = formatBundleTime(ts, "zh-TW");
     expect(out).toMatch(/2026/);
     expect(out).toMatch(/11:00|23:00/);
+  });
+});
+
+describe("blockingReason — 環境前提", () => {
+  it("缺腳本、缺 python3 各自可分辨", () => {
+    expect(blockingReason({ ...OK, script_available: false })).toBe("script_missing");
+    expect(blockingReason({ ...OK, python3_available: false })).toBe("python3_missing");
+  });
+
+  it("腳本排在 python3 之前", () => {
+    expect(blockingReason({ ...OK, script_available: false, python3_available: false })).toBe(
+      "script_missing",
+    );
+  });
+
+  it("位置問題排在環境前提之前——先讓使用者把自己能決定的事情弄對", () => {
+    expect(
+      blockingReason({
+        ...OK,
+        containment: "inside_source",
+        script_available: false,
+        python3_available: false,
+      }),
+    ).toBe("inside_source");
+    expect(
+      blockingReason({ ...OK, dir_status: "missing", python3_available: false }),
+    ).toBe("dir_missing");
   });
 });

@@ -9,6 +9,7 @@
   "daysAgo": "上次備份 {{count}} 天前",
   "bundles": "既有備份包",
   "showAll": "顯示全部 {{count}} 份",
+  "preview": "預覽會收什麼",
   "blocked": {
     "dir_denied": "Fledge 讀不到這個資料夾。",
     "dir_missing": "這個資料夾已經不存在了。",
@@ -17,9 +18,12 @@
     "invalid": "已存的位置不是有效的絕對路徑，請重新選擇。",
     "is_home": "家目錄範圍太大，請選一個專用的資料夾。",
     "is_root": "檔案系統根目錄不是有效的備份位置。",
-    "not_configured": "選一個存放備份的位置。跟原始資料放同一顆碟等於沒有保護。"
+    "not_configured": "選一個存放備份的位置。跟原始資料放同一顆碟等於沒有保護。",
+    "python3_missing": "備份需要系統的 python3，目前找不到。用這個指令安裝 Xcode Command Line Tools：xcode-select --install",
+    "script_missing": "這個版本的 Fledge 缺少備份腳本。"
   },
   "errors": {
+    "runFailed": "備份啟動不了。",
     "saveFailed": "備份位置存不進去。"
   }
 }

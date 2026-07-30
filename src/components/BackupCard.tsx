@@ -7,6 +7,8 @@ import {
   freshnessLevel,
 } from "../lib/backupFormat";
 import { pickDirectory } from "../lib/dialog";
+import { useCardSession } from "../lib/useCardSession";
+import { CardTerminal } from "./CardTerminal";
 import {
   fetchBackupStatus,
   putBackupDir,
@@ -20,11 +22,15 @@ const PREVIEW_COUNT = 5;
 
 /** `PUT /api/config/backup-dir` 的判別碼 → catalog key。與 `blockingReason` 的表是同一組
  *  文案：使用者在選擇當下被擋、與事後從 status 看到的，說法必須一致。 */
-const SAVE_ERROR_KEY: Record<string, string> = {
+const CODE_KEY: Record<string, string> = {
   backup_dir_invalid: "blocked.invalid",
   backup_dir_inside_source: "blocked.inside_source",
   backup_dir_is_home: "blocked.is_home",
   backup_dir_is_root: "blocked.is_root",
+  backup_dir_not_set: "blocked.not_configured",
+  backup_dir_unusable: "blocked.dir_missing",
+  backup_script_missing: "blocked.script_missing",
+  python3_missing: "blocked.python3_missing",
 };
 
 /** 設定頁的備份卡。
@@ -42,6 +48,15 @@ export function BackupCard({ port }: { port: number | null }) {
   // state，畫面會退回上一輪的結果（比照 EnvCard 的 reqId）
   const reqId = useRef(0);
   const mounted = useRef(true);
+  // 卡內終端機的生命週期走共用 hook（與 EnvCard／LoginCard 同一套）：一次只跑一個、
+  // 切換時先關完舊的才建新的、卸載一律收 PTY。
+  const {
+    running,
+    starting,
+    error: sessionError,
+    setError: setSessionError,
+    start,
+  } = useCardSession<{ mode: "list" | "run" }>(port);
 
   useEffect(() => {
     mounted.current = true;   // StrictMode 會 mount→cleanup→再 mount，這裡要重設回來
@@ -72,6 +87,7 @@ export function BackupCard({ port }: { port: number | null }) {
     const picked = await pickDirectory();
     if (!picked) return;   // 使用者取消 → 什麼都不做
     setSaveError(null);
+    setSessionError(null);
     try {
       await putBackupDir(port, picked);
       await refresh();
@@ -80,10 +96,37 @@ export function BackupCard({ port }: { port: number | null }) {
       const code = (e as { code?: string | null }).code ?? null;
       // 後端判別碼 → i18n key。**顯式表**：動態組 key 會讓沒見過的判別碼變成畫面上的
       // i18n key 原文，未知碼一律退回通用訊息（CLAUDE.md §4.6.13）。
-      const key = code !== null ? SAVE_ERROR_KEY[code] : undefined;
+      const key = code !== null ? CODE_KEY[code] : undefined;
       setSaveError(t(key ?? "errors.saveFailed"));
     }
-  }, [port, refresh, t]);
+  }, [port, refresh, setSessionError, t]);
+
+  const startRun = useCallback(
+    async (mode: "list" | "run") => {
+      setSaveError(null);
+      // 前端只送 kind 與 backup_mode——永不送命令字串也不送路徑（沿用 kind=install 的
+      // allowlist 不變式）。path 傳空字串是因為備份不屬於任何專案，後端固定跑在 home。
+      const created = await start({
+        cardId: "backup",
+        options: { path: "", kind: "backup", backupMode: mode },
+        meta: { mode },
+        mapError: (code) => (code !== null ? (CODE_KEY[code] ? t(CODE_KEY[code]) : null) : null),
+        fallbackError: () => t("errors.runFailed"),
+      });
+      // 跑完（session 收掉）要回讀，否則天數與清單停在舊值。這裡只在真的建立了才等。
+      if (!created) await refresh();
+    },
+    [start, t, refresh],
+  );
+
+  // session 收掉＝這一輪跑完，回讀讓天數歸零、新備份包出現在清單。
+  // 判的是**轉換**（有 → 無）而不是「現在是 null」：後者在掛載時就成立，會讓每次
+  // 開卡片都多打一次請求。
+  const hadSession = useRef(false);
+  useEffect(() => {
+    if (hadSession.current && running === null) void refresh();
+    hadSession.current = running !== null;
+  }, [running, refresh]);
 
   // 讀不到狀態時整張卡不出現：這裡沒有使用者能採取的行動，留一個空殼只是噪音
   if (status === null) return null;
@@ -124,11 +167,34 @@ export function BackupCard({ port }: { port: number | null }) {
               {t("change")}
             </button>
           </div>
+          <div className="bk-actions">
+            <button
+              type="button"
+              className="settings-btn-ghost"
+              onClick={() => void startRun("list")}
+              disabled={starting || running !== null}
+            >
+              {t("preview")}
+            </button>
+          </div>
           <BundleList bundles={status.bundles} />
         </>
       )}
 
-      {saveError && <p className="bk-error">{saveError}</p>}
+      {(saveError ?? sessionError) && (
+        <p className="bk-error">{saveError ?? sessionError}</p>
+      )}
+
+      {/* 標頭只放模式的 i18n 文案，**不放實際命令字串**——命令由後端組，前端連顯示
+          都不該自己拼一份出來（那會讓畫面與實際執行的東西有兩個來源）。 */}
+      {running !== null && port != null && (
+        <CardTerminal
+          port={port}
+          sessionId={running.sessionId}
+          tabId={running.tabId}
+          title={t(running.meta.mode === "list" ? "preview" : "runNow")}
+        />
+      )}
     </div>
   );
 }

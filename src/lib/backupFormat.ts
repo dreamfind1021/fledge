@@ -49,7 +49,9 @@ export type BlockingReason =
   | "is_root"
   | "dir_missing"
   | "dir_not_dir"
-  | "dir_denied";
+  | "dir_denied"
+  | "script_missing"
+  | "python3_missing";
 
 /** 後端旗標 → 阻斷原因。**顯式表而非動態組 key**：後端日後多一個狀態時，動態組會產生
  *  catalog 裡沒有的 key，而 i18n 對查不到的 key 是把 key 原文印出來——使用者會在畫面上
@@ -78,6 +80,10 @@ export function blockingReason(status: BackupStatus): BlockingReason | null {
   // 沒選過位置時，目錄當然也是「不存在」——但要使用者去修一個他還沒選的目錄毫無意義。
   if (!status.configured) return "not_configured";
   if (status.containment !== "ok") return CONTAINMENT_REASON[status.containment] ?? null;
-  if (status.dir_status === "dir") return null;
-  return DIR_STATUS_REASON[status.dir_status] ?? null;
+  if (status.dir_status !== "dir") return DIR_STATUS_REASON[status.dir_status] ?? null;
+  // 環境前提排最後：它與使用者選了什麼位置無關，但也修不了位置的問題，
+  // 所以先讓使用者把自己能決定的事情弄對。
+  if (!status.script_available) return "script_missing";
+  if (!status.python3_available) return "python3_missing";
+  return null;
 }

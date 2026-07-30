@@ -9,6 +9,7 @@
   "daysAgo": "Last backup {{count}} day(s) ago",
   "bundles": "Existing backups",
   "showAll": "Show all {{count}}",
+  "preview": "Preview what gets backed up",
   "blocked": {
     "dir_denied": "Fledge cannot read that folder.",
     "dir_missing": "That folder no longer exists.",
@@ -17,9 +18,12 @@
     "invalid": "The saved location is not a valid absolute path. Choose it again.",
     "is_home": "Your home folder is too broad for this. Pick a dedicated folder.",
     "is_root": "The filesystem root is not a valid backup location.",
-    "not_configured": "Choose where backups should go. Keeping them on the same disk as the originals is no protection at all."
+    "not_configured": "Choose where backups should go. Keeping them on the same disk as the originals is no protection at all.",
+    "python3_missing": "Backup needs the system python3, which was not found. Install Xcode Command Line Tools with: xcode-select --install",
+    "script_missing": "The backup script is missing from this build of Fledge."
   },
   "errors": {
+    "runFailed": "The backup could not be started.",
     "saveFailed": "Could not save the backup location."
   }
 }

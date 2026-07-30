@@ -137,3 +137,31 @@ def test_unusable_dir_does_not_report_stale_bundles(tmp_path: Path, monkeypatch)
     body = TestClient(create_app()).get("/api/backup/status").json()
     assert body["bundles"] == []
     assert body["days_since"] is None
+
+
+def test_reports_script_missing(tmp_path: Path, monkeypatch):
+    out = tmp_path / "backups"
+    out.mkdir()
+    _setup(tmp_path, monkeypatch, backup_dir=str(out))
+    monkeypatch.setenv("FLEDGE_BACKUP_SCRIPTS_DIR", str(tmp_path / "no-scripts"))
+    body = TestClient(create_app()).get("/api/backup/status").json()
+    assert body["script_available"] is False
+
+
+def test_reports_python3_missing(tmp_path: Path, monkeypatch):
+    out = tmp_path / "backups"
+    out.mkdir()
+    _setup(tmp_path, monkeypatch, backup_dir=str(out))
+    monkeypatch.setattr("fledge_sidecar.routes.backup.python3_available", lambda: False)
+    body = TestClient(create_app()).get("/api/backup/status").json()
+    assert body["python3_available"] is False
+
+
+def test_env_flags_reported_even_when_unconfigured(tmp_path: Path, monkeypatch):
+    """環境前提與 backup_dir 無關：使用者不該在選完位置之後，才第一次得知
+    這台機器根本跑不了備份。"""
+    _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr("fledge_sidecar.routes.backup.python3_available", lambda: False)
+    body = TestClient(create_app()).get("/api/backup/status").json()
+    assert body["configured"] is False
+    assert body["python3_available"] is False
