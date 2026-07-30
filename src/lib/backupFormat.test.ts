@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockingReason } from "./backupFormat";
+import { blockingReason, formatSize, freshnessLevel } from "./backupFormat";
 import type { BackupStatus } from "./sidecar";
 
 // 標註成 BackupStatus 而非 `as const`：後者會把欄位推成唯讀字面型別，展開覆寫時對不上。
@@ -8,6 +8,9 @@ const OK: BackupStatus = {
   backup_dir: "/out",
   dir_status: "dir",
   containment: "ok",
+  bundles: [],
+  last_backup_ts: null,
+  days_since: 3,
 };
 
 describe("blockingReason", () => {
@@ -58,5 +61,38 @@ describe("blockingReason", () => {
   ])("後端多出未知的 %s 時不阻斷、也不會把 i18n key 印到畫面上", (_label, patch) => {
     // 動態組 key（`dir_${s}`）會產生 catalog 沒有的 key，i18n 對查不到的 key 是印出 key 原文
     expect(blockingReason({ ...OK, ...patch })).toBeNull();
+  });
+});
+
+describe("freshnessLevel", () => {
+  it("一週內是正常", () => {
+    expect(freshnessLevel(0)).toBe("fresh");
+    expect(freshnessLevel(7)).toBe("fresh");
+  });
+
+  it("8–30 天是提醒色", () => {
+    expect(freshnessLevel(8)).toBe("stale");
+    expect(freshnessLevel(30)).toBe("stale");
+  });
+
+  it("超過 30 天是警告色", () => {
+    expect(freshnessLevel(31)).toBe("overdue");
+  });
+
+  it("從未備份與「超過一個月」同級——兩者都代表現在沒有保護", () => {
+    expect(freshnessLevel(null)).toBe("overdue");
+  });
+});
+
+describe("formatSize", () => {
+  it("依量級選單位", () => {
+    expect(formatSize(0)).toBe("0 B");
+    expect(formatSize(999)).toBe("999 B");
+    expect(formatSize(1024)).toBe("1.0 KB");
+    expect(formatSize(168820736)).toBe("161.0 MB");
+  });
+
+  it("超過 GB 不再往上跳單位（備份包不會有 TB 級）", () => {
+    expect(formatSize(5 * 1024 ** 4)).toMatch(/GB$/);
   });
 });

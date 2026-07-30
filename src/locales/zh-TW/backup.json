@@ -4,6 +4,11 @@
   "chooseLocation": "選擇備份位置",
   "change": "更改",
   "location": "備份位置",
+  "neverBackedUp": "從未備份",
+  "today": "今天備份過",
+  "daysAgo": "上次備份 {{count}} 天前",
+  "bundles": "既有備份包",
+  "showAll": "顯示全部 {{count}} 份",
   "blocked": {
     "dir_denied": "Fledge 讀不到這個資料夾。",
     "dir_missing": "這個資料夾已經不存在了。",

@@ -524,6 +524,12 @@ export async function putKmsRoot(port: number, path: string): Promise<{ ok: bool
 
 // ── 備份 ──────────────────────────────────────────────────────────────────────
 
+export interface BackupBundle {
+  name: string;
+  created_ts: number;   // 秒；取自檔名時間戳而非 mtime（檔案被搬動時 mtime 會變）
+  size_bytes: number;
+}
+
 export interface BackupStatus {
   configured: boolean;
   backup_dir: string;   // raw（含 ~），未設定時為空字串
@@ -531,6 +537,9 @@ export interface BackupStatus {
   /** `invalid` 只出現在這條 wire 契約上（設定檔被手動塞了相對路徑），
    *  不是後端 `check_backup_dir()` 的回傳值之一 */
   containment: "ok" | "inside_source" | "is_home" | "is_root" | "invalid";
+  bundles: BackupBundle[];              // 倒序（新到舊）
+  last_backup_ts: number | null;        // 從未備份為 null
+  days_since: number | null;            // 本地時區的日曆日差；從未備份為 null（不是 0）
 }
 
 /** 備份端點的判別碼錯誤。理由同 `SetupError`：`code` 只放欄位、不進 message，

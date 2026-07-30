@@ -4,6 +4,11 @@
   "chooseLocation": "Choose backup location",
   "change": "Change",
   "location": "Backup location",
+  "neverBackedUp": "Never backed up",
+  "today": "Backed up today",
+  "daysAgo": "Last backup {{count}} day(s) ago",
+  "bundles": "Existing backups",
+  "showAll": "Show all {{count}}",
   "blocked": {
     "dir_denied": "Fledge cannot read that folder.",
     "dir_missing": "That folder no longer exists.",

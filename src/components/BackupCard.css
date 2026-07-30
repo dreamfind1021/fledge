@@ -56,3 +56,52 @@
   margin: 8px 0 0;
   color: var(--error);
 }
+
+/* 天數主行：分級只用文字顏色，不加徽章也不加 banner（刻意的設計決策——
+   這張卡是常駐可見指標，不是催促使用者的通知） */
+.bk-days {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 10px 0 0;
+}
+
+.bk-days--fresh { color: var(--text); }
+.bk-days--stale { color: var(--warning); }
+.bk-days--overdue { color: var(--error); }
+
+/* 備份包清單 */
+.bk-bundles {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.bk-bundles-title {
+  font-size: 11.5px;
+  color: var(--dim);
+  margin-bottom: 6px;
+}
+
+.bk-bundle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.bk-bundle-time {
+  color: var(--text);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 大小靠右對齊成一欄；等寬數字讓不同長度的數值不會左右跳動 */
+.bk-bundle-size {
+  color: var(--dim);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}

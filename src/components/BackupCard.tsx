@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { blockingReason } from "../lib/backupFormat";
+import { blockingReason, formatSize, freshnessLevel } from "../lib/backupFormat";
 import { pickDirectory } from "../lib/dialog";
-import { fetchBackupStatus, putBackupDir, type BackupStatus } from "../lib/sidecar";
+import {
+  fetchBackupStatus,
+  putBackupDir,
+  type BackupBundle,
+  type BackupStatus,
+} from "../lib/sidecar";
 import "./BackupCard.css";
+
+// 清單預設只列最近幾份：多數時候使用者只想確認「最新那份在不在」，全列會把卡片撐長
+const PREVIEW_COUNT = 5;
 
 /** `PUT /api/config/backup-dir` 的判別碼 → catalog key。與 `blockingReason` 的表是同一組
  *  文案：使用者在選擇當下被擋、與事後從 status 看到的，說法必須一致。 */
@@ -96,16 +104,53 @@ export function BackupCard({ port }: { port: number | null }) {
           </button>
         </div>
       ) : (
-        <div className="bk-row">
-          <span className="bk-row-label">{t("location")}</span>
-          <code className="b4-mono bk-path">{status.backup_dir}</code>
-          <button type="button" className="settings-btn-ghost" onClick={onChoose}>
-            {t("change")}
-          </button>
-        </div>
+        <>
+          <p className={`bk-days bk-days--${freshnessLevel(status.days_since)}`}>
+            {status.days_since === null
+              ? t("neverBackedUp")
+              : status.days_since === 0
+                ? t("today")
+                : t("daysAgo", { count: status.days_since })}
+          </p>
+          <div className="bk-row">
+            <span className="bk-row-label">{t("location")}</span>
+            <code className="b4-mono bk-path">{status.backup_dir}</code>
+            <button type="button" className="settings-btn-ghost" onClick={onChoose}>
+              {t("change")}
+            </button>
+          </div>
+          <BundleList bundles={status.bundles} />
+        </>
       )}
 
       {saveError && <p className="bk-error">{saveError}</p>}
+    </div>
+  );
+}
+
+/** 既有備份包清單。這份清單之後由還原精靈複用（選哪個備份包還原就從這裡選），
+ *  所以它是共用的資料來源而不是卡片專屬的呈現。 */
+function BundleList({ bundles }: { bundles: BackupBundle[] }) {
+  const { t } = useTranslation("backup");
+  const [showAll, setShowAll] = useState(false);
+
+  if (bundles.length === 0) return null;
+  const shown = showAll ? bundles : bundles.slice(0, PREVIEW_COUNT);
+
+  return (
+    <div className="bk-bundles">
+      <div className="bk-bundles-title">{t("bundles")}</div>
+      {shown.map((b) => (
+        <div key={b.name} className="bk-bundle">
+          <span className="bk-bundle-time">{new Date(b.created_ts * 1000).toLocaleString()}</span>
+          <span className="bk-bundle-size">{formatSize(b.size_bytes)}</span>
+        </div>
+      ))}
+      {!showAll && bundles.length > PREVIEW_COUNT && (
+        <button type="button" className="st-link" onClick={() => setShowAll(true)}>
+          {t("showAll", { count: bundles.length })}
+        </button>
+      )}
     </div>
   );
 }

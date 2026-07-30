@@ -6,9 +6,12 @@ containment 與環境前提）。錯誤只留給「請求本身壞掉」——�
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi import APIRouter
 
 from fledge_sidecar.app_config import AppConfig
+from fledge_sidecar.backup import bundles as bundles_mod
 from fledge_sidecar.backup.containment import check_backup_dir, source_roots
 from fledge_sidecar.backup.script import scripts_root
 from fledge_sidecar.paths import expand_and_validate, probe_dir
@@ -25,6 +28,9 @@ def backup_status() -> dict:
         "backup_dir": raw,
         "dir_status": "missing",
         "containment": "ok",
+        "bundles": [],
+        "last_backup_ts": None,
+        "days_since": None,
     }
     if not raw:
         return payload
@@ -41,4 +47,13 @@ def backup_status() -> dict:
 
     payload["containment"] = check_backup_dir(abs_path, source_roots(config, scripts_root()))
     payload["dir_status"] = probe_dir(abs_path)
+    if payload["dir_status"] != "dir":
+        return payload  # 目錄不可用就不端清單——掃目錄的整個重點是狀態要誠實
+
+    found = bundles_mod.list_bundles(abs_path)
+    payload["bundles"] = [
+        {"name": b.name, "created_ts": b.created_ts, "size_bytes": b.size_bytes} for b in found
+    ]
+    payload["last_backup_ts"] = found[0].created_ts if found else None
+    payload["days_since"] = bundles_mod.days_since(payload["last_backup_ts"], datetime.now())
     return payload

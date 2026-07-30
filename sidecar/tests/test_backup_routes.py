@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -105,3 +106,34 @@ def test_dir_status_is_probe_four_states_only(tmp_path: Path, monkeypatch):
     _setup(tmp_path, monkeypatch, backup_dir=str(out))
     body = TestClient(create_app()).get("/api/backup/status").json()
     assert body["dir_status"] in {"dir", "missing", "not_dir", "denied"}
+
+
+def test_lists_bundles_with_size_and_days(tmp_path: Path, monkeypatch):
+    out = tmp_path / "backups"
+    out.mkdir()
+    (out / "claude-backup-20260727-1432.tar.gz").write_bytes(b"x" * 99)
+    _setup(tmp_path, monkeypatch, backup_dir=str(out))
+    body = TestClient(create_app()).get("/api/backup/status").json()
+    assert [b["name"] for b in body["bundles"]] == ["claude-backup-20260727-1432.tar.gz"]
+    assert body["bundles"][0]["size_bytes"] == 99
+    assert body["last_backup_ts"] == datetime(2026, 7, 27, 14, 32).timestamp()
+    assert body["days_since"] >= 0
+
+
+def test_no_bundles_yet(tmp_path: Path, monkeypatch):
+    """從未備份：天數是 null 而不是 0——0 會被讀成「今天剛備份過」。"""
+    out = tmp_path / "backups"
+    out.mkdir()
+    _setup(tmp_path, monkeypatch, backup_dir=str(out))
+    body = TestClient(create_app()).get("/api/backup/status").json()
+    assert body["bundles"] == []
+    assert body["last_backup_ts"] is None
+    assert body["days_since"] is None
+
+
+def test_unusable_dir_does_not_report_stale_bundles(tmp_path: Path, monkeypatch):
+    """目錄不可用時不能端出清單——掃目錄的整個重點是狀態要誠實。"""
+    _setup(tmp_path, monkeypatch, backup_dir=str(tmp_path / "gone"))
+    body = TestClient(create_app()).get("/api/backup/status").json()
+    assert body["bundles"] == []
+    assert body["days_since"] is None

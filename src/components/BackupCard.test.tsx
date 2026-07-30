@@ -23,6 +23,11 @@ const OK: BackupStatus = {
   backup_dir: "/out/backups",
   dir_status: "dir",
   containment: "ok",
+  bundles: [
+    { name: "claude-backup-20260727-1432.tar.gz", created_ts: 1785220320, size_bytes: 168820736 },
+  ],
+  last_backup_ts: 1785220320,
+  days_since: 3,
 };
 
 function mockStatus(overrides: Partial<BackupStatus> = {}) {
@@ -115,5 +120,43 @@ describe("BackupCard", () => {
     fireEvent.click(await screen.findByRole("button", { name: zh.chooseLocation }));
     await screen.findByText(zh.errors.saveFailed);
     expect(screen.queryByText(/something_new/)).toBeNull();
+  });
+});
+
+describe("BackupCard 天數與清單", () => {
+  it("顯示天數與備份包大小", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    await screen.findByText(zh.daysAgo.replace("{{count}}", "3"));
+    expect(screen.getByText("161.0 MB")).toBeTruthy();
+  });
+
+  it("今天備份過時說「今天」而不是「0 天前」", async () => {
+    mockStatus({ days_since: 0 });
+    render(<BackupCard port={1} />);
+    await screen.findByText(zh.today);
+  });
+
+  it("從未備份時說「從未備份」，不是 0 天前", async () => {
+    mockStatus({ bundles: [], last_backup_ts: null, days_since: null });
+    render(<BackupCard port={1} />);
+    await screen.findByText(zh.neverBackedUp);
+    expect(screen.queryByText(zh.bundles)).toBeNull();   // 沒有備份包就不列空清單
+  });
+
+  it("超過五份才給展開，展開後全部列出", async () => {
+    const many = Array.from({ length: 7 }, (_, i) => ({
+      name: `claude-backup-2026072${i}-1000.tar.gz`,
+      created_ts: 1785220320 + i,
+      size_bytes: 1024,
+    }));
+    mockStatus({ bundles: many });
+    render(<BackupCard port={1} />);
+    const expand = await screen.findByRole("button", {
+      name: zh.showAll.replace("{{count}}", "7"),
+    });
+    expect(screen.getAllByText("1.0 KB")).toHaveLength(5);
+    fireEvent.click(expand);
+    expect(screen.getAllByText("1.0 KB")).toHaveLength(7);
   });
 });

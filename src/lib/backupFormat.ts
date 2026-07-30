@@ -1,5 +1,33 @@
 import type { BackupStatus } from "./sidecar";
 
+/** 距上次備份的新鮮度。純文字顏色用——這是「只做常駐可見指標」的方案裡唯一還能加強度的
+ *  地方，且不佔任何額外版面（不加徽章、不加 banner，那是刻意的設計決策）。 */
+export type Freshness = "fresh" | "stale" | "overdue";
+
+const FRESH_DAYS = 7;
+const STALE_DAYS = 30;
+
+export function freshnessLevel(days: number | null): Freshness {
+  // 從未備份與「超過一個月」同級：兩者都代表使用者**現在**沒有保護，沒有理由把前者說得比較輕
+  if (days === null) return "overdue";
+  if (days <= FRESH_DAYS) return "fresh";
+  if (days <= STALE_DAYS) return "stale";
+  return "overdue";
+}
+
+const SIZE_UNITS = ["B", "KB", "MB", "GB"] as const;
+
+/** 位元組 → 人看得懂的大小。停在 GB：備份包不會有 TB 級，多加單位只是沒人走到的分支。 */
+export function formatSize(bytes: number): string {
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < SIZE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return unit === 0 ? `${value} B` : `${value.toFixed(1)} ${SIZE_UNITS[unit]}`;
+}
+
 /** 卡片目前的阻斷原因；`null` 代表可以正常呈現。 */
 export type BlockingReason =
   | "not_configured"
