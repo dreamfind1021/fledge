@@ -18,7 +18,12 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
 }));
 vi.mock("../lib/dialog", () => ({ pickDirectory: () => pickDirectory() }));
 
-const OK: BackupStatus = { configured: true, backup_dir: "/out/backups", dir_status: "dir" };
+const OK: BackupStatus = {
+  configured: true,
+  backup_dir: "/out/backups",
+  dir_status: "dir",
+  containment: "ok",
+};
 
 function mockStatus(overrides: Partial<BackupStatus> = {}) {
   fetchBackupStatus.mockResolvedValue({ ...OK, ...overrides });
@@ -50,11 +55,28 @@ describe("BackupCard", () => {
     ["missing", zh.blocked.dir_missing],
     ["not_dir", zh.blocked.dir_not_dir],
     ["denied", zh.blocked.dir_denied],
-    ["invalid", zh.blocked.dir_invalid],
   ] as const)("目錄異常 %s 顯示可分辨的說明", async (status, message) => {
     mockStatus({ dir_status: status });
     render(<BackupCard port={1} />);
     await screen.findByText(message);
+  });
+
+  it.each([
+    ["inside_source", zh.blocked.inside_source],
+    ["is_home", zh.blocked.is_home],
+    ["is_root", zh.blocked.is_root],
+    ["invalid", zh.blocked.invalid],
+  ] as const)("位置不合法 %s 顯示可分辨的說明", async (containment, message) => {
+    mockStatus({ containment });
+    render(<BackupCard port={1} />);
+    await screen.findByText(message);
+  });
+
+  it("位置不合法且目錄也不存在時，顯示位置那條——把目錄建出來也沒用", async () => {
+    mockStatus({ containment: "inside_source", dir_status: "missing" });
+    render(<BackupCard port={1} />);
+    await screen.findByText(zh.blocked.inside_source);
+    expect(screen.queryByText(zh.blocked.dir_missing)).toBeNull();
   });
 
   it("選完位置會存回後端並重新讀狀態", async () => {
@@ -81,7 +103,7 @@ describe("BackupCard", () => {
     putBackupDir.mockRejectedValue(new BackupError("backup_dir_invalid", 400));
     render(<BackupCard port={1} />);
     fireEvent.click(await screen.findByRole("button", { name: zh.chooseLocation }));
-    await screen.findByText(zh.blocked.dir_invalid);
+    await screen.findByText(zh.blocked.invalid);
     expect(screen.queryByText(/backup_dir_invalid/)).toBeNull();
   });
 

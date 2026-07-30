@@ -67,15 +67,41 @@ def test_reports_denied(tmp_path: Path, monkeypatch):
         parent.chmod(0o755)  # 還原，否則 tmp_path 清不掉
 
 
-def test_relative_path_reported_as_invalid(tmp_path: Path, monkeypatch):
-    """手動編輯設定檔塞進相對路徑時，status 要如實說它不合法，
-    而不是拿 sidecar 的 cwd 去解讀出一個假的探測結果。"""
-    _setup(tmp_path, monkeypatch, backup_dir="foo")
-    body = TestClient(create_app()).get("/api/backup/status").json()
-    assert body["dir_status"] == "invalid"
-
-
 def test_status_never_errors_on_bad_config(tmp_path: Path, monkeypatch):
     """目錄問題不是錯誤：一律 200，用旗標表達。錯誤只留給請求本身壞掉。"""
     _setup(tmp_path, monkeypatch, backup_dir=str(tmp_path / "gone"))
     assert TestClient(create_app()).get("/api/backup/status").status_code == 200
+
+
+def test_containment_ok_for_unrelated_dir(tmp_path: Path, monkeypatch):
+    out = tmp_path / "backups"
+    out.mkdir()
+    _setup(tmp_path, monkeypatch, backup_dir=str(out))
+    assert TestClient(create_app()).get("/api/backup/status").json()["containment"] == "ok"
+
+
+def test_containment_reports_inside_source(tmp_path: Path, monkeypatch):
+    """事後才變得不合法的情形（例如新增了包住它的帳號）：值已在設定檔裡，status 要如實回報。"""
+    inside = tmp_path / "claude" / "projects" / "backups"
+    inside.mkdir(parents=True)
+    _setup(tmp_path, monkeypatch, backup_dir=str(inside))
+    body = TestClient(create_app()).get("/api/backup/status").json()
+    assert body["containment"] == "inside_source"
+
+
+def test_relative_path_reported_via_containment_not_dir_status(tmp_path: Path, monkeypatch):
+    """`invalid` 屬於 containment 而不是 dir_status：後者回答「這個目錄現在怎麼樣」，
+    前者回答「這個位置能不能用」。相對路徑連目錄都稱不上，探測它沒有意義。"""
+    _setup(tmp_path, monkeypatch, backup_dir="foo")
+    body = TestClient(create_app()).get("/api/backup/status").json()
+    assert body["containment"] == "invalid"
+    assert body["dir_status"] == "missing"   # 不拿 sidecar 的 cwd 去探一個假答案
+
+
+def test_dir_status_is_probe_four_states_only(tmp_path: Path, monkeypatch):
+    """dir_status 回歸單純的 probe_dir 四態，不再混進 invalid。"""
+    out = tmp_path / "backups"
+    out.mkdir()
+    _setup(tmp_path, monkeypatch, backup_dir=str(out))
+    body = TestClient(create_app()).get("/api/backup/status").json()
+    assert body["dir_status"] in {"dir", "missing", "not_dir", "denied"}

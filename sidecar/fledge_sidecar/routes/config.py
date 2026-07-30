@@ -10,6 +10,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from fledge_sidecar.app_config import AppConfig
+from fledge_sidecar.backup.containment import check_backup_dir, source_roots
+from fledge_sidecar.backup.script import scripts_root
 from fledge_sidecar.paths import canonicalize, expand_and_validate, probe_dir, resolve_best_effort
 
 router = APIRouter()
@@ -318,13 +320,21 @@ def put_backup_dir(body: BackupDirBody):
     前端讀的是 `error` 欄位，且判別碼必須是穩定英文碼、不能像既有 detail 那樣夾中文
     prose（CLAUDE.md §4.6.13）。"""
     raw = (body.path or "").strip()
+    abs_path: str | None = None
     if raw:  # 空字串＝清除，不必驗
         try:
-            expand_and_validate(raw)
+            abs_path = expand_and_validate(raw)
         except ValueError:
             return JSONResponse(status_code=400, content={"error": "backup_dir_invalid"})
     with _config_lock:
         config = AppConfig.load()
+        if abs_path is not None:
+            # 存檔時的 containment 檢查是 UX：錯誤在使用者按下選擇器的當場出現。
+            # 真正的守門在 spawn 前（備份執行票）——存檔時合法的值之後可能變得不合法，
+            # 最常見的是新增了一個 config_dir 剛好包住它的帳號。
+            verdict = check_backup_dir(abs_path, source_roots(config, scripts_root()))
+            if verdict != "ok":
+                return JSONResponse(status_code=400, content={"error": f"backup_dir_{verdict}"})
         config.set_backup_dir(raw)
         config.save()
         return {"ok": True, "backup_dir": config.backup_dir}

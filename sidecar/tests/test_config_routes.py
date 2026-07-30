@@ -391,3 +391,30 @@ def test_put_backup_dir_rejects_unknown_field(tmp_path: Path, monkeypatch):
     client = TestClient(create_app())
     resp = client.put("/api/config/backup-dir", json={"path": "/tmp/x", "extra": 1})
     assert resp.status_code == 422
+
+
+def test_put_backup_dir_rejects_inside_source(tmp_path: Path, monkeypatch):
+    """輸出目錄落在被備份的目錄裡，腳本會把正在寫入的暫存區收進備份包。"""
+    _write_config(tmp_path, monkeypatch)
+    inside = tmp_path / "claude" / "projects" / "backups"
+    inside.mkdir(parents=True)
+    client = TestClient(create_app())
+    client.patch("/api/config/accounts/work", json={"config_dir": str(tmp_path / "claude")})
+    resp = client.put("/api/config/backup-dir", json={"path": str(inside)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "backup_dir_inside_source"
+
+
+def test_put_backup_dir_rejects_home(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.put("/api/config/backup-dir", json={"path": str(Path.home())})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "backup_dir_is_home"
+
+
+def test_rejected_containment_is_not_written(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    client.put("/api/config/backup-dir", json={"path": str(Path.home())})
+    assert client.get("/api/config").json().get("backup_dir", "") == ""

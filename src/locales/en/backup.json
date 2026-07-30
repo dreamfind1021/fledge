@@ -5,11 +5,14 @@
   "change": "Change",
   "location": "Backup location",
   "blocked": {
-    "not_configured": "Choose where backups should go. Keeping them on the same disk as the originals is no protection at all.",
-    "dir_invalid": "The saved location is not a valid absolute path. Choose it again.",
+    "dir_denied": "Fledge cannot read that folder.",
     "dir_missing": "That folder no longer exists.",
     "dir_not_dir": "That path is not a folder.",
-    "dir_denied": "Fledge cannot read that folder."
+    "inside_source": "This folder sits inside the data being backed up, so the backup would end up containing itself. Pick somewhere outside your Claude directories.",
+    "invalid": "The saved location is not a valid absolute path. Choose it again.",
+    "is_home": "Your home folder is too broad for this. Pick a dedicated folder.",
+    "is_root": "The filesystem root is not a valid backup location.",
+    "not_configured": "Choose where backups should go. Keeping them on the same disk as the originals is no protection at all."
   },
   "errors": {
     "saveFailed": "Could not save the backup location."

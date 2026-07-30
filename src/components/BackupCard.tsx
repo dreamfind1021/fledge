@@ -5,6 +5,15 @@ import { pickDirectory } from "../lib/dialog";
 import { fetchBackupStatus, putBackupDir, type BackupStatus } from "../lib/sidecar";
 import "./BackupCard.css";
 
+/** `PUT /api/config/backup-dir` 的判別碼 → catalog key。與 `blockingReason` 的表是同一組
+ *  文案：使用者在選擇當下被擋、與事後從 status 看到的，說法必須一致。 */
+const SAVE_ERROR_KEY: Record<string, string> = {
+  backup_dir_invalid: "blocked.invalid",
+  backup_dir_inside_source: "blocked.inside_source",
+  backup_dir_is_home: "blocked.is_home",
+  backup_dir_is_root: "blocked.is_root",
+};
+
 /** 設定頁的備份卡。
  *
  * 這張卡存在的理由是「不必記得去終端機跑腳本」——備份腳本 7/27 交付後兩天一次都沒被跑過，
@@ -56,10 +65,10 @@ export function BackupCard({ port }: { port: number | null }) {
     } catch (e) {
       console.error("[BackupCard] 儲存備份位置失敗", e);
       const code = (e as { code?: string | null }).code ?? null;
-      // 後端的 backup_dir_* 判別碼對應到 blocked.dir_* 文案；沒有對應的一律退回通用訊息，
-      // 不能讓沒見過的判別碼直接漏到畫面上
-      const key = code === "backup_dir_invalid" ? "blocked.dir_invalid" : "errors.saveFailed";
-      setSaveError(t(key));
+      // 後端判別碼 → i18n key。**顯式表**：動態組 key 會讓沒見過的判別碼變成畫面上的
+      // i18n key 原文，未知碼一律退回通用訊息（CLAUDE.md §4.6.13）。
+      const key = code !== null ? SAVE_ERROR_KEY[code] : undefined;
+      setSaveError(t(key ?? "errors.saveFailed"));
     }
   }, [port, refresh, t]);
 

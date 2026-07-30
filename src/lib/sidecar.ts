@@ -527,8 +527,10 @@ export async function putKmsRoot(port: number, path: string): Promise<{ ok: bool
 export interface BackupStatus {
   configured: boolean;
   backup_dir: string;   // raw（含 ~），未設定時為空字串
-  /** `invalid` 只出現在這條 wire 契約上（設定檔被手動塞了相對路徑），不是 probe_dir 的四態之一 */
-  dir_status: "dir" | "missing" | "not_dir" | "denied" | "invalid";
+  dir_status: "dir" | "missing" | "not_dir" | "denied";
+  /** `invalid` 只出現在這條 wire 契約上（設定檔被手動塞了相對路徑），
+   *  不是後端 `check_backup_dir()` 的回傳值之一 */
+  containment: "ok" | "inside_source" | "is_home" | "is_root" | "invalid";
 }
 
 /** 備份端點的判別碼錯誤。理由同 `SetupError`：`code` 只放欄位、不進 message，
