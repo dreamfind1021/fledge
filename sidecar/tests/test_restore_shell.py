@@ -243,3 +243,77 @@ def test_diff_only_reuses_an_existing_extraction(tmp_path: Path):
     assert proc.returncode == 0, proc.stderr
     assert marker.read_text(encoding="utf-8") == "touched"
     assert "兩邊都有但不同" in proc.stdout
+
+
+# ── 展開位置的 containment（Codex 對抗式審查 finding 1）──────────────────────
+# 票 09 驗收 #6 的措辭是「根本沒有那條路」而不是「預設不寫」：GUI 那層擋得住不代表
+# 直接跑腳本的人擋得住，所以同一組規則在腳本裡也要有一份。
+
+
+def test_refuses_dest_inside_a_live_account_dir(tmp_path: Path):
+    """展開到現役帳號目錄裡面＝把一份完整副本折回備份來源，下次備份會再收一遍。"""
+    home, live = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    before = _snapshot(live)
+
+    dest = live / "restored"
+    proc = _run([str(bundle), "-o", str(dest)], home)
+    assert proc.returncode != 0
+    assert not dest.exists()
+    assert _snapshot(live) == before          # 現役目錄一個位元都沒動
+
+
+def test_refuses_dest_that_is_a_live_account_dir_itself(tmp_path: Path):
+    home, live = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    before = _snapshot(live)
+    proc = _run([str(bundle), "-o", str(live)], home)
+    assert proc.returncode != 0
+    assert _snapshot(live) == before
+
+
+def test_refuses_home_and_root(tmp_path: Path):
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    for dest in (str(home), "/"):
+        proc = _run([str(bundle), "-o", dest], home)
+        assert proc.returncode != 0, dest
+
+
+def test_refuses_dest_inside_an_extra_source_path(tmp_path: Path):
+    """`~/.agents` 這類帳號目錄外的來源同樣是備份來源——判定要讀共用清單檔，
+    不能只看帳號目錄（否則兩邊的 containment 認定會漂移）。"""
+    home, _ = _fake_home(tmp_path)
+    agents = home / ".agents"
+    agents.mkdir()
+    bundle = _make_bundle(tmp_path, home)
+    proc = _run([str(bundle), "-o", str(agents / "restored")], home)
+    assert proc.returncode != 0
+    assert not (agents / "restored").exists()
+
+
+def test_still_allows_a_normal_location_outside_the_source_tree(tmp_path: Path):
+    """防呆不能寬到把正常位置也擋掉。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    dest = tmp_path / "restored"
+    proc = _run([str(bundle), "-o", str(dest)], home)
+    assert proc.returncode == 0, proc.stderr
+    assert (dest / "manifest.json").is_file()
+
+
+def test_missing_shared_list_file_is_not_fatal(tmp_path: Path):
+    """共用清單檔讀不到時仍要能跑（比照備份腳本）。`live_roots` 最後一個 `[ -f ]` 為假時
+    函式回非零——process substitution 會吞掉它，但這條測試把「吞得掉」變成有人守著的事實。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    lonely = tmp_path / "lonely"
+    lonely.mkdir()
+    copy = lonely / "restore-claude.sh"
+    copy.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    proc = subprocess.run(
+        ["/bin/bash", str(copy), str(bundle), "-o", str(tmp_path / "restored")],
+        capture_output=True, text=True,
+        env={**os.environ, "HOME": str(home)}, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr

@@ -45,6 +45,82 @@ DEST="${DEST:-${HOME}/.claude-restore-$(basename "${BUNDLE}" .tar.gz | sed 's/^c
 
 expand_home() { case "$1" in "~/"*) echo "${HOME}/${1#\~/}" ;; "~") echo "${HOME}" ;; *) echo "$1" ;; esac; }
 
+# ── 展開位置的 containment 防呆 ─────────────────────────────────────────────
+# **這一層必須在腳本裡，不能只在 GUI**：約束是「根本沒有那條路」而不是「GUI 預設不走那
+# 條路」。sidecar 的 `_restore_blocked` 是同一組規則的另一份實作（那邊比對 (st_dev,st_ino)
+# 身分、比這裡精確），兩層都在，直接跑腳本的人也擋得住。
+#
+# 展開到現役資料裡面的後果不是覆蓋（解的是 DEST/accounts/…）而是更難察覺的：把一份完整
+# 副本折回備份來源，下一次備份會把它整包再收一遍。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_JSON="${HOME}/.fledge/config.json"
+EXTRA_PATHS_FILE="${SCRIPT_DIR}/backup-extra-paths.txt"
+
+live_roots() {
+  # 現役來源＝所有帳號的 config_dir ∪ 共用清單檔。清單檔與 backup-claude.sh 共用同一份
+  # ——各存一份必然漂移，而漂移的後果是新來源不在防呆的認定裡。
+  if [ -f "${CONFIG_JSON}" ]; then
+    python3 -c "
+import json, os
+try:
+    cfg = json.load(open(os.path.expanduser('${CONFIG_JSON}')))
+except Exception:
+    raise SystemExit(0)
+for acc in cfg.get('accounts', {}).values():
+    d = (acc.get('config_dir') or '').strip()
+    if d:
+        print(d)
+" 2>/dev/null || true
+  fi
+  # 設定檔讀不到（或裡面沒有帳號）時仍然守住預設位置。**這不是 fail-open**：移機到新機器
+  # 上還沒設定過 Fledge 正是最常見的還原情境，而那時候 ~/.claude 一樣是現役目錄。
+  echo "~/.claude"
+  if [ -f "${EXTRA_PATHS_FILE}" ]; then
+    while IFS= read -r line || [ -n "${line}" ]; do
+      line="${line#"${line%%[![:space:]]*}"}"     # 去前導空白
+      case "${line}" in ''|'#'*) continue ;; esac
+      echo "${line}"
+    done < "${EXTRA_PATHS_FILE}"
+  fi
+}
+
+phys() {
+  # 實體路徑（跟隨 symlink）。DEST 通常還不存在，所以取最近的既有祖先再把剩下的接回去。
+  local p="$1" rest=""
+  while [ ! -d "${p}" ]; do
+    case "${p}" in ''|'/'|'.'|'..') break ;; esac
+    rest="/$(basename "${p}")${rest}"
+    p="$(dirname "${p}")"
+  done
+  printf '%s%s' "$(cd "${p}" 2>/dev/null && pwd -P || printf '%s' "${p}")" "${rest}"
+}
+
+# 比對前一律轉小寫：APFS 預設不分大小寫，~/.claude 與 ~/.CLAUDE 是同一個目錄但字串不等。
+# 誤判方向是「多擋一個其實可用的位置」，對防呆來說是安全的那一邊。
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+
+if [ "${DIFF_ONLY}" = false ]; then
+  dest_phys="$(phys "${DEST}")"
+  dest_key="$(lower "${dest_phys}")"
+  if [ "${dest_phys}" = "/" ]; then
+    echo "拒絕執行：不能展開到檔案系統根目錄。" >&2; exit 1
+  fi
+  if [ "${dest_key}" = "$(lower "$(phys "${HOME}")")" ]; then
+    echo "拒絕執行：不能展開到家目錄本身，請選一個專用的資料夾。" >&2; exit 1
+  fi
+  while IFS= read -r root; do
+    [ -n "${root}" ] || continue
+    root_key="$(lower "$(phys "$(expand_home "${root}")")")"
+    # pattern 兩側都加引號＝字面比對：路徑可能含 * ? [ 這些 glob 元字元
+    case "${dest_key}" in
+      "${root_key}"|"${root_key}"/*)
+        echo "拒絕執行：${DEST} 在現役的 Claude 資料（${root}）裡面。" >&2
+        echo "展開到那裡會把一份完整副本折回備份來源。換一個 Claude 目錄以外的位置。" >&2
+        exit 1 ;;
+    esac
+  done < <(live_roots)
+fi
+
 # ── 展開 ────────────────────────────────────────────────────────────────────
 if [ "${DIFF_ONLY}" = false ]; then
   # 展開目標必須是空的或不存在——絕不往既有內容上疊
