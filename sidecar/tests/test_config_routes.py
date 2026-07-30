@@ -338,3 +338,83 @@ def test_check_dir_status(tmp_path: Path, monkeypatch):
     assert client.post("/api/config/check-dir", json={"path": str(tmp_path)}).json()["status"] == "dir"
     assert client.post("/api/config/check-dir", json={"path": str(tmp_path / "nope")}).json()["status"] == "missing"
     assert client.post("/api/config/check-dir", json={"path": str(f)}).json()["status"] == "not_dir"
+
+
+def test_put_backup_dir(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    out = tmp_path / "backups"
+    out.mkdir()
+    client = TestClient(create_app())
+    resp = client.put("/api/config/backup-dir", json={"path": str(out)})
+    assert resp.status_code == 200
+    assert resp.json()["backup_dir"] == str(out)
+
+
+def test_put_backup_dir_keeps_tilde_raw(tmp_path: Path, monkeypatch):
+    """存 raw 不展開——與 kms_root 同構，換使用者名時 ~ 才會跟著走。"""
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.put("/api/config/backup-dir", json={"path": "~/backups"})
+    assert resp.status_code == 200
+    assert resp.json()["backup_dir"] == "~/backups"
+
+
+def test_put_backup_dir_clears(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    client.put("/api/config/backup-dir", json={"path": "~/backups"})
+    resp = client.put("/api/config/backup-dir", json={"path": ""})
+    assert resp.status_code == 200
+    assert resp.json()["backup_dir"] == ""
+
+
+def test_put_backup_dir_rejects_relative_path(tmp_path: Path, monkeypatch):
+    """相對路徑必須擋：備份 session 跑在家目錄、sidecar 的 cwd 是別的地方，
+    `"foo"` 會讓「檢查的目錄」與「實際寫入的目錄」變成兩個不同的地方。"""
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.put("/api/config/backup-dir", json={"path": "foo"})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "backup_dir_invalid"
+
+
+def test_rejected_backup_dir_is_not_written(tmp_path: Path, monkeypatch):
+    """被拒的值不能落進設定檔——否則下次啟動會帶著一個非法值進來。"""
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    client.put("/api/config/backup-dir", json={"path": "foo"})
+    assert client.get("/api/config").json().get("backup_dir", "") == ""
+
+
+def test_put_backup_dir_rejects_unknown_field(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.put("/api/config/backup-dir", json={"path": "/tmp/x", "extra": 1})
+    assert resp.status_code == 422
+
+
+def test_put_backup_dir_rejects_inside_source(tmp_path: Path, monkeypatch):
+    """輸出目錄落在被備份的目錄裡，腳本會把正在寫入的暫存區收進備份包。"""
+    _write_config(tmp_path, monkeypatch)
+    inside = tmp_path / "claude" / "projects" / "backups"
+    inside.mkdir(parents=True)
+    client = TestClient(create_app())
+    client.patch("/api/config/accounts/work", json={"config_dir": str(tmp_path / "claude")})
+    resp = client.put("/api/config/backup-dir", json={"path": str(inside)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "backup_dir_inside_source"
+
+
+def test_put_backup_dir_rejects_home(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.put("/api/config/backup-dir", json={"path": str(Path.home())})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "backup_dir_is_home"
+
+
+def test_rejected_containment_is_not_written(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    client.put("/api/config/backup-dir", json={"path": str(Path.home())})
+    assert client.get("/api/config").json().get("backup_dir", "") == ""

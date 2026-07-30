@@ -1,0 +1,12 @@
+# 帳號 config_dir 之外的備份來源。一行一個路徑，`#` 開頭是註解、空行忽略、支援 ~。
+#
+# 這個檔案刻意被兩邊讀，是單一權威：
+#   - scripts/backup-claude.sh                     決定要「收」哪些額外目錄
+#   - sidecar 的 backup/containment.py             決定備份輸出目錄「不得落在」哪些目錄裡
+#
+# 各自硬編碼一份的話，只改其中一邊就會漂移：新來源會被打包，但 containment 不知道它，
+# 使用者就能把備份輸出目錄設進那個來源裡，於是備份把正在寫入的暫存區收進自己。
+#
+# 為什麼需要這一類路徑：skill 的真身可以放在 config_dir 外、再從 skills/ symlink 過去
+# （~/.agents/skills 就是這樣），只備 config_dir 會收到一條指向空氣的連結。
+~/.agents

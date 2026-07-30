@@ -1,0 +1,127 @@
+/* 備份卡。容器與標頭沿用 Onboarding.css 的 b4-card 家族，這裡只放備份專屬的版面。 */
+
+.bk-card {
+  margin-top: 10px;
+}
+
+/* 路徑列：標籤、路徑、動作各佔一段；路徑吃掉剩餘寬度並在過長時省略，
+   不讓一條深路徑把按鈕擠出卡片外 */
+.bk-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.bk-row-label {
+  font-size: 12px;
+  color: var(--dim);
+  flex: 0 0 auto;
+}
+
+.bk-path {
+  font-size: 11.5px;
+  color: var(--dim);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 7px;
+  flex: 1 1 auto;
+  min-width: 0;              /* flex 子項預設 min-width:auto，不設就不會縮、也不會省略 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 阻斷態：說明獨佔一行（可能兩三句），路徑與按鈕排在下面 */
+.bk-blocked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.bk-blocked-msg {
+  flex: 1 0 100%;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  color: var(--warning);
+}
+
+.bk-error {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 8px 0 0;
+  color: var(--error);
+}
+
+/* 天數主行：分級只用文字顏色，不加徽章也不加 banner（刻意的設計決策——
+   這張卡是常駐可見指標，不是催促使用者的通知） */
+.bk-days {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 10px 0 0;
+}
+
+.bk-days--fresh { color: var(--text); }
+.bk-days--stale { color: var(--warning); }
+.bk-days--overdue { color: var(--error); }
+
+/* 備份包清單 */
+.bk-bundles {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.bk-bundles-title {
+  font-size: 11.5px;
+  color: var(--dim);
+  margin-bottom: 6px;
+}
+
+.bk-bundle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.bk-bundle-time {
+  color: var(--text);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 大小靠右對齊成一欄；等寬數字讓不同長度的數值不會左右跳動 */
+.bk-bundle-size {
+  color: var(--dim);
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 動作列：與路徑列之間留白，按鈕靠左（不是 modal 的確認鍵，不該靠右） */
+.bk-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* 「上次備份未完成」：接在天數主行下方的一行提醒。不是阻斷態，用 warning 而非 error */
+.bk-warn {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 4px 0 0;
+  color: var(--warning);
+}
+
+/* 「關閉設定會中斷」提示：執行中才出現，接在動作列下方 */
+.bk-hint {
+  margin: 8px 0 0;
+}

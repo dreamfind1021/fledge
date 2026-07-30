@@ -567,3 +567,139 @@ def test_login_session_unknown_account_400(tmp_path: Path, monkeypatch):
     })
     assert resp.status_code == 400
     assert resp.json()["error"] == "unknown_account"
+
+
+# ── kind=backup（票 05）────────────────────────────────────────────────────────
+
+
+def _backup_config(tmp_path: Path, monkeypatch, backup_dir: str, with_script: bool = True) -> None:
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "version": 1, "roots": [],
+        "accounts": {"default": {"config_dir": str(tmp_path / "claude"), "label": ""}},
+        "backup_dir": backup_dir,
+    }), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    scripts = tmp_path / "scripts"
+    scripts.mkdir(exist_ok=True)
+    if with_script:
+        (scripts / "backup-claude.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_BACKUP_SCRIPTS_DIR", str(scripts))
+
+
+def _post_backup(client, mode: str | None = "run"):
+    body = {"path": "", "kind": "backup"}
+    if mode is not None:
+        body["backup_mode"] = mode
+    return client.post("/api/sessions", json=body)
+
+
+def _capture_create(captured: dict):
+    class _Session:
+        session_id = "test-backup-session"
+
+    def _create(**kwargs):
+        captured.update(kwargs)
+        return _Session()
+
+    return _create
+
+
+def test_backup_session_rejects_injected_command(tmp_path: Path, monkeypatch):
+    """安全不變式：未知欄位一律擋掉，命令字串永遠不可能從前端進來。"""
+    out = tmp_path / "backups"
+    out.mkdir()
+    _backup_config(tmp_path, monkeypatch, backup_dir=str(out))
+    client = TestClient(create_app())
+    resp = client.post("/api/sessions", json={
+        "path": "", "kind": "backup", "backup_mode": "run", "command": "rm -rf /",
+    })
+    assert resp.status_code == 422
+
+
+def test_backup_session_rejects_unknown_mode(tmp_path: Path, monkeypatch):
+    out = tmp_path / "backups"
+    out.mkdir()
+    _backup_config(tmp_path, monkeypatch, backup_dir=str(out))
+    assert _post_backup(TestClient(create_app()), mode="wipe").status_code == 422
+
+
+def test_backup_session_requires_mode(tmp_path: Path, monkeypatch):
+    out = tmp_path / "backups"
+    out.mkdir()
+    _backup_config(tmp_path, monkeypatch, backup_dir=str(out))
+    resp = _post_backup(TestClient(create_app()), mode=None)
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "backup_mode_required"
+
+
+def test_backup_session_blocked_when_not_configured(tmp_path: Path, monkeypatch):
+    _backup_config(tmp_path, monkeypatch, backup_dir="")
+    resp = _post_backup(TestClient(create_app()))
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "backup_dir_not_set"
+
+
+def test_backup_session_blocked_on_relative_path(tmp_path: Path, monkeypatch):
+    _backup_config(tmp_path, monkeypatch, backup_dir="foo")
+    resp = _post_backup(TestClient(create_app()))
+    assert resp.json()["error"] == "backup_dir_invalid"
+
+
+def test_backup_session_blocked_when_inside_source(tmp_path: Path, monkeypatch):
+    """spawn 前的閘才是真正的守門：存檔時合法的值可能因為新增帳號而變得不合法。"""
+    inside = tmp_path / "claude" / "projects" / "backups"
+    inside.mkdir(parents=True)
+    _backup_config(tmp_path, monkeypatch, backup_dir=str(inside))
+    resp = _post_backup(TestClient(create_app()))
+    assert resp.json()["error"] == "backup_dir_inside_source"
+
+
+def test_backup_session_blocked_when_dir_missing(tmp_path: Path, monkeypatch):
+    _backup_config(tmp_path, monkeypatch, backup_dir=str(tmp_path / "gone"))
+    resp = _post_backup(TestClient(create_app()))
+    assert resp.json()["error"] == "backup_dir_unusable"
+
+
+def test_backup_session_blocked_when_script_missing(tmp_path: Path, monkeypatch):
+    out = tmp_path / "backups"
+    out.mkdir()
+    _backup_config(tmp_path, monkeypatch, backup_dir=str(out), with_script=False)
+    resp = _post_backup(TestClient(create_app()))
+    assert resp.json()["error"] == "backup_script_missing"
+
+
+def test_backup_session_blocked_when_python3_missing(tmp_path: Path, monkeypatch):
+    out = tmp_path / "backups"
+    out.mkdir()
+    _backup_config(tmp_path, monkeypatch, backup_dir=str(out))
+    monkeypatch.setattr("fledge_sidecar.routes.sessions.python3_available", lambda: False)
+    resp = _post_backup(TestClient(create_app()))
+    assert resp.json()["error"] == "python3_missing"
+
+
+def test_backup_session_gate_order_matches_card(tmp_path: Path, monkeypatch):
+    """多個阻斷條件同時成立時回優先序最前的——卡片顯示的修復指引必須與後端
+    下一個會擋的東西一致。"""
+    _backup_config(tmp_path, monkeypatch, backup_dir="", with_script=False)
+    monkeypatch.setattr("fledge_sidecar.routes.sessions.python3_available", lambda: False)
+    assert _post_backup(TestClient(create_app())).json()["error"] == "backup_dir_not_set"
+
+
+def test_backup_session_spawns_with_backend_built_argv(tmp_path: Path, monkeypatch):
+    """成功路徑：跑的是後端組的 argv（前端沒有任何影響力），且不綁帳號。"""
+    out = tmp_path / "My Backups"  # 含空白，驗證不經 shell
+    out.mkdir()
+    _backup_config(tmp_path, monkeypatch, backup_dir=str(out))
+    captured: dict = {}
+    monkeypatch.setattr(
+        "fledge_sidecar.routes.sessions._bridge.create_session", _capture_create(captured)
+    )
+    resp = _post_backup(TestClient(create_app()), mode="list")
+    assert resp.status_code == 200
+    assert captured["command"][0] == "/bin/bash"
+    assert str(out) in captured["command"]
+    assert captured["command"][-1] == "--list"
+    assert captured["cwd"] == str(Path.home())
+    assert captured["env_overrides"] == {}
+    assert "CLAUDE_CONFIG_DIR" in captured["env_remove"]

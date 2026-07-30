@@ -57,12 +57,20 @@ interface TerminalProps {
   tabId: string;
   isActive: boolean;
   projectPath?: string; // 用於把終端機輸出裡的相對路徑解析成絕對路徑（Cmd+click 開連結）
+  /** PTY EOF（WS 4001／1008）＝跑在裡面的命令真的結束了。給設置卡用：卡片的合成 tabId
+   *  在 store 內沒有對應 tab，`setTabStatus` 是 no-op，卡片因此收不到任何結束訊號。
+   *  **不含放棄重連的分支**——那時命令可能還在跑，說它結束是謊報。 */
+  onEnded?: () => void;
 }
 
-export function Terminal({ port, sessionId, tabId, isActive, projectPath }: TerminalProps) {
+export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnded }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const isActiveRef = useRef(isActive);
+  // 走 ref 而非 effect 依賴：呼叫端每次 render 都會給新的 callback 引用，放進依賴會
+  // teardown+rebuild xterm（term.dispose 毀掉終端機內容）
+  const onEndedRef = useRef(onEnded);
+  onEndedRef.current = onEnded;
   const forceRefreshRef = useRef<(() => void) | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -361,6 +369,7 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath }: Term
         // 4001/1008：session 已結束 → 不重連
         if (!shouldReconnect(e.code)) {
           setTabStatus(tabId, "ended");
+          onEndedRef.current?.();
           return;
         }
         // backend 非 up（suspect/down/restarting）→ 不重連（整個後端沒了、徒勞），留 offline 由 banner 主導。

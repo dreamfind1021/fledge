@@ -6,9 +6,12 @@ import re
 import threading
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
 from fledge_sidecar.app_config import AppConfig
+from fledge_sidecar.backup.containment import check_backup_dir, source_roots
+from fledge_sidecar.backup.script import scripts_root
 from fledge_sidecar.paths import canonicalize, expand_and_validate, probe_dir, resolve_best_effort
 
 router = APIRouter()
@@ -298,3 +301,40 @@ def put_kms_root(body: KmsRootBody):
         config.set_kms_root(body.path)
         config.save()
         return {"ok": True, "kms_root": config.kms_root}
+
+
+class BackupDirBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = ""
+
+
+@router.put("/api/config/backup-dir")
+def put_backup_dir(body: BackupDirBody):
+    """設備份輸出目錄。存 raw（含 ~）；空字串＝清除。不驗目錄存在——存在與否
+    交給 `GET /api/backup/status` 的 `dir_status` 表達，卡片才能說明是哪一種異常。
+
+    但**相對路徑必須擋**：備份跑在家目錄、sidecar 的 cwd 是別的地方，`"foo"` 會讓
+    「檢查的目錄」與「實際寫入的目錄」變成兩個不同的地方，探測與 UI 顯示同時失真。
+
+    錯誤走 `JSONResponse({"error": code})` 而非本檔其他地方的 `HTTPException(detail=…)`：
+    前端讀的是 `error` 欄位，且判別碼必須是穩定英文碼、不能像既有 detail 那樣夾中文
+    prose（CLAUDE.md §4.6.13）。"""
+    raw = (body.path or "").strip()
+    abs_path: str | None = None
+    if raw:  # 空字串＝清除，不必驗
+        try:
+            abs_path = expand_and_validate(raw)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"error": "backup_dir_invalid"})
+    with _config_lock:
+        config = AppConfig.load()
+        if abs_path is not None:
+            # 存檔時的 containment 檢查是 UX：錯誤在使用者按下選擇器的當場出現。
+            # 真正的守門在 spawn 前（備份執行票）——存檔時合法的值之後可能變得不合法，
+            # 最常見的是新增了一個 config_dir 剛好包住它的帳號。
+            verdict = check_backup_dir(abs_path, source_roots(config, scripts_root()))
+            if verdict != "ok":
+                return JSONResponse(status_code=400, content={"error": f"backup_dir_{verdict}"})
+        config.set_backup_dir(raw)
+        config.save()
+        return {"ok": True, "backup_dir": config.backup_dir}

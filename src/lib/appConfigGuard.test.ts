@@ -97,6 +97,17 @@ describe("isUsableConfig", () => {
     expect(isUsableConfig({ ...base(), kms_root: "/kms" })).toBe(true);
     expect(isUsableConfig({ ...base(), kms_root: 1 })).toBe(false);
   });
+
+  it("backup_dir 未提供通過、提供但非字串不通過", () => {
+    expect(isUsableConfig({ ...base(), backup_dir: "~/backups" })).toBe(true);
+    expect(isUsableConfig({ ...base(), backup_dir: 1 })).toBe(false);
+  });
+
+  it("backup_dir 是相對路徑仍放行——合法性是 route 的責任，不是啟動守衛的", () => {
+    // 把 containment/絕對路徑檢查搬進這裡的話，一個事後才變得不合法的值會讓
+    // 使用者永久卡在啟動畫面，而重試讀回的是同一份檔案、救不了。
+    expect(isUsableConfig({ ...base(), backup_dir: "foo" })).toBe(true);
+  });
 });
 
 // 這個 guard 曾經兩度走偏：先是太鬆（只驗頂層兩個欄位，Codex R2），再是太嚴（要求具名欄位

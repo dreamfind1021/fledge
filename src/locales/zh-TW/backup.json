@@ -1,0 +1,32 @@
+{
+  "title": "備份",
+  "intro": "備份的是你的 Claude 生態：自己寫的 skill 與腳本、指令歷史、session 歷史、對話中貼入的圖片。快取與執行期狀態不收。永不含憑證——但備份包仍帶有可識別你的資訊，不要公開。",
+  "chooseLocation": "選擇備份位置",
+  "change": "更改",
+  "location": "備份位置",
+  "neverBackedUp": "從未備份",
+  "today": "今天備份過",
+  "daysAgo": "上次備份 {{count}} 天前",
+  "bundles": "既有備份包",
+  "showAll": "顯示全部 {{count}} 份",
+  "preview": "預覽會收什麼",
+  "runNow": "立即備份",
+  "lastAttemptFailed": "上次備份未完成",
+  "leaveHint": "備份進行中，關閉設定會中斷它。",
+  "blocked": {
+    "dir_denied": "Fledge 讀不到這個資料夾。",
+    "dir_missing": "這個資料夾已經不存在了。",
+    "dir_not_dir": "這個路徑不是資料夾。",
+    "inside_source": "這個資料夾在被備份的資料裡面，備份會把自己收進去。請選 Claude 目錄以外的位置。",
+    "invalid": "已存的位置不是有效的絕對路徑，請重新選擇。",
+    "is_home": "家目錄範圍太大，請選一個專用的資料夾。",
+    "is_root": "檔案系統根目錄不是有效的備份位置。",
+    "not_configured": "選一個存放備份的位置。跟原始資料放同一顆碟等於沒有保護。",
+    "python3_missing": "備份需要系統的 python3，目前找不到。用這個指令安裝 Xcode Command Line Tools：xcode-select --install",
+    "script_missing": "這個版本的 Fledge 缺少備份腳本。"
+  },
+  "errors": {
+    "runFailed": "備份啟動不了。",
+    "saveFailed": "備份位置存不進去。"
+  }
+}

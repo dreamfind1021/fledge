@@ -77,6 +77,7 @@ class AppConfig:
     ui: dict[str, Any] = field(default_factory=dict)
     subscriptions: list[dict[str, Any]] = field(default_factory=list)
     kms_root: str = ""  # KMS 根目錄，raw 含 ~，runtime 才 expanduser
+    backup_dir: str = ""  # 備份輸出目錄，raw 含 ~，runtime 才 expanduser
 
     @classmethod
     def load(cls, path: Path | None = None) -> AppConfig:
@@ -142,6 +143,7 @@ class AppConfig:
             ui=data.get("ui", DEFAULT_CONFIG["ui"]),
             subscriptions=data.get("subscriptions", []),
             kms_root=data.get("kms_root", "") or "",
+            backup_dir=data.get("backup_dir", "") or "",
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -154,6 +156,7 @@ class AppConfig:
             "ui": self.ui,
             "subscriptions": self.subscriptions,
             "kms_root": self.kms_root,
+            "backup_dir": self.backup_dir,
         }
 
     def save(self) -> None:
@@ -225,3 +228,10 @@ class AppConfig:
     def set_kms_root(self, path: str) -> None:
         """存 raw（含 ~，trim 在路由層 expanduser）；空字串＝未設。"""
         self.kms_root = (path or "").strip()
+
+    def set_backup_dir(self, path: str) -> None:
+        """存 raw（含 ~，runtime 才 expanduser）；空字串＝未設。
+
+        合法性（絕對路徑、之後還會加上不得落在備份來源內）一律由路由層驗——這裡只負責存。
+        把驗證放進載入路徑的話，一個事後才變得不合法的值會讓整個 app 開不起來。"""
+        self.backup_dir = (path or "").strip()

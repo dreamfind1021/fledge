@@ -1,0 +1,32 @@
+{
+  "title": "Backup",
+  "intro": "Backs up your Claude ecosystem: the skills and scripts you wrote, command history, session history, and images you pasted into conversations. Caches and runtime state are left out. Credentials are never included — but the bundle still identifies you, so don't publish it.",
+  "chooseLocation": "Choose backup location",
+  "change": "Change",
+  "location": "Backup location",
+  "neverBackedUp": "Never backed up",
+  "today": "Backed up today",
+  "daysAgo": "Last backup {{count}} day(s) ago",
+  "bundles": "Existing backups",
+  "showAll": "Show all {{count}}",
+  "preview": "Preview what gets backed up",
+  "runNow": "Back up now",
+  "lastAttemptFailed": "The last attempt did not finish",
+  "leaveHint": "Leaving Settings while this runs will stop it.",
+  "blocked": {
+    "dir_denied": "Fledge cannot read that folder.",
+    "dir_missing": "That folder no longer exists.",
+    "dir_not_dir": "That path is not a folder.",
+    "inside_source": "This folder sits inside the data being backed up, so the backup would end up containing itself. Pick somewhere outside your Claude directories.",
+    "invalid": "The saved location is not a valid absolute path. Choose it again.",
+    "is_home": "Your home folder is too broad for this. Pick a dedicated folder.",
+    "is_root": "The filesystem root is not a valid backup location.",
+    "not_configured": "Choose where backups should go. Keeping them on the same disk as the originals is no protection at all.",
+    "python3_missing": "Backup needs the system python3, which was not found. Install Xcode Command Line Tools with: xcode-select --install",
+    "script_missing": "The backup script is missing from this build of Fledge."
+  },
+  "errors": {
+    "runFailed": "The backup could not be started.",
+    "saveFailed": "Could not save the backup location."
+  }
+}
