@@ -526,3 +526,60 @@ def test_case_alias_of_home_itself_is_refused_as_home(tmp_path: Path):
     proc = _run([str(bundle), "-o", alias], home)
     assert proc.returncode != 0
     assert "家目錄" in proc.stderr, proc.stderr
+
+
+def test_publish_refuses_when_dest_appeared_during_extraction(tmp_path: Path):
+    """**發布必須是 no-replace 的**：`mv A B` 在 B 是既有目錄時會把 A 移**進去**，於是
+    另一個程序在我們解壓期間搶先發布時，我們會把整棵樹藏進它裡面——而且因為 DEST 底下
+    有（別人的）manifest.json，腳本還會照樣印出成功的差異報告。整套設計最反對的假成功。
+
+    競態窗口在「檢查 DEST 空不空」與「發布」之間，只有微秒——**單靠併行跑兩個程序碰不到
+    它**（下面那條就是這樣，退回 mv 也照樣綠）。這裡用假 tar 在解壓期間把 DEST 建出來，
+    確定性地重現那一刻。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    dest = tmp_path / "restored"
+    rival = _fake_bin(
+        tmp_path, "tar",
+        '#!/bin/sh\ncase "$1" in *x*) mkdir -p "$RIVAL_DEST";'
+        ' echo other > "$RIVAL_DEST/manifest.json" ;; esac\nexec /usr/bin/tar "$@"\n',
+    )
+    proc = _run([str(bundle), "-o", str(dest)], home,
+                extra_env={"PATH": f"{rival}:{os.environ['PATH']}", "RIVAL_DEST": str(dest)})
+
+    assert proc.returncode != 0
+    assert (dest / "manifest.json").read_text(encoding="utf-8").strip() == "other"  # 別人的沒被動
+    assert [p.name for p in dest.iterdir()] == ["manifest.json"], "我們的樹被藏進去了"
+
+
+def test_concurrent_restores_to_the_same_dest(tmp_path: Path):
+    """端到端：兩個還原同時解到同一個 DEST，恰有一個成功。
+
+    **這條碰不到發布那一刻的競態**（上面那條才是），它守的是整條路徑不會兩個都成功。
+    假 HOME 很小，兩個程序不做事就會先後跑完、根本不重疊——用會拖慢的 tar 造出重疊窗口
+    （比照 test_backup_shell）。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    dest = tmp_path / "restored"
+    slow_tar = _fake_bin(
+        tmp_path, "tar",
+        '#!/bin/sh\ncase "$1" in *x*) sleep 1 ;; esac\nexec /usr/bin/tar "$@"\n',
+    )
+    env = {**os.environ, "HOME": str(home), "PATH": f"{slow_tar}:{os.environ['PATH']}"}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    procs = [
+        subprocess.Popen(
+            ["/bin/bash", str(SCRIPT), str(bundle), "-o", str(dest)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        )
+        for _ in range(2)
+    ]
+    for proc in procs:
+        proc.wait(timeout=180)
+
+    assert sum(1 for p in procs if p.returncode == 0) == 1, "應恰有一個成功、一個讓位"
+    assert (dest / "manifest.json").is_file()
+    # 第二份不得藏在第一份裡面，殘骸也不該留在旁邊
+    nested = [p.name for p in dest.iterdir() if p.name.startswith(".")]
+    assert nested == [], nested
+    assert list(tmp_path.glob(".*fledge-restore*")) == []

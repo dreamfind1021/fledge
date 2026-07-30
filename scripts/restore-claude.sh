@@ -218,12 +218,20 @@ if [ "${DIFF_ONLY}" = false ]; then
   [ -f "${staging}/manifest.json" ] || {
     echo "這不是一份完整的備份包（缺 manifest.json）：${BUNDLE}" >&2; exit 1; }
 
-  # DEST 已存在但為空（使用者用系統選擇器挑的位置必然已存在）時，mv 會把 staging 塞進
-  # 它底下變成 DEST/<staging名>。先 rmdir 掉——只有真的空才會成功，非空在上面已擋掉。
-  if [ -d "${DEST}" ]; then
-    rmdir "${DEST}"
-  fi
-  mv "${staging}" "${DEST}"
+  # **發布走 os.rename 而不是 mv**：`mv A B` 在 B 是既有目錄時會把 A 移**進去**變成
+  # B/<staging名>，於是兩個同時還原到同一個 DEST 的程序，第二個會把自己整棵樹藏進第一份
+  # 結果裡面，而且因為 DEST/manifest.json（第一份的）存在，它還會照樣印出成功的差異報告
+  # ——整套設計最反對的假成功。rename(2) 的語意正是我們要的：目標不存在或是**空目錄**才
+  # 成功、非空回 ENOTEMPTY，而且是原子的（「先 rmdir 再 mv」的 check-then-act 擋不住併發）。
+  python3 -c '
+import os, sys
+try:
+    os.rename(sys.argv[1], sys.argv[2])
+except OSError as exc:
+    print("展開位置在執行期間被佔用了（%s）：%s" % (exc.strerror, sys.argv[2]), file=sys.stderr)
+    print("多半是同時跑了兩個還原。換一個位置再試。", file=sys.stderr)
+    raise SystemExit(1)
+' "${staging}" "${DEST}"
 fi
 
 MANIFEST="${DEST}/manifest.json"
