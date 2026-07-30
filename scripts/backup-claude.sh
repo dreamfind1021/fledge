@@ -203,15 +203,18 @@ mkdir -p "${OUT_DIR}"
 out="${OUT_DIR}/claude-backup-${stamp}.tar.gz"
 # 驗證通過前寫的名字：前導 `.` 加 `.partial` 後綴，兩重都不符合「完整備份包」的形狀，
 # 所以半成品永遠不會被 UI 當成一次成功的備份（原子發布）。
-partial="${OUT_DIR}/.claude-backup-${stamp}.tar.gz.partial"
+#
+# **帶 PID**（比照 stage）：`stamp` 只有分鐘精度，只用它命名的話，同分鐘啟動的兩個備份
+# （GUI + CLI、或兩個實例）會寫同一個檔案。更糟的是先完成的那個 rename 成最終名之後，
+# 另一個的 open fd 仍指向同一個 inode——它會繼續寫，把一份**已經驗證過**的備份包寫壞。
+partial="${OUT_DIR}/.claude-backup-${stamp}-$$.tar.gz.partial"
 [ -e "${out}" ] && { echo "輸出檔已存在，不覆蓋：${out}" >&2; exit 1; }
-[ -e "${partial}" ] && { echo "同時間戳的半成品已存在：${partial}" >&2; exit 1; }
 
 # 回收超齡殘骸：SIGKILL、程序崩潰或斷電時下面的 trap 不會執行，殘骸會一直累積，
 # 吃掉的正是要拿來放備份的空間。**嚴格命名 + 24 小時年齡閘**——只刪本腳本自己產生的
 # 格式，且不誤刪另一個正在跑的實例。命名不符的一律不動，即使它很舊。
 find "${OUT_DIR}" -maxdepth 1 -type f \
-  -name '.claude-backup-????????-????.tar.gz.partial' -mmin +1440 -delete 2>/dev/null || true
+  -name '.claude-backup-????????-????-*.tar.gz.partial' -mmin +1440 -delete 2>/dev/null || true
 
 # staging 用 APFS clone（同卷零成本、瞬間完成），tar 再打包它。
 # stage 路徑由本腳本 mkdir 產生、含 PID，trap 只清這一個；partial 同理。
@@ -283,8 +286,14 @@ if ! tar tzf "${partial}" > /dev/null 2>&1; then
   rm -f "${partial}"
   exit 1
 fi
-# 同目錄改名是原子的：最終名一出現，就代表內容已經通過驗證。
-mv "${partial}" "${out}"
+# 發布用 `ln` 而不是 `mv`：hard link 遇到既有目標會直接失敗（EEXIST），是真正的原子
+# no-clobber——上面那行 `[ -e "${out}" ]` 只是 check-then-act，兩個同分鐘的備份可能都通過
+# 它然後互相覆寫。link 成功後 partial 與 out 是同一個 inode，unlink 掉 partial 這個名字即可。
+if ! ln "${partial}" "${out}" 2>/dev/null; then
+  echo "輸出檔已存在（另一個備份可能同分鐘完成），不覆蓋：${out}" >&2
+  exit 1
+fi
+rm -f "${partial}"
 entries=$(tar tzf "${out}" | wc -l | tr -d ' ')
 
 echo

@@ -37,7 +37,7 @@ def test_size_is_reported(tmp_path: Path):
 def test_partial_and_unrelated_names_are_ignored(tmp_path: Path):
     """只認完整備份包的確切形狀。半成品（前導 `.` + `.partial` 後綴）被顯示成一次成功的
     備份，是這張卡最危險的失敗——使用者會看到「0 天前」配正常色。"""
-    _touch(tmp_path, ".claude-backup-20260729-0900.tar.gz.partial")
+    _touch(tmp_path, ".claude-backup-20260729-0900-12345.tar.gz.partial")
     _touch(tmp_path, "claude-backup-20260729-0900.tar.gz.partial")
     _touch(tmp_path, "unrelated.tar.gz")
     _touch(tmp_path, "claude-backup-20260729-0900.tar")
@@ -90,20 +90,20 @@ def test_last_attempt_failed_when_partial_newer_than_bundle(tmp_path: Path):
     """比最新備份包還新的殘骸＝上一次沒跑完。讓它沉默，使用者會看到「N 天前」
     卻不知道最近那次是失敗的。"""
     _touch(tmp_path, "claude-backup-20260727-1432.tar.gz")
-    _touch(tmp_path, ".claude-backup-20260729-0900.tar.gz.partial")
+    _touch(tmp_path, ".claude-backup-20260729-0900-12345.tar.gz.partial")
     assert last_attempt_failed(str(tmp_path), list_bundles(str(tmp_path))) is True
 
 
 def test_last_attempt_not_failed_when_partial_older(tmp_path: Path):
     """舊殘骸不該讓一次成功的備份看起來像失敗。"""
-    _touch(tmp_path, ".claude-backup-20260727-1000.tar.gz.partial")
+    _touch(tmp_path, ".claude-backup-20260727-1000-12345.tar.gz.partial")
     _touch(tmp_path, "claude-backup-20260729-0900.tar.gz")
     assert last_attempt_failed(str(tmp_path), list_bundles(str(tmp_path))) is False
 
 
 def test_last_attempt_failed_with_no_bundles_at_all(tmp_path: Path):
     """從未成功過但有殘骸：仍要算失敗。"""
-    _touch(tmp_path, ".claude-backup-20260729-0900.tar.gz.partial")
+    _touch(tmp_path, ".claude-backup-20260729-0900-12345.tar.gz.partial")
     assert last_attempt_failed(str(tmp_path), []) is True
 
 
@@ -116,4 +116,11 @@ def test_malformed_partial_name_ignored(tmp_path: Path):
     """命名不符的檔案不是我們的殘骸，不能拿它來宣稱備份失敗。"""
     _touch(tmp_path, ".claude-backup-nonsense.tar.gz.partial")
     _touch(tmp_path, "important.tar.gz.partial")
+    assert last_attempt_failed(str(tmp_path), []) is False
+
+
+def test_partial_without_pid_segment_is_not_our_residue(tmp_path: Path):
+    """沒有 PID 段的檔名不是本腳本產生的格式——不能拿它宣稱備份失敗，
+    腳本的回收邏輯也不會刪它。兩邊的命名認定必須一致。"""
+    _touch(tmp_path, ".claude-backup-20260729-0900.tar.gz.partial")
     assert last_attempt_failed(str(tmp_path), []) is False

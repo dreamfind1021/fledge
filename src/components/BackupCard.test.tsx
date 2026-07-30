@@ -308,3 +308,23 @@ describe("BackupCard 立即備份", () => {
     expect(screen.queryByText(zh.lastAttemptFailed)).toBeNull();
   });
 });
+
+describe("BackupCard 執行中的位置變更", () => {
+  it("執行中不能改位置——備份寫舊位置、回讀掃新位置會讓成功的備份憑空消失", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.runNow }));
+    await waitFor(() => expect(screen.queryByTestId("terminal")).toBeTruthy());
+    expect(screen.getByRole("button", { name: zh.change }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("跑完後恢復可改位置", async () => {
+    mockStatus();
+    render(<BackupCard port={1} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.runNow }));
+    fireEvent.click(await screen.findByTestId("end-session"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: zh.change }).hasAttribute("disabled")).toBe(false),
+    );
+  });
+});

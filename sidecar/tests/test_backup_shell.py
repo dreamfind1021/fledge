@@ -237,7 +237,7 @@ def test_stale_partial_is_reclaimed(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     out = tmp_path / "out"
     out.mkdir()
-    stale = out / ".claude-backup-20200101-0000.tar.gz.partial"
+    stale = out / ".claude-backup-20200101-0000-12345.tar.gz.partial"
     stale.write_bytes(b"x")
     old = os.path.getmtime(stale) - 48 * 3600
     os.utime(stale, (old, old))
@@ -250,7 +250,7 @@ def test_fresh_partial_is_kept(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     out = tmp_path / "out"
     out.mkdir()
-    fresh = out / ".claude-backup-20260730-0900.tar.gz.partial"
+    fresh = out / ".claude-backup-20260730-0900-12345.tar.gz.partial"
     fresh.write_bytes(b"x")
     _run(["-o", str(out)], home)
     assert fresh.exists()
@@ -301,3 +301,78 @@ def test_scan_output_has_no_blank_item_row(tmp_path: Path):
     proc = _run(["--list", "-o", str(tmp_path / "out")], home)
     blank_rows = [ln for ln in proc.stdout.splitlines() if ln.strip().startswith("收") and len(ln.split()) < 3]
     assert blank_rows == [], blank_rows
+
+
+def test_concurrent_runs_do_not_share_partial(tmp_path: Path):
+    """兩個同分鐘啟動的備份不得互相破壞。
+
+    `stamp` 只有分鐘精度。若 partial 名只由 stamp 決定，兩個程序會寫同一個檔案；更糟的是
+    A 驗證通過、rename 成最終名之後，B 的 open fd 仍指向同一個 inode——B 繼續寫，把一個
+    **已經驗證過**的備份包寫壞。原子發布必須在併行這一側也成立。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    # 假 HOME 很小，兩個程序不做任何事就會先後跑完、根本不重疊——那樣的測試是假綠，
+    # 它證明的是「沒有併行」而不是「併行安全」。用會拖慢的 tar 造出真正的重疊窗口。
+    slow_tar = _fake_bin(
+        tmp_path, "tar",
+        '#!/bin/sh\ncase "$1" in *c*) sleep 1 ;; esac\nexec /usr/bin/tar "$@"\n',
+    )
+    env = {**os.environ, "HOME": str(home), "PATH": f"{slow_tar}:{os.environ['PATH']}"}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    procs = [
+        subprocess.Popen(
+            ["/bin/bash", str(SCRIPT), "-o", str(out)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        )
+        for _ in range(2)
+    ]
+    for p in procs:
+        p.wait(timeout=180)
+
+    bundles = list(out.glob("claude-backup-*.tar.gz"))
+    assert len(bundles) == 1, f"同分鐘併行應只發布一份，實得 {[b.name for b in bundles]}"
+    # 發布出來的那份必須完整：被另一個程序寫壞的話這裡會失敗
+    assert subprocess.run(["tar", "tzf", str(bundles[0])], capture_output=True).returncode == 0
+    assert list(out.glob(".claude-backup-*.partial")) == [], "半成品沒被清乾淨"
+    assert sum(1 for p in procs if p.returncode == 0) == 1, "應恰有一個成功、一個讓位"
+
+
+def test_partial_name_is_per_process(tmp_path: Path):
+    """確定性地驗證「不共用 partial」這個構造性質，不依賴贏得競爭。
+
+    上面那條併行測試會受時序影響（兩個程序可能根本沒重疊），單靠它證明不了原子性。
+    這裡直接攔截 tar 拿到的 partial 路徑：兩次不同的執行必須拿到不同的檔名。"""
+    home, _ = _fake_home(tmp_path)
+    seen = tmp_path / "seen.txt"
+    recorder = _fake_bin(
+        tmp_path, "tar",
+        f'#!/bin/sh\ncase "$1" in *c*) echo "$2" >> {seen} ;; esac\nexec /usr/bin/tar "$@"\n',
+    )
+    env = {"PATH": f"{recorder}:{os.environ['PATH']}"}
+    _run(["-o", str(tmp_path / "out1")], home, extra_env=env)
+    _run(["-o", str(tmp_path / "out2")], home, extra_env=env)
+    names = [Path(line).name for line in seen.read_text(encoding="utf-8").split()]
+    assert len(names) == 2
+    assert names[0] != names[1], f"兩次執行拿到同一個 partial：{names}"
+    for n in names:
+        assert n.startswith(".claude-backup-") and n.endswith(".tar.gz.partial")
+
+
+def test_publish_never_clobbers_existing_bundle(tmp_path: Path):
+    """發布是 no-clobber 的：最終名已存在時不得覆寫，也不得留下半成品。
+
+    這是併行安全的另一半——`[ -e ]` 只是 check-then-act，真正的保證來自用 `ln`
+    發布（遇既有目標直接 EEXIST 失敗）。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    # 先跑一次拿到真實的檔名，再用它預先佔位
+    _run(["-o", str(out)], home)
+    (existing,) = list(out.glob("claude-backup-*.tar.gz"))
+    original = existing.read_bytes()
+
+    proc = _run(["-o", str(out)], home)   # 同一分鐘內再跑一次 → 撞同名
+    if proc.returncode == 0:
+        return  # 跨過了分鐘邊界，這次沒撞名，不適用
+    assert existing.read_bytes() == original, "既有備份包被覆寫了"
+    assert list(out.glob(".claude-backup-*.partial")) == [], "失敗後留下半成品"

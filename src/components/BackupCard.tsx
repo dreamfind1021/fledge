@@ -150,7 +150,7 @@ export function BackupCard({ port }: { port: number | null }) {
           <p className="bk-blocked-msg">{t(`blocked.${blocked}`)}</p>
           {/* 已設定但位置有問題時，路徑要看得到——使用者得知道是哪個位置壞了 */}
           {status.configured && <code className="b4-mono bk-path">{status.backup_dir}</code>}
-          <button type="button" className="settings-btn-ghost" onClick={onChoose}>
+          <button type="button" className="settings-btn-ghost" onClick={onChoose} disabled={busy}>
             {t("chooseLocation")}
           </button>
         </div>
@@ -170,7 +170,10 @@ export function BackupCard({ port }: { port: number | null }) {
           <div className="bk-row">
             <span className="bk-row-label">{t("location")}</span>
             <code className="b4-mono bk-path">{status.backup_dir}</code>
-            <button type="button" className="settings-btn-ghost" onClick={onChoose}>
+            {/* 執行中不得改位置：session 建立時後端已把當時的 backup_dir 固定進 argv，
+                備份寫的是舊位置，但跑完的回讀掃的是新位置——終端機顯示成功、卡片卻找不到
+                那份備份包，使用者會以為失敗了。 */}
+            <button type="button" className="settings-btn-ghost" onClick={onChoose} disabled={busy}>
               {t("change")}
             </button>
           </div>
