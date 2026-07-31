@@ -75,6 +75,38 @@ _Avoid_: 快照（snapshot 在本專案指 UI 的偵測結果，見共通設置�
 把備份包展開成可檢視的形式，**不寫現役目錄**——展開到獨立位置並產出差異報告，由使用者決定搬什麼回去。
 _Avoid_: 匯入、覆蓋（後者正是本專案刻意不做的事）
 
+**Migration（移機）**:
+把備份包的資產實際寫進**新機器的現役目錄**，是 restore 的下一步而非同義詞。與 restore 的分界很硬：
+restore 沒有寫入現役目錄的能力（`backup/restore.py` 檔頭的不變式），migration 有，且只有它有。
+_Avoid_: 還原（會混淆「展開來看」與「裝回去」這兩件性質完全不同的事）
+
+**Staging（展開目錄）**:
+備份包解開後的獨立位置（`~/.claude-restore-<時間戳>`）。**全程唯讀**——migration 從這裡讀、往現役
+目錄寫，不回頭改它。備份包本身因此永遠是原狀退路。
+_Avoid_: 暫存目錄（與 runtime state 混淆）、解壓目錄
+
+**Landing spot（授權落點）**:
+使用者**逐項確認過**的寫入目標：每個帳號的 `config_dir`、每個帳號外資產的落點。備份包的 manifest
+只能產生建議值，**不能授權目的地**——確認過的才算數。
+_Avoid_: 目標路徑（沒表達出「經過授權」這層）
+
+**Node（節點）**:
+staging 內的一個待安裝物件——目錄、一般檔或 symlink。`install` 的結果、symlink 的依賴判定、
+provenance journal 的記錄單位都是 node。
+_Avoid_: 檔案（漏掉目錄與 symlink）、項目
+
+**Provenance journal（發布簿記）**:
+記錄「哪些 node 確實由本次 migration 發布」的檔案，放 `~/.fledge/`（不放 staging，那是唯讀；也不放
+現役目錄，那是使用者的）。兩個用途：symlink 依賴判定（只認自己裝過的目標），以及「這次移機還沒
+收尾」的訊號。**install 完整成功後才刪除。**
+_Avoid_: log（它是判定依據不是紀錄）、manifest（那是備份包裡的東西）
+
+**四個 outcome**:
+`installed`＝本次確實寫進去了；`skipped`＝現役已有同名物件，**我們沒動它**（好事，不需要行動）；
+`excluded`＝我們刻意不處理或判定不安全（`.claude.json`、指向未授權目標的 symlink、未對應的專案）；
+`failed`＝該裝但沒裝成（可重跑）。**只有 `excluded` 與 `failed` 需要使用者行動**，報告的分層依此而定。
+_Avoid_: 把 `skipped` 與 `excluded` 混用（前者是「你的東西受保護」，後者是「有東西沒帶過來」）
+
 ### 用量與計價
 
 **等價 API 價值（equivalent API value）**:
