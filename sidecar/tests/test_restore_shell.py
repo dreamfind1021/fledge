@@ -14,9 +14,11 @@ SCRIPT = REPO / "scripts" / "restore-claude.sh"
 BACKUP_SCRIPT = REPO / "scripts" / "backup-claude.sh"
 
 
-def _fake_home(tmp_path: Path) -> tuple[Path, Path]:
-    """假 HOME：一個帳號目錄（＝待比對的「現役目錄」）+ 一份 Fledge config。"""
-    home = tmp_path / "home"
+def _fake_home(tmp_path: Path, name: str = "home") -> tuple[Path, Path]:
+    """假 HOME：一個帳號目錄（＝待比對的「現役目錄」）+ 一份 Fledge config。
+
+    `name` 讓需要特殊字元的測試（含單引號的路徑）換掉目錄名，其餘結構完全相同。"""
+    home = tmp_path / name
     config_dir = home / ".claude"
     (config_dir / "skills").mkdir(parents=True)
     (config_dir / "skills" / "demo.md").write_text("live", encoding="utf-8")
@@ -390,17 +392,10 @@ def test_home_with_a_quote_still_reads_the_accounts(tmp_path: Path):
     """HOME 含單引號時，設定檔路徑若被插值進 Python 程式碼會變成語法錯誤，而那個錯誤
     會被當成「沒有帳號」——防呆最不該有的失敗方向。路徑必須走 argv。
 
-    備份包在**正常** HOME 下產生：`backup-claude.sh` 至今仍用插值寫法，含單引號的 HOME
-    會讓它自己 SyntaxError（既有缺陷，不在本票範圍，已另外回報）。這裡要驗的是還原端。"""
-    plain, _ = _fake_home(tmp_path)
-    bundle = _make_bundle(tmp_path, plain)
-
-    home = tmp_path / "ho'me"
-    live = home / ".claude"
-    (live / "skills").mkdir(parents=True)
-    (live / "skills" / "demo.md").write_text("live", encoding="utf-8")
-    (home / ".fledge").mkdir()
-    _config_with_account(home, live)
+    備份包也在同一個含單引號的 HOME 下產生。票 11 把 `backup-claude.sh` 一併改成 argv
+    寫法之前這裡做不到（產生端自己會 SyntaxError），得先在正常 HOME 下產包再換過來。"""
+    home, live = _fake_home(tmp_path, name="ho'me")
+    bundle = _make_bundle(tmp_path, home)
 
     proc = _run([str(bundle), "-o", str(live / "restored")], home)
     assert proc.returncode != 0, "帳號讀得到就該擋下來源樹內的位置"

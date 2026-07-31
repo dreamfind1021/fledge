@@ -12,9 +12,11 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "backup-claude.sh"
 
 
-def _fake_home(tmp_path: Path) -> tuple[Path, Path]:
-    """建一個假 HOME：一個帳號目錄 + 一份 Fledge config。回 (home, config_dir)。"""
-    home = tmp_path / "home"
+def _fake_home(tmp_path: Path, name: str = "home") -> tuple[Path, Path]:
+    """建一個假 HOME：一個帳號目錄 + 一份 Fledge config。回 (home, config_dir)。
+
+    `name` 讓需要特殊字元的測試（含單引號的路徑）換掉目錄名，其餘結構完全相同。"""
+    home = tmp_path / name
     config_dir = home / ".claude"
     (config_dir / "skills").mkdir(parents=True)
     (config_dir / "skills" / "demo.md").write_text("x", encoding="utf-8")
@@ -125,6 +127,30 @@ def test_glob_matches_are_actually_packed(tmp_path: Path):
         ["tar", "tzf", str(bundle)], capture_output=True, text=True, timeout=60
     ).stdout
     assert "settings.json.bak.20260727-1432" in listing
+
+
+# ── HOME 含特殊字元（票 11）──────────────────────────────────────────────────
+
+
+def test_home_with_a_quote_still_backs_up(tmp_path: Path):
+    """`/Users/o'brien` 這種姓氏在 macOS 上完全合法。設定檔路徑若被插值進內嵌的 Python
+    程式碼字串，那段程式會變成 SyntaxError——備份整個跑不起來，而使用者看到的是一段
+    看不懂的 traceback。路徑必須走 argv。"""
+    home, _ = _fake_home(tmp_path, name="ho'me")
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    listing = subprocess.run(
+        ["tar", "tzf", str(bundle)], capture_output=True, text=True, timeout=60
+    ).stdout
+    assert "accounts/default/skills/demo.md" in listing
+
+
+def test_no_shell_interpolation_into_python():
+    """對帳哨兵：`python3 -c "…"`（雙引號）是唯一會把 shell 變數插進程式碼的形式。
+    單引號的 `-c` 與 quoted heredoc（`<<'PY'`）都不插值，路徑一律走 argv。"""
+    assert 'python3 -c "' not in SCRIPT.read_text(encoding="utf-8")
 
 
 # ── 共用來源清單檔 ────────────────────────────────────────────────────────────
