@@ -6,6 +6,7 @@
 import json
 from pathlib import Path
 
+from conftest import make_staging
 from fastapi.testclient import TestClient
 
 from fledge_sidecar.app import create_app
@@ -253,3 +254,62 @@ def test_plan_default_dest_skips_a_previous_restore(tmp_path: Path, monkeypatch)
     body = _plan(TestClient(create_app())).json()
     assert body["dest"] == str(previous) + "-1"
     assert body["dest_status"] == "ok"
+
+
+# ── 票 03：install-plan／install 端點（實際寫入走 backup/install.py） ──────────────
+
+def _install_config(tmp_path: Path, monkeypatch) -> Path:
+    """install 端點用的假 config：一個 work 帳號指向 tmp 內的 live 目錄。回 live。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    live = tmp_path / "live"
+    live.mkdir()
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "version": 1, "roots": [],
+        "accounts": {"work": {"config_dir": str(live), "label": ""}},
+    }), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    return live
+
+
+def test_install_plan_reads_accounts_from_config_not_body(tmp_path: Path, monkeypatch):
+    """落點從已落檔的 config.json 讀——那是使用者確認過的，不是 manifest 說的。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    resp = TestClient(create_app()).post("/api/restore/install-plan",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 200
+    assert resp.json()["will_install"] == 2
+
+
+def test_install_plan_rejects_non_bundle_dest(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(tmp_path / "config.json"))
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    resp = TestClient(create_app()).post("/api/restore/install-plan",
+                                         json={"dest": str(bare)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "source_not_a_bundle"
+
+
+def test_install_recomputes_plan_and_does_not_trust_client(tmp_path: Path, monkeypatch):
+    """ADR-0002：server 以相同輸入重算 plan，不吃 client 送來的 plan。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 200
+    outcomes = {r["outcome"] for r in resp.json()["results"]}
+    assert outcomes == {"installed"}
+    assert (live / "CLAUDE.md").read_text(encoding="utf-8") == "RULES"
+
+
+def test_install_rejects_client_supplied_plan(tmp_path: Path, monkeypatch):
+    """ADR-0002 的強制面：body 只有 dest，client 塞 plan 進來一律 422、零寫入。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    resp = TestClient(create_app()).post(
+        "/api/restore/install",
+        json={"dest": str(staging), "plan": {"targets": {"work": "/etc"}}})
+    assert resp.status_code == 422
+    assert list(live.iterdir()) == []          # 一個檔案都沒寫

@@ -202,7 +202,7 @@ def test_common_config_apply_authorizes_per_account_not_per_entry(tmp_path: Path
 
 
 def test_common_config_apply_serialises_concurrent_calls(tmp_path: Path, monkeypatch):
-    # _setup_lock：apply 會動 FS，並發進來若不序列化，兩個請求會在同一路徑上互踩
+    # setup_lock：apply 會動 FS，並發進來若不序列化，兩個請求會在同一路徑上互踩
     # （實測無鎖時直接噴 500）。序列化後應是「一個 created、其餘看到已完成→skipped」。
     from concurrent.futures import ThreadPoolExecutor
 
@@ -330,7 +330,7 @@ def test_templates_reject_bad_input(tmp_path: Path, monkeypatch):
 
 
 def test_templates_deploy_serialises_concurrent_calls(tmp_path: Path, monkeypatch):
-    # _setup_lock：deploy 會動 FS。並發進來若不序列化，多個請求會同時看到 missing 然後
+    # setup_lock：deploy 會動 FS。並發進來若不序列化，多個請求會同時看到 missing 然後
     # 一起寫同一個路徑——O_EXCL 讓輸家拿到 target_exists（outcome=failed），使用者看到
     # 一半成功一半失敗。序列化後應是「一個 created、其餘看到已完成→skipped」。
     from concurrent.futures import ThreadPoolExecutor

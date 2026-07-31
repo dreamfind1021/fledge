@@ -3,31 +3,13 @@
 **全程假 HOME + tmp_path，絕不碰真實的 ~/.claude。** 這個模組是唯一有能力寫現役目錄的
 還原路徑，測試自己更要守住同一條線。
 """
-import json
 import os
 from pathlib import Path
 
 import pytest
+from conftest import make_staging as _staging
 
 from fledge_sidecar.backup import install as inst
-
-
-def _staging(tmp_path: Path, *, home: str = "/Users/olduser") -> Path:
-    """造一份最小的展開目錄（含 manifest），比照 backup-claude.sh 的產出佈局。"""
-    root = tmp_path / "staging"
-    (root / "accounts" / "work" / "skills").mkdir(parents=True)
-    (root / "accounts" / "work" / "skills" / "a.md").write_text("SKILL", encoding="utf-8")
-    (root / "accounts" / "work" / "CLAUDE.md").write_text("RULES", encoding="utf-8")
-    (root / "manifest.json").write_text(json.dumps({
-        "format": 1,
-        "created": "20260731-1200",
-        "host": "old-mac",
-        "home": home,
-        "accounts": {"work": f"{home}/.claude"},
-        "extra": {},
-        "excludes_credentials": True,
-    }), encoding="utf-8")
-    return root
 
 
 def _accounts(target: Path) -> dict[str, dict[str, str]]:

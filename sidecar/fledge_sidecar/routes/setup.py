@@ -18,7 +18,7 @@ from fledge_sidecar.setup.env_detect import detect_all
 router = APIRouter()
 
 # 沿用 routes/config.py 的慣例：單 process 鎖序列化並發寫入（apply 會動 FS）
-_setup_lock = threading.Lock()
+setup_lock = threading.Lock()
 
 
 class CommonConfigBody(BaseModel):
@@ -96,7 +96,7 @@ def common_config_apply(body: CommonConfigApplyBody):
     # 目錄動手。唯讀預覽不設此閘（精靈要能先看狀態）。
     if not default_config_path().exists():
         return JSONResponse(status_code=400, content={"error": "config_not_initialized"})
-    with _setup_lock:
+    with setup_lock:
         try:
             result = _build_plan(body)
         except _PlanError as exc:
@@ -112,14 +112,14 @@ def common_config_repair(body: CommonConfigBody):
     """修復共通設置的斷鏈（票 08 的 `repair`）：移機／還原後 target 帳號的連結全指著舊機器的
     絕對路徑，這裡拿同一份 entry allowlist 重新指向本機的 source。
 
-    **與 `apply` 共用 `_setup_lock`**：兩者改寫的是同一批 symlink，各自持鎖等於併發時互相踩。
+    **與 `apply` 共用 `setup_lock`**：兩者改寫的是同一批 symlink，各自持鎖等於併發時互相踩。
     plan 同樣由 server 以相同輸入重算（ADR-0002）。body 不收 `overwrite`——repair 從不做破壞
     既有內容的動作，收那個欄位只會讓呼叫端以為它有效。"""
     # 與 apply 同一道 readiness 閘：設定檔不存在時 AppConfig.load() 會 fallback 到
     # DEFAULT_CONFIG（default=~/.claude），修復是會寫檔的動作，不能對真實 home 目錄動手。
     if not default_config_path().exists():
         return JSONResponse(status_code=400, content={"error": "config_not_initialized"})
-    with _setup_lock:
+    with setup_lock:
         try:
             result = _build_plan(body)
         except _PlanError as exc:
@@ -183,8 +183,8 @@ def templates_plan(body: TemplateBody):
 
 @router.post("/api/setup/templates/deploy")
 def templates_deploy(body: TemplateBody):
-    """部署範本。plan 由 server 重算（不接受 client 傳入的 plan），寫入以 _setup_lock 序列化。"""
-    with _setup_lock:
+    """部署範本。plan 由 server 重算（不接受 client 傳入的 plan），寫入以 setup_lock 序列化。"""
+    with setup_lock:
         try:
             result = templates.deploy(body.template, body.destination)
         except ValueError as exc:
