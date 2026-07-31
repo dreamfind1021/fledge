@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Literal
 
 from fledge_sidecar.paths import (
+    dir_identity,
     expand_and_validate,
     is_same_or_within,
     is_within_root,
@@ -56,6 +57,12 @@ class AccountGraph:
     source_key: str
     source_dir: str            # resolved
     targets: dict[str, str]    # account key -> resolved dir
+    # 建 graph 當下 source dir 的 (st_dev, st_ino)。apply 每次 mutation 前比對，把「驗過
+    # 之後被抽換」的窗口從「使用者在 UI 上看預覽、按套用」那段時間縮到比對與 mutation 之間
+    # 的幾行程式碼（票 10；**縮小不是消除**，見 _require_usable_source 的殘餘說明）。
+    # source 尚不存在時是 None——那種 plan 的每個 entry 都會判成 source_missing→skip，
+    # 走不到 mutation。
+    source_identity: tuple[int, int] | None
 
 
 def _resolved_config_dir(accounts: dict[str, dict[str, str]], key: str) -> str:
@@ -111,7 +118,8 @@ def build_account_graph(
             raise ValueError("overlapping_account_dirs")
         seen.add(resolved)
         targets[key] = resolved
-    return AccountGraph(source_key=source_key, source_dir=source_dir, targets=targets)
+    return AccountGraph(source_key=source_key, source_dir=source_dir, targets=targets,
+                        source_identity=dir_identity(source_dir))
 
 
 EntryState = Literal[
@@ -165,6 +173,9 @@ class Plan:
     source_dir: str
     targets: dict[str, str]
     operations: list[Operation]
+    # 見 AccountGraph.source_identity。**刻意不給預設值**：忘了帶就是型別錯誤，
+    # 而不是靜默退化成「跳過重驗」——防呆不得 fail-open。
+    source_identity: tuple[int, int] | None
 
 
 def _same_link_target(link_path: str, source_entry: str, source_dir: str) -> bool:
@@ -247,7 +258,8 @@ def plan(graph: AccountGraph, selected_entries: list[str]) -> Plan:
                 action=action,
                 needs_overwrite=needs_overwrite,
             ))
-    return Plan(source_dir=graph.source_dir, targets=dict(graph.targets), operations=operations)
+    return Plan(source_dir=graph.source_dir, targets=dict(graph.targets), operations=operations,
+                source_identity=graph.source_identity)
 
 
 Outcome = Literal["created", "relinked", "copied", "skipped", "conflict", "stale", "failed"]
@@ -287,7 +299,8 @@ def _backup(path: str) -> str:
     return candidate
 
 
-def _apply_one(op: Operation, source_dir: str, overwrite: set[tuple[str, str]]) -> OpResult:
+def _apply_one(op: Operation, source_dir: str, overwrite: set[tuple[str, str]],
+               source_identity: tuple[int, int] | None) -> OpResult:
     spec = _SPEC_BY_NAME[op.entry]
     target_dir = os.path.dirname(op.target_path)
     if op.action == "skip":
@@ -315,6 +328,14 @@ def _apply_one(op: Operation, source_dir: str, overwrite: set[tuple[str, str]]) 
     # 授權以 (account, entry) 為單位：裸 entry 名會讓 A 帳號的授權連帶授權 B 帳號
     if needs_overwrite and (op.account, op.entry) not in overwrite:
         return OpResult(op.account, op.entry, "conflict")
+
+    # source 側的 apply-time revalidation（票 10），對稱於上面的 target 側：前置閘
+    # （build_account_graph／_require_usable_source）驗過的是「當時那個目錄」，之後被改名
+    # 再於同一路徑放進另一個目錄的話，我們仍會建出字面指向 source_dir/entry 的連結、回報
+    # relinked，帳號實際卻導向未經 build_account_graph 驗證的內容。比 realpath 嚴：身分走
+    # (st_dev, st_ino)，抽換成另一個真目錄時 realpath 仍等於自己、identity 不會。
+    if dir_identity(source_dir) != source_identity:
+        return OpResult(op.account, op.entry, "failed", error="source_dir_moved")
 
     source_entry = os.path.join(source_dir, spec.name)
     backup: str | None = None      # 備份成功但後續失敗時，仍要把備份位置回報給呼叫端
@@ -403,7 +424,7 @@ def apply(plan: Plan, overwrite: list[tuple[str, str]]) -> ApplyResult:
         if err is not None:
             results.append(OpResult(op.account, op.entry, "failed", error=err))
             continue
-        results.append(_apply_one(op, plan.source_dir, allowed))
+        results.append(_apply_one(op, plan.source_dir, allowed, plan.source_identity))
 
     for r in results:
         # 沒做成的每一項都留一行：conflict/stale 是「刻意沒動」，failed 另有 ERROR 帶 traceback
@@ -435,14 +456,19 @@ def _require_usable_source(source_dir: str) -> None:
     「source_missing 已跳過」只是把同一個原因講六遍，使用者看不出該去修什麼。停手也是安全
     面的必要：拿不存在的 source 去重建連結，只會把斷鏈換成另一條斷鏈。
 
-    **已知殘餘風險（check→use 窗口）**：本閘是一次性的，驗過的身分沒有綁進後續每次 mutation
-    ——`_apply_one` 只重驗 target 側。另一支程式若在本函式回傳後把 source_dir 改名、再於同一
-    路徑放進別的目錄，重建出來的連結（字面仍是 `source_dir/entry`）就會解析到那份內容。與
-    `_backup` 的競態同一個威脅模型（「防意外、不防已取得執行權的行為者」）：命中需要對方在
-    毫秒級窗口內寫使用者 home 內的目錄。要真正封住，得讓 source 驗證跨進 `apply` 的每次
-    mutation（per-mutation `(st_dev, st_ino)` 重驗）或整體改走 `templates.py` 那種
-    `O_DIRECTORY｜O_NOFOLLOW` dir fd——兩者都會動到 B 階段已驗收的共通設置共用路徑，故留成
-    獨立票（`.scratch/backup-restore/issues/10-source-toctou-hardening.md`）而不在此順手做。"""
+    本閘只跑一次，但**驗過的身分有綁進後續每次 mutation**（票 10）：`_apply_one` 動手前比對
+    `Plan.source_identity`，本函式回傳之後才被改名、再於同一路徑放進別的目錄的 source，會判
+    `source_dir_moved` 停手——否則重建出來的連結（字面仍是 `source_dir/entry`）就會解析到那份
+    未經 `build_account_graph` 驗證的內容。
+
+    **殘餘（與 target 側同一等級，Codex 對抗式審查 R1 覆核過）**：identity 比對到實際 mutation
+    之間仍是 check-then-act，五個 mutation 分支都在比對之後才以**路徑**動手。所以本機制是把窗口
+    從「使用者看預覽、按下套用」那段時間縮到幾行程式碼，**不是消除它**——別在別處寫成「已關閉
+    TOCTOU」。
+
+    要連那幾行的窗口都消滅：`copy` 分支可行（改以已驗證的 dir fd `openat` 讀 source），但
+    symlink 分支不行——`os.symlink` 存的是字面路徑、解析時根本不經 fd。本模組六個 entry 有
+    五個是 symlink 項，封住一個分支換來兩套並存的機制，判定不划算（票 10 使用者裁示）。"""
     if not os.path.lexists(source_dir):
         raise ValueError("source_dir_missing")
     if not os.path.isdir(source_dir):
@@ -493,7 +519,7 @@ def repair(plan: Plan) -> ApplyResult:
                 plan.source_dir, sorted(plan.targets), len(repairable), len(plan.operations))
     if repairable:
         subset = Plan(source_dir=plan.source_dir, targets=dict(plan.targets),
-                      operations=repairable)
+                      operations=repairable, source_identity=plan.source_identity)
         outcomes = apply(subset, overwrite=[]).results
         # apply 對每個 op 恰好回一筆結果且保序，故按位置放回。不用 (account, entry) 當 key
         # 對回去——selected_entries 含重複名字時會有同 key 的多筆 op，字典會吃掉其中一筆；

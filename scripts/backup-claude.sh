@@ -98,14 +98,18 @@ if [ ! -f "${CONFIG_JSON}" ]; then
   exit 1
 fi
 
-accounts=$(python3 -c "
-import json, os
-cfg = json.load(open(os.path.expanduser('${CONFIG_JSON}')))
-for key, acc in cfg.get('accounts', {}).items():
-    d = (acc.get('config_dir') or '').strip()
+# 路徑走 argv、程式碼用**單引號**包住：把 `${CONFIG_JSON}` 插進雙引號的 `-c` 字串，
+# HOME 含單引號時（`/Users/o'brien` 在 macOS 上完全合法）那段 Python 會變成
+# SyntaxError——備份直接跑不起來，而訊息是使用者看不懂的一段 traceback。
+# `restore-claude.sh` 已是這個寫法，兩支腳本一致。
+accounts=$(python3 -c '
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+for key, acc in cfg.get("accounts", {}).items():
+    d = (acc.get("config_dir") or "").strip()
     if d:
-        print(f'{key}\t{d}')
-")
+        print(f"{key}\t{d}")
+' "${CONFIG_JSON}")
 [ -n "${accounts}" ] || { echo "設定檔裡沒有任何帳號。" >&2; exit 1; }
 
 # ── 掃描：這次會收什麼、跳過什麼、有沒有沒判定過的新東西 ──────────────────────
