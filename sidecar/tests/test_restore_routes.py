@@ -238,3 +238,18 @@ def test_restore_session_defaults_the_dest_when_not_given(tmp_path: Path, monkey
     )
     assert _post_restore(TestClient(create_app())).status_code == 200
     assert captured["command"][-1] == str(tmp_path / "home" / ".claude-restore-20260101-1200")
+
+
+def test_plan_default_dest_skips_a_previous_restore(tmp_path: Path, monkeypatch):
+    """跑過一次之後回到卡片，預設位置正是上次的展開結果——app 不該建議一個自己隨後
+    會拒絕的位置（真機驗收抓到）。往後加序號，且 `dest_status` 直接就是 ok。"""
+    _config(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    previous = home / ".claude-restore-20260101-1200"
+    (previous / "accounts").mkdir(parents=True)
+
+    body = _plan(TestClient(create_app())).json()
+    assert body["dest"] == str(previous) + "-1"
+    assert body["dest_status"] == "ok"

@@ -48,16 +48,53 @@ def resolve_backup_dir(config: AppConfig) -> str:
     return abs_dir
 
 
+# 預設位置撞名時最多往後找幾號。找不到就回最後一個候選，讓 `check_dest` 照常回 not_empty
+# ——**不無界迴圈**：真的堆了這麼多沒清的展開目錄時，該讓使用者看到訊息去處理，而不是讓
+# 一支唯讀的預覽端點在那裡數目錄。
+_MAX_DEST_SUFFIX = 50
+
+
+def _dest_is_free(path: str) -> bool:
+    """這個位置現在能不能直接用（不存在，或存在但是空目錄）。"""
+    status = probe_dir(path)
+    if status == "missing":
+        return True
+    if status != "dir":
+        return False
+    try:
+        return not os.listdir(path)
+    except OSError:
+        return False
+
+
 def resolve_dest(dest_raw: str | None, bundle_name: str) -> str:
     """展開位置 → 絕對路徑；沒給就用預設。不是合法絕對路徑 → `ValueError("dest_invalid")`。
 
     plan 與 spawn 前的閘共用同一支：兩邊各自解讀「沒給」或「相對路徑」必然漂移，而漂移的
-    後果是預覽說可以、按下去卻被擋。"""
-    raw = (dest_raw or "").strip() or default_dest(bundle_name)
+    後果是預覽說可以、按下去卻被擋。
+
+    **預設位置撞名時往後加序號**（比照 `common_config._backup`）：跑過一次之後回到卡片，
+    預設位置正是上次的展開結果（非空），使用者會看到「預設值＋警告＋停用的按鈕」——
+    app 不該建議一個自己隨後會拒絕的位置（真機驗收抓到）。
+
+    **使用者自己指定的位置不套這個**：他選什麼就是什麼，非空由 `check_dest` 照樣擋。
+    悄悄把他選的 X 換成 X-1，等於在他沒看到的地方改掉他的決定。"""
+    raw = (dest_raw or "").strip()
+    if raw:
+        try:
+            return expand_and_validate(raw)
+        except ValueError as exc:
+            raise ValueError("dest_invalid") from exc
     try:
-        return expand_and_validate(raw)
+        base = expand_and_validate(default_dest(bundle_name))
     except ValueError as exc:
         raise ValueError("dest_invalid") from exc
+    candidate = base
+    for n in range(1, _MAX_DEST_SUFFIX + 1):
+        if _dest_is_free(candidate):
+            break
+        candidate = f"{base}-{n}"
+    return candidate
 
 
 def bundle_path(backup_dir_abs: str, name: str) -> str:

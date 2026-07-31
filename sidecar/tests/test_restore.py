@@ -151,3 +151,55 @@ def test_build_restore_argv_passes_paths_as_arguments(tmp_path: Path):
 def test_restore_script_is_present_in_the_repo():
     assert restore_script_available() is True
     assert restore_script_path().endswith("restore-claude.sh")
+
+
+# ── 預設展開位置的撞名（真機驗收 finding）────────────────────────────────────
+# app 不該建議一個自己隨後會拒絕的位置：跑過一次之後回到卡片，預設位置正是上次的展開
+# 結果（非空），使用者看到的是「預設值＋橘色警告＋停用的按鈕」。
+
+
+def test_resolve_dest_skips_an_occupied_default(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    base = home / ".claude-restore-20260101-1200"
+    (base / "accounts").mkdir(parents=True)          # 上一次的展開結果
+
+    assert restore.resolve_dest(None, BUNDLE_NAME) == str(base) + "-1"
+
+
+def test_resolve_dest_keeps_counting_until_it_finds_a_free_one(tmp_path: Path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    base = home / ".claude-restore-20260101-1200"
+    for suffix in ("", "-1", "-2"):
+        d = Path(str(base) + suffix)
+        d.mkdir()
+        (d / "x").write_bytes(b"x")
+
+    assert restore.resolve_dest(None, BUNDLE_NAME) == str(base) + "-3"
+
+
+def test_resolve_dest_reuses_an_empty_default(tmp_path: Path, monkeypatch):
+    """空目錄是可用的（系統選擇器挑出來的必然形狀），不該因為「存在」就跳過——
+    否則每按一次變更又選回來，就多一個空殼目錄。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    base = home / ".claude-restore-20260101-1200"
+    base.mkdir()
+
+    assert restore.resolve_dest(None, BUNDLE_NAME) == str(base)
+
+
+def test_resolve_dest_never_suffixes_a_user_choice(tmp_path: Path, monkeypatch):
+    """使用者自己指定的位置**不套**撞名迴圈：他選什麼就是什麼，非空由 check_dest 照樣擋。
+    悄悄把他選的 X 換成 X-1，等於在他沒看到的地方改掉他的決定。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    used = tmp_path / "used"
+    used.mkdir()
+    (used / "mine.txt").write_bytes(b"x")
+
+    assert restore.resolve_dest(str(used), BUNDLE_NAME) == str(used)
+    assert restore.check_dest(str(used), []) == "not_empty"
