@@ -1,3 +1,4 @@
+import errno
 import os
 from pathlib import Path
 
@@ -89,4 +90,60 @@ def test_error_code_maps_errno_and_falls_back():
     # ENOTDIR 是「目錄在建立與開啟之間被抽換」在 macOS 上的 errno（實測非 ELOOP）。
     # 缺這條會讓最值得診斷的競態退化成無資訊的 io_failed。
     assert safe_fs.error_code(OSError(errno_mod.ENOTDIR, "x")) == "not_a_directory"
+    # exFAT／部分 SMB、NFS 不支援 hard link，link 發布在那裡回的就是這兩個 errno
+    # （macOS 上 ENOTSUP=45 與 EOPNOTSUPP=102 是不同值，缺一都會退成無資訊的 io_failed）。
+    assert safe_fs.error_code(OSError(errno_mod.ENOTSUP, "x")) == "operation_not_supported"
+    assert safe_fs.error_code(OSError(errno_mod.EOPNOTSUPP, "x")) == "operation_not_supported"
     assert safe_fs.error_code(OSError("no errno at all")) == "io_failed"
+
+
+def test_write_bytes_atomic_publishes_only_complete_content(tmp_path: Path):
+    """原子發布：最終名一出現就代表內容完整。中途失敗不得留下佔用最終名的半截檔。"""
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        safe_fs.write_bytes_atomic(b"hello", "out.txt", dir_fd=d)
+    finally:
+        os.close(d)
+    assert (tmp_path / "out.txt").read_bytes() == b"hello"
+    # 暫存檔不得殘留
+    assert [p.name for p in tmp_path.iterdir()] == ["out.txt"]
+
+
+def test_write_bytes_atomic_refuses_existing_target(tmp_path: Path):
+    """不覆蓋：目標已存在時拋 FileExistsError，且既有內容一位元組不變。"""
+    (tmp_path / "out.txt").write_bytes(b"MINE")
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        with pytest.raises(FileExistsError):
+            safe_fs.write_bytes_atomic(b"theirs", "out.txt", dir_fd=d)
+    finally:
+        os.close(d)
+    assert (tmp_path / "out.txt").read_bytes() == b"MINE"
+
+
+def test_write_bytes_atomic_cleans_temp_when_publish_fails(tmp_path: Path, monkeypatch):
+    """發布失敗時要清掉自己的暫存檔，否則每次失敗都在使用者目錄留一份垃圾。"""
+    def _boom(*a, **k):
+        raise OSError(errno.EPERM, "nope")
+
+    monkeypatch.setattr(safe_fs.os, "link", _boom)
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        with pytest.raises(OSError):
+            safe_fs.write_bytes_atomic(b"hello", "out.txt", dir_fd=d)
+    finally:
+        os.close(d)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_write_bytes_atomic_cleans_temp_when_write_fails(tmp_path: Path, monkeypatch):
+    """寫入階段（而非發布階段）失敗也要清暫存檔——移機寫上千個檔案時磁碟滿了，
+    不清的話每個失敗項都在使用者現役目錄留一份 .fledge-install-* 垃圾。"""
+    monkeypatch.setattr(safe_fs.os, "write", lambda fd, data: 0)   # 寫不進去 → EIO
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        with pytest.raises(OSError):
+            safe_fs.write_bytes_atomic(b"hello", "out.txt", dir_fd=d)
+    finally:
+        os.close(d)
+    assert list(tmp_path.iterdir()) == []

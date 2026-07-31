@@ -52,6 +52,55 @@ def copy_file_no_clobber(source_path: str, target_path: str, *, dir_fd: int | No
         os.close(fd)
 
 
+# 暫存名的形狀：前導 `.` 加 PID 與隨機段。兩者缺一不可——前導 `.` 讓它不像成品，
+# PID＋隨機段讓同時跑的兩個 install 不會撞同一個暫存名（比照 backup-claude.sh 的 .partial）。
+_TEMP_PREFIX = ".fledge-install-"
+
+
+def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int, mode: int = 0o600) -> None:
+    """把 data 寫成 dir_fd 底下的 name，**抗硬中斷**。
+
+    `O_EXCL` 只保證「不覆蓋」，不保證「原子」：先以最終名建立再逐段寫入的話，SIGKILL、
+    process crash 或斷電都不會執行清理，留下的是「名字對但內容截斷」的檔案——而下一次
+    重跑會因為 EEXIST 判它已存在而跳過，**永久損壞且重跑不修**。
+
+    所以走 temp → fsync → link → unlink temp：`link` 遇既有目標回 EEXIST，是真正的原子
+    no-clobber，最終名一出現就代表內容已經完整落盤。
+
+    目標已存在 → FileExistsError（呼叫端據此判 skipped）。
+    """
+    temp_name = f"{_TEMP_PREFIX}{os.getpid()}-{os.urandom(4).hex()}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    fd = os.open(temp_name, flags, mode, dir_fd=dir_fd)
+    try:
+        try:
+            written = 0
+            while written < len(data):
+                n = os.write(fd, data[written:])
+                if n <= 0:
+                    raise OSError(errno.EIO, "write made no progress")
+                written += n
+            os.fsync(fd)      # 先確保內容落盤，再讓它以最終名可見
+        finally:
+            os.close(fd)
+    except BaseException:
+        # 寫入階段失敗也要清暫存檔——移機一次寫上千個檔案，磁碟滿時不清就是一地垃圾。
+        # 暫存名含本進程 PID＋隨機段，不會誤刪別人的檔案，直接 unlink 即可。
+        with contextlib.suppress(OSError):
+            os.unlink(temp_name, dir_fd=dir_fd)
+        raise
+    try:
+        # 真正的原子 no-clobber。**不退回「檢查不存在再 rename」**：那是 check-then-act，
+        # 並行的兩個 install 可以雙雙通過檢查然後互相覆蓋使用者的現役檔案。
+        os.link(temp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temp_name, dir_fd=dir_fd)
+        raise
+    with contextlib.suppress(OSError):
+        os.unlink(temp_name, dir_fd=dir_fd)
+
+
 # errno → 穩定判別碼。`str(OSError)` 夾帶 errno 文字與絕對路徑，是診斷細節而非前端
 # 合約（CLAUDE.md §4.6.13：sidecar 回 code、前端負責 i18n）。完整例外走 log。
 _ERROR_CODE_BY_ERRNO: dict[int, str] = {
@@ -67,6 +116,10 @@ _ERROR_CODE_BY_ERRNO: dict[int, str] = {
     # macOS 對「O_DIRECTORY|O_NOFOLLOW 開到 symlink」回的是 ENOTDIR 而非 ELOOP（已實測）。
     # 這正是目錄在建立與開啟之間被抽換的情形，缺這一條會退化成無資訊的 io_failed。
     errno.ENOTDIR: "not_a_directory",
+    # exFAT／部分 SMB、NFS 不支援 hard link，write_bytes_atomic 的 link 發布在那裡
+    # 就 fail closed（spec §4.2.5 點名要回報原因）。macOS 上兩個常數是不同值，都要列。
+    errno.ENOTSUP: "operation_not_supported",
+    errno.EOPNOTSUPP: "operation_not_supported",
 }
 
 
