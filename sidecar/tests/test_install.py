@@ -114,6 +114,21 @@ def test_install_stops_when_source_root_swapped_after_plan(tmp_path: Path):
     assert list(tgt.iterdir()) == []          # 一個檔案都沒寫
 
 
+def test_install_stops_account_when_target_swapped_after_plan(tmp_path: Path):
+    """plan 到 install 之間 target 被換掉 → 該帳號停手回 target_moved、一個檔案都不寫
+    （票 03 R1：target 側的 identity 重驗，比照票 10 的 source 側；縮小窗口不是關閉）。"""
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    os.rename(tgt, tmp_path / "moved-away")
+    (tmp_path / "live").mkdir()                           # 替身
+    results = inst.install(p)
+    assert any(r.outcome == "failed" and r.error == "target_moved" for r in results)
+    assert list((tmp_path / "live").iterdir()) == []      # 替身一個檔案都沒收到
+    assert list((tmp_path / "moved-away").iterdir()) == []  # 原目錄也沒收到
+
+
 def test_install_fsyncs_account_root_before_returning(tmp_path: Path, monkeypatch):
     """根層檔案（如 CLAUDE.md）的目錄項持久性掛在 root dst_fd 的 fsync 上——只 fsync
     遞迴開出的子目錄的話，斷電後根層檔案連目錄項都可能消失，而 API 已回報 installed

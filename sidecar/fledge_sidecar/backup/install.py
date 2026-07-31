@@ -54,6 +54,10 @@ class InstallPlan:
     source_root: str                        # 展開目錄（resolved）
     source_identity: tuple[int, int] | None  # 建 plan 當下的身分，install 前重驗
     targets: dict[str, str]                 # account key -> resolved config_dir
+    # target 側的 plan 時身分（票 03 R1，比照 source_identity）：install 開出 fd 後
+    # fstat 比對。None＝plan 時不存在（全新機器的主流情境）、由 install 新建，沒有
+    # 基準可比——那條窗口是殘餘，記錄於票 03。
+    target_identities: dict[str, tuple[int, int] | None]
     extra_targets: dict[str, str]           # extra 項名 -> resolved 落點
     will_install: int
     will_skip: list[str]
@@ -145,6 +149,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]]) -> InstallPlan:
         source_root=root,
         source_identity=dir_identity(root),
         targets=targets,
+        target_identities={key: dir_identity(t) for key, t in targets.items()},
         extra_targets={},                   # 票 05（extra 資產）填
         will_install=will_install,
         will_skip=will_skip,
@@ -249,7 +254,12 @@ def install(plan: InstallPlan) -> list[ItemResult]:
     """依 plan 把資產寫進各落點。逐項盡力——單項失敗不阻斷其餘。
 
     來源身分不符即整批停手（不是跳過單項）：那代表我們掃描過的東西已經不是現在要讀的
-    東西，繼續下去等於拿沒驗過的內容寫使用者的現役目錄。"""
+    東西，繼續下去等於拿沒驗過的內容寫使用者的現役目錄。
+
+    target 側同款 identity 重驗（票 03 R1，比照票 10 的 source 側）：plan 記下當時存在
+    的 target 身分，install 開出 fd 後 fstat 比對，不符回 `target_moved`、該帳號停手
+    （各帳號的落點彼此獨立，不株連整批）。**這是縮小窗口不是關閉**：比對到 mutation
+    之間仍是 check-then-act；plan 時不存在、由 install 新建的 target 沒有基準可比。"""
     src_root_fd = _require_source_identity(plan)
     results: list[ItemResult] = []
     logger.info("移機開始：source=%s targets=%s", plan.source_root, sorted(plan.targets))
@@ -265,6 +275,12 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                     Path(target).mkdir(parents=True, exist_ok=True)
                     dst_fd = _open_dir_pinned(target)
                     try:
+                        expected = plan.target_identities.get(key)
+                        st = os.fstat(dst_fd)
+                        if expected is not None and (st.st_dev, st.st_ino) != expected:
+                            # 落點已不是 plan 驗過的那個目錄——寫下去就是寫進替身。
+                            results.append(ItemResult(key, "", "failed", "target_moved"))
+                            continue
                         _install_tree(account_fd, dst_fd, key, "", results)
                         # 根層檔案的目錄項持久性掛在這裡——_install_tree 只 fsync 遞迴
                         # 開出的子目錄，root 這層漏掉的話 CLAUDE.md 這種根層檔案斷電後
