@@ -114,6 +114,60 @@ def test_install_stops_when_source_root_swapped_after_plan(tmp_path: Path):
     assert list(tgt.iterdir()) == []          # 一個檔案都沒寫
 
 
+def test_install_fsyncs_account_root_before_returning(tmp_path: Path, monkeypatch):
+    """根層檔案（如 CLAUDE.md）的目錄項持久性掛在 root dst_fd 的 fsync 上——只 fsync
+    遞迴開出的子目錄的話，斷電後根層檔案連目錄項都可能消失，而 API 已回報 installed
+    （Codex 票 03 R1）。spy 記 inode：root 目錄必須在被 fsync 的集合裡。"""
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    synced: list[tuple[int, int]] = []
+    real_fsync = os.fsync
+
+    def _spy(fd):
+        st = os.fstat(fd)
+        synced.append((st.st_dev, st.st_ino))
+        return real_fsync(fd)
+
+    monkeypatch.setattr(inst.os, "fsync", _spy)
+    inst.install(inst.plan(str(src), _accounts(tgt)))
+    root_stat = os.stat(tgt)
+    assert (root_stat.st_dev, root_stat.st_ino) in synced
+
+
+def test_plan_and_install_agree_when_bundle_contains_file_symlinks(tmp_path: Path):
+    """plan 用 os.walk、install 用 scandir——file symlink 在前者落進 filenames、在後者
+    被略過（票 04 的第二階段才處理），兩邊語意不一致的話預覽數字就會穩定虛報
+    （Codex 票 03 R1）。斷鏈 symlink 同理。"""
+    src = _staging(tmp_path)
+    work = src / "accounts" / "work"
+    (work / "linked.md").symlink_to(work / "CLAUDE.md")   # 指向包內一般檔
+    (work / "dangling.md").symlink_to(work / "nope")      # 斷鏈
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    assert p.will_install == 2                            # 兩條 symlink 都不算
+    results = inst.install(p)
+    installed = [r for r in results if r.outcome == "installed"]
+    assert len(installed) == p.will_install
+    assert not os.path.lexists(tgt / "linked.md")
+    assert not os.path.lexists(tgt / "dangling.md")
+
+
+def test_special_files_are_never_opened_nor_counted(tmp_path: Path):
+    """FIFO 以 O_RDONLY 開啟會阻塞到有 writer 為止——特殊檔必須連 open 都不碰，
+    plan 也不得把它算進 will_install（兩邊語意要一致）。"""
+    src = _staging(tmp_path)
+    os.mkfifo(src / "accounts" / "work" / "pipe")
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    assert p.will_install == 2                            # FIFO 不算
+    results = inst.install(p)
+    assert not os.path.lexists(tgt / "pipe")
+    assert any(r.rel_path == "pipe" and r.outcome == "excluded" for r in results)
+
+
 def test_install_excludes_claude_json_from_target(tmp_path: Path):
     """驗收：.claude.json 在結果的「不處理」清單裡，且目標位置確實沒有它。"""
     src = _staging(tmp_path)

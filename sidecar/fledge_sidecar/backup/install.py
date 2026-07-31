@@ -90,7 +90,12 @@ def _walk_account(account_dir: Path) -> tuple[list[str], list[str]]:
     """回 (可安裝的相對路徑, 被排除的名字)。純掃描，不寫任何東西。
 
     **不跟隨 symlink**：`os.walk` 的 followlinks 預設就是 False，但這裡顯式寫出來——
-    備份包裡一個指向 `/` 的目錄連結就能讓遞迴走出展開目錄。"""
+    備份包裡一個指向 `/` 的目錄連結就能讓遞迴走出展開目錄。
+
+    **只數 lstat 為一般檔的項目**：`os.walk` 會把 file symlink（含斷鏈）與特殊檔都放進
+    filenames，而 install 的 scandir 路徑對 symlink 是第二階段（票 04）、對特殊檔是
+    excluded——plan 照單全收的話，預覽數字會穩定大於實際結果（Codex 票 03 R1 的
+    walk／scandir 語意分歧）。"""
     installable: list[str] = []
     excluded: list[str] = []
     for dirpath, dirnames, filenames in os.walk(account_dir, followlinks=False):
@@ -103,7 +108,9 @@ def _walk_account(account_dir: Path) -> tuple[list[str], list[str]]:
                     excluded.append(rel)
                 continue
             if name in filenames:
-                installable.append(rel)
+                st = os.lstat(os.path.join(dirpath, name))
+                if stat_module.S_ISREG(st.st_mode):
+                    installable.append(rel)
     return installable, excluded
 
 
@@ -170,8 +177,11 @@ def _require_source_identity(plan: InstallPlan) -> int:
 def _read_file_pinned(name: str, dir_fd: int) -> bytes:
     """以 dir_fd 開檔後 fstat 確認型別才讀——不用 pathname 重新解析。
 
-    判型與讀取之間若還經過一次名稱解析，那一刻被換成 symlink 就會讀到 staging 外的檔案。"""
-    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    判型與讀取之間若還經過一次名稱解析，那一刻被換成 symlink 就會讀到 staging 外的檔案。
+
+    `O_NONBLOCK`：scandir 判型之後、open 之前被換成 FIFO 的話，O_RDONLY 會阻塞到有
+    writer 為止——加了它 open 立即返回，fstat 照樣把非一般檔擋下（對一般檔是 no-op）。"""
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
     try:
         st = os.fstat(fd)
         if not stat_module.S_ISREG(st.st_mode):
@@ -219,6 +229,11 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                 finally:
                     os.close(child_src)
                 continue
+            if not entry.is_file(follow_symlinks=False):
+                # 特殊檔（FIFO／socket／device）連 open 都不碰——FIFO 一開就阻塞。
+                # plan 的 _walk_account 同樣不數它們，兩邊語意才對得上。
+                results.append(ItemResult(account, rel, "excluded", "not_a_regular_file"))
+                continue
             data = _read_file_pinned(entry.name, src_fd)
             safe_fs.write_bytes_atomic(data, entry.name, dir_fd=dst_fd,
                                        mode=entry.stat(follow_symlinks=False).st_mode & 0o777)
@@ -251,6 +266,13 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                     dst_fd = _open_dir_pinned(target)
                     try:
                         _install_tree(account_fd, dst_fd, key, "", results)
+                        # 根層檔案的目錄項持久性掛在這裡——_install_tree 只 fsync 遞迴
+                        # 開出的子目錄，root 這層漏掉的話 CLAUDE.md 這種根層檔案斷電後
+                        # 連目錄項都可能消失（Codex 票 03 R1）。suppress 與子層一致：
+                        # 目錄 fsync 不受支援時把斷電移出保證範圍，不是整批失敗（spec
+                        # §4.2.5 保證表第三列）。
+                        with contextlib.suppress(OSError):
+                            os.fsync(dst_fd)
                     finally:
                         os.close(dst_fd)
                 finally:
