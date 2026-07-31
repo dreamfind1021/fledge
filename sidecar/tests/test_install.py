@@ -3,6 +3,7 @@
 **全程假 HOME + tmp_path，絕不碰真實的 ~/.claude。** 這個模組是唯一有能力寫現役目錄的
 還原路徑，測試自己更要守住同一條線。
 """
+import json
 import os
 from pathlib import Path
 
@@ -129,6 +130,29 @@ def test_install_stops_account_when_target_swapped_after_plan(tmp_path: Path):
     assert list((tmp_path / "moved-away").iterdir()) == []  # 原目錄也沒收到
 
 
+def test_install_isolates_account_level_failure(tmp_path: Path):
+    """單一帳號的落點壞掉（被一般檔占用）不得株連其餘帳號，也不得讓 OSError 穿出
+    install()——route 只接 ValueError，穿出去就是裸 500（Codex 票 03 R2）。"""
+    src = _staging(tmp_path)
+    (src / "accounts" / "personal").mkdir()
+    (src / "accounts" / "personal" / "CLAUDE.md").write_text("P", encoding="utf-8")
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["personal"] = "/Users/olduser/.claude-tc"
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    tgt_work = tmp_path / "live-work"
+    tgt_work.write_text("occupied", encoding="utf-8")     # work 的落點被檔案占用
+    tgt_personal = tmp_path / "live-personal"
+    tgt_personal.mkdir()
+    accounts = {
+        "work": {"config_dir": str(tgt_work), "label": ""},
+        "personal": {"config_dir": str(tgt_personal), "label": ""},
+    }
+    results = inst.install(inst.plan(str(src), accounts))  # 不得 raise
+    assert any(r.account == "work" and r.outcome == "failed" for r in results)
+    assert (tgt_personal / "CLAUDE.md").read_text(encoding="utf-8") == "P"
+    assert tgt_work.read_text(encoding="utf-8") == "occupied"   # 佔位檔一位元組不變
+
+
 def test_install_fsyncs_account_root_before_returning(tmp_path: Path, monkeypatch):
     """根層檔案（如 CLAUDE.md）的目錄項持久性掛在 root dst_fd 的 fsync 上——只 fsync
     遞迴開出的子目錄的話，斷電後根層檔案連目錄項都可能消失，而 API 已回報 installed
@@ -167,6 +191,40 @@ def test_plan_and_install_agree_when_bundle_contains_file_symlinks(tmp_path: Pat
     assert len(installed) == p.will_install
     assert not os.path.lexists(tgt / "linked.md")
     assert not os.path.lexists(tgt / "dangling.md")
+
+
+def test_plan_marks_leaves_blocked_when_target_ancestor_is_a_file(tmp_path: Path):
+    """目的地的 skills 是一般檔：install 只會在目錄層 fail、葉檔根本到不了——plan 把
+    該子樹的葉檔列 blocked 而非算進 will_install，預覽數字才對得上（Codex 票 03 R2）。"""
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    (tgt / "skills").write_text("occupied", encoding="utf-8")
+    p = inst.plan(str(src), _accounts(tgt))
+    assert p.will_install == 1                            # 只剩 CLAUDE.md
+    assert os.path.join("skills", "a.md") in p.blocked
+    results = inst.install(p)
+    installed = [r for r in results if r.outcome == "installed"]
+    assert len(installed) == p.will_install
+    assert any(r.rel_path == "skills" and r.outcome == "failed" for r in results)
+    assert (tgt / "skills").read_text(encoding="utf-8") == "occupied"   # 佔位檔不變
+
+
+def test_plan_blocks_subtree_behind_symlinked_target_ancestor(tmp_path: Path):
+    """目的地的 skills 是 symlink（即使指向真目錄）：install 的 O_NOFOLLOW 一律拒開，
+    plan 要同語意列 blocked；連結指向的外部目錄不得收到任何寫入。"""
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tgt / "skills").symlink_to(outside)
+    p = inst.plan(str(src), _accounts(tgt))
+    assert p.will_install == 1
+    assert os.path.join("skills", "a.md") in p.blocked
+    results = inst.install(p)
+    assert len([r for r in results if r.outcome == "installed"]) == p.will_install
+    assert list(outside.iterdir()) == []                  # 外部目錄零寫入
 
 
 def test_special_files_are_never_opened_nor_counted(tmp_path: Path):

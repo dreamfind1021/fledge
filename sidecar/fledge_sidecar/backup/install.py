@@ -61,6 +61,9 @@ class InstallPlan:
     extra_targets: dict[str, str]           # extra 項名 -> resolved 落點
     will_install: int
     will_skip: list[str]
+    # 目的地祖先被非目錄（一般檔或 symlink）占用的葉檔：install 只會在目錄層 fail、
+    # 這些葉檔根本到不了，算進 will_install 就是預覽說謊（Codex 票 03 R2）。
+    blocked: list[str]
     excluded: list[str]
 
 
@@ -132,6 +135,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]]) -> InstallPlan:
 
     will_install = 0
     will_skip: list[str] = []
+    blocked: list[str] = []
     excluded: list[str] = []
     for key, target in targets.items():
         account_dir = Path(root, "accounts", key)
@@ -139,8 +143,39 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]]) -> InstallPlan:
             continue
         installable, ex = _walk_account(account_dir)
         excluded.extend(ex)
+        # 目的地祖先鏈逐層 lstat（與 install 的 O_NOFOLLOW 同語意：symlink 也算占用）。
+        # 快取按相對前綴——同一子樹的葉檔不必重複探測。
+        blocked_dirs: set[str] = set()
+        ok_dirs: set[str] = set()
         for rel in installable:
-            if os.path.lexists(os.path.join(target, rel)):
+            parent = os.path.dirname(rel)
+            bad = False
+            cur = ""
+            for part in parent.split(os.sep) if parent else []:
+                cur = os.path.join(cur, part) if cur else part
+                if cur in blocked_dirs:
+                    bad = True
+                    break
+                if cur in ok_dirs:
+                    continue
+                try:
+                    st = os.lstat(os.path.join(target, cur))
+                except FileNotFoundError:
+                    ok_dirs.add(cur)        # 不存在 → install 會自己建
+                    continue
+                except OSError:
+                    blocked_dirs.add(cur)   # 探測不了就 fail-closed 當占用，不虛報
+                    bad = True
+                    break
+                if stat_module.S_ISDIR(st.st_mode):
+                    ok_dirs.add(cur)
+                else:
+                    blocked_dirs.add(cur)
+                    bad = True
+                    break
+            if bad:
+                blocked.append(rel)
+            elif os.path.lexists(os.path.join(target, rel)):
                 will_skip.append(rel)
             else:
                 will_install += 1
@@ -153,6 +188,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]]) -> InstallPlan:
         extra_targets={},                   # 票 05（extra 資產）填
         will_install=will_install,
         will_skip=will_skip,
+        blocked=blocked,
         excluded=excluded,
     )
 
@@ -272,9 +308,10 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                 except OSError:
                     continue                # 備份包裡沒有這個帳號的內容
                 try:
-                    Path(target).mkdir(parents=True, exist_ok=True)
-                    dst_fd = _open_dir_pinned(target)
+                    dst_fd = None
                     try:
+                        Path(target).mkdir(parents=True, exist_ok=True)
+                        dst_fd = _open_dir_pinned(target)
                         expected = plan.target_identities.get(key)
                         st = os.fstat(dst_fd)
                         if expected is not None and (st.st_dev, st.st_ino) != expected:
@@ -289,8 +326,16 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                         # §4.2.5 保證表第三列）。
                         with contextlib.suppress(OSError):
                             os.fsync(dst_fd)
+                    except OSError as exc:
+                        # 帳號級隔離（Codex 票 03 R2）：落點被檔案占用、權限被收走等
+                        # 只讓「這個帳號」失敗——例外穿出去的話 route 只接 ValueError，
+                        # 會變裸 500，且排序在後的帳號全部裝不到，違反逐項盡力語意。
+                        logger.error("移機帳號級失敗：account=%s target=%s",
+                                     key, target, exc_info=True)
+                        results.append(ItemResult(key, "", "failed", safe_fs.error_code(exc)))
                     finally:
-                        os.close(dst_fd)
+                        if dst_fd is not None:
+                            os.close(dst_fd)
                 finally:
                     os.close(account_fd)
         finally:
