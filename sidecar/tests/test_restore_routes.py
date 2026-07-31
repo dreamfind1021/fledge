@@ -313,3 +313,16 @@ def test_install_rejects_client_supplied_plan(tmp_path: Path, monkeypatch):
         json={"dest": str(staging), "plan": {"targets": {"work": "/etc"}}})
     assert resp.status_code == 422
     assert list(live.iterdir()) == []          # 一個檔案都沒寫
+
+
+def test_install_plan_is_readonly_and_matches_install_results(tmp_path: Path, monkeypatch):
+    """票 03 驗收：預覽端點不寫任何東西，且它報的數字與實際執行的結果一致。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    client = TestClient(create_app())
+    planned = client.post("/api/restore/install-plan", json={"dest": str(staging)}).json()
+    assert list(live.iterdir()) == []          # 預覽零寫入
+    results = client.post("/api/restore/install",
+                          json={"dest": str(staging)}).json()["results"]
+    installed = [r for r in results if r["outcome"] == "installed"]
+    assert len(installed) == planned["will_install"]

@@ -114,6 +114,17 @@ def test_install_stops_when_source_root_swapped_after_plan(tmp_path: Path):
     assert list(tgt.iterdir()) == []          # 一個檔案都沒寫
 
 
+def test_install_excludes_claude_json_from_target(tmp_path: Path):
+    """驗收：.claude.json 在結果的「不處理」清單裡，且目標位置確實沒有它。"""
+    src = _staging(tmp_path)
+    (src / "accounts" / "work" / ".claude.json").write_text("{}", encoding="utf-8")
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    results = inst.install(inst.plan(str(src), _accounts(tgt)))
+    assert not (tgt / ".claude.json").exists()
+    assert any(r.rel_path == ".claude.json" and r.outcome == "excluded" for r in results)
+
+
 def test_install_does_not_follow_symlinked_subdir_out_of_staging(tmp_path: Path):
     """惡意 bundle：staging 內的子目錄是指向外面的 symlink → 不得跟隨、不得寫出去。"""
     src = _staging(tmp_path)
