@@ -375,6 +375,17 @@ def _graph(src: str, tgt: str) -> cc.AccountGraph:
     return cc.build_account_graph(accounts, "work", ["personal"])
 
 
+def _manual_plan(src: str | Path, tgt: str | Path,
+                 operations: list[cc.Operation]) -> cc.Plan:
+    """手工組 Plan（不經 `plan()`）的測試捷徑，單一 `personal` target。
+
+    `source_identity` 一律取 source dir **當下**的真實身分，讓票 10 的 per-mutation
+    重驗自然通過——這些測試各自要驗的是別的不變式，不該被 source 重驗攔在前面。"""
+    source_dir = str(Path(src).resolve())
+    return cc.Plan(source_dir=source_dir, targets={"personal": str(Path(tgt).resolve())},
+                   operations=operations, source_identity=cc.dir_identity(source_dir))
+
+
 def test_apply_creates_links_and_copies(tmp_path: Path):
     src, tgt = _dirs(tmp_path)
     (Path(src) / "commands").mkdir()
@@ -527,8 +538,7 @@ def test_relink_never_deletes_a_real_file_it_did_not_inspect(tmp_path: Path, mon
     (Path(tgt) / "commands").write_text("REAL", encoding="utf-8")
     op = cc.Operation("personal", "commands", str(Path(tgt).resolve() / "commands"),
                       "wrong_link", "relink", False)
-    p = cc.Plan(source_dir=str(Path(src).resolve()),
-                targets={"personal": str(Path(tgt).resolve())}, operations=[op])
+    p = _manual_plan(src, tgt, [op])
     monkeypatch.setattr(cc, "probe_entry", lambda *a, **k: "wrong_link")  # 騙過重探測
     res = cc.apply(p, overwrite=[])
     assert res.results[0].outcome in {"stale", "failed"}
@@ -555,8 +565,7 @@ def test_relink_restore_does_not_clobber_a_file_that_reappeared(tmp_path: Path, 
     monkeypatch.setattr(cc, "probe_entry", lambda *a, **k: "wrong_link")
     op = cc.Operation("personal", "commands", str(Path(tgt).resolve() / "commands"),
                       "wrong_link", "relink", False)
-    p = cc.Plan(source_dir=str(Path(src).resolve()),
-                targets={"personal": str(Path(tgt).resolve())}, operations=[op])
+    p = _manual_plan(src, tgt, [op])
     r = cc.apply(p, overwrite=[]).results[0]
     assert r.outcome == "stale"
     assert r.backup_path is not None
@@ -606,6 +615,69 @@ def test_apply_rechecks_containment_before_every_op(tmp_path: Path, monkeypatch)
     outcomes = [r.outcome for r in cc.apply(p, overwrite=[]).results]
     assert outcomes == ["created", "failed"]
     assert not (outside / "skills").exists()   # 沒寫出 account dir
+
+
+def test_apply_stops_when_source_dir_is_swapped_after_the_probe(tmp_path: Path, monkeypatch):
+    """source 側的 check→use 窗口（票 10）：閘與重探測都通過之後、mutation 之前，
+    source dir 被改名再於同一路徑放進另一個目錄。建出來的連結字面仍是 `source_dir/entry`，
+    指的卻是沒經過 `build_account_graph` 驗證的內容——必須停手。
+
+    抽換點刻意放在 `probe_entry` **回傳之後**：在呼叫 apply 之前就換好的話，測到的是
+    前置閘而不是這個窗口（票 08 的既有測試已經涵蓋前置閘）。"""
+    src, tgt = _dirs(tmp_path)
+    (Path(src) / "commands").mkdir()
+    outside = tmp_path / "elsewhere"
+    (outside / "commands").mkdir(parents=True)
+    (Path(tgt) / "commands").symlink_to(outside / "commands")   # wrong_link → relink，免授權
+    p = cc.plan(_graph(src, tgt), ["commands"])
+    assert [op.state for op in p.operations] == ["wrong_link"]
+
+    impostor = tmp_path / "impostor"
+    (impostor / "commands").mkdir(parents=True)
+    real_probe = cc.probe_entry
+
+    def _probe_then_swap(source_dir: str, target_dir: str, spec):
+        state = real_probe(source_dir, target_dir, spec)
+        os.rename(src, tmp_path / "moved-away")   # 閘已通過才動手
+        os.rename(impostor, src)                  # 同一路徑、不同目錄
+        return state
+
+    monkeypatch.setattr(cc, "probe_entry", _probe_then_swap)
+
+    (r,) = cc.apply(p, overwrite=[]).results
+
+    assert r.outcome == "failed"
+    assert r.error == "source_dir_moved"
+    # 原連結必須原封不動：relink 不需要 overwrite 授權，動了就是免授權改寫
+    assert os.readlink(Path(tgt) / "commands") == str(outside / "commands")
+
+
+def test_repair_stops_when_source_dir_is_swapped_after_the_gate(tmp_path: Path, monkeypatch):
+    """`_require_usable_source` 是一次性前置閘，驗過的身分沒有綁進後續每次 mutation。
+    它通過之後 source 被換掉，repair 重建出來的連結就會指向未經驗證的內容。"""
+    src, tgt = _restored_home(tmp_path, monkeypatch)
+    (src / "skills").mkdir()
+    (tgt / "skills").symlink_to(_old_machine(tmp_path, "skills"))   # broken_link
+    p = cc.plan(_graph(str(src), str(tgt)), ["skills"])
+    assert [op.state for op in p.operations] == ["broken_link"]
+
+    impostor = tmp_path / "impostor"
+    (impostor / "skills").mkdir(parents=True)
+    real_probe = cc.probe_entry
+
+    def _probe_then_swap(source_dir: str, target_dir: str, spec):
+        state = real_probe(source_dir, target_dir, spec)
+        os.rename(src, tmp_path / "moved-away")
+        os.rename(impostor, src)
+        return state
+
+    monkeypatch.setattr(cc, "probe_entry", _probe_then_swap)
+
+    (r,) = cc.repair(p).results
+
+    assert r.outcome == "failed"
+    assert r.error == "source_dir_moved"
+    assert os.readlink(tgt / "skills") == str(_old_machine(tmp_path, "skills"))
 
 
 def test_apply_refuses_destructive_without_overwrite(tmp_path: Path):
@@ -723,8 +795,7 @@ def test_apply_recomputes_authorization_from_probed_state(tmp_path: Path):
     (Path(tgt) / "commands" / "mine.md").write_text("MINE", encoding="utf-8")
     lying_op = cc.Operation("personal", "commands", str(Path(tgt).resolve() / "commands"),
                             "real_dir", "backup_and_link", False)
-    p = cc.Plan(source_dir=str(Path(src).resolve()),
-                targets={"personal": str(Path(tgt).resolve())}, operations=[lying_op])
+    p = _manual_plan(src, tgt, [lying_op])
     res = cc.apply(p, overwrite=[])
     assert res.results[0].outcome == "conflict"
     assert (Path(tgt) / "commands" / "mine.md").read_text(encoding="utf-8") == "MINE"
@@ -790,8 +861,7 @@ def test_apply_refuses_operation_whose_path_is_not_in_the_graph(tmp_path: Path):
     (outside / "commands" / "PRECIOUS.md").write_text("不該被碰", encoding="utf-8")
     rogue = cc.Operation("personal", "commands", str(outside / "commands"),
                          "real_dir", "backup_and_link", True)
-    p = cc.Plan(source_dir=str(Path(src).resolve()),
-                targets={"personal": str(Path(tgt).resolve())}, operations=[rogue])
+    p = _manual_plan(src, tgt, [rogue])
     for overwrite in ([], [("personal", "commands")]):
         r = cc.apply(p, overwrite=overwrite).results[0]
         assert r.outcome == "failed"
@@ -1096,8 +1166,7 @@ def test_repair_refuses_operation_whose_path_is_not_in_the_graph(tmp_path: Path,
     (outside / "commands").symlink_to(_old_machine(tmp_path, "commands"))
     rogue = cc.Operation("personal", "commands", str(outside / "commands"),
                          "broken_link", "relink", False)
-    p = cc.Plan(source_dir=str(src.resolve()),
-                targets={"personal": str(tgt.resolve())}, operations=[rogue])
+    p = _manual_plan(src, tgt, [rogue])
 
     r = cc.repair(p).results[0]
 
