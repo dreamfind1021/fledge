@@ -19,7 +19,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from fledge_sidecar.app_config import AppConfig
+from fledge_sidecar.app_config import AppConfig, default_config_path
 from fledge_sidecar.backup import install, restore
 from fledge_sidecar.backup.containment import source_roots
 from fledge_sidecar.backup.script import scripts_root
@@ -95,6 +95,12 @@ def install_route(body: DestBody):
 
     與共通設置／範本部署共用同一把 `setup_lock`：三者可能改寫同一批目錄，各自持鎖
     等於併發互踩。"""
+    # 破壞性端點自己強制 readiness（與 common-config 的 apply／repair 同款閘）：config
+    # 未落檔時 AppConfig.load() 會 fallback 到 DEFAULT_CONFIG（default=~/.claude），
+    # bundle 的 manifest 含 "default" 帳號就會把備份內容寫進現役 Claude 目錄——「落點
+    # 來自使用者確認過的 config.json」的前提在 fallback 下不成立。唯讀預覽不設此閘。
+    if not default_config_path().exists():
+        return JSONResponse(status_code=400, content={"error": "config_not_initialized"})
     try:
         with setup_lock:
             plan = _plan_or_error(body.dest)

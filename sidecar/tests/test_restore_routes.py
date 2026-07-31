@@ -326,3 +326,24 @@ def test_install_plan_is_readonly_and_matches_install_results(tmp_path: Path, mo
                           json={"dest": str(staging)}).json()["results"]
     installed = [r for r in results if r["outcome"] == "installed"]
     assert len(installed) == planned["will_install"]
+
+
+def test_install_requires_initialized_config(tmp_path: Path, monkeypatch):
+    """破壞性端點的 readiness 閘（與 common-config 的 apply／repair 同款）：config 未落檔
+    時 AppConfig.load() 會 fallback 到指向真實 ~/.claude 的 DEFAULT_CONFIG——沒有這道閘，
+    未 onboard 的機器只要 bundle 的 manifest 含 "default" 帳號，install 就會把備份內容
+    寫進現役 Claude 目錄（Codex 票 03 R3，L1）。
+
+    測試用雙層保險：HOME 指向假目錄、manifest 的帳號 key 也刻意不撞 DEFAULT_CONFIG。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(tmp_path / "nope" / "config.json"))
+    root = tmp_path / "staging-z"
+    (root / "accounts" / "zzz").mkdir(parents=True)
+    (root / "accounts" / "zzz" / "f.md").write_text("X", encoding="utf-8")
+    (root / "manifest.json").write_text(json.dumps({
+        "format": 1, "home": "/Users/olduser",
+        "accounts": {"zzz": "/Users/olduser/.claude"},
+    }), encoding="utf-8")
+    resp = TestClient(create_app()).post("/api/restore/install", json={"dest": str(root)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "config_not_initialized"
