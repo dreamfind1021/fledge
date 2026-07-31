@@ -213,10 +213,18 @@ if [ "${DIFF_ONLY}" = false ]; then
   # 跑的實例。年齡閘用 60 分鐘而非 backup-claude.sh 的 24 小時——那邊的殘骸是備份目錄裡的
   # 小檔案，這邊是家目錄裡最大幾百 MB 的目錄，而沒有任何一次合法的展開會跑超過一小時。
   while IFS= read -r -d '' stale; do
-    [[ "$(basename "${stale}")" =~ ^\..*\.fledge-restore-[0-9]+-[0-9]+\.partial$ ]] || continue
+    [[ "$(basename "${stale}")" =~ ^\..*\.fledge-restore-([0-9]+)-[0-9]+\.partial$ ]] || continue
+    # 名字裡的 PID 比時間精確：產生它的程序已經不在＝確定是棄置的，立刻回收。
+    # 「中斷 → 立刻重跑」是最自然的反應，只靠年齡閘的話那份殘骸要留一小時（真機驗收
+    # B7 就是這樣：第二次還原在 47 秒後啟動，清不到第一次的殘骸）。
+    if kill -0 "${BASH_REMATCH[1]}" 2>/dev/null; then
+      # 程序還活著：多半是另一個正在跑的還原，不碰。PID 被回收給不相干的程序時會落到
+      # 這裡，交給年齡閘處理——誤判方向是「少刪一個」，那是安全的那一邊。
+      [ -n "$(find "${stale}" -maxdepth 0 -mmin +60)" ] || continue
+    fi
     rm -rf "${stale}"
   done < <(find "${parent}" -maxdepth 1 -type d -name '.*.fledge-restore-*.partial' \
-    -mmin +60 -print0 2>/dev/null)
+    -print0 2>/dev/null)
 
   mkdir -p "${staging}"
 

@@ -641,11 +641,13 @@ def test_stale_staging_is_reclaimed_on_the_next_run(tmp_path: Path):
     assert not ours.exists()
 
 
-def test_fresh_staging_is_kept(tmp_path: Path):
-    """未超齡的不能刪：可能是另一個正在跑的還原。"""
+def test_staging_of_a_live_process_is_kept(tmp_path: Path):
+    """產生它的程序還活著就不能刪：那多半是另一個正在跑的還原。用**測試自己的 PID**
+    ——`kill -0` 對 root 的 PID 回 EPERM（存在但簽不到），那代表「不是我們的程序」，
+    拿系統 PID 來測會測到相反的分支。"""
     home, _ = _fake_home(tmp_path)
     bundle = _make_bundle(tmp_path, home)
-    fresh = tmp_path / "..other.fledge-restore-999-111.partial"
+    fresh = tmp_path / f"..other.fledge-restore-{os.getpid()}-111.partial"
     fresh.mkdir()
 
     assert _run([str(bundle), "-o", str(tmp_path / "restored")], home).returncode == 0
@@ -668,3 +670,16 @@ def test_reclaim_only_deletes_our_exact_naming(tmp_path: Path):
     assert _run([str(bundle), "-o", str(tmp_path / "restored")], home).returncode == 0
     for k in keepers:
         assert k.exists(), k.name
+
+
+def test_abandoned_staging_is_reclaimed_immediately(tmp_path: Path):
+    """產生它的程序已經不在＝確定棄置，不必等年齡閘。「中斷 → 立刻重跑」是最自然的反應，
+    只靠 60 分鐘閘的話那份殘骸（可能幾百 MB）要在家目錄留一小時（真機驗收 B7）。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    dead = tmp_path / "..abandoned.fledge-restore-999999-42.partial"   # macOS PID 上限 99998
+    dead.mkdir()
+    (dead / "junk").write_bytes(b"x")
+
+    assert _run([str(bundle), "-o", str(tmp_path / "restored")], home).returncode == 0
+    assert not dead.exists()
