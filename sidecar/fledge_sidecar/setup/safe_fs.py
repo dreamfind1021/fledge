@@ -58,14 +58,22 @@ _TEMP_PREFIX = ".fledge-install-"
 
 
 def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int, mode: int = 0o600) -> None:
-    """把 data 寫成 dir_fd 底下的 name，**抗硬中斷**。
+    """把 data 寫成 dir_fd 底下的 name：內容完整落盤之後，最終檔名才會出現。
 
     `O_EXCL` 只保證「不覆蓋」，不保證「原子」：先以最終名建立再逐段寫入的話，SIGKILL、
     process crash 或斷電都不會執行清理，留下的是「名字對但內容截斷」的檔案——而下一次
     重跑會因為 EEXIST 判它已存在而跳過，**永久損壞且重跑不修**。
 
     所以走 temp → fsync → link → unlink temp：`link` 遇既有目標回 EEXIST，是真正的原子
-    no-clobber，最終名一出現就代表內容已經完整落盤。
+    no-clobber。
+
+    **保證等級（宣稱與實際逐字對齊，Codex R1）**：
+    - SIGKILL／process crash：完全保證——page cache 仍在，最終名一出現即內容完整，重跑收斂。
+    - 斷電：本函式只保證「最終名若存活，指到的內容已 fsync」；`link`／`unlink` 產生的
+      **目錄項**持久性不在本函式——由呼叫端在每個目錄處理完畢後 `fsync(dir_fd)` 承擔
+      （per-directory 粒度是 spec §4.2.5 的成本決策：一次還原上千小檔，每檔兩次目錄
+      fsync 太貴）。斷電落在 link 與 unlink 之間時，暫存檔可能在重開機後復活，重跑
+      不會清它——殘餘窗口極窄，記錄於票 02。
 
     目標已存在 → FileExistsError（呼叫端據此判 skipped）。
     """

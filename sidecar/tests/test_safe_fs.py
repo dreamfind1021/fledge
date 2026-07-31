@@ -136,6 +136,31 @@ def test_write_bytes_atomic_cleans_temp_when_publish_fails(tmp_path: Path, monke
     assert list(tmp_path.iterdir()) == []
 
 
+def test_write_bytes_atomic_fsyncs_content_before_publish(tmp_path: Path, monkeypatch):
+    """fsync 先於 link 是這個原語的存在理由：顛倒（或漏掉 fsync）時，斷電可能讓最終名
+    指著沒落盤的內容——而其他測試都跑在 page cache 上，刪掉 fsync 那行照樣全綠
+    （Codex R1 抓到的測試缺口：安全關鍵的一行沒有紅線）。"""
+    calls: list[str] = []
+    real_fsync, real_link = os.fsync, os.link
+
+    def _spy_fsync(fd):
+        calls.append("fsync")
+        return real_fsync(fd)
+
+    def _spy_link(*a, **k):
+        calls.append("link")
+        return real_link(*a, **k)
+
+    monkeypatch.setattr(safe_fs.os, "fsync", _spy_fsync)
+    monkeypatch.setattr(safe_fs.os, "link", _spy_link)
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        safe_fs.write_bytes_atomic(b"hello", "out.txt", dir_fd=d)
+    finally:
+        os.close(d)
+    assert calls == ["fsync", "link"]
+
+
 def test_write_bytes_atomic_cleans_temp_when_write_fails(tmp_path: Path, monkeypatch):
     """寫入階段（而非發布階段）失敗也要清暫存檔——移機寫上千個檔案時磁碟滿了，
     不清的話每個失敗項都在使用者現役目錄留一份 .fledge-install-* 垃圾。"""
