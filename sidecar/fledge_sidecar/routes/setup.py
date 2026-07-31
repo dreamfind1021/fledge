@@ -107,6 +107,32 @@ def common_config_apply(body: CommonConfigApplyBody):
     return {"results": [asdict(r) for r in applied.results]}
 
 
+@router.post("/api/setup/common-config/repair")
+def common_config_repair(body: CommonConfigBody):
+    """修復共通設置的斷鏈（票 08 的 `repair`）：移機／還原後 target 帳號的連結全指著舊機器的
+    絕對路徑，這裡拿同一份 entry allowlist 重新指向本機的 source。
+
+    **與 `apply` 共用 `_setup_lock`**：兩者改寫的是同一批 symlink，各自持鎖等於併發時互相踩。
+    plan 同樣由 server 以相同輸入重算（ADR-0002）。body 不收 `overwrite`——repair 從不做破壞
+    既有內容的動作，收那個欄位只會讓呼叫端以為它有效。"""
+    # 與 apply 同一道 readiness 閘：設定檔不存在時 AppConfig.load() 會 fallback 到
+    # DEFAULT_CONFIG（default=~/.claude），修復是會寫檔的動作，不能對真實 home 目錄動手。
+    if not default_config_path().exists():
+        return JSONResponse(status_code=400, content={"error": "config_not_initialized"})
+    with _setup_lock:
+        try:
+            result = _build_plan(body)
+        except _PlanError as exc:
+            return JSONResponse(status_code=exc.status, content={"error": exc.code})
+        try:
+            repaired = common_config.repair(result)
+        except ValueError as exc:
+            # 模組保證是英文判別碼（source_dir_missing／source_dir_unusable）。與
+            # build_account_graph 的判別碼同樣走 400——都是「前提不成立」而非伺服端故障。
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+    return {"results": [asdict(r) for r in repaired.results]}
+
+
 class TemplateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")   # 未知欄位 → 422
     template: str

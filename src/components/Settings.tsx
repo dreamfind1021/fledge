@@ -8,6 +8,7 @@ import { AccountsEditor } from "./AccountsEditor";
 import { BackupCard } from "./BackupCard";
 import { DevEnvSection } from "./DevEnvSection";
 import { LangSwitch } from "./LangSwitch";
+import { RestoreCard } from "./RestoreCard";
 import { validateSubscriptions } from "../lib/subscriptionsForm";
 import "./Settings.css";
 
@@ -348,6 +349,10 @@ export function Settings({ onClose, onRerunOnboarding }: SettingsProps) {
           {/* 備份（票 02）：常駐顯示備份位置與其狀態。刻意不自動備份、不提醒——
               這是「有一個固定的落腳處」而不是「催使用者」。 */}
           <BackupCard port={port} />
+
+          {/* 還原（票 09）：接在備份卡下面——選備份包、展開到獨立位置、看差異報告。
+              **不寫現役目錄**是這個功能的核心約束（ADR-0004），不是保守的預設值。 */}
+          <RestoreCard port={port} accounts={config?.accounts ?? {}} />
 
         </div>
 

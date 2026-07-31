@@ -1,0 +1,54 @@
+{
+  "title": "還原",
+  "intro": "把備份包展開到一個獨立的新資料夾，並列出它與你現在的內容有哪些不同。全程不會寫入現役的 Claude 目錄——要搬什麼回去由你決定。",
+  "chooseBundle": "選一份備份",
+  "destLabel": "展開到",
+  "change": "變更",
+  "run": "展開並比對差異",
+  "leaveHint": "執行期間關閉設定會中斷它。",
+  "afterHint": "沒有任何東西被寫進現役目錄。要搬什麼回去，從上面那個資料夾自行複製。",
+  "blocked": {
+    "not_configured": "還沒設定備份位置，沒有可以還原的來源。",
+    "dir_unusable": "現在讀不到備份資料夾，列不出裡面的備份包。",
+    "no_bundles": "那個資料夾裡還沒有任何備份包。",
+    "script_missing": "這個 Fledge 版本裡缺少還原腳本。",
+    "python3_missing": "還原需要系統的 python3，但找不到它。用這個指令安裝 Xcode Command Line Tools：xcode-select --install"
+  },
+  "dest": {
+    "is_root": "檔案系統根目錄不是能展開備份的位置。",
+    "is_home": "家目錄的範圍太大了，選一個專用的資料夾。",
+    "inside_source": "那個資料夾在現役的 Claude 資料裡面。展開到那裡會把一份完整副本折回備份來源中。請選 Claude 目錄以外的位置。",
+    "not_empty": "那個資料夾裡已經有東西了。還原絕不往既有內容上疊——請選一個空的或全新的資料夾。",
+    "not_dir": "那個路徑是檔案，不是資料夾。",
+    "denied": "Fledge 讀不到那個資料夾。"
+  },
+  "links": {
+    "title": "共通設置檢查（現役目錄）",
+    "scanning": "檢查中…",
+    "none": "沒有斷鏈——現役的共通設置指向的是這台機器。",
+    "found": "現役的共通設置有 {{count}} 條連結指向已經不存在的路徑。這裡檢查的是你目前的目錄，與剛才展開的備份包無關——把舊機的設定搬回現役目錄之後就會這樣：備份包存的是連結本身，不是它指向的檔案。",
+    "repair": "重新指向這台機器",
+    "repairing": "重新指向中…",
+    "notApplicable": "只登記了一個帳號，沒有共通設置需要檢查。"
+  },
+  "repair": {
+    "result": {
+      "relinked": "已重新指向",
+      "created": "已建立",
+      "copied": "已複製",
+      "skipped": "未變動",
+      "conflict": "沒有動它",
+      "stale": "期間又變了",
+      "failed": "失敗"
+    }
+  },
+  "errors": {
+    "planFailed": "算不出這份備份包會展開到哪裡。",
+    "runFailed": "無法開始還原。",
+    "scanFailed": "無法檢查共通設置的連結。",
+    "repairFailed": "無法重新指向共通設置的連結。",
+    "unknown_bundle": "那份備份包已經不在備份資料夾裡了。",
+    "dest_invalid": "那不是一個合法的資料夾路徑。",
+    "restore_bundle_required": "請先選一份備份。"
+  }
+}

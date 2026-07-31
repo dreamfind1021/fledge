@@ -1,0 +1,54 @@
+{
+  "title": "Restore",
+  "intro": "Unpacks a backup into a separate new folder and lists what differs from what you have now. Nothing is ever written back over your live Claude directories — you decide what to copy back.",
+  "chooseBundle": "Which backup",
+  "destLabel": "Unpack into",
+  "change": "Change",
+  "run": "Unpack and compare",
+  "leaveHint": "Leaving Settings while this runs will stop it.",
+  "afterHint": "Nothing was written to your live directories. Copy back whatever you need from the folder above.",
+  "blocked": {
+    "not_configured": "No backup location has been set yet, so there is nothing to restore from.",
+    "dir_unusable": "The backup folder cannot be read right now, so its backups cannot be listed.",
+    "no_bundles": "There are no backups in that folder yet.",
+    "script_missing": "The restore script is missing from this build of Fledge.",
+    "python3_missing": "Restore needs the system python3, which was not found. Install Xcode Command Line Tools with: xcode-select --install"
+  },
+  "dest": {
+    "is_root": "The filesystem root is not a valid place to unpack into.",
+    "is_home": "Your home folder is too broad for this. Pick a dedicated folder.",
+    "inside_source": "That folder sits inside your live Claude data. Unpacking there would fold a full copy back into what gets backed up. Pick somewhere outside your Claude directories.",
+    "not_empty": "That folder already has something in it. Restore never unpacks on top of existing content — pick an empty or new folder.",
+    "not_dir": "That path is a file, not a folder.",
+    "denied": "Fledge cannot read that folder."
+  },
+  "links": {
+    "title": "Shared setup check (your live directories)",
+    "scanning": "Checking…",
+    "none": "No broken links — your live shared setup points at this machine.",
+    "found": "{{count}} link(s) in your live shared setup point at a path that no longer exists. This checks your current directories, not the backup you just unpacked — it happens once you move an old machine's setup back into place: a backup stores the links themselves, not the files they point at.",
+    "repair": "Repoint them to this machine",
+    "repairing": "Repointing…",
+    "notApplicable": "Only one account is registered, so there is no shared setup to check."
+  },
+  "repair": {
+    "result": {
+      "relinked": "repointed",
+      "created": "created",
+      "copied": "copied",
+      "skipped": "left alone",
+      "conflict": "not touched",
+      "stale": "changed in the meantime",
+      "failed": "failed"
+    }
+  },
+  "errors": {
+    "planFailed": "Could not work out where this backup would be unpacked.",
+    "runFailed": "The restore could not be started.",
+    "scanFailed": "Could not check the shared setup links.",
+    "repairFailed": "Could not repoint the shared setup links.",
+    "unknown_bundle": "That backup is no longer in the backup folder.",
+    "dest_invalid": "That is not a valid folder path.",
+    "restore_bundle_required": "Pick a backup first."
+  }
+}

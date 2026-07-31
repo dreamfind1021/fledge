@@ -9,6 +9,7 @@ const OK: BackupStatus = {
   dir_status: "dir",
   containment: "ok",
   script_available: true,
+  restore_script_available: true,
   python3_available: true,
   last_attempt_failed: false,
   bundles: [],

@@ -415,3 +415,89 @@ def apply(plan: Plan, overwrite: list[tuple[str, str]]) -> ApplyResult:
                         r.outcome, r.account, r.entry, r.backup_path)
     logger.info("共通設置 apply 完成：%s", dict(Counter(r.outcome for r in results)))
     return ApplyResult(results=results)
+
+
+# repair 只處理 broken_link——目標不存在的連結，移機／還原的典型症狀。
+# **wrong_link 刻意不在範圍內**：它只代表「沒指向目前的 source entry」，分不出「備份帶回的
+# 舊機連結」與「使用者刻意指到別處、目前仍然有效的設置」；而 relink 的 needs_overwrite=False，
+# 收進來就等於免授權改寫後者（spec §6.5 原文亦只寫 broken-link）。那類連結交給共通設置卡的
+# apply——使用者在那裡看得到逐項狀態才按套用，等於人工授權。日後若還原流程能提供舊 source
+# root 當 provenance（精確比對 os.readlink 而非只看「不等於現在的 source」），才有依據把它
+# 收進自動修復。其餘狀態同樣不動：missing 沒有連結可修；real_file／content_differs 要
+# overwrite 授權，那是 apply 的職責。
+_REPAIRABLE_STATE: EntryState = "broken_link"
+
+
+def _require_usable_source(source_dir: str) -> None:
+    """repair 的前提：source 帳號目錄此刻真的在、真的是目錄、真的讀得出內容。
+
+    不成立就整批停手（ValueError(<判別碼>)，比照 build_account_graph 的慣例）。逐項回
+    「source_missing 已跳過」只是把同一個原因講六遍，使用者看不出該去修什麼。停手也是安全
+    面的必要：拿不存在的 source 去重建連結，只會把斷鏈換成另一條斷鏈。
+
+    **已知殘餘風險（check→use 窗口）**：本閘是一次性的，驗過的身分沒有綁進後續每次 mutation
+    ——`_apply_one` 只重驗 target 側。另一支程式若在本函式回傳後把 source_dir 改名、再於同一
+    路徑放進別的目錄，重建出來的連結（字面仍是 `source_dir/entry`）就會解析到那份內容。與
+    `_backup` 的競態同一個威脅模型（「防意外、不防已取得執行權的行為者」）：命中需要對方在
+    毫秒級窗口內寫使用者 home 內的目錄。要真正封住，得讓 source 驗證跨進 `apply` 的每次
+    mutation（per-mutation `(st_dev, st_ino)` 重驗）或整體改走 `templates.py` 那種
+    `O_DIRECTORY｜O_NOFOLLOW` dir fd——兩者都會動到 B 階段已驗收的共通設置共用路徑，故留成
+    獨立票（`.scratch/backup-restore/issues/10-source-toctou-hardening.md`）而不在此順手做。"""
+    if not os.path.lexists(source_dir):
+        raise ValueError("source_dir_missing")
+    if not os.path.isdir(source_dir):
+        raise ValueError("source_dir_unusable")     # 實體檔、斷鏈、symlink 迴圈
+    # source_dir 是 build_account_graph resolve 過的，realpath 應等於自己；被換成指向
+    # 別處的 symlink 時 isdir 仍為真，但已不是 plan 驗過的那個目錄——那樣重建出來的連結
+    # 會指進一個沒經過正規化與防呆的目錄。
+    if os.path.realpath(source_dir) != source_dir:
+        raise ValueError("source_dir_unusable")
+    try:
+        os.listdir(source_dir)      # 實際讀一次，不用 os.access 預測權限
+    except OSError as exc:
+        # 整個 repair 就此中止＝功能失敗，比照 _apply_one 的 OSError 用 ERROR 帶 traceback
+        logger.error("共通設置 repair 前提不成立：source=%s 讀不到", source_dir, exc_info=True)
+        raise ValueError("source_dir_unusable") from exc
+
+
+def repair(plan: Plan) -> ApplyResult:
+    """C（移機還原）專用：拿同一份 entry allowlist 重新指向**這台機器**的 source dir。
+
+    備份包存的是連結本身而不是它指向的內容，所以還原後 target 帳號的連結全指著舊機器的
+    絕對路徑（`/Users/<舊使用者>/.claude/...`）。修法不是把舊指向抄過來，而是重建成本機的
+    source entry——`plan` 的 target_path 與 state 都是在這台機器上探測出來的，本函式只做
+    「哪些該修」的取捨：**只有 `broken_link` 會被重建**，理由見 `_REPAIRABLE_STATE`。
+
+    **只碰 allowlist 上的名字**：不在清單內的斷鏈可能是使用者自建，我們沒有立場替他決定該
+    指去哪；那些 entry 根本不會進 plan，故連判斷都不需要。實際的檔案操作委派 `apply`
+    （overwrite 給空清單），以繼承它的 apply-time 重探測、parent containment 重驗與
+    op-in-graph 檢查——repair 不另開一條破壞性路徑。
+
+    傳入的 Plan 必須來自 `plan()`＋`build_account_graph()`：安全前提（正規化、containment）
+    建立在那兩支，本函式不重新推導。
+
+    source 帳號目錄不存在或不可用時 raise ValueError(<判別碼>)，不回半套結果。
+    """
+    _require_usable_source(plan.source_dir)
+    # 一趟走完：待修的挑出來，其餘先佔位成 skipped（每個 entry 都要有一行回報）
+    results: list[OpResult] = []
+    repairable: list[Operation] = []
+    slots: list[int] = []          # 待修項在 results 裡的位置
+    for op in plan.operations:
+        if op.state == _REPAIRABLE_STATE:
+            slots.append(len(results))
+            repairable.append(op)
+        results.append(OpResult(op.account, op.entry, "skipped"))
+
+    logger.info("共通設置 repair 開始：source=%s targets=%s 待修=%d/%d",
+                plan.source_dir, sorted(plan.targets), len(repairable), len(plan.operations))
+    if repairable:
+        subset = Plan(source_dir=plan.source_dir, targets=dict(plan.targets),
+                      operations=repairable)
+        outcomes = apply(subset, overwrite=[]).results
+        # apply 對每個 op 恰好回一筆結果且保序，故按位置放回。不用 (account, entry) 當 key
+        # 對回去——selected_entries 含重複名字時會有同 key 的多筆 op，字典會吃掉其中一筆；
+        # strict=True 讓那個 1:1 假設是被檢查的，而不是被相信的。
+        for index, outcome in zip(slots, outcomes, strict=True):
+            results[index] = outcome
+    return ApplyResult(results=results)
