@@ -86,7 +86,25 @@ class AppConfig:
             data = json.loads(path.read_text(encoding="utf-8"))
         else:
             data = copy.deepcopy(DEFAULT_CONFIG)  # 防止 add_root 等方法污染模組級 DEFAULT_CONFIG
+        return cls._from_data(path, data)
 
+    @classmethod
+    def load_existing(cls, path: Path | None = None) -> AppConfig:
+        """嚴格版 load：單次讀取、**永不退回 DEFAULT_CONFIG**（檔案級與 accounts 欄位級都是）。
+
+        破壞性端點（移機 install）專用——「落點來自使用者確認過的 config.json」的前提在
+        任何 fallback 下都不成立：檔案不存在退整份 DEFAULT、檔案在但缺 accounts 欄位退
+        DEFAULT 帳號，兩層拿到的都是 default=~/.claude。另外 exists→load 兩段式檢查有
+        TOCTOU（等鎖期間檔案被刪即落入 fallback），這裡改成單次 read_text——不存在就在
+        read 這一步拋 FileNotFoundError，由呼叫端轉 config_not_initialized。"""
+        path = path or default_config_path()
+        data = json.loads(path.read_text(encoding="utf-8"))   # 壞 JSON → ValueError
+        if not isinstance(data, dict) or not isinstance(data.get("accounts"), dict):
+            raise ValueError("config has no usable accounts mapping")
+        return cls._from_data(path, data)
+
+    @classmethod
+    def _from_data(cls, path: Path, data: dict[str, Any]) -> AppConfig:
         # 自我遷移：把既有 roots/manual/override key canonicalize 成與 scanner 一致的
         # resolved path，並依 canonical 去重（symlink 別名會撞同一路徑）。下次 save 持久化。
         # 逐項容錯：設定檔可能被手動編輯或損壞，元素若不是 dict 或欄位型別不對，

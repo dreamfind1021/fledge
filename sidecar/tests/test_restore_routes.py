@@ -347,3 +347,44 @@ def test_install_requires_initialized_config(tmp_path: Path, monkeypatch):
     resp = TestClient(create_app()).post("/api/restore/install", json={"dest": str(root)})
     assert resp.status_code == 400
     assert resp.json()["error"] == "config_not_initialized"
+
+
+def test_install_never_uses_fallback_accounts(tmp_path: Path, monkeypatch):
+    """R4 L1：exists→load 兩段式閘有 TOCTOU（等鎖期間 config 被刪即退回 DEFAULT_CONFIG），
+    且 load() 的 fallback 有兩層——檔案不存在退整份、檔案在但缺 accounts 欄位退 DEFAULT
+    帳號（default=~/.claude）。寫入端改走 load_existing 單次讀取、兩層都永不 fallback：
+    缺 accounts 的 config 一律 config_unreadable，絕不拿 DEFAULT 帳號當落點。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "roots": []}), encoding="utf-8")  # 缺 accounts
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    staging = make_staging(tmp_path)
+    resp = TestClient(create_app()).post("/api/restore/install", json={"dest": str(staging)})
+    assert resp.status_code == 500
+    assert resp.json()["error"] == "config_unreadable"
+
+
+def test_corrupt_bundles_map_to_stable_code_not_naked_500(tmp_path: Path, monkeypatch):
+    """R4 L2：manifest["accounts"] 不是物件會在 plan 產生 TypeError、manifest 在但實體
+    accounts/ 目錄缺失會在 install 拋 OSError——都要映成 source_not_a_bundle 400，
+    不得讓例外穿出變裸 500（error-code 合約）。"""
+    _install_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    # accounts 欄位是 null
+    bad1 = tmp_path / "bad1"
+    bad1.mkdir()
+    (bad1 / "manifest.json").write_text(json.dumps({
+        "format": 1, "home": "/x", "accounts": None,
+    }), encoding="utf-8")
+    resp = client.post("/api/restore/install-plan", json={"dest": str(bad1)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
+    # manifest 合法但沒有實體 accounts/ 目錄
+    bad2 = tmp_path / "bad2"
+    bad2.mkdir()
+    (bad2 / "manifest.json").write_text(json.dumps({
+        "format": 1, "home": "/x", "accounts": {"work": "/x/.claude"},
+    }), encoding="utf-8")
+    resp = client.post("/api/restore/install-plan", json={"dest": str(bad2)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
+    resp = client.post("/api/restore/install", json={"dest": str(bad2)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")

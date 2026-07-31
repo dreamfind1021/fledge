@@ -19,7 +19,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from fledge_sidecar.app_config import AppConfig, default_config_path
+from fledge_sidecar.app_config import AppConfig
 from fledge_sidecar.backup import install, restore
 from fledge_sidecar.backup.containment import source_roots
 from fledge_sidecar.backup.script import scripts_root
@@ -65,23 +65,20 @@ class DestBody(BaseModel):
 # 的剖析失敗（JSONDecodeError 是 ValueError 子類，訊息不可外洩當判別碼）。
 _INSTALL_CLIENT_ERRORS = frozenset({
     "source_not_a_bundle", "invalid_config_dir", "unsafe_config_dir", "source_root_moved",
+    "invalid_account_key",
 })
-
-
-def _plan_or_error(dest: str) -> install.InstallPlan:
-    """install-plan 與 install 共用：落點一律從**已落檔的 config.json** 讀。
-
-    那份是使用者確認過的（走設定頁或票 07 的 adopt-config），不是 manifest 說的——
-    這是 spec §4.2.2 授權模型的另一半：manifest 只能描述來源，不能授權目的地。"""
-    config = AppConfig.load()                # ValueError 由呼叫端轉 config_unreadable 500
-    return install.plan(dest, config.accounts)
 
 
 @router.post("/api/restore/install-plan")
 def install_plan(body: DestBody):
-    """唯讀預覽：會裝幾項、跳過哪些、刻意不處理哪些。不動檔案系統。"""
+    """唯讀預覽：會裝幾項、跳過哪些、刻意不處理哪些。不動檔案系統。
+
+    落點從 config.json 讀，不由前端送（spec §4.2.2：manifest 只能描述來源，不能授權
+    目的地）。預覽沿用會 fallback 的 `AppConfig.load()`——與 common-config 的預覽同一
+    慣例（精靈 pre-onboard 要能看狀態），fallback 下的探測全是唯讀 lstat。"""
     try:
-        plan = _plan_or_error(body.dest)
+        config = AppConfig.load()            # ValueError → 下方轉 config_unreadable 500
+        plan = install.plan(body.dest, config.accounts)
     except ValueError as exc:
         if str(exc) in _INSTALL_CLIENT_ERRORS:
             return JSONResponse(status_code=400, content={"error": str(exc)})
@@ -94,16 +91,20 @@ def install_route(body: DestBody):
     """實際寫入。server 以相同輸入**重算 plan**（ADR-0002，不吃 client 送來的 plan）。
 
     與共通設置／範本部署共用同一把 `setup_lock`：三者可能改寫同一批目錄，各自持鎖
-    等於併發互踩。"""
-    # 破壞性端點自己強制 readiness（與 common-config 的 apply／repair 同款閘）：config
-    # 未落檔時 AppConfig.load() 會 fallback 到 DEFAULT_CONFIG（default=~/.claude），
-    # bundle 的 manifest 含 "default" 帳號就會把備份內容寫進現役 Claude 目錄——「落點
-    # 來自使用者確認過的 config.json」的前提在 fallback 下不成立。唯讀預覽不設此閘。
-    if not default_config_path().exists():
-        return JSONResponse(status_code=400, content={"error": "config_not_initialized"})
+    等於併發互踩。
+
+    落點只能來自**使用者確認過的 config.json**，所以走 `load_existing`（單次讀取、
+    永不 fallback）而非 exists→load 兩段式閘——後者在等鎖期間 config 被刪時仍會退回
+    DEFAULT_CONFIG（default=~/.claude），把備份內容寫進現役 Claude 目錄（Codex 票 03
+    R3／R4）。讀取放在鎖內，與寫入同一臨界區。唯讀預覽不設此限。"""
     try:
         with setup_lock:
-            plan = _plan_or_error(body.dest)
+            try:
+                config = AppConfig.load_existing()
+            except FileNotFoundError:
+                return JSONResponse(status_code=400,
+                                    content={"error": "config_not_initialized"})
+            plan = install.plan(body.dest, config.accounts)
             results = install.install(plan)
     except ValueError as exc:
         if str(exc) in _INSTALL_CLIENT_ERRORS:

@@ -68,6 +68,22 @@ def test_plan_refuses_config_dir_at_home_or_above(tmp_path: Path, monkeypatch):
             inst.plan(str(src), {"work": {"config_dir": bad, "label": ""}})
 
 
+def test_plan_rejects_path_like_account_keys(tmp_path: Path):
+    """account key 會被拼進 Path(root, 'accounts', key)：絕對 key 讓 Path 丟棄 root、
+    `..` key 走出 staging、含分隔符的 key 也一樣——而 manifest 是不可信輸入、config 的
+    accounts 又可能被手動編輯。key 在模組信任邊界重驗（與 routes/config.py 的 _KEY_RE
+    同規則），不依賴 config API 擋（Codex 票 03 R4）。"""
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    for bad in ("/etc", "../outside", "a/b", ".", ".."):
+        manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+        manifest["accounts"] = {bad: "/Users/olduser/.claude"}
+        (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(ValueError, match="invalid_account_key"):
+            inst.plan(str(src), {bad: {"config_dir": str(tgt), "label": ""}})
+
+
 def test_install_copies_files_into_empty_target(tmp_path: Path):
     src = _staging(tmp_path)
     tgt = tmp_path / "live"

@@ -15,6 +15,7 @@ import errno
 import json
 import logging
 import os
+import re
 import stat as stat_module
 from collections import Counter
 from dataclasses import dataclass
@@ -39,6 +40,12 @@ Outcome = Literal["installed", "skipped", "excluded", "failed"]
 EXCLUDED_NAMES: frozenset[str] = frozenset({".claude.json"})
 
 MANIFEST_NAME = "manifest.json"
+
+# account key 會被拼進 Path(root, "accounts", key) 與 fd-relative open：絕對 key 讓 Path
+# 丟棄 root、`..` 走出 staging、絕對路徑更會讓 os.open 直接忽略 dir_fd。manifest 是不可信
+# 輸入、config 的 accounts 也可能被手動編輯——**在本模組的信任邊界重驗**，不依賴新增帳號
+# API 的擋法（routes/config.py 的 _KEY_RE 同一規則）。
+_SAFE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 @dataclass(frozen=True)
@@ -90,6 +97,10 @@ def read_manifest(source_root: str) -> dict:
         raise ValueError("source_not_a_bundle") from exc
     if not isinstance(data, dict):
         raise ValueError("source_not_a_bundle")
+    # accounts 是後續所有迭代與拼路徑的基礎——不是 mapping（null／list／string）的話，
+    # 會在 plan 內變成未捕捉的 TypeError 穿出去成裸 500，違反 error-code 合約。
+    if not isinstance(data.get("accounts"), dict):
+        raise ValueError("source_not_a_bundle")
     return data
 
 
@@ -125,12 +136,23 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]]) -> InstallPlan:
     """掃描展開目錄與各落點，回「會裝什麼、會跳過什麼、不處理什麼」。純唯讀。"""
     root = resolve_best_effort(source_root)
     manifest = read_manifest(root)          # 順便驗它確實是我們展開的目錄
+    # 實體 accounts/ 目錄也是 bundle 形狀的一部分：缺了它 plan 會回一份空預覽、install
+    # 卻在 _open_dir_pinned("accounts") 拋 OSError 穿出去——預覽與執行要同一判準。
+    # lstat 判型（不跟隨）：accounts 是 symlink 時 install 的 O_NOFOLLOW 也會拒開。
+    try:
+        accounts_st = os.lstat(os.path.join(root, "accounts"))
+    except OSError as exc:
+        raise ValueError("source_not_a_bundle") from exc
+    if not stat_module.S_ISDIR(accounts_st.st_mode):
+        raise ValueError("source_not_a_bundle")
 
     targets: dict[str, str] = {}
     for key in manifest.get("accounts", {}):
         entry = accounts.get(key)
         if entry is None:
             continue                        # 使用者沒為這個帳號指定落點 → 不裝
+        if not _SAFE_KEY_RE.fullmatch(key):
+            raise ValueError("invalid_account_key")   # 進得了 targets 的 key 才會拼路徑
         targets[key] = _resolved_config_dir(entry.get("config_dir", ""))
 
     will_install = 0
@@ -300,7 +322,12 @@ def install(plan: InstallPlan) -> list[ItemResult]:
     results: list[ItemResult] = []
     logger.info("移機開始：source=%s targets=%s", plan.source_root, sorted(plan.targets))
     try:
-        accounts_fd = _open_dir_pinned("accounts", dir_fd=src_root_fd)
+        try:
+            accounts_fd = _open_dir_pinned("accounts", dir_fd=src_root_fd)
+        except OSError as exc:
+            # plan 之後 accounts/ 被拿掉或換型——bundle 形狀已不成立，映成穩定判別碼
+            # 而不是讓 OSError 穿出去變裸 500。
+            raise ValueError("source_not_a_bundle") from exc
         try:
             for key, target in plan.targets.items():
                 try:
