@@ -139,17 +139,22 @@ def test_write_bytes_atomic_cleans_temp_when_publish_fails(tmp_path: Path, monke
 def test_write_bytes_atomic_fsyncs_content_before_publish(tmp_path: Path, monkeypatch):
     """fsync 先於 link 是這個原語的存在理由：顛倒（或漏掉 fsync）時，斷電可能讓最終名
     指著沒落盤的內容——而其他測試都跑在 page cache 上，刪掉 fsync 那行照樣全綠
-    （Codex R1 抓到的測試缺口：安全關鍵的一行沒有紅線）。"""
-    calls: list[str] = []
+    （Codex R1 抓到的測試缺口：安全關鍵的一行沒有紅線）。
+
+    只記呼叫名稱不夠：誤改成 `fsync(dir_fd)` 一樣得到 ["fsync","link"]（Codex R2）——
+    所以用 inode 釘死「fsync 的對象就是 link 要發布的那個檔」。"""
+    events: list[tuple[str, tuple[int, int]]] = []
     real_fsync, real_link = os.fsync, os.link
 
     def _spy_fsync(fd):
-        calls.append("fsync")
+        st = os.fstat(fd)
+        events.append(("fsync", (st.st_dev, st.st_ino)))
         return real_fsync(fd)
 
-    def _spy_link(*a, **k):
-        calls.append("link")
-        return real_link(*a, **k)
+    def _spy_link(src, dst, **kw):
+        st = os.stat(src, dir_fd=kw["src_dir_fd"], follow_symlinks=False)
+        events.append(("link", (st.st_dev, st.st_ino)))
+        return real_link(src, dst, **kw)
 
     monkeypatch.setattr(safe_fs.os, "fsync", _spy_fsync)
     monkeypatch.setattr(safe_fs.os, "link", _spy_link)
@@ -158,7 +163,9 @@ def test_write_bytes_atomic_fsyncs_content_before_publish(tmp_path: Path, monkey
         safe_fs.write_bytes_atomic(b"hello", "out.txt", dir_fd=d)
     finally:
         os.close(d)
-    assert calls == ["fsync", "link"]
+    assert [name for name, _ in events] == ["fsync", "link"]
+    # 順序對但同步錯檔案（如 dir_fd）一樣是假保證——兩個 inode 必須是同一個
+    assert events[0][1] == events[1][1]
 
 
 def test_write_bytes_atomic_cleans_temp_when_write_fails(tmp_path: Path, monkeypatch):

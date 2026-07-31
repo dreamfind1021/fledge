@@ -67,13 +67,16 @@ def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int, mode: int = 0o600
     所以走 temp → fsync → link → unlink temp：`link` 遇既有目標回 EEXIST，是真正的原子
     no-clobber。
 
-    **保證等級（宣稱與實際逐字對齊，Codex R1）**：
-    - SIGKILL／process crash：完全保證——page cache 仍在，最終名一出現即內容完整，重跑收斂。
-    - 斷電：本函式只保證「最終名若存活，指到的內容已 fsync」；`link`／`unlink` 產生的
-      **目錄項**持久性不在本函式——由呼叫端在每個目錄處理完畢後 `fsync(dir_fd)` 承擔
-      （per-directory 粒度是 spec §4.2.5 的成本決策：一次還原上千小檔，每檔兩次目錄
-      fsync 太貴）。斷電落在 link 與 unlink 之間時，暫存檔可能在重開機後復活，重跑
-      不會清它——殘餘窗口極窄，記錄於票 02。
+    **保證等級（宣稱與實際逐字對齊，Codex R1／R2）**：
+    - 發布結果：SIGKILL／process crash 下，最終名一出現即內容完整、絕不覆蓋既有目標，
+      重跑收斂（EEXIST → skipped）。斷電下只保證「最終名若存活，指到的內容已 fsync」；
+      `link`／`unlink` 產生的**目錄項**持久性不在本函式——由呼叫端在每個目錄處理完畢後
+      `fsync(dir_fd)` 承擔（per-directory 粒度是 spec §4.2.5 的成本決策：一次還原上千
+      小檔，每檔兩次目錄 fsync 太貴）。
+    - 暫存檔殘留：中斷（SIGKILL **或**斷電）恰落在 link 成功與 unlink temp 之間時，
+      暫存檔殘留且重跑不清（新進程的 PID＋隨機名對不上）——「失敗清暫存」只覆蓋本進程
+      活著走到例外路徑的情形。殘骸清理屬呼叫端簿記（按 `_TEMP_PREFIX` 前綴＋PID 存活
+      檢查掃，不能無條件掃：並行的另一個 install 的暫存檔還活著），記錄於票 02。
 
     目標已存在 → FileExistsError（呼叫端據此判 skipped）。
     """
