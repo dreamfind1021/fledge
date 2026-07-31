@@ -202,6 +202,22 @@ if [ "${DIFF_ONLY}" = false ]; then
     return 0   # trap 的回傳值會變成腳本的結束碼；上面任一 [ ] 為假都會讓成功的還原回非零
   }
   trap cleanup EXIT
+
+  # 回收超齡殘骸。**這是真機驗收（B7）逼出來的**：EXIT trap 在掛斷時確實會跑，但關掉設定頁
+  # 時 ptyprocess 在 0.3 秒後就送 SIGKILL，而 `rm -rf` 幾百 MB 要好幾秒——清到一半被砍，
+  # 家目錄裡就留下 525MB 的隱藏目錄，沒有人會清它。原本判定「不做回收」的前提是「殘骸只在
+  # SIGKILL／斷電時出現」，而驗收顯示它發生在一個正常的使用者動作上，前提不成立。
+  #
+  # 這是在**使用者的家目錄**裡遞迴刪除，所以認定要嚴：find 先粗篩，再逐一以 regex 覆核
+  # basename（含 PID 與隨機段，只有本腳本會產生這種名字），且加年齡閘避免誤刪另一個正在
+  # 跑的實例。年齡閘用 60 分鐘而非 backup-claude.sh 的 24 小時——那邊的殘骸是備份目錄裡的
+  # 小檔案，這邊是家目錄裡最大幾百 MB 的目錄，而沒有任何一次合法的展開會跑超過一小時。
+  while IFS= read -r -d '' stale; do
+    [[ "$(basename "${stale}")" =~ ^\..*\.fledge-restore-[0-9]+-[0-9]+\.partial$ ]] || continue
+    rm -rf "${stale}"
+  done < <(find "${parent}" -maxdepth 1 -type d -name '.*.fledge-restore-*.partial' \
+    -mmin +60 -print0 2>/dev/null)
+
   mkdir -p "${staging}"
 
   echo "展開 $(basename "${BUNDLE}") → ${DEST}"

@@ -583,3 +583,88 @@ def test_concurrent_restores_to_the_same_dest(tmp_path: Path):
     nested = [p.name for p in dest.iterdir() if p.name.startswith(".")]
     assert nested == [], nested
     assert list(tmp_path.glob(".*fledge-restore*")) == []
+
+
+# ── 中斷後不留殘骸（真機驗收 B7）──────────────────────────────────────────────
+# 關掉設定頁時 sidecar 收掉 PTY，ptyprocess 依序送 SIGHUP→SIGCONT→SIGINT，**0.3 秒後升到
+# SIGKILL**。EXIT trap 在掛斷時確實會跑（下面第一條測的就是這個），但 `rm -rf` 幾百 MB 要
+# 好幾秒——真機驗收就是這樣在家目錄留下 525MB 的隱藏 staging：清到一半被 SIGKILL 砍掉。
+# 所以真正的保證是「下一次還原順手回收超齡殘骸」，trap 只負責清得完的那些。
+
+
+def test_hangup_during_extraction_leaves_nothing(tmp_path: Path):
+    """掛斷時 EXIT trap 會執行——staging 還小的時候清得完，DEST 也不會被建出來。"""
+    import signal
+
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    dest = tmp_path / "restored"
+    slow = _fake_bin(
+        tmp_path, "tar",
+        '#!/bin/sh\ncase "$1" in *x*) sleep 3 ;; esac\nexec /usr/bin/tar "$@"\n',
+    )
+    env = {**os.environ, "HOME": str(home), "PATH": f"{slow}:{os.environ['PATH']}"}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    proc = subprocess.Popen(
+        ["/bin/bash", str(SCRIPT), str(bundle), "-o", str(dest)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+    )
+    # 等 staging 建出來、tar 開始跑，再模擬掛斷
+    for _ in range(50):
+        if list(tmp_path.glob(".*fledge-restore*")):
+            break
+        subprocess.run(["sleep", "0.1"], check=False)
+    proc.send_signal(signal.SIGHUP)
+    proc.wait(timeout=30)
+
+    assert proc.returncode != 0
+    assert not dest.exists(), "中斷不得留下半套的展開結果"
+    assert list(tmp_path.glob(".*fledge-restore*")) == [], "staging 殘骸沒被清掉"
+
+
+def _stale(path: Path) -> Path:
+    path.mkdir(parents=True)
+    (path / "junk").write_bytes(b"x")
+    old = os.path.getmtime(path) - 3 * 3600
+    os.utime(path, (old, old))
+    return path
+
+
+def test_stale_staging_is_reclaimed_on_the_next_run(tmp_path: Path):
+    """SIGKILL／斷電時 trap 不會執行（rm -rf 幾百 MB 要好幾秒，而 SIGKILL 在 0.3 秒後就到），
+    殘骸會留在家目錄。下一次還原順手回收——比照 backup-claude.sh 對 .partial 的做法。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    ours = _stale(tmp_path / "..old-restore.fledge-restore-12345-678.partial")
+
+    assert _run([str(bundle), "-o", str(tmp_path / "restored")], home).returncode == 0
+    assert not ours.exists()
+
+
+def test_fresh_staging_is_kept(tmp_path: Path):
+    """未超齡的不能刪：可能是另一個正在跑的還原。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    fresh = tmp_path / "..other.fledge-restore-999-111.partial"
+    fresh.mkdir()
+
+    assert _run([str(bundle), "-o", str(tmp_path / "restored")], home).returncode == 0
+    assert fresh.exists()
+
+
+def test_reclaim_only_deletes_our_exact_naming(tmp_path: Path):
+    """只刪本腳本自己產生的命名（含 PID 與隨機段）。這是在**使用者的家目錄**裡遞迴刪除，
+    命名認定寬一格的代價是刪掉別人的東西。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    keepers = [
+        _stale(tmp_path / "..x.fledge-restore-.partial"),          # 空 PID 段
+        _stale(tmp_path / "..x.fledge-restore-abc-def.partial"),   # 非數字
+        _stale(tmp_path / "..x.fledge-restore-12345.partial"),     # 缺隨機段
+        _stale(tmp_path / "important.partial"),
+        _stale(tmp_path / ".fledge-restore-12345-678"),            # 缺 .partial 後綴
+    ]
+
+    assert _run([str(bundle), "-o", str(tmp_path / "restored")], home).returncode == 0
+    for k in keepers:
+        assert k.exists(), k.name
