@@ -10,9 +10,13 @@ expand→absolute→resolve 後才使用（比照 common_config）。備份包�
 """
 from __future__ import annotations
 
+import contextlib
+import errno
 import json
 import logging
 import os
+import stat as stat_module
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -23,6 +27,7 @@ from fledge_sidecar.paths import (
     is_same_or_within,
     resolve_best_effort,
 )
+from fledge_sidecar.setup import safe_fs
 
 logger = logging.getLogger(__name__)
 
@@ -138,3 +143,121 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]]) -> InstallPlan:
         will_skip=will_skip,
         excluded=excluded,
     )
+
+
+def _open_dir_pinned(name: str, *, dir_fd: int | None = None) -> int:
+    """從父 fd 開出子目錄，不跟隨 symlink。開失敗一律讓 OSError 往上拋。
+
+    `O_NOFOLLOW` 讓「這一層是 symlink」直接失敗（macOS 回 ENOTDIR），所以整條路徑上
+    沒有任何一層是我們沒看見就跟過去的。"""
+    return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+
+
+def _require_source_identity(plan: InstallPlan) -> int:
+    """開出 staging root fd 並確認它就是 plan 驗過的那個目錄。回 fd，呼叫端負責關。
+
+    **先 open 再 fstat**（順序不能顛倒）：先以 pathname 重驗再 open 的話，中間仍有窗口
+    讓 root 被改名再換上另一個同型別目錄——`O_NOFOLLOW` 只拒絕最後元件是 symlink，
+    不證明開到的是原 inode。要證明身分，只能對已經開啟的 fd 做 fstat。"""
+    fd = _open_dir_pinned(plan.source_root)
+    st = os.fstat(fd)
+    if (st.st_dev, st.st_ino) != plan.source_identity:
+        os.close(fd)
+        raise ValueError("source_root_moved")
+    return fd
+
+
+def _read_file_pinned(name: str, dir_fd: int) -> bytes:
+    """以 dir_fd 開檔後 fstat 確認型別才讀——不用 pathname 重新解析。
+
+    判型與讀取之間若還經過一次名稱解析，那一刻被換成 symlink 就會讀到 staging 外的檔案。"""
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    try:
+        st = os.fstat(fd)
+        if not stat_module.S_ISREG(st.st_mode):
+            raise OSError(errno.EINVAL, "not a regular file")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
+                  results: list[ItemResult]) -> None:
+    """遞迴安裝一層。symlink 在本階段一律略過（票 04 的第二階段處理）。"""
+    for entry in os.scandir(src_fd):
+        rel = os.path.join(rel_prefix, entry.name) if rel_prefix else entry.name
+        if entry.name in EXCLUDED_NAMES and not rel_prefix:
+            results.append(ItemResult(account, rel, "excluded", "not_migrated_by_design"))
+            continue
+        if entry.is_symlink():
+            continue                        # 第二階段處理，見票 04
+        try:
+            if entry.is_dir(follow_symlinks=False):
+                child_src = _open_dir_pinned(entry.name, dir_fd=src_fd)
+                try:
+                    # 目標目錄不存在才建；已存在不算衝突（目錄本身沒有內容會被覆蓋）
+                    try:
+                        os.mkdir(entry.name, 0o700, dir_fd=dst_fd)
+                    except FileExistsError:
+                        pass
+                    child_dst = _open_dir_pinned(entry.name, dir_fd=dst_fd)
+                    try:
+                        _install_tree(child_src, child_dst, account, rel, results)
+                        # durability：link／unlink 的目錄項在斷電後不保證持久，光 fsync
+                        # 檔案不夠。粒度取「每個目錄一次」而非每檔兩次——一次還原可能
+                        # 上千個小檔，後者成本過高（spec §4.2.5）。
+                        with contextlib.suppress(OSError):
+                            os.fsync(child_dst)
+                    finally:
+                        os.close(child_dst)
+                finally:
+                    os.close(child_src)
+                continue
+            data = _read_file_pinned(entry.name, src_fd)
+            safe_fs.write_bytes_atomic(data, entry.name, dir_fd=dst_fd,
+                                       mode=entry.stat(follow_symlinks=False).st_mode & 0o777)
+            results.append(ItemResult(account, rel, "installed"))
+        except FileExistsError:
+            results.append(ItemResult(account, rel, "skipped"))
+        except OSError as exc:
+            logger.error("移機寫入失敗：account=%s rel=%s", account, rel, exc_info=True)
+            results.append(ItemResult(account, rel, "failed", safe_fs.error_code(exc)))
+
+
+def install(plan: InstallPlan) -> list[ItemResult]:
+    """依 plan 把資產寫進各落點。逐項盡力——單項失敗不阻斷其餘。
+
+    來源身分不符即整批停手（不是跳過單項）：那代表我們掃描過的東西已經不是現在要讀的
+    東西，繼續下去等於拿沒驗過的內容寫使用者的現役目錄。"""
+    src_root_fd = _require_source_identity(plan)
+    results: list[ItemResult] = []
+    logger.info("移機開始：source=%s targets=%s", plan.source_root, sorted(plan.targets))
+    try:
+        accounts_fd = _open_dir_pinned("accounts", dir_fd=src_root_fd)
+        try:
+            for key, target in plan.targets.items():
+                try:
+                    account_fd = _open_dir_pinned(key, dir_fd=accounts_fd)
+                except OSError:
+                    continue                # 備份包裡沒有這個帳號的內容
+                try:
+                    Path(target).mkdir(parents=True, exist_ok=True)
+                    dst_fd = _open_dir_pinned(target)
+                    try:
+                        _install_tree(account_fd, dst_fd, key, "", results)
+                    finally:
+                        os.close(dst_fd)
+                finally:
+                    os.close(account_fd)
+        finally:
+            os.close(accounts_fd)
+    finally:
+        os.close(src_root_fd)
+    logger.info("移機完成：%s", dict(Counter(r.outcome for r in results)))
+    return results
