@@ -190,128 +190,62 @@ def test_write_bytes_atomic_cleans_temp_when_write_fails(tmp_path: Path, monkeyp
     assert list(tmp_path.iterdir()) == []
 
 
-# ---------- 暫存殘骸回收（票 08：SIGKILL／斷電留下的暫存檔重跑不清） ----------
+# ---------- 暫存殘骸偵測（票 08：SIGKILL／斷電留下的暫存檔重跑不清） ----------
 
 
-def test_reap_removes_temp_whose_creator_is_gone(tmp_path: Path):
-    """硬中斷留下的暫存檔要被回收——重跑的 PID 對不上，不主動掃就永遠留著。"""
-    orphan = tmp_path / f"{safe_fs.TEMP_PREFIX}{_dead_pid()}-a1b2c3d4"
-    orphan.write_bytes(b"half")
+def _find(tmp_path: Path) -> list[str]:
     d = os.open(str(tmp_path), os.O_DIRECTORY)
     try:
-        assert safe_fs.reap_stale_temps(d) == 1
+        return safe_fs.find_stale_temps(d)
     finally:
         os.close(d)
-    assert not orphan.exists()
 
 
-def test_reap_spares_temp_of_a_live_process(tmp_path: Path):
-    """並行的另一個移機正在寫的暫存檔絕不能清——那會破壞對方進行中的原子發布。
-
-    不能無條件掃前綴，這就是原因。"""
-    live = tmp_path / f"{safe_fs.TEMP_PREFIX}{os.getpid()}-a1b2c3d4"
-    live.write_bytes(b"in flight")
-    d = os.open(str(tmp_path), os.O_DIRECTORY)
-    try:
-        assert safe_fs.reap_stale_temps(d) == 0
-    finally:
-        os.close(d)
-    assert live.exists()
+def test_find_reports_temp_whose_creator_is_gone(tmp_path: Path):
+    """硬中斷留下的暫存檔要被指認出來——重跑的 PID 對不上，不主動找就沒人知道它在。"""
+    name = f"{safe_fs.TEMP_PREFIX}{_dead_pid()}-a1b2c3d4"
+    (tmp_path / name).write_bytes(b"half")
+    assert _find(tmp_path) == [name]
+    assert (tmp_path / name).exists(), "只回報，不刪——刪除的授權不在這一層"
 
 
-def test_reap_never_touches_anything_but_its_own_temps(tmp_path: Path):
-    """使用者的檔案（含剛好也是隱藏檔的）一律不碰。"""
+def test_find_skips_temp_of_a_live_process(tmp_path: Path):
+    """並行的另一個移機正在寫的暫存檔不是殘骸——它的原子發布還在進行中。"""
+    live = f"{safe_fs.TEMP_PREFIX}{os.getpid()}-a1b2c3d4"
+    (tmp_path / live).write_bytes(b"in flight")
+    assert _find(tmp_path) == []
+
+
+def test_find_reports_nothing_but_its_own_namespace(tmp_path: Path):
+    """使用者的檔案（含剛好也是隱藏檔的、以及別的 fledge 前綴）一律不指認。"""
     for name in ("CLAUDE.md", ".hidden", ".fledge-lnk-1-a1b2c3d4", "settings.json"):
         (tmp_path / name).write_bytes(b"MINE")
-    d = os.open(str(tmp_path), os.O_DIRECTORY)
-    try:
-        assert safe_fs.reap_stale_temps(d) == 0
-    finally:
-        os.close(d)
-    assert sorted(p.name for p in tmp_path.iterdir()) == [
-        ".fledge-lnk-1-a1b2c3d4", ".hidden", "CLAUDE.md", "settings.json"]
+    assert _find(tmp_path) == []
 
 
-def test_reap_spares_names_whose_pid_cannot_be_parsed(tmp_path: Path):
-    """看起來像但解不出進程編號的 → 判斷不出來就留著（寧可漏清也不誤刪）。"""
+def test_find_skips_names_whose_pid_cannot_be_parsed(tmp_path: Path):
+    """看起來像但解不出進程編號的 → 判斷不出來就不指認。"""
     for suffix in ("notanumber-a1b2", "", "-a1b2"):
         (tmp_path / f"{safe_fs.TEMP_PREFIX}{suffix}").write_bytes(b"?")
-    d = os.open(str(tmp_path), os.O_DIRECTORY)
-    try:
-        assert safe_fs.reap_stale_temps(d) == 0
-    finally:
-        os.close(d)
-    assert len(list(tmp_path.iterdir())) == 3
+    assert _find(tmp_path) == []
 
 
-def test_reap_only_touches_regular_files(tmp_path: Path):
-    """暫存檔一律是一般檔——名字像但其實是目錄或 symlink 的，都不是我們產生的。
-
-    **symlink 才是這條線真正守住的東西**：`unlink` 對目錄本來就會失敗（拿掉型別檢查
-    也刪不掉，用目錄測就是假綠），但對 symlink 會成功——刪掉的會是使用者自己的連結。"""
-    victim = tmp_path / "user-data.md"
-    victim.write_bytes(b"MINE")
+def test_find_only_reports_regular_files(tmp_path: Path):
+    """暫存檔一律是一般檔——名字像但其實是目錄或 symlink 的，不是我們產生的。"""
     pid = _dead_pid()
     (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0001").mkdir()
-    (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0002").symlink_to(victim)
-
-    d = os.open(str(tmp_path), os.O_DIRECTORY)
-    try:
-        assert safe_fs.reap_stale_temps(d) == 0
-    finally:
-        os.close(d)
-    assert (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0001").is_dir()
-    assert (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0002").is_symlink()
-    assert victim.read_bytes() == b"MINE"
+    (tmp_path / "user-data.md").write_bytes(b"MINE")
+    (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0002").symlink_to(tmp_path / "user-data.md")
+    assert _find(tmp_path) == []
 
 
-def test_reap_rechecks_identity_before_unlink(tmp_path: Path, monkeypatch):
-    """scandir 判型到 unlink 之間名字被抽換 → 身分不符就不刪（Codex 票 08 R1 F1）。
-
-    POSIX 沒有「按 fd 刪除」的原語（macOS 無 `funlinkat`，Python 只有 pathname 版
-    `unlink`），所以無法原子地「驗身分再刪」——**這是縮小窗口不是關閉**，同票 09 對
-    symlink 暫名的裁定。這條釘住的是「至少不能拿 scandir 當時的型別結果去授權稍後的
-    刪除」。"""
-    pid = _dead_pid()
-    name = f"{safe_fs.TEMP_PREFIX}{pid}-a1b2c3d4"
-    (tmp_path / name).write_bytes(b"stale")
-    victim = tmp_path / "user-data.md"
-    victim.write_bytes(b"MINE")
-
-    real_lstat = safe_fs.os.lstat
-    swapped: list[bool] = []
-
-    def _swap_then_lstat(path, **kwargs):
-        # 抽換發生在重驗之前：reaper 拿到的會是「另一個物件」的身分
-        if path == name and not swapped:
-            swapped.append(True)
-            (tmp_path / name).unlink()
-            victim.rename(tmp_path / name)
-        return real_lstat(path, **kwargs)
-
-    monkeypatch.setattr(safe_fs.os, "lstat", _swap_then_lstat)
-    d = os.open(str(tmp_path), os.O_DIRECTORY)
-    try:
-        assert safe_fs.reap_stale_temps(d) == 0
-    finally:
-        os.close(d)
-    assert swapped, "抽換沒有發生過，這條測試沒測到東西"
-    assert (tmp_path / name).read_bytes() == b"MINE", "抽換進來的使用者檔案不得被刪"
-
-
-def test_reap_spares_temp_when_liveness_cannot_be_determined(tmp_path: Path, monkeypatch):
-    """`kill(0)` 回 EPERM（進程存在但不屬於我們）→ 問不出來一律留著。
+def test_find_skips_temp_when_liveness_cannot_be_determined(tmp_path: Path, monkeypatch):
+    """`kill(0)` 回 EPERM（進程存在但不屬於我們）→ 問不出來一律不指認。
 
     `ProcessLookupError`（ESRCH）才是「確定不在」的唯一訊號。"""
     def _eperm(pid, sig):
         raise PermissionError(errno.EPERM, "not yours")
 
     monkeypatch.setattr(safe_fs.os, "kill", _eperm)
-    orphan = tmp_path / f"{safe_fs.TEMP_PREFIX}{_dead_pid()}-a1b2c3d4"
-    orphan.write_bytes(b"half")
-    d = os.open(str(tmp_path), os.O_DIRECTORY)
-    try:
-        assert safe_fs.reap_stale_temps(d) == 0
-    finally:
-        os.close(d)
-    assert orphan.exists()
+    (tmp_path / f"{safe_fs.TEMP_PREFIX}{_dead_pid()}-a1b2c3d4").write_bytes(b"half")
+    assert _find(tmp_path) == []

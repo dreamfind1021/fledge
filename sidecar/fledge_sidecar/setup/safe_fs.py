@@ -11,7 +11,6 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
-import stat as stat_module
 from pathlib import Path
 
 
@@ -55,7 +54,7 @@ def copy_file_no_clobber(source_path: str, target_path: str, *, dir_fd: int | No
 
 # 暫存名的形狀：前導 `.` 加 PID 與隨機段。兩者缺一不可——前導 `.` 讓它不像成品，
 # PID＋隨機段讓同時跑的兩個 install 不會撞同一個暫存名（比照 backup-claude.sh 的 .partial）。
-# public：`reap_stale_temps` 的呼叫端要認得出這批殘骸屬於誰。
+# public：`find_stale_temps` 的呼叫端要認得出這批殘骸屬於誰。
 TEMP_PREFIX = ".fledge-install-"
 
 
@@ -78,9 +77,9 @@ def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int,
       小檔，每檔兩次目錄 fsync 太貴）。
     - 暫存檔殘留：中斷（SIGKILL **或**斷電）恰落在 link 成功與 unlink temp 之間時，
       暫存檔殘留——「失敗清暫存」只覆蓋本進程活著走到例外路徑的情形，本函式對別的
-      進程留下的殘骸一無所知。回收屬呼叫端簿記，機制是 `reap_stale_temps`、
-      `_install_tree` 每層呼叫（票 08 收攏票 02 記錄的這條殘餘）：**重跑會清掉本輪
-      走訪到的目錄裡**產生者已不在的殘骸；本輪不會走到的位置仍留著。
+      進程留下的殘骸一無所知。**別的進程留下的殘骸不會被自動清除**——`find_stale_temps`
+      只指認、不刪除（票 08 R3：可用的判準全是可偽造的檔名特徵，達不到「只刪自己建的」
+      這條底線），刪除的授權留給看得到完整路徑的使用者。
 
     目標已存在 → FileExistsError（呼叫端據此判 skipped）。
     """
@@ -142,52 +141,35 @@ def _creator_is_gone(name: str) -> bool:
     return False
 
 
-def reap_stale_temps(dir_fd: int) -> int:
-    """回收 `dir_fd` 這一層裡產生者已經不在的暫存檔，回傳清掉幾個。
+def find_stale_temps(dir_fd: int) -> list[str]:
+    """指認 `dir_fd` 這一層裡疑似前一輪硬中斷留下的暫存檔。**唯讀，不刪任何東西。**
 
     `write_bytes_atomic` 的「失敗清暫存」只覆蓋**本進程活著走到例外路徑**的情形。
-    SIGKILL 或斷電落在 link 前後都會留下暫存檔，而重跑的 PID＋隨機名對不上、不會清它
-    ——移機一次寫上千個檔案，中斷幾次就在使用者的現役目錄留下一地看不懂的隱藏檔，
-    且永遠不會自己消失（票 02 判定「屬呼叫端簿記」的殘餘，收在這裡）。
+    SIGKILL 或斷電落在 link 前後都會留下暫存檔，而重跑的 PID＋隨機名對不上——移機一次
+    寫上千個檔案，中斷幾次就在使用者的現役目錄留下一地看不懂的隱藏檔（票 02 記錄的殘餘）。
 
-    只認自己的命名空間、只清產生者已不在的、只碰一般檔（同名目錄或 symlink 不是我們
-    產生的）。是簿記不是安裝的一部分——讀不到目錄或刪不掉都不阻斷安裝。
+    **為什麼只回報不刪除**（Codex 票 08 R3）：能拿來授權刪除的只有檔名前綴、檔名內的
+    PID 已不存在、以及型別是一般檔——三者**全都是可預測、可偽造的檔名特徵**，證明得了
+    「名字看起來像我們建的」，證明不了「這確實是我們建的」。專案對破壞性操作的既有底線
+    是「只刪自己建的」，這裡達不到那個標準，所以不刪：回報給呼叫端，刪除的授權交給看得到
+    完整路徑、能逐項確認的人（Plan B 的 UI）。**這個判準只用來指認嫌疑，不授權任何刪除**，
+    所以誤判的兩個方向都只是回報多了或少了。
 
-    **保證等級（宣稱與實際逐字對齊）**：刪除前重驗身分，但 **POSIX 沒有「按 fd 刪除」
-    的原語**（macOS 無 `funlinkat`，Python 只有 pathname 版 `unlink`），所以「驗身分」
-    與「刪除」之間必然還有一次名稱解析——**這是縮小窗口不是關閉**（Codex 票 08 R1 F1；
-    同票 09 對 symlink 暫名的裁定）。殘餘窗口內若名字被抽換成另一個一般檔，刪到的會是
-    替代物；能做到這件事的主體必須對落點目錄有寫入權，而那等於已經能直接刪任何檔案。
+    只認自己的命名空間（`TEMP_PREFIX`）、只認產生者已確定不在的（`ProcessLookupError`
+    ＝ESRCH 是唯一「確定不在」的訊號，`EPERM` 與其餘問不出來的一律不指認）、只認一般檔
+    （同名目錄或 symlink 不是我們產生的）。讀不到目錄回空清單，不阻斷安裝。
 
     **適用邊界**：liveness 判斷是單機語意。跨 PID namespace 共享同一檔案系統時，
     `kill(0)` 對別的 namespace 的活 writer 會回 ESRCH——當前部署（macOS 桌面 app、
     sidecar 由 Tauri 殼直接 spawn）沒有這個情形。"""
     try:
         with os.scandir(dir_fd) as entries:
-            # 先 materialize 再刪：邊迭代邊 unlink 的行為未定義。身分連 name 一起記，
-            # 刪之前要拿它比對（`is_file` 的結果屬於 scandir 那一刻，不能授權稍後的刪除）。
-            candidates = [(e.name, (e.stat(follow_symlinks=False).st_dev, e.inode()))
-                          for e in entries
-                          if e.name.startswith(TEMP_PREFIX)
-                          and e.is_file(follow_symlinks=False)]
+            names = [e.name for e in entries
+                     if e.name.startswith(TEMP_PREFIX)
+                     and e.is_file(follow_symlinks=False)]
     except OSError:
-        return 0
-    reaped = 0
-    for name, identity in candidates:
-        if not _creator_is_gone(name):
-            continue
-        try:
-            st = os.lstat(name, dir_fd=dir_fd)
-        except OSError:
-            continue                    # 已經不在，或問不出來——都不刪
-        if (st.st_dev, st.st_ino) != identity or not stat_module.S_ISREG(st.st_mode):
-            continue                    # 名字已指向另一個物件，不是我們掃到的那個
-        try:
-            os.unlink(name, dir_fd=dir_fd)
-        except OSError:
-            continue
-        reaped += 1
-    return reaped
+        return []
+    return sorted(name for name in names if _creator_is_gone(name))
 
 
 # errno → 穩定判別碼。`str(OSError)` 夾帶 errno 文字與絕對路徑，是診斷細節而非前端

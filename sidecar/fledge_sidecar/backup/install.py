@@ -743,7 +743,7 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                   rename_children: dict[str, str] | None = None,
                   project_renames: dict[str, str] | None = None,
                   dir_owners: dict[tuple[int, int], str] | None = None,
-                  reap_temps: bool = False) -> None:
+                  stale_temps: list[str] | None = None) -> None:
     """遞迴安裝一層。symlink 收集起來延到第二階段（票 04：過 provenance 授權才建）。
 
     `rename_children`＝本層目錄項的目的地改名表（票 06：只有 `projects/` 那一層的
@@ -751,10 +751,12 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
     進入 `projects/` 那一步向下傳成 `rename_children`。rel／journal／results 一律記
     **目的地**位置。"""
     # 前一輪硬中斷留在這一層的暫存殘骸（票 08）：`write_bytes_atomic` 只清得掉本進程
-    # 活著走到例外路徑的那些，SIGKILL／斷電留下的要靠這裡掃。掃的範圍就是本輪會寫入
-    # 的目錄，不額外走訪使用者的其他位置；`reap_temps` 只在續作時為真（見 install()）。
-    if reap_temps:
-        safe_fs.reap_stale_temps(dst_fd)
+    # 活著走到例外路徑的那些。**只指認不刪除**（票 08 R3）——刪除的授權留給使用者。
+    # `stale_temps` 非 None 才掃，且範圍就是本輪會寫入的目錄（gating 見 install()）。
+    if stale_temps is not None:
+        for name in safe_fs.find_stale_temps(dst_fd):
+            rel = os.path.join(rel_prefix, name) if rel_prefix else name
+            stale_temps.append(f"{account}/{rel}")
     for entry in os.scandir(src_fd):
         dst_name = (rename_children or {}).get(entry.name, entry.name)
         rel = os.path.join(rel_prefix, dst_name) if rel_prefix else dst_name
@@ -803,7 +805,7 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                                       journal_fd, pending,
                                       rename_children=child_renames,
                                       dir_owners=dir_owners,
-                                      reap_temps=reap_temps)
+                                      stale_temps=stale_temps)
                         # durability：link／unlink 的目錄項在斷電後不保證持久，光 fsync
                         # 檔案不夠。粒度取「每個目錄一次」而非每檔兩次——一次還原可能
                         # 上千個小檔，後者成本過高（spec §4.2.5）。
@@ -1160,13 +1162,13 @@ def install(plan: InstallPlan) -> list[ItemResult]:
     # journal 開在 source 驗證之後、任何寫入之前：它是 symlink 授權與中斷續作的基礎，
     # 開不起來就不該動使用者的目錄——fail closed 回穩定判別碼，不讓 OSError 裸穿。
     journal = journal_path(transaction_id(plan))
-    # 只有續作才掃暫存殘骸（Codex 票 08 R1 F3）：完整成功會清掉 journal，所以「還有
-    # journal 在」正是有一輪沒收尾的訊號，也是唯一可能留下殘骸的情況。首次安裝掃了必然
+    # 只有續作才找暫存殘骸（Codex 票 08 R1 F3）：完整成功會清掉 journal，所以「還有
+    # journal 在」正是有一輪沒收尾的訊號，也是唯一可能留下殘骸的情況。首次安裝找了必然
     # 一無所獲，而那個掃描是**按目的地既有目錄項計費**——落點已有上千個使用者檔案時每層
     # 都要全掃。判準是「有沒有任何一輪沒收尾」而不是「本次 transaction 的 journal 在不
     # 在」（Codex 票 08 R2：後者會讓「中斷後改 mapping／重展 bundle 再跑」永久漏清）。
-    # 這不是安全判斷（誤判只會多掃一次或少清一次殘骸），所以用 pathname 探測就夠。
-    resuming = _has_unfinished_journal()
+    # 這不是安全判斷、也不授權任何刪除（找到的只寫進 log，票 08 R3），所以 pathname 探測就夠。
+    stale_temps: list[str] | None = [] if _has_unfinished_journal() else None
     try:
         journal_fd = _open_journal_fd(journal)
     except OSError as exc:
@@ -1280,7 +1282,7 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                                                    if not spot.key.startswith("extra:")
                                                    else None),
                                   dir_owners=dir_owners,
-                                  reap_temps=resuming)
+                                  stale_temps=stale_temps)
                     # 根層目錄項的斷電持久性掛在這裡（票 03 R1）；目錄 fsync 不受支援時
                     # 降級不整批失敗。
                     with contextlib.suppress(OSError):
@@ -1334,6 +1336,12 @@ def install(plan: InstallPlan) -> list[ItemResult]:
         os.close(journal_fd)
         os.close(src_root_fd)
     logger.info("移機完成：%s", dict(Counter(r.outcome for r in results)))
+    if stale_temps:
+        # 前一輪硬中斷留下的暫存檔（票 08 R3）：**只回報不刪**——可用的判準全是可偽造的
+        # 檔名特徵，達不到「只刪自己建的」這條底線。刪除的授權留給看得到完整路徑的使用者
+        # （Plan B 的 UI）。列前 20 個就夠診斷，上千個殘骸不需要全灌進 log。
+        logger.warning("移機發現前一輪殘留的暫存檔 %d 個（未自動刪除）：%s",
+                       len(stale_temps), ", ".join(stale_temps[:20]))
     # 完整成功才清 journal：它是「這次移機還沒收尾」的訊號（ADR-0006），留著會讓還原卡
     # 永遠顯示「上次移機未完成」。有 failed 則保留——供修好後重跑，中斷續作靠它認得
     # 前一輪已發布的 node（excluded 是刻意拒絕、不算未完成，不阻止清除）。

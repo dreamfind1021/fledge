@@ -13,6 +13,7 @@ barrier 刻意**不放進 production code**（plan 原本寫的是讀環境變�
 
 **全程假 HOME + tmp_path，絕不碰真實的 ~/.claude。**
 """
+import logging
 import os
 import select
 import shutil
@@ -154,7 +155,7 @@ def test_source_node_swapped_between_type_check_and_read(tmp_path: Path, monkeyp
     assert (tgt / "CLAUDE.md").read_text(encoding="utf-8") == "RULES"
 
 
-def test_sigkill_after_temp_write_leaves_no_truncated_final(tmp_path: Path):
+def test_sigkill_after_temp_write_leaves_no_truncated_final(tmp_path: Path, caplog):
     """窗口一：暫存檔寫完、`link` 之前被強制結束。
 
     最終檔名此刻不該存在，SIGKILL 之後也不該出現——否則下次重跑會因為 EEXIST 判它
@@ -169,12 +170,15 @@ def test_sigkill_after_temp_write_leaves_no_truncated_final(tmp_path: Path):
     proc.wait(timeout=10)
     assert not (tgt / "CLAUDE.md").exists(), "SIGKILL 後不得留下佔用最終名的截斷檔"
 
-    inst.install(inst.plan(str(src), _accounts(tgt)))
+    with caplog.at_level(logging.WARNING, logger="fledge_sidecar.backup.install"):
+        inst.install(inst.plan(str(src), _accounts(tgt)))
     assert (tgt / "CLAUDE.md").read_text(encoding="utf-8") == "RULES"
-    assert _temp_leftovers(tgt) == [], "重跑要回收前一輪的暫存檔"
+    # 殘骸只被指認、不被刪（票 08 R3：判準全是可偽造的檔名特徵，達不到「只刪自己建的」）
+    assert _temp_leftovers(tgt), "暫存檔不該被自動刪除"
+    assert "殘留的暫存檔" in caplog.text, "但必須被指認出來，使用者才知道它在"
 
 
-def test_sigkill_after_link_before_temp_cleanup(tmp_path: Path):
+def test_sigkill_after_link_before_temp_cleanup(tmp_path: Path, caplog):
     """窗口二：`link` 成功、暫存檔還沒清掉時被強制結束。
 
     最終名此刻已經完整（原子發布的意義），重跑判為已存在；殘留的暫存檔要被回收。"""
@@ -188,10 +192,12 @@ def test_sigkill_after_link_before_temp_cleanup(tmp_path: Path):
     proc.kill()
     proc.wait(timeout=10)
 
-    results = inst.install(inst.plan(str(src), _accounts(tgt)))
+    with caplog.at_level(logging.WARNING, logger="fledge_sidecar.backup.install"):
+        results = inst.install(inst.plan(str(src), _accounts(tgt)))
     assert any(r.rel_path == "CLAUDE.md" and r.outcome == "skipped" for r in results)
     assert (tgt / "CLAUDE.md").read_text(encoding="utf-8") == "RULES"
-    assert _temp_leftovers(tgt) == [], "重跑要回收前一輪的暫存檔"
+    assert _temp_leftovers(tgt), "暫存檔不該被自動刪除"
+    assert "殘留的暫存檔" in caplog.text, "但必須被指認出來"
 
 
 def test_sigkill_between_phases_still_creates_symlinks_on_rerun(tmp_path: Path):
@@ -222,15 +228,15 @@ def test_sigkill_between_phases_still_creates_symlinks_on_rerun(tmp_path: Path):
     assert (tgt / "linked" / "c.md").read_text(encoding="utf-8") == "CMD"
 
 
-def test_reap_is_skipped_when_there_was_no_prior_round(tmp_path: Path, monkeypatch):
+def test_stale_temp_scan_is_skipped_when_there_was_no_prior_round(tmp_path: Path, monkeypatch):
     """正常首次安裝不掃暫存殘骸：沒有前一輪就不可能有殘骸，掃描是純成本。
 
     這個掃描是**按目的地既有目錄項計費**而非按殘骸數計費（Codex 票 08 R1 F3）——落點
     若已有上千個使用者檔案，每一層都要全掃一次。前一輪完整成功會清掉 journal，所以
     「journal 還在」正是「上一輪沒收尾」的訊號，也就是唯一可能有殘骸的情況。"""
     calls: list[int] = []
-    monkeypatch.setattr(inst.safe_fs, "reap_stale_temps",
-                        lambda fd: calls.append(fd) or 0)
+    monkeypatch.setattr(inst.safe_fs, "find_stale_temps",
+                        lambda fd: calls.append(fd) or [])
     src = _staging(tmp_path)
     tgt = tmp_path / "live"
     tgt.mkdir()
@@ -239,7 +245,7 @@ def test_reap_is_skipped_when_there_was_no_prior_round(tmp_path: Path, monkeypat
     assert calls == [], "首次安裝不該掃描目的地"
 
 
-def test_reap_runs_when_transaction_changed_after_interrupt(tmp_path: Path):
+def test_stale_temps_reported_when_transaction_changed_after_interrupt(tmp_path: Path, caplog):
     """中斷後重展 bundle（或改 mapping／落點）→ transaction 變了，同一個落點的殘骸
     仍要回收（Codex 票 08 R2）。
 
@@ -262,5 +268,6 @@ def test_reap_runs_when_transaction_changed_after_interrupt(tmp_path: Path):
     plan2 = inst.plan(str(src2), _accounts(tgt))
     assert inst.transaction_id(plan2) != tid_before, "前提沒成立：transaction 沒有變"
 
-    inst.install(plan2)
-    assert _temp_leftovers(tgt) == [], "換了 transaction 也要回收前一輪的殘骸"
+    with caplog.at_level(logging.WARNING, logger="fledge_sidecar.backup.install"):
+        inst.install(plan2)
+    assert "殘留的暫存檔" in caplog.text, "換了 transaction 也要指認出前一輪的殘骸"
