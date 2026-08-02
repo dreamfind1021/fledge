@@ -1082,3 +1082,183 @@ def test_install_records_failed_when_extra_dir_unopenable(tmp_path: Path, monkey
     assert any(r.account == "extra:agents" and r.outcome == "failed" for r in results)
     assert list(replacement.iterdir()) == []                    # 替身目錄零讀寫
     assert inst.journal_path(inst.transaction_id(p)).exists()
+
+
+# ---------- 票 06：專案目錄改名（對話歷史叫得出來） ----------
+
+
+def _staging_with_history(tmp_path: Path) -> Path:
+    """備份包含一個專案的對話歷史（projects/<encoded>/）＋記憶子目錄。"""
+    src = _staging(tmp_path)
+    proj = src / "accounts" / "work" / "projects" / "-Users-olduser-work-app"
+    proj.mkdir(parents=True)
+    lines = [
+        {"type": "user", "cwd": "/Users/olduser/work/app", "uuid": "u1",
+         "message": {"content": "看看 /Users/olduser/work/app/src"}},
+        {"type": "assistant", "cwd": "/Users/olduser/work/app", "uuid": "u2"},
+    ]
+    (proj / "s.jsonl").write_text(
+        "\n".join(json.dumps(o, ensure_ascii=False) for o in lines) + "\n",
+        encoding="utf-8")
+    (proj / "memory").mkdir()
+    (proj / "memory" / "note.md").write_text("記憶檔", encoding="utf-8")
+    return src
+
+
+def _snapshot_tree(root: Path) -> dict[str, bytes]:
+    """整棵樹的 {相對路徑: 位元組}（含 symlink 目標字串），驗「全程唯讀」用。"""
+    snap: dict[str, bytes] = {}
+    for p in sorted(root.rglob("*")):
+        rel = str(p.relative_to(root))
+        if p.is_symlink():
+            snap[rel] = b"->" + os.readlink(p).encode()
+        elif p.is_file():
+            snap[rel] = p.read_bytes()
+        else:
+            snap[rel] = b"<dir>"
+    return snap
+
+
+def test_mapping_renames_project_dir_and_keeps_bytes(tmp_path: Path):
+    """指定對應之後，歷史裝到**新路徑編碼**出來的目錄底下，且歷史檔逐位元組與備份包
+    相同——票 01 實測：定位只靠目錄名、內容完全不動。"""
+    src = _staging_with_history(tmp_path)
+    original = (src / "accounts" / "work" / "projects" / "-Users-olduser-work-app"
+                / "s.jsonl").read_bytes()
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt),
+                  mapping=[("/Users/olduser/work/app", "/Users/newuser/work/app")])
+    inst.install(p)
+    assert (tgt / "projects" / "-Users-newuser-work-app" / "s.jsonl").read_bytes() \
+        == original
+    assert not (tgt / "projects" / "-Users-olduser-work-app").exists()
+
+
+def test_memory_subdir_follows_the_rename(tmp_path: Path):
+    """projects/<proj>/memory/ 是記憶檔，跟著專案目錄一起搬——漏了它等於丟掉記憶。"""
+    src = _staging_with_history(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt),
+                  mapping=[("/Users/olduser/work/app", "/Users/newuser/work/app")])
+    inst.install(p)
+    assert (tgt / "projects" / "-Users-newuser-work-app" / "memory" / "note.md"
+            ).read_text(encoding="utf-8") == "記憶檔"
+
+
+def test_staging_is_byte_identical_after_install_with_mapping(tmp_path: Path):
+    """改寫融進複製過程、staging 全程唯讀（spec §4.2.4）：整棵展開目錄位元組不變。"""
+    src = _staging_with_history(tmp_path)
+    before = _snapshot_tree(src)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt),
+                  mapping=[("/Users/olduser/work/app", "/Users/newuser/work/app")])
+    inst.install(p)
+    assert _snapshot_tree(src) == before
+
+
+def test_unmapped_project_is_kept_and_reported(tmp_path: Path):
+    """沒指定對應的專案照搬原位置，且 plan 把它列進 unmapped_projects——使用者要知道
+    哪些專案的歷史在路徑變動時 `/resume` 會找不到。"""
+    src = _staging_with_history(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    assert p.unmapped_projects == [{
+        "account": "work",
+        "encoded_dir": "-Users-olduser-work-app",
+        "old_path": "/Users/olduser/work/app",
+    }]
+    inst.install(p)
+    assert (tgt / "projects" / "-Users-olduser-work-app" / "s.jsonl").is_file()
+
+
+def test_mapping_rerun_is_idempotent(tmp_path: Path):
+    """帶 mapping 的重跑：plan 的預覽要用**改名後**的目的位置判 skip，第二輪全 skipped、
+    現役零變化——中斷續作靠這個性質。"""
+    src = _staging_with_history(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    mapping = [("/Users/olduser/work/app", "/Users/newuser/work/app")]
+    inst.install(inst.plan(str(src), _accounts(tgt), mapping=mapping))
+    before = {p: p.read_bytes() for p in tgt.rglob("*") if p.is_file()}
+    p2 = inst.plan(str(src), _accounts(tgt), mapping=mapping)
+    assert p2.will_install == 0
+    results = inst.install(p2)
+    assert {r.outcome for r in results} == {"skipped"}
+    assert {p: p.read_bytes() for p in tgt.rglob("*") if p.is_file()} == before
+
+
+def test_mapping_rejects_colliding_encoded_names(tmp_path: Path):
+    """編碼有損（非英數全變 `-`）：兩個新路徑撞名、或撞上未改寫專案的既有目錄名，
+    都要在寫任何東西之前整批拒絕。"""
+    src = _staging_with_history(tmp_path)
+    other = src / "accounts" / "work" / "projects" / "-Users-olduser-work-other"
+    other.mkdir()
+    (other / "t.jsonl").write_text(
+        json.dumps({"cwd": "/Users/olduser/work/other"}) + "\n", encoding="utf-8")
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    with pytest.raises(ValueError, match="mapping_collision"):
+        inst.plan(str(src), _accounts(tgt),
+                  mapping=[("/Users/olduser/work/app", "/a/b"),
+                           ("/Users/olduser/work/other", "/a-b")])
+    with pytest.raises(ValueError, match="mapping_collision"):
+        inst.plan(str(src), _accounts(tgt),
+                  mapping=[("/Users/olduser/work/app",
+                            "/Users/olduser-work-other")])   # 撞未改寫專案的既有名
+    with pytest.raises(ValueError, match="mapping_collision"):
+        inst.plan(str(src), _accounts(tgt),
+                  mapping=[("/Users/olduser/work/app", "/x/a"),
+                           ("/Users/olduser/work/app", "/x/b")])   # 同一專案對兩個新路徑
+    assert list(tgt.iterdir()) == []
+
+
+def test_mapping_rejects_relative_new_path(tmp_path: Path):
+    src = _staging_with_history(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    with pytest.raises(ValueError, match="mapping_not_absolute"):
+        inst.plan(str(src), _accounts(tgt),
+                  mapping=[("/Users/olduser/work/app", "relative/path")])
+
+
+def test_mapping_rejects_unknown_old_project(tmp_path: Path):
+    """old 必須是備份包裡確實存在的專案——mapping 也是不可信輸入的一種。"""
+    src = _staging_with_history(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    with pytest.raises(ValueError, match="mapping_unknown_project"):
+        inst.plan(str(src), _accounts(tgt),
+                  mapping=[("/Users/olduser/nope", "/Users/newuser/nope")])
+
+
+def test_mapping_changes_transaction_id(tmp_path: Path):
+    """journal node 以改名後的位置記——改 mapping 重跑＝不同 transaction，不讀舊
+    journal（比照票 04 R1 F1 的落點 mapping 綁定）；同 mapping 重跑則穩定接上。"""
+    src = _staging_with_history(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    mapping = [("/Users/olduser/work/app", "/Users/newuser/work/app")]
+    tid_none = inst.transaction_id(inst.plan(str(src), _accounts(tgt)))
+    tid_map1 = inst.transaction_id(inst.plan(str(src), _accounts(tgt), mapping=mapping))
+    tid_map2 = inst.transaction_id(inst.plan(str(src), _accounts(tgt), mapping=mapping))
+    assert tid_none != tid_map1
+    assert tid_map1 == tid_map2
+
+
+def test_project_paths_reads_old_path_from_history(tmp_path: Path):
+    """編碼不可逆（非英數全變 `-`），舊路徑只能從歷史檔的 cwd 讀；舊 home 底下的
+    給建議值（換 home 前綴）、並回報建議位置是否存在。純唯讀。"""
+    src = _staging_with_history(tmp_path)
+    found = inst.project_paths(str(src))
+    home = str(Path(os.environ["HOME"]).resolve())
+    assert found == [{
+        "account": "work",
+        "old_path": "/Users/olduser/work/app",
+        "encoded_dir": "-Users-olduser-work-app",
+        "suggested": f"{home}/work/app",
+        "suggested_exists": False,
+    }]

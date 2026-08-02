@@ -548,3 +548,56 @@ def test_install_plan_rejects_overlapping_spots_from_config(tmp_path: Path, monk
     resp = TestClient(create_app()).post("/api/restore/install-plan",
                                          json={"dest": str(src)})
     assert (resp.status_code, resp.json()["error"]) == (400, "overlapping_config_dirs")
+
+
+def _add_history(src: Path) -> None:
+    proj = src / "accounts" / "work" / "projects" / "-Users-olduser-work-app"
+    proj.mkdir(parents=True)
+    (proj / "s.jsonl").write_text(
+        json.dumps({"cwd": "/Users/olduser/work/app"}) + "\n", encoding="utf-8")
+
+
+def test_project_paths_route_reads_bundle(tmp_path: Path, monkeypatch):
+    """唯讀端點（票 06）：列備份包裡的專案、舊路徑（讀歷史檔 cwd）、建議新路徑；
+    非 bundle 400。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    _add_history(src)
+    client = TestClient(create_app())
+    resp = client.get("/api/restore/project-paths", params={"dest": str(src)})
+    assert resp.status_code == 200
+    [p] = resp.json()["projects"]
+    assert p["old_path"] == "/Users/olduser/work/app"
+    assert p["suggested"] == f"{home}/work/app"
+    resp = client.get("/api/restore/project-paths", params={"dest": str(tmp_path)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
+
+
+def test_install_endpoints_apply_mapping(tmp_path: Path, monkeypatch):
+    """mapping 經正式 API 一路生效（票 06）：install-plan 帶 mapping 預覽（改名表＋
+    未對應清單）、install 依同一 mapping 把歷史裝到新名底下；mapping 錯誤映 400。"""
+    from fledge_sidecar.project_scanner import encode_cc_project_dir
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    _add_history(src)
+    client = TestClient(create_app())
+    assert client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+    }).status_code == 200
+    resp = client.post("/api/restore/install-plan", json={"dest": str(src)})
+    assert [u["encoded_dir"] for u in resp.json()["unmapped_projects"]] \
+        == ["-Users-olduser-work-app"]
+    mapping = [{"old": "/Users/olduser/work/app", "new": f"{home}/work/app"}]
+    resp = client.post("/api/restore/install-plan",
+                       json={"dest": str(src), "mapping": mapping})
+    assert resp.status_code == 200
+    new_enc = encode_cc_project_dir(f"{home}/work/app")
+    assert resp.json()["project_renames"] == {"-Users-olduser-work-app": new_enc}
+    assert resp.json()["unmapped_projects"] == []
+    resp = client.post("/api/restore/install",
+                       json={"dest": str(src), "mapping": mapping})
+    assert resp.status_code == 200
+    assert (home / ".claude" / "projects" / new_enc / "s.jsonl").is_file()
+    resp = client.post("/api/restore/install-plan", json={
+        "dest": str(src),
+        "mapping": [{"old": "/Users/olduser/work/app", "new": "rel/path"}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "mapping_not_absolute")

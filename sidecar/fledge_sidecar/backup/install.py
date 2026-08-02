@@ -29,6 +29,7 @@ from fledge_sidecar.paths import (
     is_same_or_within,
     resolve_best_effort,
 )
+from fledge_sidecar.project_scanner import encode_cc_project_dir
 from fledge_sidecar.setup import safe_fs
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,10 @@ Outcome = Literal["installed", "skipped", "excluded", "failed"]
 EXCLUDED_NAMES: frozenset[str] = frozenset({".claude.json"})
 
 MANIFEST_NAME = "manifest.json"
+
+# 對話歷史所在的帳號子目錄：`projects/<encoded>` 的第二層目錄名是移機唯一的改寫點
+# （票 01 實測：/resume 定位只靠目錄名、歷史檔內容完全不動）。
+_PROJECTS_DIR = "projects"
 
 # account key 會被拼進 Path(root, "accounts", key) 與 fd-relative open：絕對 key 讓 Path
 # 丟棄 root、`..` 走出 staging、絕對路徑更會讓 os.open 直接忽略 dir_fd。manifest 是不可信
@@ -73,6 +78,11 @@ class InstallPlan:
     # plan 後才出現、plan 看過卻消失，皆 failed（source_moved）；None＝plan 時不存在，
     # install 見 ENOENT 才容許靜默。內容層變動不凍結——plan 是預覽不是內容授權。
     spot_source_identities: dict[str, tuple[int, int] | None]
+    # 票 06：專案目錄改名表（舊 encoded 名 → 新 encoded 名；新名一律由
+    # encode_cc_project_dir 產生，不接受任意字串）與未對應專案清單（照搬原位置；
+    # 路徑變動時 /resume 會找不到——前端據此提示，後端只給資料不給 prose）。
+    project_renames: dict[str, str]
+    unmapped_projects: list[dict]
     will_install: int
     will_skip: list[str]
     # 目的地祖先被非目錄（一般檔或 symlink）占用的葉檔：install 只會在目錄層 fail、
@@ -172,10 +182,26 @@ def _walk_account(account_dir: Path) -> tuple[list[str], list[str]]:
     return installable, excluded
 
 
-def _scan_spot(content_dir: Path, target: str) -> tuple[int, list[str], list[str], list[str]]:
+def _dest_rel(rel: str, renames: dict[str, str] | None) -> str:
+    """來源相對路徑 → 目的地相對路徑：只有 `projects/<專案>` 的第二層目錄名會換
+    （票 06），其餘一律原樣。"""
+    if not renames:
+        return rel
+    parts = rel.split(os.sep)
+    if len(parts) >= 2 and parts[0] == _PROJECTS_DIR and parts[1] in renames:
+        parts[1] = renames[parts[1]]
+        return os.sep.join(parts)
+    return rel
+
+
+def _scan_spot(content_dir: Path, target: str,
+               renames: dict[str, str] | None = None
+               ) -> tuple[int, list[str], list[str], list[str]]:
     """掃一個落點的來源目錄，回 (會裝數, 跳過, 被祖先擋, walk 排除)。純唯讀。
 
-    帳號與 extra 共用同一支——落點的驗證規則不因它不是帳號而放寬（票 05 驗收）。"""
+    帳號與 extra 共用同一支——落點的驗證規則不因它不是帳號而放寬（票 05 驗收）。
+    目的地存在性與祖先檢查一律以**改名後**的位置判（票 06）：否則帶 mapping 的重跑
+    會把已裝的當未裝、預覽數字說謊。skip／blocked 清單記的也是目的地位置。"""
     if not content_dir.is_dir():
         return 0, [], [], []
     installable, walk_excluded = _walk_account(content_dir)
@@ -186,7 +212,8 @@ def _scan_spot(content_dir: Path, target: str) -> tuple[int, list[str], list[str
     # 快取按相對前綴——同一子樹的葉檔不必重複探測。
     blocked_dirs: set[str] = set()
     ok_dirs: set[str] = set()
-    for rel in installable:
+    for src_rel in installable:
+        rel = _dest_rel(src_rel, renames)
         parent = os.path.dirname(rel)
         bad = False
         cur = ""
@@ -221,12 +248,93 @@ def _scan_spot(content_dir: Path, target: str) -> tuple[int, list[str], list[str
     return n_install, skip, blocked, walk_excluded
 
 
+def _validate_mapping(mapping: list[tuple[str, str]],
+                      project_dirs: dict[str, list[str]]) -> dict[str, str]:
+    """驗 mapping（舊專案路徑 → 新專案路徑），回 {舊 encoded 名: 新 encoded 名}。
+    **在寫任何東西之前一次驗完**（spec §4.2.4）：new 必須絕對路徑；old 必須是備份包
+    內確實存在的專案（mapping 也是不可信輸入）；編碼有損（非英數全變 `-`），新名彼此
+    相撞、同一專案對到兩個新路徑、或撞上未改寫專案的既有目錄名，都整批拒。"""
+    all_names = {n for names in project_dirs.values() for n in names}
+    renames: dict[str, str] = {}
+    for old, new in mapping:
+        if not isinstance(new, str) or not os.path.isabs(new):
+            raise ValueError("mapping_not_absolute")
+        old_enc = encode_cc_project_dir(str(old))
+        if old_enc not in all_names:
+            raise ValueError("mapping_unknown_project")
+        if old_enc in renames:
+            raise ValueError("mapping_collision")   # 同一專案（或編碼相撞的兩個 old）
+        renames[old_enc] = encode_cc_project_dir(new)
+    # 每個帳號的 projects/ 內，改名後的名字集合不得有重複（含未改寫的既有名）——
+    # 不同帳號各有自己的 projects/，跨帳號同名不構成實體衝突。
+    for names in project_dirs.values():
+        finals = [renames.get(n, n) for n in names]
+        if len(set(finals)) != len(finals):
+            raise ValueError("mapping_collision")
+    return renames
+
+
+def _peek_cwd(project_dir: Path) -> str | None:
+    """讀專案目錄歷史檔裡第一個出現的 `cwd`。**只讀不改**——編碼不可逆，這是知道
+    專案舊路徑的唯一辦法（票 01：內容不必動，讀 cwd 純粹為了列給使用者做對應；
+    首行可能是沒有 cwd 的 summary，故逐行找而不是只看第一行）。"""
+    for f in sorted(project_dir.glob("*.jsonl")):
+        try:
+            with f.open(encoding="utf-8") as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    cwd = json.loads(line).get("cwd")
+                    if isinstance(cwd, str):
+                        return cwd
+        except (OSError, ValueError):
+            continue                        # 壞檔跳過，不讓它擋住整個列表
+    return None
+
+
+def project_paths(source_root: str) -> list[dict]:
+    """列出備份包裡每個專案的舊路徑與建議新路徑。純唯讀（票 06）。
+
+    建議值規則同落點（spec §4.2.2 決策 9）：舊路徑在舊 home 底下 → 換 home 前綴；
+    其餘留空**不猜**。一律由使用者確認後經 mapping 送回。"""
+    root = resolve_best_effort(source_root)
+    manifest = read_manifest(root)          # 順便驗它確實是我們展開的目錄
+    old_home = manifest.get("home", "")
+    new_home = str(Path.home().resolve())
+    found: list[dict] = []
+    for key in sorted(manifest.get("accounts", {})):
+        if not _SAFE_KEY_RE.fullmatch(key):
+            raise ValueError("invalid_account_key")   # key 拼進路徑，同規則重驗
+        pdir = Path(root, "accounts", key, _PROJECTS_DIR)
+        if not pdir.is_dir():
+            continue
+        for child in sorted(pdir.iterdir()):
+            if not child.is_dir() or child.is_symlink():
+                continue
+            cwd = _peek_cwd(child)
+            if cwd is None:
+                continue                    # 讀不出舊路徑的專案無從對應，不列
+            suggested = (_rewrite_home_prefix(cwd, old_home, new_home)
+                         if old_home else None)
+            found.append({
+                "account": key,
+                "old_path": cwd,
+                "encoded_dir": child.name,
+                "suggested": suggested or "",
+                "suggested_exists": bool(suggested) and os.path.isdir(suggested),
+            })
+    return found
+
+
 def plan(source_root: str, accounts: dict[str, dict[str, str]],
-         extra: dict[str, str] | None = None) -> InstallPlan:
+         extra: dict[str, str] | None = None,
+         mapping: list[tuple[str, str]] | None = None) -> InstallPlan:
     """掃描展開目錄與各落點，回「會裝什麼、會跳過什麼、不處理什麼」。純唯讀。
 
     `extra`＝帳號目錄外資產（如 `~/.agents`）的**使用者確認落點** `{name: config_dir}`；
-    manifest 只提供建議值、不能自行指定目的地（spec §4.2.2）——沒確認的整項不搬、列 excluded。"""
+    manifest 只提供建議值、不能自行指定目的地（spec §4.2.2）——沒確認的整項不搬、列 excluded。
+    `mapping`＝使用者確認的專案路徑對應（舊絕對路徑 → 新絕對路徑，票 06）：只影響
+    `projects/<encoded>` 的目錄名，歷史檔逐位元組不變。"""
     root = resolve_best_effort(source_root)
     manifest = read_manifest(root)          # 順便驗它確實是我們展開的目錄
     # 實體 accounts/ 目錄也是 bundle 形狀的一部分：缺了它 plan 會回一份空預覽、install
@@ -268,8 +376,32 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         spot_source_identities[f"extra:{name}"] = \
             dir_identity(str(Path(root, "extra", name)))
 
+    # 落點重疊以 install 時的解析結果重驗（帳號＋extra 一起），不依賴 adopt 那一道
+    _ensure_no_overlap(list(targets.values()) + list(extra_targets.values()))
+
+    # 票 06：mapping 前置驗證＋未對應清單——放在掃描之前，帳號掃描要用改名表以
+    # 目的地位置判 skip／blocked。專案目錄以 lstat 語意列（symlink 不算）。
+    project_dirs: dict[str, list[str]] = {}
+    for key in targets:
+        pdir = Path(root, "accounts", key, _PROJECTS_DIR)
+        project_dirs[key] = sorted(
+            c.name for c in pdir.iterdir()
+            if c.is_dir() and not c.is_symlink()) if pdir.is_dir() else []
+    project_renames = _validate_mapping(list(mapping or []), project_dirs)
+    unmapped_projects: list[dict] = []
+    for key in sorted(project_dirs):
+        for name in project_dirs[key]:
+            if name not in project_renames:
+                unmapped_projects.append({
+                    "account": key,
+                    "encoded_dir": name,
+                    "old_path": _peek_cwd(
+                        Path(root, "accounts", key, _PROJECTS_DIR, name)),
+                })
+
     for key, target in targets.items():
-        n, sk, bl, ex = _scan_spot(Path(root, "accounts", key), target)
+        n, sk, bl, ex = _scan_spot(Path(root, "accounts", key), target,
+                                   renames=project_renames)
         will_install += n
         will_skip.extend(sk)
         blocked.extend(bl)
@@ -281,9 +413,6 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         blocked.extend(bl)
         excluded.extend(ex)
 
-    # 落點重疊以 install 時的解析結果重驗（帳號＋extra 一起），不依賴 adopt 那一道
-    _ensure_no_overlap(list(targets.values()) + list(extra_targets.values()))
-
     identities = {key: dir_identity(t) for key, t in targets.items()}
     identities.update({f"extra:{name}": dir_identity(t) for name, t in extra_targets.items()})
     return InstallPlan(
@@ -293,6 +422,8 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         target_identities=identities,
         extra_targets=extra_targets,
         spot_source_identities=spot_source_identities,
+        project_renames=project_renames,
+        unmapped_projects=unmapped_projects,
         will_install=will_install,
         will_skip=will_skip,
         blocked=blocked,
@@ -316,6 +447,9 @@ def transaction_id(plan: InstallPlan) -> str:
         repr(plan.source_identity),
         repr(sorted(plan.targets.items())),
         repr(sorted(plan.extra_targets.items())),   # 改 extra 落點也是新 transaction
+        # journal node 以改名後的位置記——改 mapping 重跑＝不同 transaction，不讀舊
+        # journal（比照落點 mapping 的綁定理由，票 04 R1 F1／票 06）。
+        repr(sorted(plan.project_renames.items())),
     ])
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
@@ -453,10 +587,18 @@ def _read_file_pinned(name: str, dir_fd: int) -> bytes:
 
 def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                   results: list[ItemResult], journal_fd: int,
-                  pending: list[_PendingLink]) -> None:
-    """遞迴安裝一層。symlink 收集起來延到第二階段（票 04：過 provenance 授權才建）。"""
+                  pending: list[_PendingLink],
+                  rename_children: dict[str, str] | None = None,
+                  project_renames: dict[str, str] | None = None) -> None:
+    """遞迴安裝一層。symlink 收集起來延到第二階段（票 04：過 provenance 授權才建）。
+
+    `rename_children`＝本層目錄項的目的地改名表（票 06：只有 `projects/` 那一層的
+    專案目錄名會換，其餘每層原名照搬）；`project_renames`＝完整改名表，只在從帳號根
+    進入 `projects/` 那一步向下傳成 `rename_children`。rel／journal／results 一律記
+    **目的地**位置。"""
     for entry in os.scandir(src_fd):
-        rel = os.path.join(rel_prefix, entry.name) if rel_prefix else entry.name
+        dst_name = (rename_children or {}).get(entry.name, entry.name)
+        rel = os.path.join(rel_prefix, dst_name) if rel_prefix else dst_name
         if entry.name in EXCLUDED_NAMES and not rel_prefix:
             results.append(ItemResult(account, rel, "excluded", "not_migrated_by_design"))
             continue
@@ -473,14 +615,20 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                     # 的 commands／plugins），授權判準要認得出「這個目錄是我們裝的」；
                     # 已存在的目錄是使用者的，記了就等於讓 symlink 能指向現役內容（R4）。
                     try:
-                        os.mkdir(entry.name, 0o700, dir_fd=dst_fd)
+                        os.mkdir(dst_name, 0o700, dir_fd=dst_fd)
                         _record(journal_fd, account, rel)
                     except FileExistsError:
                         pass
-                    child_dst = _open_dir_pinned(entry.name, dir_fd=dst_fd)
+                    child_dst = _open_dir_pinned(dst_name, dir_fd=dst_fd)
                     try:
+                        # 只有帳號根層的 projects/ 那一步把改名表傳成下一層的
+                        # rename_children；再往下一律原名（票 06）。
+                        child_renames = (project_renames
+                                         if not rel_prefix and
+                                         entry.name == _PROJECTS_DIR else None)
                         _install_tree(child_src, child_dst, account, rel, results,
-                                      journal_fd, pending)
+                                      journal_fd, pending,
+                                      rename_children=child_renames)
                         # durability：link／unlink 的目錄項在斷電後不保證持久，光 fsync
                         # 檔案不夠。粒度取「每個目錄一次」而非每檔兩次——一次還原可能
                         # 上千個小檔，後者成本過高（spec §4.2.5）。
@@ -497,7 +645,7 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                 results.append(ItemResult(account, rel, "excluded", "not_a_regular_file"))
                 continue
             data = _read_file_pinned(entry.name, src_fd)
-            safe_fs.write_bytes_atomic(data, entry.name, dir_fd=dst_fd,
+            safe_fs.write_bytes_atomic(data, dst_name, dir_fd=dst_fd,
                                        mode=entry.stat(follow_symlinks=False).st_mode & 0o777)
             _record(journal_fd, account, rel)   # 發布成功才記（不是 intent-first）
             results.append(ItemResult(account, rel, "installed"))
@@ -816,8 +964,13 @@ def install(plan: InstallPlan) -> list[ItemResult]:
             # 寫入階段：fd 版重疊重驗通過的落點才逐一裝樹。
             for spot in _drop_overlapping_spots(prepared, results):
                 try:
+                    # 專案改名表只作用於帳號落點——extra 是帳號外資產，沒有 projects/
+                    # 語意（extra key 帶 "extra:" 前綴，帳號 key 的正則不含冒號）。
                     _install_tree(spot.src_fd, spot.dst_fd, spot.key, "", results,
-                                  journal_fd, pending)
+                                  journal_fd, pending,
+                                  project_renames=(plan.project_renames
+                                                   if not spot.key.startswith("extra:")
+                                                   else None))
                     # 根層目錄項的斷電持久性掛在這裡（票 03 R1）；目錄 fsync 不受支援時
                     # 降級不整批失敗。
                     with contextlib.suppress(OSError):

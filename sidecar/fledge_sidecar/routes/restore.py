@@ -59,9 +59,18 @@ def restore_plan(body: RestorePlanBody):
     }
 
 
+class MappingEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    old: str
+    new: str
+
+
 class DestBody(BaseModel):
     model_config = ConfigDict(extra="forbid")  # ADR-0002：client 塞 plan 之類的欄位 → 422
     dest: str
+    # 專案路徑對應（票 06）：舊絕對路徑 → 使用者確認的新絕對路徑。驗證全在模組內
+    # （絕對路徑／確實存在的專案／編碼碰撞），route 只轉譯。
+    mapping: list[MappingEntry] = []
 
 
 # 模組保證 ValueError 內容是英文判別碼；不在此集合的 ValueError 只剩 AppConfig.load()
@@ -69,6 +78,7 @@ class DestBody(BaseModel):
 _INSTALL_CLIENT_ERRORS = frozenset({
     "source_not_a_bundle", "invalid_config_dir", "unsafe_config_dir", "source_root_moved",
     "invalid_account_key", "overlapping_config_dirs",
+    "mapping_not_absolute", "mapping_collision", "mapping_unknown_project",
 })
 
 
@@ -167,6 +177,18 @@ def adopt_config(body: AdoptConfigBody):
     return config.to_dict()
 
 
+@router.get("/api/restore/project-paths")
+def project_paths_route(dest: str):
+    """唯讀（票 06）：備份包裡有哪些專案、各自的舊路徑（讀歷史檔 cwd——編碼不可逆，
+    無法從目錄名反推）、建議的新路徑與其存在性。不動檔案系統。"""
+    try:
+        return {"projects": install.project_paths(dest)}
+    except ValueError as exc:
+        if str(exc) in _INSTALL_CLIENT_ERRORS:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        raise                               # 模組只拋判別碼，其餘不吞
+
+
 @router.post("/api/restore/install-plan")
 def install_plan(body: DestBody):
     """唯讀預覽：會裝幾項、跳過哪些、刻意不處理哪些。不動檔案系統。
@@ -177,7 +199,8 @@ def install_plan(body: DestBody):
     try:
         config = AppConfig.load()            # ValueError → 下方轉 config_unreadable 500
         # extra 落點同樣只來自 config（adopt-config 確認後寫入），不由前端送（票 07）
-        plan = install.plan(body.dest, config.accounts, extra=config.extra)
+        plan = install.plan(body.dest, config.accounts, extra=config.extra,
+                            mapping=[(m.old, m.new) for m in body.mapping])
     except ValueError as exc:
         if str(exc) in _INSTALL_CLIENT_ERRORS:
             return JSONResponse(status_code=400, content={"error": str(exc)})
@@ -203,7 +226,8 @@ def install_route(body: DestBody):
             except FileNotFoundError:
                 return JSONResponse(status_code=400,
                                     content={"error": "config_not_initialized"})
-            plan = install.plan(body.dest, config.accounts, extra=config.extra)
+            plan = install.plan(body.dest, config.accounts, extra=config.extra,
+                                mapping=[(m.old, m.new) for m in body.mapping])
             results = install.install(plan)
     except ValueError as exc:
         if str(exc) in _INSTALL_CLIENT_ERRORS:
