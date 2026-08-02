@@ -1679,3 +1679,16 @@ def test_corrupt_prior_journal_lines_fail_closed(tmp_path: Path, monkeypatch):
         assert all(r.outcome == "failed" and r.error == "provenance_unavailable"
                    for r in results), payload
         assert list(tgt.iterdir()) == [], payload
+
+
+def test_existing_entry_at_link_name_is_skipped_untouched(
+        tmp_path: Path, monkeypatch):
+    """發布分支的 EEXIST 語意（票 09 R4）：最終名已有使用者的項目 → os.link EEXIST
+    → skipped、該項目原封不動、暫名清乾淨——驗證成功後的發布路徑確實走到。"""
+    src = _staging_with_link(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    (tgt / "linked").write_text("USER", encoding="utf-8")   # 使用者既有同名檔
+    results = inst.install(inst.plan(str(src), _accounts(tgt)))
+    assert (tgt / "linked").read_text(encoding="utf-8") == "USER"
+    assert any(r.rel_path == "linked" and r.outcome == "skipped" for r in results)
+    assert not [e for e in os.listdir(tgt) if e.startswith(".fledge-lnk-")]
