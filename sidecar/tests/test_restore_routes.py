@@ -534,3 +534,17 @@ def test_install_plan_excludes_extra_without_config_entry(tmp_path: Path, monkey
     resp = client.post("/api/restore/install-plan", json={"dest": str(src)})
     assert resp.status_code == 200
     assert "agents" in resp.json()["excluded"]
+
+
+def test_install_plan_rejects_overlapping_spots_from_config(tmp_path: Path, monkeypatch):
+    """config 被手編成巢狀落點 → install 端點 400 overlapping_config_dirs，不裸 500
+    也不動手（Codex 票 07 R1 F2：授權時刻的重疊檢查不能是唯一一道）。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    cfg.write_text(json.dumps({
+        "version": 1, "roots": [],
+        "accounts": {"work": {"config_dir": str(home / ".claude"), "label": ""}},
+        "extra": {"agents": str(home / ".claude" / "agents")},
+    }), encoding="utf-8")
+    resp = TestClient(create_app()).post("/api/restore/install-plan",
+                                         json={"dest": str(src)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "overlapping_config_dirs")

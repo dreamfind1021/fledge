@@ -662,6 +662,28 @@ def test_validate_landing_spots_rejects_overlap(tmp_path: Path, monkeypatch):
             {"work": str(tmp_path / "a"), "extra:agents": str(tmp_path / "a")})
 
 
+def test_plan_rejects_overlapping_landing_spots(tmp_path: Path, monkeypatch):
+    """重疊檢查不能只在 adopt 授權時跑一次（Codex 票 07 R1 F2）：config 可被手編，
+    install 時的 plan 必須以**當時的解析結果**對所有落點（帳號＋extra）重驗——巢狀
+    落點會讓外層的安裝把內容灌進內層落點的樹裡。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    src = _staging_with_extra(tmp_path)
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["personal"] = "/Users/olduser/.claude-tc"
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    nested_accounts = {
+        "work": {"config_dir": str(tmp_path / "a"), "label": ""},
+        "personal": {"config_dir": str(tmp_path / "a" / "sub"), "label": ""},
+    }
+    with pytest.raises(ValueError, match="overlapping_config_dirs"):
+        inst.plan(str(src), nested_accounts)
+    with pytest.raises(ValueError, match="overlapping_config_dirs"):
+        inst.plan(str(src), _accounts(tmp_path / "a"),
+                  extra={"agents": str(tmp_path / "a" / "agents")})
+
+
 def test_plan_treats_non_string_extra_confirmation_as_unconfirmed(
         tmp_path: Path, monkeypatch):
     """extra 確認值將來自 config.json（使用者可手編）：非字串不讓 plan 炸 500，

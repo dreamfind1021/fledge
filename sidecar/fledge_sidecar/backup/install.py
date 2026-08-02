@@ -107,12 +107,18 @@ def validate_landing_spots(spots: dict[str, str]) -> dict[str, str]:
         if not _SAFE_KEY_RE.fullmatch(bare):
             raise ValueError("invalid_account_key")
         resolved[key] = _resolved_config_dir(raw)
-    ordered = list(resolved.values())
-    for i, path in enumerate(ordered):
-        for other in ordered[:i]:
+    _ensure_no_overlap(list(resolved.values()))
+    return resolved
+
+
+def _ensure_no_overlap(resolved: list[str]) -> None:
+    """任兩落點相同或互為祖先 → overlapping_config_dirs：外層的安裝會把內容灌進內層
+    落點的樹裡。adopt 授權時與 install 的 `plan` **各跑一道**——config 可被手編、路徑
+    的解析結果也會隨 symlink 變動，授權時刻的檢查不能是唯一一道（Codex 票 07 R1 F2）。"""
+    for i, path in enumerate(resolved):
+        for other in resolved[:i]:
             if is_same_or_within(path, other) or is_same_or_within(other, path):
                 raise ValueError("overlapping_config_dirs")
-    return resolved
 
 
 def read_manifest(source_root: str) -> dict:
@@ -274,6 +280,9 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         will_skip.extend(sk)
         blocked.extend(bl)
         excluded.extend(ex)
+
+    # 落點重疊以 install 時的解析結果重驗（帳號＋extra 一起），不依賴 adopt 那一道
+    _ensure_no_overlap(list(targets.values()) + list(extra_targets.values()))
 
     identities = {key: dir_identity(t) for key, t in targets.items()}
     identities.update({f"extra:{name}": dir_identity(t) for name, t in extra_targets.items()})

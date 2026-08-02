@@ -68,7 +68,7 @@ class DestBody(BaseModel):
 # 的剖析失敗（JSONDecodeError 是 ValueError 子類，訊息不可外洩當判別碼）。
 _INSTALL_CLIENT_ERRORS = frozenset({
     "source_not_a_bundle", "invalid_config_dir", "unsafe_config_dir", "source_root_moved",
-    "invalid_account_key",
+    "invalid_account_key", "overlapping_config_dirs",
 })
 
 
@@ -122,7 +122,11 @@ def adopt_config(body: AdoptConfigBody):
         return JSONResponse(status_code=400, content={"error": "duplicate_extra_name"})
     try:
         manifest = install.read_manifest(resolve_best_effort(body.dest))
-        # 只採用備份包宣稱的成員：確認流的對象是 bundle 的內容，不是任意鍵值
+        # 只採用備份包宣稱的成員——這是確認流的**輸入 hygiene**，不是把授權綁定到這份
+        # bundle：config 落點授權的是「目的地」，install 對任意 bundle 一視同仁地靠
+        # no-clobber／containment／provenance 防護（票 03 起的模型，正常 onboard 的
+        # 使用者本來就能對任意 bundle 呼叫 install）。
+
         if not set(account_keys) <= set(manifest["accounts"]):
             return JSONResponse(status_code=400, content={"error": "unknown_account_key"})
         if not set(extra_names) <= set(manifest.get("extra", {})):
