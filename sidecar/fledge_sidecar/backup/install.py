@@ -727,6 +727,10 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
     專案目錄名會換，其餘每層原名照搬）；`project_renames`＝完整改名表，只在從帳號根
     進入 `projects/` 那一步向下傳成 `rename_children`。rel／journal／results 一律記
     **目的地**位置。"""
+    # 前一輪硬中斷留在這一層的暫存殘骸（票 08）：`write_bytes_atomic` 只清得掉本進程
+    # 活著走到例外路徑的那些，SIGKILL／斷電留下的要靠這裡掃。掃的範圍就是本輪會寫入
+    # 的目錄，不額外走訪使用者的其他位置。
+    safe_fs.reap_stale_temps(dst_fd)
     for entry in os.scandir(src_fd):
         dst_name = (rename_children or {}).get(entry.name, entry.name)
         rel = os.path.join(rel_prefix, dst_name) if rel_prefix else dst_name

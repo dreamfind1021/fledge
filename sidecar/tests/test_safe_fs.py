@@ -1,10 +1,19 @@
 import errno
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from fledge_sidecar.setup import safe_fs
+
+
+def _dead_pid() -> int:
+    """一個剛剛結束、確定已經不在的進程編號。"""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
 
 
 def test_copy_file_completes_short_writes(tmp_path: Path, monkeypatch):
@@ -179,3 +188,78 @@ def test_write_bytes_atomic_cleans_temp_when_write_fails(tmp_path: Path, monkeyp
     finally:
         os.close(d)
     assert list(tmp_path.iterdir()) == []
+
+
+# ---------- 暫存殘骸回收（票 08：SIGKILL／斷電留下的暫存檔重跑不清） ----------
+
+
+def test_reap_removes_temp_whose_creator_is_gone(tmp_path: Path):
+    """硬中斷留下的暫存檔要被回收——重跑的 PID 對不上，不主動掃就永遠留著。"""
+    orphan = tmp_path / f"{safe_fs.TEMP_PREFIX}{_dead_pid()}-a1b2c3d4"
+    orphan.write_bytes(b"half")
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        assert safe_fs.reap_stale_temps(d) == 1
+    finally:
+        os.close(d)
+    assert not orphan.exists()
+
+
+def test_reap_spares_temp_of_a_live_process(tmp_path: Path):
+    """並行的另一個移機正在寫的暫存檔絕不能清——那會破壞對方進行中的原子發布。
+
+    不能無條件掃前綴，這就是原因。"""
+    live = tmp_path / f"{safe_fs.TEMP_PREFIX}{os.getpid()}-a1b2c3d4"
+    live.write_bytes(b"in flight")
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        assert safe_fs.reap_stale_temps(d) == 0
+    finally:
+        os.close(d)
+    assert live.exists()
+
+
+def test_reap_never_touches_anything_but_its_own_temps(tmp_path: Path):
+    """使用者的檔案（含剛好也是隱藏檔的）一律不碰。"""
+    for name in ("CLAUDE.md", ".hidden", ".fledge-lnk-1-a1b2c3d4", "settings.json"):
+        (tmp_path / name).write_bytes(b"MINE")
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        assert safe_fs.reap_stale_temps(d) == 0
+    finally:
+        os.close(d)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        ".fledge-lnk-1-a1b2c3d4", ".hidden", "CLAUDE.md", "settings.json"]
+
+
+def test_reap_spares_names_whose_pid_cannot_be_parsed(tmp_path: Path):
+    """看起來像但解不出進程編號的 → 判斷不出來就留著（寧可漏清也不誤刪）。"""
+    for suffix in ("notanumber-a1b2", "", "-a1b2"):
+        (tmp_path / f"{safe_fs.TEMP_PREFIX}{suffix}").write_bytes(b"?")
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        assert safe_fs.reap_stale_temps(d) == 0
+    finally:
+        os.close(d)
+    assert len(list(tmp_path.iterdir())) == 3
+
+
+def test_reap_only_touches_regular_files(tmp_path: Path):
+    """暫存檔一律是一般檔——名字像但其實是目錄或 symlink 的，都不是我們產生的。
+
+    **symlink 才是這條線真正守住的東西**：`unlink` 對目錄本來就會失敗（拿掉型別檢查
+    也刪不掉，用目錄測就是假綠），但對 symlink 會成功——刪掉的會是使用者自己的連結。"""
+    victim = tmp_path / "user-data.md"
+    victim.write_bytes(b"MINE")
+    pid = _dead_pid()
+    (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0001").mkdir()
+    (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0002").symlink_to(victim)
+
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        assert safe_fs.reap_stale_temps(d) == 0
+    finally:
+        os.close(d)
+    assert (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0001").is_dir()
+    assert (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0002").is_symlink()
+    assert victim.read_bytes() == b"MINE"
