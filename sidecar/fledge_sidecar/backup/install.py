@@ -67,12 +67,12 @@ class InstallPlan:
     # 基準可比——那條窗口是殘餘，記錄於票 03。
     target_identities: dict[str, tuple[int, int] | None]
     extra_targets: dict[str, str]           # extra 項名 -> resolved 落點
-    # extra 來源在 plan 時的身分（Codex 票 05 R1 F1）：install 只在「install 時狀態＝
-    # plan 時狀態」才動手——換成另一個真目錄（O_NOFOLLOW 攔不到）、plan 後才出現、
-    # plan 看過卻消失，皆 failed（source_moved）；None＝plan 時不存在，install 見
-    # ENOENT 才容許靜默。帳號側沒有對應欄位（票 03 記錄在案的殘餘窗口）；內容層變動
-    # 兩側皆不凍結——plan 是預覽不是內容授權。
-    extra_source_identities: dict[str, tuple[int, int] | None]
+    # 各落點來源在 plan 時的身分（Codex 票 05 R1 F1；帳號側比照＝票 05 收尾裁示，封
+    # 票 03 殘餘窗口）。key 用落點命名空間（account key／`extra:<name>`）。install 只在
+    # 「install 時狀態＝plan 時狀態」才動手——換成另一個真目錄（O_NOFOLLOW 攔不到）、
+    # plan 後才出現、plan 看過卻消失，皆 failed（source_moved）；None＝plan 時不存在，
+    # install 見 ENOENT 才容許靜默。內容層變動不凍結——plan 是預覽不是內容授權。
+    spot_source_identities: dict[str, tuple[int, int] | None]
     will_install: int
     will_skip: list[str]
     # 目的地祖先被非目錄（一般檔或 symlink）占用的葉檔：install 只會在目錄層 fail、
@@ -217,6 +217,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
     excluded: list[str] = []
 
     targets: dict[str, str] = {}
+    spot_source_identities: dict[str, tuple[int, int] | None] = {}
     for key in manifest.get("accounts", {}):
         entry = accounts.get(key)
         if entry is None:
@@ -224,9 +225,9 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         if not _SAFE_KEY_RE.fullmatch(key):
             raise ValueError("invalid_account_key")   # 進得了 targets 的 key 才會拼路徑
         targets[key] = _resolved_config_dir(entry.get("config_dir", ""))
+        spot_source_identities[key] = dir_identity(str(Path(root, "accounts", key)))
 
     extra_targets: dict[str, str] = {}
-    extra_source_identities: dict[str, tuple[int, int] | None] = {}
     for name in manifest.get("extra", {}):
         confirmed = (extra or {}).get(name)
         if not confirmed:
@@ -235,7 +236,8 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         if not _SAFE_KEY_RE.fullmatch(name):
             raise ValueError("invalid_account_key")   # extra name 同樣拼進路徑，同規則重驗
         extra_targets[name] = _resolved_config_dir(confirmed)
-        extra_source_identities[name] = dir_identity(str(Path(root, "extra", name)))
+        spot_source_identities[f"extra:{name}"] = \
+            dir_identity(str(Path(root, "extra", name)))
 
     for key, target in targets.items():
         n, sk, bl, ex = _scan_spot(Path(root, "accounts", key), target)
@@ -258,7 +260,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         targets=targets,
         target_identities=identities,
         extra_targets=extra_targets,
-        extra_source_identities=extra_source_identities,
+        spot_source_identities=spot_source_identities,
         will_install=will_install,
         will_skip=will_skip,
         blocked=blocked,
@@ -569,6 +571,33 @@ def _publish_links(pending: list[_PendingLink], plan: InstallPlan,
                                       safe_fs.error_code(exc)))
 
 
+def _open_verified_source(name: str, dir_fd: int, expected: tuple[int, int] | None,
+                          key: str, results: list[ItemResult]) -> int | None:
+    """開一個落點的來源內容目錄並重驗 plan 時身分。回 fd（呼叫端負責關）；不可用回
+    None（該記的 failed 已記）。帳號與 extra 共用（票 05 收尾：同一條不變式一次寫）。
+
+    「install 時狀態＝plan 時狀態」才動手（Codex 票 05 R1 F1）：換成另一個真目錄
+    （O_NOFOLLOW 攔不到）、plan 後才出現、plan 看過卻消失皆 `source_moved`；
+    None＋ENOENT＝備份包從頭就沒有這份內容，正常靜默。開失敗（symlink、權限）記
+    failed——「不存在≠開失敗」（票 04 F3 同款區分）。"""
+    try:
+        fd = _open_dir_pinned(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        if expected is not None:
+            results.append(ItemResult(key, "", "failed", "source_moved"))
+        return None
+    except OSError as exc:
+        logger.error("移機來源開啟失敗：key=%s", key, exc_info=True)
+        results.append(ItemResult(key, "", "failed", safe_fs.error_code(exc)))
+        return None
+    st = os.fstat(fd)
+    if expected is None or (st.st_dev, st.st_ino) != expected:
+        os.close(fd)
+        results.append(ItemResult(key, "", "failed", "source_moved"))
+        return None
+    return fd
+
+
 def _install_spot(src_item_fd: int, key: str, target: str, plan: InstallPlan,
                   results: list[ItemResult], journal_fd: int,
                   pending: list[_PendingLink], account_dst_fds: dict[str, int]) -> None:
@@ -638,10 +667,11 @@ def install(plan: InstallPlan) -> list[ItemResult]:
             raise ValueError("source_not_a_bundle") from exc
         try:
             for key, target in plan.targets.items():
-                try:
-                    account_fd = _open_dir_pinned(key, dir_fd=accounts_fd)
-                except OSError:
-                    continue                # 備份包裡沒有這個帳號的內容
+                account_fd = _open_verified_source(
+                    key, accounts_fd, plan.spot_source_identities.get(key),
+                    key, results)
+                if account_fd is None:
+                    continue
                 try:
                     _install_spot(account_fd, key, target, plan, results,
                                   journal_fd, pending, account_dst_fds)
@@ -659,7 +689,7 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                 # extra/ 不存在：只有「plan 時也不存在」的項目容許靜默；plan 看過的
                 # 消失了就是誤報成功的形狀（Codex 票 05 R1 F1）。
                 for name in plan.extra_targets:
-                    if plan.extra_source_identities.get(name) is not None:
+                    if plan.spot_source_identities.get(f"extra:{name}") is not None:
                         results.append(ItemResult(f"extra:{name}", "", "failed",
                                                   "source_moved"))
             except OSError as exc:
@@ -671,32 +701,15 @@ def install(plan: InstallPlan) -> list[ItemResult]:
             if extra_fd is not None:
                 try:
                     for name, target in plan.extra_targets.items():
-                        expected_src = plan.extra_source_identities.get(name)
-                        try:
-                            item_fd = _open_dir_pinned(name, dir_fd=extra_fd)
-                        except FileNotFoundError:
-                            if expected_src is not None:
-                                # plan 看過的來源不見了≠備份包本來就沒有——靜默＝誤報成功
-                                results.append(ItemResult(f"extra:{name}", "", "failed",
-                                                          "source_moved"))
-                            continue        # 備份包從頭就沒有這份內容——正常
-                        except OSError as exc:
-                            logger.error("移機 extra 來源開啟失敗：name=%s", name,
-                                         exc_info=True)
-                            results.append(ItemResult(f"extra:{name}", "", "failed",
-                                                      safe_fs.error_code(exc)))
+                        spot_key = f"extra:{name}"
+                        item_fd = _open_verified_source(
+                            name, extra_fd,
+                            plan.spot_source_identities.get(spot_key),
+                            spot_key, results)
+                        if item_fd is None:
                             continue
                         try:
-                            # 來源身分重驗（比照 target 側）：換成另一個真目錄時
-                            # O_NOFOLLOW 攔不到，寫下去就是把 plan 沒掃描過的內容
-                            # 裝進確認落點；plan 時不存在、現在卻開得起來同判。
-                            st = os.fstat(item_fd)
-                            if expected_src is None or \
-                                    (st.st_dev, st.st_ino) != expected_src:
-                                results.append(ItemResult(f"extra:{name}", "", "failed",
-                                                          "source_moved"))
-                                continue
-                            _install_spot(item_fd, f"extra:{name}", target, plan, results,
+                            _install_spot(item_fd, spot_key, target, plan, results,
                                           journal_fd, pending, account_dst_fds)
                         finally:
                             os.close(item_fd)

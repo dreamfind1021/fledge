@@ -628,6 +628,108 @@ def test_install_does_not_follow_symlinked_subdir_out_of_staging(tmp_path: Path)
     assert not (tgt / "escaped" / "x.md").exists()
 
 
+# ---------- 帳號側來源身分綁定（票 05 收尾裁示：比照 extra，封票 03 殘餘窗口） ----------
+
+
+def test_install_fails_when_account_source_swapped_with_real_dir_after_plan(
+        tmp_path: Path):
+    """plan 之後 accounts/<key> 被換成另一個真目錄（O_NOFOLLOW 攔不到、root 身分沒變）
+    → 來源身分不符記 failed、替身內容零落地——與 extra 同一條不變式：install 時狀態＝
+    plan 時狀態。"""
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    import shutil
+    shutil.rmtree(src / "accounts" / "work")
+    impostor = src / "accounts" / "work"
+    impostor.mkdir()
+    (impostor / "evil.md").write_text("EVIL", encoding="utf-8")
+    results = inst.install(p)
+    assert any(r.account == "work" and r.outcome == "failed"
+               and r.error == "source_moved" for r in results)
+    assert not (tgt / "evil.md").exists()
+    assert inst.journal_path(inst.transaction_id(p)).exists()
+
+
+def test_install_fails_when_planned_account_source_deleted(tmp_path: Path):
+    """plan 看過的帳號內容在 install 前被刪 → 不得靜默成功清 journal（「plan 說會裝」
+    的整個帳號無聲消失＝誤報成功）。"""
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    import shutil
+    shutil.rmtree(src / "accounts" / "work")
+    results = inst.install(p)
+    assert any(r.account == "work" and r.outcome == "failed"
+               and r.error == "source_moved" for r in results)
+    assert inst.journal_path(inst.transaction_id(p)).exists()
+
+
+def test_install_records_failed_when_account_source_unopenable(tmp_path: Path):
+    """accounts/<key> 被換成 symlink → 開失敗（O_NOFOLLOW）記 failed，不得與「備份包
+    沒這個帳號的內容」混同靜默。"""
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    import shutil
+    shutil.rmtree(src / "accounts" / "work")
+    (src / "accounts" / "work").symlink_to(tmp_path / "elsewhere")
+    results = inst.install(p)
+    assert any(r.account == "work" and r.outcome == "failed" for r in results)
+    assert list(tgt.iterdir()) == []
+    assert inst.journal_path(inst.transaction_id(p)).exists()
+
+
+def test_account_absent_at_plan_time_stays_silent(tmp_path: Path):
+    """manifest 列了帳號、使用者也給了落點，但備份包從頭就沒有它的內容（plan 時身分
+    None）→ ENOENT 正常靜默：不 failed、其餘帳號照裝、完整成功清 journal。"""
+    src = _staging(tmp_path)
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["personal"] = "/Users/olduser/.claude-tc"
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    tgt_work = tmp_path / "live-work"
+    tgt_work.mkdir()
+    tgt_personal = tmp_path / "live-personal"
+    tgt_personal.mkdir()
+    accounts = {
+        "work": {"config_dir": str(tgt_work), "label": ""},
+        "personal": {"config_dir": str(tgt_personal), "label": ""},
+    }
+    p = inst.plan(str(src), accounts)
+    results = inst.install(p)
+    assert not any(r.outcome == "failed" for r in results)
+    assert (tgt_work / "CLAUDE.md").read_text(encoding="utf-8") == "RULES"
+    assert not inst.journal_path(inst.transaction_id(p)).exists()
+
+
+def test_account_created_after_plan_is_not_installed(tmp_path: Path):
+    """plan 時不存在、install 前才冒出來的帳號內容 → 不裝、記 failed：plan 沒掃描過
+    的內容不寫進落點。"""
+    src = _staging(tmp_path)
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["personal"] = "/Users/olduser/.claude-tc"
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    tgt_work = tmp_path / "live-work"
+    tgt_work.mkdir()
+    tgt_personal = tmp_path / "live-personal"
+    tgt_personal.mkdir()
+    accounts = {
+        "work": {"config_dir": str(tgt_work), "label": ""},
+        "personal": {"config_dir": str(tgt_personal), "label": ""},
+    }
+    p = inst.plan(str(src), accounts)
+    late = src / "accounts" / "personal"
+    late.mkdir()
+    (late / "late.md").write_text("LATE", encoding="utf-8")
+    results = inst.install(p)
+    assert any(r.account == "personal" and r.outcome == "failed"
+               and r.error == "source_moved" for r in results)
+    assert not (tgt_personal / "late.md").exists()
+
+
 # ---------- 票 05：帳號目錄外的資產（extra/） ----------
 
 
