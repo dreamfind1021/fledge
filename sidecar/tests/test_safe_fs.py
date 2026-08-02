@@ -1,10 +1,19 @@
 import errno
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from fledge_sidecar.setup import safe_fs
+
+
+def _dead_pid() -> int:
+    """一個剛剛結束、確定已經不在的進程編號。"""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    return proc.pid
 
 
 def test_copy_file_completes_short_writes(tmp_path: Path, monkeypatch):
@@ -179,3 +188,64 @@ def test_write_bytes_atomic_cleans_temp_when_write_fails(tmp_path: Path, monkeyp
     finally:
         os.close(d)
     assert list(tmp_path.iterdir()) == []
+
+
+# ---------- 暫存殘骸偵測（票 08：SIGKILL／斷電留下的暫存檔重跑不清） ----------
+
+
+def _find(tmp_path: Path) -> list[str]:
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        return safe_fs.find_stale_temps(d)
+    finally:
+        os.close(d)
+
+
+def test_find_reports_temp_whose_creator_is_gone(tmp_path: Path):
+    """硬中斷留下的暫存檔要被指認出來——重跑的 PID 對不上，不主動找就沒人知道它在。"""
+    name = f"{safe_fs.TEMP_PREFIX}{_dead_pid()}-a1b2c3d4"
+    (tmp_path / name).write_bytes(b"half")
+    assert _find(tmp_path) == [name]
+    assert (tmp_path / name).exists(), "只回報，不刪——刪除的授權不在這一層"
+
+
+def test_find_skips_temp_of_a_live_process(tmp_path: Path):
+    """並行的另一個移機正在寫的暫存檔不是殘骸——它的原子發布還在進行中。"""
+    live = f"{safe_fs.TEMP_PREFIX}{os.getpid()}-a1b2c3d4"
+    (tmp_path / live).write_bytes(b"in flight")
+    assert _find(tmp_path) == []
+
+
+def test_find_reports_nothing_but_its_own_namespace(tmp_path: Path):
+    """使用者的檔案（含剛好也是隱藏檔的、以及別的 fledge 前綴）一律不指認。"""
+    for name in ("CLAUDE.md", ".hidden", ".fledge-lnk-1-a1b2c3d4", "settings.json"):
+        (tmp_path / name).write_bytes(b"MINE")
+    assert _find(tmp_path) == []
+
+
+def test_find_skips_names_whose_pid_cannot_be_parsed(tmp_path: Path):
+    """看起來像但解不出進程編號的 → 判斷不出來就不指認。"""
+    for suffix in ("notanumber-a1b2", "", "-a1b2"):
+        (tmp_path / f"{safe_fs.TEMP_PREFIX}{suffix}").write_bytes(b"?")
+    assert _find(tmp_path) == []
+
+
+def test_find_only_reports_regular_files(tmp_path: Path):
+    """暫存檔一律是一般檔——名字像但其實是目錄或 symlink 的，不是我們產生的。"""
+    pid = _dead_pid()
+    (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0001").mkdir()
+    (tmp_path / "user-data.md").write_bytes(b"MINE")
+    (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0002").symlink_to(tmp_path / "user-data.md")
+    assert _find(tmp_path) == []
+
+
+def test_find_skips_temp_when_liveness_cannot_be_determined(tmp_path: Path, monkeypatch):
+    """`kill(0)` 回 EPERM（進程存在但不屬於我們）→ 問不出來一律不指認。
+
+    `ProcessLookupError`（ESRCH）才是「確定不在」的唯一訊號。"""
+    def _eperm(pid, sig):
+        raise PermissionError(errno.EPERM, "not yours")
+
+    monkeypatch.setattr(safe_fs.os, "kill", _eperm)
+    (tmp_path / f"{safe_fs.TEMP_PREFIX}{_dead_pid()}-a1b2c3d4").write_bytes(b"half")
+    assert _find(tmp_path) == []

@@ -7,7 +7,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fledge_sidecar.paths import resolve_best_effort
 
@@ -41,6 +41,25 @@ def default_config_path() -> Path:
     if override:
         return Path(override)
     return Path.home() / ".fledge" / "config.json"
+
+
+def create_if_absent(build: Callable[[AppConfig], None],
+                     path: Path | None = None) -> AppConfig:
+    """建立設定檔，**只在它還不存在時**。已存在 → FileExistsError（票 07，spec §4.3.1）。
+
+    `onboard` 與 `adopt-config` 都會建立同一個 config.json，兩份 first-run 檢查必然
+    漂移，而漂移的樣態是「一支擋住、另一支放行」，結果是後寫者整份覆蓋前者——所以
+    共用這一個原語，各端點只提供「填什麼」。呼叫端自行持 `_config_lock`。
+
+    跨 process 的 race 不在此防護內（沿用 routes/config.py 的既有限制，歸 Plan 04）：
+    兩個 app 實例並存時 sidecar 會先互殺，單實例假設早於此失效。"""
+    target = path or default_config_path()
+    if target.exists():
+        raise FileExistsError(str(target))
+    config = AppConfig.load(target)
+    build(config)
+    config.save()
+    return config
 
 
 def usable_entry(item: Any, *fields: str) -> bool:
@@ -78,6 +97,9 @@ class AppConfig:
     subscriptions: list[dict[str, Any]] = field(default_factory=list)
     kms_root: str = ""  # KMS 根目錄，raw 含 ~，runtime 才 expanduser
     backup_dir: str = ""  # 備份輸出目錄，raw 含 ~，runtime 才 expanduser
+    # 移機 extra（帳號外資產）的使用者確認落點 {name: raw path}（票 07，spec §4.2.2）：
+    # adopt-config 逐項確認後寫入，install 端點從這裡讀——manifest 只能建議不能授權。
+    extra: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | None = None) -> AppConfig:
@@ -86,7 +108,25 @@ class AppConfig:
             data = json.loads(path.read_text(encoding="utf-8"))
         else:
             data = copy.deepcopy(DEFAULT_CONFIG)  # 防止 add_root 等方法污染模組級 DEFAULT_CONFIG
+        return cls._from_data(path, data)
 
+    @classmethod
+    def load_existing(cls, path: Path | None = None) -> AppConfig:
+        """嚴格版 load：單次讀取、**永不退回 DEFAULT_CONFIG**（檔案級與 accounts 欄位級都是）。
+
+        破壞性端點（移機 install）專用——「落點來自使用者確認過的 config.json」的前提在
+        任何 fallback 下都不成立：檔案不存在退整份 DEFAULT、檔案在但缺 accounts 欄位退
+        DEFAULT 帳號，兩層拿到的都是 default=~/.claude。另外 exists→load 兩段式檢查有
+        TOCTOU（等鎖期間檔案被刪即落入 fallback），這裡改成單次 read_text——不存在就在
+        read 這一步拋 FileNotFoundError，由呼叫端轉 config_not_initialized。"""
+        path = path or default_config_path()
+        data = json.loads(path.read_text(encoding="utf-8"))   # 壞 JSON → ValueError
+        if not isinstance(data, dict) or not isinstance(data.get("accounts"), dict):
+            raise ValueError("config has no usable accounts mapping")
+        return cls._from_data(path, data)
+
+    @classmethod
+    def _from_data(cls, path: Path, data: dict[str, Any]) -> AppConfig:
         # 自我遷移：把既有 roots/manual/override key canonicalize 成與 scanner 一致的
         # resolved path，並依 canonical 去重（symlink 別名會撞同一路徑）。下次 save 持久化。
         # 逐項容錯：設定檔可能被手動編輯或損壞，元素若不是 dict 或欄位型別不對，
@@ -144,6 +184,8 @@ class AppConfig:
             subscriptions=data.get("subscriptions", []),
             kms_root=data.get("kms_root", "") or "",
             backup_dir=data.get("backup_dir", "") or "",
+            # 非 dict（手編壞形狀）退空：畸形的 extra 進到 install 端點會變 500
+            extra=data["extra"] if isinstance(data.get("extra"), dict) else {},
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -157,6 +199,7 @@ class AppConfig:
             "subscriptions": self.subscriptions,
             "kms_root": self.kms_root,
             "backup_dir": self.backup_dir,
+            "extra": self.extra,
         }
 
     def save(self) -> None:

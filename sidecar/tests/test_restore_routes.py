@@ -4,11 +4,14 @@
 展開任何東西**（成功路徑攔截 create_session，只驗後端組出來的 argv）。
 """
 import json
+import shutil
 from pathlib import Path
 
+from conftest import make_staging
 from fastapi.testclient import TestClient
 
 from fledge_sidecar.app import create_app
+from fledge_sidecar.backup import install
 
 BUNDLE = "claude-backup-20260101-1200.tar.gz"
 
@@ -253,3 +256,499 @@ def test_plan_default_dest_skips_a_previous_restore(tmp_path: Path, monkeypatch)
     body = _plan(TestClient(create_app())).json()
     assert body["dest"] == str(previous) + "-1"
     assert body["dest_status"] == "ok"
+
+
+# ── 票 03：install-plan／install 端點（實際寫入走 backup/install.py） ──────────────
+
+def _install_config(tmp_path: Path, monkeypatch) -> Path:
+    """install 端點用的假 config：一個 work 帳號指向 tmp 內的 live 目錄。回 live。"""
+    # home 要真的建：install 的 provenance journal 走 fd-relative 開啟（票 04 R2 F1），
+    # home 不存在會 journal_unavailable。
+    (tmp_path / "home").mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    live = tmp_path / "live"
+    live.mkdir()
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({
+        "version": 1, "roots": [],
+        "accounts": {"work": {"config_dir": str(live), "label": ""}},
+    }), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    return live
+
+
+def test_install_plan_reads_accounts_from_config_not_body(tmp_path: Path, monkeypatch):
+    """落點從已落檔的 config.json 讀——那是使用者確認過的，不是 manifest 說的。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    resp = TestClient(create_app()).post("/api/restore/install-plan",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 200
+    assert resp.json()["will_install"] == 2
+
+
+def test_install_plan_rejects_non_bundle_dest(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(tmp_path / "config.json"))
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    resp = TestClient(create_app()).post("/api/restore/install-plan",
+                                         json={"dest": str(bare)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "source_not_a_bundle"
+
+
+def test_install_recomputes_plan_and_does_not_trust_client(tmp_path: Path, monkeypatch):
+    """ADR-0002：server 以相同輸入重算 plan，不吃 client 送來的 plan。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 200
+    outcomes = {r["outcome"] for r in resp.json()["results"]}
+    assert outcomes == {"installed"}
+    assert (live / "CLAUDE.md").read_text(encoding="utf-8") == "RULES"
+
+
+def test_install_rejects_client_supplied_plan(tmp_path: Path, monkeypatch):
+    """ADR-0002 的強制面：body 只有 dest，client 塞 plan 進來一律 422、零寫入。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    resp = TestClient(create_app()).post(
+        "/api/restore/install",
+        json={"dest": str(staging), "plan": {"targets": {"work": "/etc"}}})
+    assert resp.status_code == 422
+    assert list(live.iterdir()) == []          # 一個檔案都沒寫
+
+
+def test_install_plan_is_readonly_and_matches_install_results(tmp_path: Path, monkeypatch):
+    """票 03 驗收：預覽端點不寫任何東西，且它報的數字與實際執行的結果一致。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    client = TestClient(create_app())
+    planned = client.post("/api/restore/install-plan", json={"dest": str(staging)}).json()
+    assert list(live.iterdir()) == []          # 預覽零寫入
+    results = client.post("/api/restore/install",
+                          json={"dest": str(staging)}).json()["results"]
+    installed = [r for r in results if r["outcome"] == "installed"]
+    assert len(installed) == planned["will_install"]
+
+
+def test_install_requires_initialized_config(tmp_path: Path, monkeypatch):
+    """破壞性端點的 readiness 閘（與 common-config 的 apply／repair 同款）：config 未落檔
+    時 AppConfig.load() 會 fallback 到指向真實 ~/.claude 的 DEFAULT_CONFIG——沒有這道閘，
+    未 onboard 的機器只要 bundle 的 manifest 含 "default" 帳號，install 就會把備份內容
+    寫進現役 Claude 目錄（Codex 票 03 R3，L1）。
+
+    測試用雙層保險：HOME 指向假目錄、manifest 的帳號 key 也刻意不撞 DEFAULT_CONFIG。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(tmp_path / "nope" / "config.json"))
+    root = tmp_path / "staging-z"
+    (root / "accounts" / "zzz").mkdir(parents=True)
+    (root / "accounts" / "zzz" / "f.md").write_text("X", encoding="utf-8")
+    (root / "manifest.json").write_text(json.dumps({
+        "format": 1, "home": "/Users/olduser",
+        "accounts": {"zzz": "/Users/olduser/.claude"},
+    }), encoding="utf-8")
+    resp = TestClient(create_app()).post("/api/restore/install", json={"dest": str(root)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "config_not_initialized"
+
+
+def test_install_never_uses_fallback_accounts(tmp_path: Path, monkeypatch):
+    """R4 L1：exists→load 兩段式閘有 TOCTOU（等鎖期間 config 被刪即退回 DEFAULT_CONFIG），
+    且 load() 的 fallback 有兩層——檔案不存在退整份、檔案在但缺 accounts 欄位退 DEFAULT
+    帳號（default=~/.claude）。寫入端改走 load_existing 單次讀取、兩層都永不 fallback：
+    缺 accounts 的 config 一律 config_unreadable，絕不拿 DEFAULT 帳號當落點。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "roots": []}), encoding="utf-8")  # 缺 accounts
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    staging = make_staging(tmp_path)
+    resp = TestClient(create_app()).post("/api/restore/install", json={"dest": str(staging)})
+    assert resp.status_code == 500
+    assert resp.json()["error"] == "config_unreadable"
+
+
+def test_corrupt_bundles_map_to_stable_code_not_naked_500(tmp_path: Path, monkeypatch):
+    """R4 L2：manifest["accounts"] 不是物件會在 plan 產生 TypeError、manifest 在但實體
+    accounts/ 目錄缺失會在 install 拋 OSError——都要映成 source_not_a_bundle 400，
+    不得讓例外穿出變裸 500（error-code 合約）。"""
+    _install_config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    # accounts 欄位是 null
+    bad1 = tmp_path / "bad1"
+    bad1.mkdir()
+    (bad1 / "manifest.json").write_text(json.dumps({
+        "format": 1, "home": "/x", "accounts": None,
+    }), encoding="utf-8")
+    resp = client.post("/api/restore/install-plan", json={"dest": str(bad1)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
+    # manifest 合法但沒有實體 accounts/ 目錄
+    bad2 = tmp_path / "bad2"
+    bad2.mkdir()
+    (bad2 / "manifest.json").write_text(json.dumps({
+        "format": 1, "home": "/x", "accounts": {"work": "/x/.claude"},
+    }), encoding="utf-8")
+    resp = client.post("/api/restore/install-plan", json={"dest": str(bad2)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
+    resp = client.post("/api/restore/install", json={"dest": str(bad2)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
+
+
+# ---------- 票 07：adopt-config 與 extra 接線 ----------
+
+
+def _adopt_env(tmp_path: Path, monkeypatch) -> tuple[Path, Path, Path]:
+    """假 HOME＋尚未落檔的 config＋含 extra 的 staging。回 (cfg_path, src, home)。
+
+    staging 帶一條帳號內指向 extra 資產的 symlink——F2 端到端要驗「搬完連結解得開」。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    cfg = tmp_path / "fledge-config.json"
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    src = make_staging(tmp_path)
+    (src / "extra" / "agents" / "skills" / "s").mkdir(parents=True)
+    (src / "extra" / "agents" / "skills" / "s" / "SKILL.md").write_text("X", encoding="utf-8")
+    (src / "accounts" / "work" / "skills" / "s").symlink_to("/Users/olduser/.agents/skills/s")
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["extra"] = {"agents": "/Users/olduser/.agents"}
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return cfg, src, home
+
+
+def test_adopt_config_requires_confirmed_landing_spots(tmp_path: Path, monkeypatch):
+    """manifest 說的落點不算數——body 沒帶 accounts 就一位元組都不寫（spec §4.2.2）。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    resp = TestClient(create_app()).post("/api/restore/adopt-config",
+                                         json={"dest": str(src)})
+    assert resp.status_code == 422
+    assert not cfg.exists()
+
+
+def test_adopt_config_revalidates_landing_spots(tmp_path: Path, monkeypatch):
+    """使用者送回的落點一樣要重驗：home 本身（ADR-0001）與落點互為祖先都擋、零寫入。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home)}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "unsafe_config_dir")
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "extra": [{"name": "agents", "path": str(home / ".claude" / "sub")}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "overlapping_config_dirs")
+    assert not cfg.exists()
+
+
+def test_adopt_config_refuses_when_config_exists(tmp_path: Path, monkeypatch):
+    """設定檔已存在 → 409 且逐位元組不變（票 07 驗收：不是部分寫入）。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    cfg.write_text('{"version": 1, "accounts": {}}', encoding="utf-8")
+    before = cfg.read_bytes()
+    resp = TestClient(create_app()).post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}]})
+    assert (resp.status_code, resp.json()["error"]) == (409, "config_already_initialized")
+    assert cfg.read_bytes() == before
+
+
+def test_adopt_config_rejects_undeclared_or_duplicate_names(tmp_path: Path, monkeypatch):
+    """帳號 key／extra name 必須是備份包宣稱的成員；同名重複（後蓋前的歧義）也拒。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "ghost", "config_dir": str(home / ".x")}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "unknown_account_key")
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "extra": [{"name": "ghost", "path": str(home / ".g")}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "unknown_extra_name")
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".c1")},
+                     {"key": "work", "config_dir": str(home / ".c2")}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "duplicate_account_key")
+    assert not cfg.exists()
+
+
+def test_adopt_config_rejects_root_with_unknown_account(tmp_path: Path, monkeypatch):
+    """root 的 default_account 必須指向本次確認的帳號之一，否則 400、零寫入。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    resp = TestClient(create_app()).post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "roots": [{"path": str(projects), "default_account": "ghost"}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "unknown_account")
+    assert not cfg.exists()
+
+
+def test_adopt_config_writes_confirmed_spots_not_manifest_suggestions(
+        tmp_path: Path, monkeypatch):
+    """成功路徑：config 收使用者確認的值（raw）；manifest 的舊機路徑一個都不落地。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    resp = TestClient(create_app()).post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "roots": [{"path": str(projects), "default_account": "work"}],
+        "extra": [{"name": "agents", "path": str(home / ".agents")}]})
+    assert resp.status_code == 200
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    assert data["accounts"] == {"work": {"config_dir": str(home / ".claude"), "label": ""}}
+    assert data["extra"] == {"agents": str(home / ".agents")}
+    assert [r["default_account"] for r in data["roots"]] == ["work"]
+    assert "/Users/olduser" not in cfg.read_text(encoding="utf-8")
+
+
+def test_install_endpoints_use_config_extra(tmp_path: Path, monkeypatch):
+    """F2 端到端（Codex 票 05 R1/R2）：adopt-config 確認 extra → install-plan 把 extra
+    數進預覽 → install 落地且帳號內指向它的連結解得開。extra 落點全程只來自 config。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "extra": [{"name": "agents", "path": str(home / ".agents")}]})
+    assert resp.status_code == 200
+    resp = client.post("/api/restore/install-plan", json={"dest": str(src)})
+    assert resp.status_code == 200
+    assert resp.json()["will_install"] == 3      # 帳號 2 檔＋extra 的 SKILL.md
+    resp = client.post("/api/restore/install", json={"dest": str(src)})
+    assert resp.status_code == 200
+    assert (home / ".agents" / "skills" / "s" / "SKILL.md").read_text(encoding="utf-8") == "X"
+    assert (home / ".claude" / "skills" / "s" / "SKILL.md").read_text(encoding="utf-8") == "X"
+
+
+def test_install_plan_excludes_extra_without_config_entry(tmp_path: Path, monkeypatch):
+    """config 沒有該 extra 的確認（使用者跳過）→ 經正式 API 的 plan 列 excluded。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}]})
+    resp = client.post("/api/restore/install-plan", json={"dest": str(src)})
+    assert resp.status_code == 200
+    assert "agents" in resp.json()["excluded"]
+
+
+def test_install_plan_rejects_overlapping_spots_from_config(tmp_path: Path, monkeypatch):
+    """config 被手編成巢狀落點 → install 端點 400 overlapping_config_dirs，不裸 500
+    也不動手（Codex 票 07 R1 F2：授權時刻的重疊檢查不能是唯一一道）。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    cfg.write_text(json.dumps({
+        "version": 1, "roots": [],
+        "accounts": {"work": {"config_dir": str(home / ".claude"), "label": ""}},
+        "extra": {"agents": str(home / ".claude" / "agents")},
+    }), encoding="utf-8")
+    resp = TestClient(create_app()).post("/api/restore/install-plan",
+                                         json={"dest": str(src)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "overlapping_config_dirs")
+
+
+def _add_history(src: Path) -> None:
+    proj = src / "accounts" / "work" / "projects" / "-Users-olduser-work-app"
+    proj.mkdir(parents=True)
+    (proj / "s.jsonl").write_text(
+        json.dumps({"cwd": "/Users/olduser/work/app"}) + "\n", encoding="utf-8")
+
+
+def test_project_paths_route_reads_bundle(tmp_path: Path, monkeypatch):
+    """唯讀端點（票 06）：列備份包裡的專案、舊路徑（讀歷史檔 cwd）、建議新路徑；
+    非 bundle 400。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    _add_history(src)
+    client = TestClient(create_app())
+    resp = client.get("/api/restore/project-paths", params={"dest": str(src)})
+    assert resp.status_code == 200
+    [p] = resp.json()["projects"]
+    assert p["old_path"] == "/Users/olduser/work/app"
+    assert p["suggested"] == f"{home}/work/app"
+    resp = client.get("/api/restore/project-paths", params={"dest": str(tmp_path)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
+
+
+def test_install_endpoints_apply_mapping(tmp_path: Path, monkeypatch):
+    """mapping 經正式 API 一路生效（票 06）：install-plan 帶 mapping 預覽（改名表＋
+    未對應清單）、install 依同一 mapping 把歷史裝到新名底下；mapping 錯誤映 400。"""
+    from fledge_sidecar.project_scanner import encode_cc_project_dir
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    _add_history(src)
+    client = TestClient(create_app())
+    assert client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+    }).status_code == 200
+    resp = client.post("/api/restore/install-plan", json={"dest": str(src)})
+    assert [u["encoded_dir"] for u in resp.json()["unmapped_projects"]] \
+        == ["-Users-olduser-work-app"]
+    mapping = [{"old": "/Users/olduser/work/app", "new": f"{home}/work/app"}]
+    resp = client.post("/api/restore/install-plan",
+                       json={"dest": str(src), "mapping": mapping})
+    assert resp.status_code == 200
+    new_enc = encode_cc_project_dir(f"{home}/work/app")
+    assert resp.json()["project_renames"] == {"-Users-olduser-work-app": new_enc}
+    assert resp.json()["unmapped_projects"] == []
+    resp = client.post("/api/restore/install",
+                       json={"dest": str(src), "mapping": mapping})
+    assert resp.status_code == 200
+    assert (home / ".claude" / "projects" / new_enc / "s.jsonl").is_file()
+    resp = client.post("/api/restore/install-plan", json={
+        "dest": str(src),
+        "mapping": [{"old": "/Users/olduser/work/app", "new": "rel/path"}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "mapping_not_absolute")
+
+
+# ── 票 08 收官守門：install 端點的錯誤合約完整性（Codex 階段 10 F6） ──────────────
+
+
+def test_install_reports_stable_code_when_staging_vanishes_after_plan(
+        tmp_path: Path, monkeypatch):
+    """server 重算 plan 之後、真正寫入之前 staging 被刪 → 穩定判別碼，不得裸穿 500。
+
+    `_require_source_identity` 的 `os.open` 失敗拋的是 OSError，而 route 只接 ValueError
+    ——不正規化就會變成非合約的 500，前端分不出「來源不見了」與「設定檔壞了」。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    real_plan = install.plan
+
+    def _plan_then_remove(*args, **kwargs):
+        result = real_plan(*args, **kwargs)
+        shutil.rmtree(staging)          # plan 過了、install 還沒開始
+        return result
+
+    monkeypatch.setattr(install, "plan", _plan_then_remove)
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "source_not_a_bundle"
+
+
+def test_install_reports_journal_unavailable_as_itself(tmp_path: Path, monkeypatch):
+    """journal 開不起來是**環境問題**，不是設定檔問題——判別碼要說實話。
+
+    誤報成 `config_unreadable` 會讓使用者去修一個沒壞的檔案。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    # ~/.fledge 佔成一般檔 → fd-relative 開啟必失敗
+    (tmp_path / "home" / ".fledge").write_text("not a dir", encoding="utf-8")
+
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.json()["error"] == "journal_unavailable"
+    assert resp.status_code == 500          # 環境問題不是 client 送錯
+    assert not (live / "CLAUDE.md").exists(), "journal 開不起來就不該動使用者目錄"
+
+
+def test_install_rejects_malformed_account_entry_in_config(tmp_path: Path, monkeypatch):
+    """config.json 是使用者可手編的：帳號項不是物件 → 穩定判別碼，不得 AttributeError 裸穿。
+
+    票 07 對 extra 已做「非字串視同未確認」，帳號側要有同等的形狀檢查。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    cfg = tmp_path / "config.json"
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    data["accounts"]["work"] = "/somewhere"          # 手編成字串
+    cfg.write_text(json.dumps(data), encoding="utf-8")
+
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_account_entry"
+
+
+def test_install_still_reports_source_root_moved_as_client_error(
+        tmp_path: Path, monkeypatch):
+    """回歸保護：`source_root_moved` 本來就在 client 錯誤清單裡，別在修上面三條時弄丟。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    real_plan = install.plan
+
+    def _plan_then_swap(*args, **kwargs):
+        result = real_plan(*args, **kwargs)
+        shutil.rmtree(staging)
+        make_staging(tmp_path)          # 同路徑、換一個 inode
+        return result
+
+    monkeypatch.setattr(install, "plan", _plan_then_swap)
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "source_root_moved"
+
+
+def test_install_endpoints_report_config_unreadable_for_malformed_containers(
+        tmp_path: Path, monkeypatch):
+    """config 的頂層容器欄位畸形（手編出 `roots: 1`／`project_overrides: []`）→ 兩支
+    install 端點都回 `config_unreadable`，不得讓框架產生非合約 500。
+
+    `_from_data` 對容器欄位不驗形狀，拋的是 TypeError／AttributeError 而非 ValueError
+    （Codex 階段 10 守門 R2 實測）。**config 的容錯判準是另一張票的主題**
+    （`.scratch/config-resilience/issues/01`——在 `load()` 丟棄畸形資料會造成不可逆
+    遺失，那張票的四輪 PR-gate 就是栽在這裡）；這裡只保證端點合約。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    cfg = tmp_path / "config.json"
+    client = TestClient(create_app())
+
+    for malformed in ({"accounts": {}, "roots": 1},
+                      {"accounts": {}, "project_overrides": []},
+                      {"accounts": {}, "manual_projects": 5}):
+        cfg.write_text(json.dumps(malformed), encoding="utf-8")
+        for path in ("/api/restore/install-plan", "/api/restore/install"):
+            resp = client.post(path, json={"dest": str(staging)})
+            assert resp.status_code == 500, (path, malformed)
+            assert resp.json()["error"] == "config_unreadable", (path, malformed)
+        # /api/restore/plan 走同一份 config，合約要一致（Codex 階段 10 守門 R3）
+        resp = client.post("/api/restore/plan", json={"bundle": BUNDLE})
+        assert resp.status_code == 500, malformed
+        assert resp.json()["error"] == "config_unreadable", malformed
+
+
+def test_config_read_failures_are_part_of_the_endpoint_contract(
+        tmp_path: Path, monkeypatch):
+    """設定檔讀不出來（是目錄、沒權限）也是「讀不出來」——同樣回穩定判別碼。
+
+    `Path.read_text()` 拋的是 `OSError` 家族（`IsADirectoryError`／`PermissionError`），
+    不在原本的 tuple 裡就會裸穿成非合約 500（Codex 階段 10 守門 R3）。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    client = TestClient(create_app())
+
+    as_dir = tmp_path / "config-as-dir.json"
+    as_dir.mkdir()
+    no_perm = tmp_path / "config-no-perm.json"
+    no_perm.write_text(json.dumps({"accounts": {}}), encoding="utf-8")
+    no_perm.chmod(0o000)
+    try:
+        for broken in (as_dir, no_perm):
+            monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(broken))
+            for path, body in (("/api/restore/install-plan", {"dest": str(staging)}),
+                               ("/api/restore/install", {"dest": str(staging)}),
+                               ("/api/restore/plan", {"bundle": BUNDLE})):
+                resp = client.post(path, json=body)
+                assert resp.status_code == 500, (path, broken.name)
+                assert resp.json()["error"] == "config_unreadable", (path, broken.name)
+    finally:
+        no_perm.chmod(0o600)          # 讓 tmp_path 清得掉
+
+
+def test_missing_config_still_reads_as_not_initialized_not_unreadable(
+        tmp_path: Path, monkeypatch):
+    """**`FileNotFoundError` 是 `OSError` 子類**——把 OSError 納進「讀不出來」之後，
+    `except FileNotFoundError` 必須排在前面，否則「還沒初始化」會被吞成「設定檔壞掉」，
+    而前者是引導精靈該接手的狀態、後者是叫使用者去修檔案。這條釘住那個順序。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(tmp_path / "does-not-exist.json"))
+
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "config_not_initialized"

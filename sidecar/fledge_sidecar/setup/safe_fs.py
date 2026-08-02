@@ -54,10 +54,12 @@ def copy_file_no_clobber(source_path: str, target_path: str, *, dir_fd: int | No
 
 # 暫存名的形狀：前導 `.` 加 PID 與隨機段。兩者缺一不可——前導 `.` 讓它不像成品，
 # PID＋隨機段讓同時跑的兩個 install 不會撞同一個暫存名（比照 backup-claude.sh 的 .partial）。
-_TEMP_PREFIX = ".fledge-install-"
+# public：`find_stale_temps` 的呼叫端要認得出這批殘骸屬於誰。
+TEMP_PREFIX = ".fledge-install-"
 
 
-def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int, mode: int = 0o600) -> None:
+def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int,
+                       mode: int = 0o600) -> tuple[int, int]:
     """把 data 寫成 dir_fd 底下的 name：內容完整落盤之後，最終檔名才會出現。
 
     `O_EXCL` 只保證「不覆蓋」，不保證「原子」：先以最終名建立再逐段寫入的話，SIGKILL、
@@ -74,13 +76,14 @@ def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int, mode: int = 0o600
       `fsync(dir_fd)` 承擔（per-directory 粒度是 spec §4.2.5 的成本決策：一次還原上千
       小檔，每檔兩次目錄 fsync 太貴）。
     - 暫存檔殘留：中斷（SIGKILL **或**斷電）恰落在 link 成功與 unlink temp 之間時，
-      暫存檔殘留且重跑不清（新進程的 PID＋隨機名對不上）——「失敗清暫存」只覆蓋本進程
-      活著走到例外路徑的情形。殘骸清理屬呼叫端簿記（按 `_TEMP_PREFIX` 前綴＋PID 存活
-      檢查掃，不能無條件掃：並行的另一個 install 的暫存檔還活著），記錄於票 02。
+      暫存檔殘留——「失敗清暫存」只覆蓋本進程活著走到例外路徑的情形，本函式對別的
+      進程留下的殘骸一無所知。**別的進程留下的殘骸不會被自動清除**——`find_stale_temps`
+      只指認、不刪除（票 08 R3：可用的判準全是可偽造的檔名特徵，達不到「只刪自己建的」
+      這條底線），刪除的授權留給看得到完整路徑的使用者。
 
     目標已存在 → FileExistsError（呼叫端據此判 skipped）。
     """
-    temp_name = f"{_TEMP_PREFIX}{os.getpid()}-{os.urandom(4).hex()}"
+    temp_name = f"{TEMP_PREFIX}{os.getpid()}-{os.urandom(4).hex()}"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     fd = os.open(temp_name, flags, mode, dir_fd=dir_fd)
     try:
@@ -92,6 +95,9 @@ def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int, mode: int = 0o600
                     raise OSError(errno.EIO, "write made no progress")
                 written += n
             os.fsync(fd)      # 先確保內容落盤，再讓它以最終名可見
+            # 發布物身分（票 09-2 journal provenance 用）：對自己的 fd 取——link 之後
+            # 用名字 lstat 會有「已被換檔」的窗口
+            st = os.fstat(fd)
         finally:
             os.close(fd)
     except BaseException:
@@ -110,6 +116,60 @@ def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int, mode: int = 0o600
         raise
     with contextlib.suppress(OSError):
         os.unlink(temp_name, dir_fd=dir_fd)
+    return (st.st_dev, st.st_ino)
+
+
+def _creator_is_gone(name: str) -> bool:
+    """暫存名 `<TEMP_PREFIX><pid>-<hex>` 的產生者是否已經不在。
+
+    解不出進程編號、或問不出存活狀態，一律回 False（＝當它還活著）。**寧可漏清也不
+    誤刪**：判斷錯的代價不對稱——留著一個垃圾檔只是難看，清掉並行 install 正在寫的
+    暫存檔則是破壞對方進行中的原子發布。"""
+    pid_text = name[len(TEMP_PREFIX):].split("-", 1)[0]
+    if not pid_text.isdigit():
+        return False
+    pid = int(pid_text)
+    if pid <= 0:
+        # 0 與負數在 POSIX 是「整個 process group」而非單一進程，不能拿去問存活。
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False        # EPERM＝進程存在但不屬於我們；其餘問不出來一律留著
+    return False
+
+
+def find_stale_temps(dir_fd: int) -> list[str]:
+    """指認 `dir_fd` 這一層裡疑似前一輪硬中斷留下的暫存檔。**唯讀，不刪任何東西。**
+
+    `write_bytes_atomic` 的「失敗清暫存」只覆蓋**本進程活著走到例外路徑**的情形。
+    SIGKILL 或斷電落在 link 前後都會留下暫存檔，而重跑的 PID＋隨機名對不上——移機一次
+    寫上千個檔案，中斷幾次就在使用者的現役目錄留下一地看不懂的隱藏檔（票 02 記錄的殘餘）。
+
+    **為什麼只回報不刪除**（Codex 票 08 R3）：能拿來授權刪除的只有檔名前綴、檔名內的
+    PID 已不存在、以及型別是一般檔——三者**全都是可預測、可偽造的檔名特徵**，證明得了
+    「名字看起來像我們建的」，證明不了「這確實是我們建的」。專案對破壞性操作的既有底線
+    是「只刪自己建的」，這裡達不到那個標準，所以不刪：回報給呼叫端，刪除的授權交給看得到
+    完整路徑、能逐項確認的人（Plan B 的 UI）。**這個判準只用來指認嫌疑，不授權任何刪除**，
+    所以誤判的兩個方向都只是回報多了或少了。
+
+    只認自己的命名空間（`TEMP_PREFIX`）、只認產生者已確定不在的（`ProcessLookupError`
+    ＝ESRCH 是唯一「確定不在」的訊號，`EPERM` 與其餘問不出來的一律不指認）、只認一般檔
+    （同名目錄或 symlink 不是我們產生的）。讀不到目錄回空清單，不阻斷安裝。
+
+    **適用邊界**：liveness 判斷是單機語意。跨 PID namespace 共享同一檔案系統時，
+    `kill(0)` 對別的 namespace 的活 writer 會回 ESRCH——當前部署（macOS 桌面 app、
+    sidecar 由 Tauri 殼直接 spawn）沒有這個情形。"""
+    try:
+        with os.scandir(dir_fd) as entries:
+            names = [e.name for e in entries
+                     if e.name.startswith(TEMP_PREFIX)
+                     and e.is_file(follow_symlinks=False)]
+    except OSError:
+        return []
+    return sorted(name for name in names if _creator_is_gone(name))
 
 
 # errno → 穩定判別碼。`str(OSError)` 夾帶 errno 文字與絕對路徑，是診斷細節而非前端
