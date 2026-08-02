@@ -714,6 +714,109 @@ def test_plan_refuses_manifest_with_malformed_extra(tmp_path: Path):
             inst.plan(str(src), _accounts(tgt))
 
 
+def test_install_fails_when_extra_item_swapped_with_real_dir_after_plan(
+        tmp_path: Path, monkeypatch):
+    """plan 之後 extra/<name> 被換成**另一個真目錄**（O_NOFOLLOW 攔不到）→ 來源身分
+    不符記 failed、替身內容零落地——不能把 plan 沒掃描過的內容裝進已確認落點
+    （Codex 票 05 R1 F1：symlink 測試只證明了 O_NOFOLLOW 分支）。"""
+    src = _staging_with_extra(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    p = inst.plan(str(src), _accounts(tgt), extra={"agents": str(home / ".agents")})
+    import shutil
+    shutil.rmtree(src / "extra" / "agents")
+    impostor = src / "extra" / "agents"
+    (impostor / "skills").mkdir(parents=True)
+    (impostor / "skills" / "evil.md").write_text("EVIL", encoding="utf-8")
+    results = inst.install(p)
+    assert any(r.account == "extra:agents" and r.outcome == "failed"
+               and r.error == "source_moved" for r in results)
+    assert not (home / ".agents" / "skills" / "evil.md").exists()   # 替身內容零落地
+    assert inst.journal_path(inst.transaction_id(p)).exists()
+
+
+def test_install_fails_when_planned_extra_item_deleted(tmp_path: Path, monkeypatch):
+    """plan 看過的 extra 來源在 install 前被刪 → ENOENT **不得**靜默成功並清 journal：
+    「plan 說會裝」的整項無聲消失就是誤報成功。「備份包本來就沒有」才容許靜默，
+    兩者以 plan 時身分（None 與否）區分（Codex 票 05 R1 F1）。"""
+    src = _staging_with_extra(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    p = inst.plan(str(src), _accounts(tgt), extra={"agents": str(home / ".agents")})
+    import shutil
+    shutil.rmtree(src / "extra" / "agents")
+    results = inst.install(p)
+    assert any(r.account == "extra:agents" and r.outcome == "failed"
+               and r.error == "source_moved" for r in results)
+    assert inst.journal_path(inst.transaction_id(p)).exists()
+
+
+def test_install_fails_when_planned_extra_dir_deleted(tmp_path: Path, monkeypatch):
+    """整個 extra/ 在 plan 後被刪 → 同上，plan 看過的項目全記 failed、journal 保留。"""
+    src = _staging_with_extra(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    p = inst.plan(str(src), _accounts(tgt), extra={"agents": str(home / ".agents")})
+    import shutil
+    shutil.rmtree(src / "extra")
+    results = inst.install(p)
+    assert any(r.account == "extra:agents" and r.outcome == "failed"
+               and r.error == "source_moved" for r in results)
+    assert inst.journal_path(inst.transaction_id(p)).exists()
+
+
+def test_extra_absent_at_plan_time_stays_silent(tmp_path: Path, monkeypatch):
+    """manifest 列了 extra、使用者也確認了落點，但備份包**從頭就沒有**這份內容
+    （plan 時身分為 None）→ install 的 ENOENT 走正常靜默：不 failed、完整成功清 journal。
+    守住這條，上面的 fail-closed 才不會把正常備份包誤殺。"""
+    src = _staging(tmp_path)
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["extra"] = {"agents": "/Users/olduser/.agents"}
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    p = inst.plan(str(src), _accounts(tgt), extra={"agents": str(home / ".agents")})
+    results = inst.install(p)
+    assert not any(r.outcome == "failed" for r in results)
+    assert not inst.journal_path(inst.transaction_id(p)).exists()   # 完整成功 → 清除
+
+
+def test_extra_absent_item_with_extra_dir_present_stays_silent(
+        tmp_path: Path, monkeypatch):
+    """同上一條，但 extra/ 目錄本身存在、只缺這一項的內容——兩個 ENOENT 入口
+    （extra/ 整個不在、單項不在）都要走「plan 時身分 None 才靜默」的同一判準。"""
+    src = _staging(tmp_path)
+    (src / "extra").mkdir()
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["extra"] = {"agents": "/Users/olduser/.agents"}
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    p = inst.plan(str(src), _accounts(tgt), extra={"agents": str(home / ".agents")})
+    results = inst.install(p)
+    assert not any(r.outcome == "failed" for r in results)
+    assert not inst.journal_path(inst.transaction_id(p)).exists()
+
+
+def test_extra_created_after_plan_is_not_installed(tmp_path: Path, monkeypatch):
+    """plan 時不存在、install 前才冒出來的 extra 內容 → 不裝、記 failed：plan 沒掃描
+    過的內容不寫進確認落點（與「換真目錄」同一條不變式：install 時狀態＝plan 時狀態）。"""
+    src = _staging(tmp_path)
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["extra"] = {"agents": "/Users/olduser/.agents"}
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    p = inst.plan(str(src), _accounts(tgt), extra={"agents": str(home / ".agents")})
+    late = src / "extra" / "agents"
+    late.mkdir(parents=True)
+    (late / "late.md").write_text("LATE", encoding="utf-8")
+    results = inst.install(p)
+    assert any(r.account == "extra:agents" and r.outcome == "failed"
+               and r.error == "source_moved" for r in results)
+    assert not (home / ".agents" / "late.md").exists()
+
+
 def test_install_records_failed_when_extra_item_unopenable(tmp_path: Path, monkeypatch):
     """plan 之後 extra/<name> 被換成 symlink → 開啟失敗（O_NOFOLLOW）但不是「不存在」：
     要記 failed 而非靜默跳過——「plan 說會裝」的整項無聲消失就是誤報成功（票 04 F3

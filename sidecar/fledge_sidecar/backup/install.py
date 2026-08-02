@@ -67,6 +67,12 @@ class InstallPlan:
     # 基準可比——那條窗口是殘餘，記錄於票 03。
     target_identities: dict[str, tuple[int, int] | None]
     extra_targets: dict[str, str]           # extra 項名 -> resolved 落點
+    # extra 來源在 plan 時的身分（Codex 票 05 R1 F1）：install 只在「install 時狀態＝
+    # plan 時狀態」才動手——換成另一個真目錄（O_NOFOLLOW 攔不到）、plan 後才出現、
+    # plan 看過卻消失，皆 failed（source_moved）；None＝plan 時不存在，install 見
+    # ENOENT 才容許靜默。帳號側沒有對應欄位（票 03 記錄在案的殘餘窗口）；內容層變動
+    # 兩側皆不凍結——plan 是預覽不是內容授權。
+    extra_source_identities: dict[str, tuple[int, int] | None]
     will_install: int
     will_skip: list[str]
     # 目的地祖先被非目錄（一般檔或 symlink）占用的葉檔：install 只會在目錄層 fail、
@@ -220,6 +226,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         targets[key] = _resolved_config_dir(entry.get("config_dir", ""))
 
     extra_targets: dict[str, str] = {}
+    extra_source_identities: dict[str, tuple[int, int] | None] = {}
     for name in manifest.get("extra", {}):
         confirmed = (extra or {}).get(name)
         if not confirmed:
@@ -228,6 +235,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         if not _SAFE_KEY_RE.fullmatch(name):
             raise ValueError("invalid_account_key")   # extra name 同樣拼進路徑，同規則重驗
         extra_targets[name] = _resolved_config_dir(confirmed)
+        extra_source_identities[name] = dir_identity(str(Path(root, "extra", name)))
 
     for key, target in targets.items():
         n, sk, bl, ex = _scan_spot(Path(root, "accounts", key), target)
@@ -250,6 +258,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         targets=targets,
         target_identities=identities,
         extra_targets=extra_targets,
+        extra_source_identities=extra_source_identities,
         will_install=will_install,
         will_skip=will_skip,
         blocked=blocked,
@@ -647,6 +656,12 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                 extra_fd = _open_dir_pinned("extra", dir_fd=src_root_fd)
             except FileNotFoundError:
                 extra_fd = None
+                # extra/ 不存在：只有「plan 時也不存在」的項目容許靜默；plan 看過的
+                # 消失了就是誤報成功的形狀（Codex 票 05 R1 F1）。
+                for name in plan.extra_targets:
+                    if plan.extra_source_identities.get(name) is not None:
+                        results.append(ItemResult(f"extra:{name}", "", "failed",
+                                                  "source_moved"))
             except OSError as exc:
                 logger.error("移機 extra/ 開啟失敗", exc_info=True)
                 for name in plan.extra_targets:
@@ -656,10 +671,15 @@ def install(plan: InstallPlan) -> list[ItemResult]:
             if extra_fd is not None:
                 try:
                     for name, target in plan.extra_targets.items():
+                        expected_src = plan.extra_source_identities.get(name)
                         try:
                             item_fd = _open_dir_pinned(name, dir_fd=extra_fd)
                         except FileNotFoundError:
-                            continue        # 備份包裡沒有這個 extra 的內容——正常
+                            if expected_src is not None:
+                                # plan 看過的來源不見了≠備份包本來就沒有——靜默＝誤報成功
+                                results.append(ItemResult(f"extra:{name}", "", "failed",
+                                                          "source_moved"))
+                            continue        # 備份包從頭就沒有這份內容——正常
                         except OSError as exc:
                             logger.error("移機 extra 來源開啟失敗：name=%s", name,
                                          exc_info=True)
@@ -667,6 +687,15 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                                                       safe_fs.error_code(exc)))
                             continue
                         try:
+                            # 來源身分重驗（比照 target 側）：換成另一個真目錄時
+                            # O_NOFOLLOW 攔不到，寫下去就是把 plan 沒掃描過的內容
+                            # 裝進確認落點；plan 時不存在、現在卻開得起來同判。
+                            st = os.fstat(item_fd)
+                            if expected_src is None or \
+                                    (st.st_dev, st.st_ino) != expected_src:
+                                results.append(ItemResult(f"extra:{name}", "", "failed",
+                                                          "source_moved"))
+                                continue
                             _install_spot(item_fd, f"extra:{name}", target, plan, results,
                                           journal_fd, pending, account_dst_fds)
                         finally:
