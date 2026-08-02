@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import hashlib
 import json
 import logging
 import os
@@ -215,6 +216,55 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]]) -> InstallPlan:
     )
 
 
+_JOURNAL_PREFIX = "restore-journal-"
+
+
+def transaction_id(plan: InstallPlan) -> str:
+    """同一份備份包 + 同一個展開位置 = 同一個 transaction，重跑才接得上前一輪。
+
+    用雜湊而非路徑本身：路徑會含使用者名與中文，直接當檔名會有跳脫問題。"""
+    return hashlib.sha256(plan.source_root.encode("utf-8")).hexdigest()[:16]
+
+
+def journal_path(transaction_id: str) -> Path:
+    """放 ~/.fledge/：不放 staging（唯讀不變式），不放現役目錄（使用者的，不該被
+    我們的簿記污染）。它同時是「這次移機還沒收尾」的訊號（ADR-0006）。"""
+    return Path.home() / ".fledge" / f"{_JOURNAL_PREFIX}{transaction_id}.jsonl"
+
+
+def installed_nodes(transaction_id: str) -> set[str]:
+    """本 transaction 已確實發布的 node（`<account>/<rel_path>`）。讀不到就是空集合。"""
+    path = journal_path(transaction_id)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return set()      # 簿記讀不到不讓移機失敗——代價是這輪 symlink 補不齊（保守方向）
+    nodes: set[str] = set()
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue                        # 壞行跳過：簿記損壞不該讓移機整個失敗
+        node = entry.get("node") if isinstance(entry, dict) else None
+        if isinstance(node, str):
+            nodes.add(node)
+    return nodes
+
+
+def _record(fd: int, account: str, rel_path: str) -> None:
+    """append 一筆並 fsync。
+
+    **順序是「發布成功 → 記錄」，不是 intent-first 的 WAL**：先記「打算裝 X」但實際被
+    EEXIST 跳過的話，重跑會把使用者原本就有的 X 誤認成我們裝的——那正是這份簿記要擋的
+    東西。代價是 link 與 fsync 之間有極小窗口，崩在那裡的 node 重跑時不被認作本次發布、
+    依賴它的 symlink 補不回來。**刻意選的保守方向**：寧可少建一條連結，也不冒認。"""
+    line = json.dumps({"node": f"{account}/{rel_path}"}, ensure_ascii=False) + "\n"
+    os.write(fd, line.encode("utf-8"))
+    os.fsync(fd)
+
+
 def _open_dir_pinned(name: str, *, dir_fd: int | None = None) -> int:
     """從父 fd 開出子目錄，不跟隨 symlink。開失敗一律讓 OSError 往上拋。
 
@@ -261,7 +311,7 @@ def _read_file_pinned(name: str, dir_fd: int) -> bytes:
 
 
 def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
-                  results: list[ItemResult]) -> None:
+                  results: list[ItemResult], journal_fd: int) -> None:
     """遞迴安裝一層。symlink 在本階段一律略過（票 04 的第二階段處理）。"""
     for entry in os.scandir(src_fd):
         rel = os.path.join(rel_prefix, entry.name) if rel_prefix else entry.name
@@ -281,7 +331,7 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                         pass
                     child_dst = _open_dir_pinned(entry.name, dir_fd=dst_fd)
                     try:
-                        _install_tree(child_src, child_dst, account, rel, results)
+                        _install_tree(child_src, child_dst, account, rel, results, journal_fd)
                         # durability：link／unlink 的目錄項在斷電後不保證持久，光 fsync
                         # 檔案不夠。粒度取「每個目錄一次」而非每檔兩次——一次還原可能
                         # 上千個小檔，後者成本過高（spec §4.2.5）。
@@ -300,6 +350,7 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
             data = _read_file_pinned(entry.name, src_fd)
             safe_fs.write_bytes_atomic(data, entry.name, dir_fd=dst_fd,
                                        mode=entry.stat(follow_symlinks=False).st_mode & 0o777)
+            _record(journal_fd, account, rel)   # 發布成功才記（不是 intent-first）
             results.append(ItemResult(account, rel, "installed"))
         except FileExistsError:
             results.append(ItemResult(account, rel, "skipped"))
@@ -321,6 +372,15 @@ def install(plan: InstallPlan) -> list[ItemResult]:
     src_root_fd = _require_source_identity(plan)
     results: list[ItemResult] = []
     logger.info("移機開始：source=%s targets=%s", plan.source_root, sorted(plan.targets))
+    # journal 開在 source 驗證之後、任何寫入之前：它是 symlink 授權與中斷續作的基礎，
+    # 開不起來就不該動使用者的目錄——fail closed 回穩定判別碼，不讓 OSError 裸穿。
+    journal = journal_path(transaction_id(plan))
+    try:
+        journal.parent.mkdir(parents=True, exist_ok=True)
+        journal_fd = os.open(journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    except OSError as exc:
+        os.close(src_root_fd)
+        raise ValueError("journal_unavailable") from exc
     try:
         try:
             accounts_fd = _open_dir_pinned("accounts", dir_fd=src_root_fd)
@@ -345,7 +405,7 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                             # 落點已不是 plan 驗過的那個目錄——寫下去就是寫進替身。
                             results.append(ItemResult(key, "", "failed", "target_moved"))
                             continue
-                        _install_tree(account_fd, dst_fd, key, "", results)
+                        _install_tree(account_fd, dst_fd, key, "", results, journal_fd)
                         # 根層檔案的目錄項持久性掛在這裡——_install_tree 只 fsync 遞迴
                         # 開出的子目錄，root 這層漏掉的話 CLAUDE.md 這種根層檔案斷電後
                         # 連目錄項都可能消失（Codex 票 03 R1）。suppress 與子層一致：
@@ -368,6 +428,7 @@ def install(plan: InstallPlan) -> list[ItemResult]:
         finally:
             os.close(accounts_fd)
     finally:
+        os.close(journal_fd)
         os.close(src_root_fd)
     logger.info("移機完成：%s", dict(Counter(r.outcome for r in results)))
     return results

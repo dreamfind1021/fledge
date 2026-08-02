@@ -13,6 +13,14 @@ from conftest import make_staging as _staging
 from fledge_sidecar.backup import install as inst
 
 
+@pytest.fixture(autouse=True)
+def _fake_home(tmp_path: Path, monkeypatch):
+    """票 04 起 install() 會寫 provenance journal 到 ~/.fledge——沒有這層假 HOME，
+    本檔任何一條 install 測試都會寫進真實家目錄（硬性要求：絕不碰真實 ~/.claude、
+    ~/.claude-tc、~/.fledge）。個別測試自己 setenv HOME 會蓋過這裡，不衝突。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+
 def _accounts(target: Path) -> dict[str, dict[str, str]]:
     return {"work": {"config_dir": str(target), "label": ""}}
 
@@ -266,6 +274,43 @@ def test_install_excludes_claude_json_from_target(tmp_path: Path):
     results = inst.install(inst.plan(str(src), _accounts(tgt)))
     assert not (tgt / ".claude.json").exists()
     assert any(r.rel_path == ".claude.json" and r.outcome == "excluded" for r in results)
+
+
+def test_journal_records_installed_nodes(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    inst.install(p)
+    recorded = inst.installed_nodes(inst.transaction_id(p))
+    assert "work/CLAUDE.md" in recorded
+    assert "work/skills/a.md" in recorded
+
+
+def test_journal_survives_rerun_and_marks_prior_nodes(tmp_path: Path, monkeypatch):
+    """中斷續作的核心：第二次跑時，第一次裝的東西仍認得出來是「我們裝的」。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    inst.install(p)
+    first = inst.installed_nodes(inst.transaction_id(p))
+    p2 = inst.plan(str(src), _accounts(tgt))
+    inst.install(p2)                      # 全部 skipped
+    assert inst.installed_nodes(inst.transaction_id(p2)) >= first
+
+
+def test_journal_id_is_stable_for_same_bundle_and_dest(tmp_path: Path, monkeypatch):
+    """同一次還原的重跑必須接上同一份 journal，否則續作認不出前一輪。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    a = inst.transaction_id(inst.plan(str(src), _accounts(tgt)))
+    b = inst.transaction_id(inst.plan(str(src), _accounts(tgt)))
+    assert a == b
 
 
 def test_install_does_not_follow_symlinked_subdir_out_of_staging(tmp_path: Path):
