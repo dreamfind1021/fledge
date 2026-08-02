@@ -426,18 +426,45 @@ def _authorized_link_target(literal: str, plan: InstallPlan, manifest: dict,
     return None
 
 
-def _publish_links(pending: list[_PendingLink], plan: InstallPlan, manifest: dict,
+def _symlink_at(root_fd: int, rel_path: str, target: str) -> None:
+    """從 root_fd 逐層 `O_NOFOLLOW` 開到父目錄，再 `os.symlink(dir_fd=父)`。
+
+    **全程不重解析完整 pathname**（Codex 票 04 R1 F2）：第二階段若用
+    `plan.targets[account]/rel_path` 這種絕對路徑，target root 或中間目錄在階段間被
+    rename＋換成 symlink，`os.symlink` 會跟著中間元件寫到 target 外。root_fd 是第一階段
+    驗過身分的 fd（釘 inode，rename 影響不到），逐層 O_NOFOLLOW 讓任一層被換成 symlink
+    直接 ENOTDIR 失敗。"""
+    parts = rel_path.split(os.sep)
+    opened: list[int] = []
+    parent_fd = root_fd
+    try:
+        for part in parts[:-1]:
+            parent_fd = _open_dir_pinned(part, dir_fd=parent_fd)
+            opened.append(parent_fd)
+        os.symlink(target, parts[-1], dir_fd=parent_fd)
+    finally:
+        for fd in opened:
+            os.close(fd)
+
+
+def _publish_links(pending: list[_PendingLink], plan: InstallPlan,
+                   account_dst_fds: dict[str, int], manifest: dict,
                    installed: set[str], results: list[ItemResult]) -> None:
     """第二階段：第一階段全部發布完、journal 記妥之後才建 symlink。"""
     for link in pending:
+        root_fd = account_dst_fds.get(link.account)
+        if root_fd is None:
+            # 該帳號第一階段失敗（target_moved／OSError），沒有可信 root fd → 不建。
+            results.append(ItemResult(link.account, link.rel_path, "failed",
+                                      "account_not_installed"))
+            continue
         target = _authorized_link_target(link.literal_target, plan, manifest, installed)
         if target is None:
             results.append(ItemResult(link.account, link.rel_path, "excluded",
                                       "symlink_target_unauthorized"))
             continue
-        full = os.path.join(plan.targets[link.account], link.rel_path)
         try:
-            os.symlink(target, full)
+            _symlink_at(root_fd, link.rel_path, target)
             results.append(ItemResult(link.account, link.rel_path, "installed"))
         except FileExistsError:
             results.append(ItemResult(link.account, link.rel_path, "skipped"))
@@ -460,6 +487,10 @@ def install(plan: InstallPlan) -> list[ItemResult]:
     src_root_fd = _require_source_identity(plan)
     results: list[ItemResult] = []
     pending: list[_PendingLink] = []        # symlink 收集起來，第一階段全完成才發布
+    # 每個帳號第一階段驗過身分的 dst_fd 延到第二階段用——symlink 一律從這個 fd 逐層
+    # 開下去建，不重解析 pathname（Codex 票 04 R1 F2：pathname 重解析會被階段間換掉的
+    # 中間目錄／target root 導向外部）。fd 釘住的是 inode，rename 影響不到它。
+    account_dst_fds: dict[str, int] = {}
     logger.info("移機開始：source=%s targets=%s", plan.source_root, sorted(plan.targets))
     # journal 開在 source 驗證之後、任何寫入之前：它是 symlink 授權與中斷續作的基礎，
     # 開不起來就不該動使用者的目錄——fail closed 回穩定判別碼，不讓 OSError 裸穿。
@@ -503,6 +534,8 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                         # §4.2.5 保證表第三列）。
                         with contextlib.suppress(OSError):
                             os.fsync(dst_fd)
+                        account_dst_fds[key] = dst_fd   # 轉交第二階段，本迴圈不關
+                        dst_fd = None
                     except OSError as exc:
                         # 帳號級隔離（Codex 票 03 R2）：落點被檔案占用、權限被收走等
                         # 只讓「這個帳號」失敗——例外穿出去的話 route 只接 ValueError，
@@ -511,7 +544,7 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                                      key, target, exc_info=True)
                         results.append(ItemResult(key, "", "failed", safe_fs.error_code(exc)))
                     finally:
-                        if dst_fd is not None:
+                        if dst_fd is not None:      # 失敗或 target_moved 才在這裡關
                             os.close(dst_fd)
                 finally:
                     os.close(account_fd)
@@ -531,10 +564,13 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                         results.append(ItemResult(link.account, link.rel_path,
                                                   "failed", "provenance_unavailable"))
                 else:
-                    _publish_links(pending, plan, manifest, installed, results)
+                    _publish_links(pending, plan, account_dst_fds, manifest,
+                                   installed, results)
         finally:
             os.close(accounts_fd)
     finally:
+        for fd in account_dst_fds.values():
+            os.close(fd)
         os.close(journal_fd)
         os.close(src_root_fd)
     logger.info("移機完成：%s", dict(Counter(r.outcome for r in results)))

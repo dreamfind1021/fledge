@@ -484,6 +484,57 @@ def test_symlink_refused_when_pointing_at_account_root_or_ancestor(tmp_path: Pat
         assert any(r.rel_path == name and r.outcome == "excluded" for r in results)
 
 
+def test_symlink_phase_does_not_follow_intermediate_dir_swapped_between_phases(
+        tmp_path: Path, monkeypatch):
+    """第一階段建了真的中間目錄 sub，第二階段前 sub 被換成指向外部的 symlink →
+    fd-relative 逐層 O_NOFOLLOW 拒絕跟隨、連結不落到外部（Codex 票 04 R1 F2）。
+
+    用 installed_nodes 被呼叫當「第一階段已結束」的信號在階段間注入替換。"""
+    src = _staging(tmp_path)
+    work = src / "accounts" / "work"
+    (work / "sub").mkdir()
+    (work / "sub" / "c.md").write_text("CMD", encoding="utf-8")
+    (work / "sub" / "linked").symlink_to("/Users/olduser/.claude/sub/c.md")
+    tgt = _home_target(tmp_path, monkeypatch)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    real_installed = inst.installed_nodes
+
+    def _swap_then_read(tid):
+        sub = tgt / "sub"
+        if sub.is_dir() and not sub.is_symlink():
+            import shutil
+            shutil.rmtree(sub)
+            (tgt / "sub").symlink_to(outside)      # 換成指向外部的 symlink
+        return real_installed(tid)
+
+    monkeypatch.setattr(inst, "installed_nodes", _swap_then_read)
+    p = inst.plan(str(src), _accounts(tgt))
+    results = inst.install(p)
+    assert list(outside.iterdir()) == []           # 外部零寫入
+    assert any(r.rel_path == os.path.join("sub", "linked") and r.outcome == "failed"
+               for r in results)
+
+
+def test_symlink_built_via_dir_fd_not_full_pathname(tmp_path: Path, monkeypatch):
+    """釘住 fd-relative 手法本身：os.symlink 收到 dir_fd 與 basename，不是完整 pathname
+    （避免退回 pathname 的迴歸）。"""
+    src = _staging_with_link(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    seen: dict = {}
+    real_symlink = os.symlink
+
+    def _spy(target, linkpath, *, dir_fd=None):
+        seen["dir_fd"] = dir_fd
+        seen["linkpath"] = linkpath
+        return real_symlink(target, linkpath, dir_fd=dir_fd)
+
+    monkeypatch.setattr(inst.os, "symlink", _spy)
+    inst.install(inst.plan(str(src), _accounts(tgt)))
+    assert seen["dir_fd"] is not None
+    assert os.sep not in seen["linkpath"]          # basename，非完整 pathname
+
+
 def test_symlink_cycle_builds_neither(tmp_path: Path, monkeypatch):
     """兩條互相指向的連結：目標都是 symlink、都不是本次發布的 node → 都不建立。"""
     src = _staging(tmp_path)
