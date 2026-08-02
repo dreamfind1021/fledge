@@ -1372,3 +1372,24 @@ def test_peek_file_cap_excludes_later_files(tmp_path: Path):
     (proj / "zz.jsonl").write_text(
         json.dumps({"cwd": "/Users/olduser/x"}) + "\n", encoding="utf-8")
     assert inst.project_paths(str(src)) == []
+
+
+def test_peek_cwd_does_not_materialize_full_sort(tmp_path: Path, monkeypatch):
+    """資源輪廓釘住（Codex 票 06 R3）：檔數上限必須在**列舉階段**生效（nsmallest，
+    O(上限) 記憶體），不得退化回 sorted(...)[:N] 的全量實體化＋排序——兩者輸出語意
+    相同，語意測試殺不死這個退化。monkeypatch sorted 為拋錯：_peek_cwd 的路徑不得
+    用到全量排序，退化即紅。"""
+    src = _staging(tmp_path)
+    proj = src / "accounts" / "work" / "projects" / "-Users-olduser-x"
+    proj.mkdir(parents=True)
+    (proj / "a.jsonl").write_text(
+        json.dumps({"cwd": "/Users/olduser/x"}) + "\n", encoding="utf-8")
+    for i in range(20):
+        (proj / f"z{i:02d}.jsonl").write_text("{}\n", encoding="utf-8")
+    import builtins
+
+    def _boom(*a, **k):
+        raise AssertionError("全量 sorted 不得出現在 _peek_cwd 路徑")
+
+    monkeypatch.setattr(builtins, "sorted", _boom)
+    assert inst._peek_cwd(proj) == "/Users/olduser/x"
