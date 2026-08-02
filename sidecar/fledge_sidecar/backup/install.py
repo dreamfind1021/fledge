@@ -267,6 +267,32 @@ def installed_nodes(transaction_id: str) -> set[str]:
     return nodes
 
 
+def _open_journal_fd(journal: Path) -> int:
+    """fd-relative 開 journal，全程 `O_NOFOLLOW`：`~/.fledge` 或 journal 本身被換成 symlink
+    時拒絕跟隨——否則 `_record` 會把 JSONL append 到 symlink 指向的任意使用者檔案（Codex
+    票 04 R2 F1）。開好 `fstat` 確認是一般檔。從 home fd 逐層下去，O_NOFOLLOW 只擋最後
+    元件、父目錄那層要靠 fd-relative 才 pin 得住。"""
+    home_fd = os.open(str(Path.home()), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        try:
+            os.mkdir(".fledge", 0o700, dir_fd=home_fd)
+        except FileExistsError:
+            pass
+        fledge_fd = _open_dir_pinned(".fledge", dir_fd=home_fd)
+    finally:
+        os.close(home_fd)
+    try:
+        fd = os.open(journal.name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                     0o600, dir_fd=fledge_fd)
+    finally:
+        os.close(fledge_fd)
+    st = os.fstat(fd)
+    if not stat_module.S_ISREG(st.st_mode):
+        os.close(fd)
+        raise OSError(errno.EINVAL, "journal is not a regular file")
+    return fd
+
+
 def _record(fd: int, account: str, rel_path: str) -> None:
     """append 一筆並 fsync。
 
@@ -496,8 +522,7 @@ def install(plan: InstallPlan) -> list[ItemResult]:
     # 開不起來就不該動使用者的目錄——fail closed 回穩定判別碼，不讓 OSError 裸穿。
     journal = journal_path(transaction_id(plan))
     try:
-        journal.parent.mkdir(parents=True, exist_ok=True)
-        journal_fd = os.open(journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        journal_fd = _open_journal_fd(journal)
     except OSError as exc:
         os.close(src_root_fd)
         raise ValueError("journal_unavailable") from exc

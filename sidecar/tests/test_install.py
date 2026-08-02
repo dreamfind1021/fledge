@@ -17,8 +17,13 @@ from fledge_sidecar.backup import install as inst
 def _fake_home(tmp_path: Path, monkeypatch):
     """票 04 起 install() 會寫 provenance journal 到 ~/.fledge——沒有這層假 HOME，
     本檔任何一條 install 測試都會寫進真實家目錄（硬性要求：絕不碰真實 ~/.claude、
-    ~/.claude-tc、~/.fledge）。個別測試自己 setenv HOME 會蓋過這裡，不衝突。"""
-    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    ~/.claude-tc、~/.fledge）。個別測試自己 setenv HOME 會蓋過這裡，不衝突。
+
+    要真的 mkdir：票 04 R2 F1 後 journal 開啟走 fd-relative（從 home fd 逐層 O_NOFOLLOW），
+    home 不存在會直接 journal_unavailable——真實環境 home 一定在，測試也要比照。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
 
 
 def _accounts(target: Path) -> dict[str, dict[str, str]]:
@@ -68,7 +73,7 @@ def test_plan_refuses_source_without_manifest(tmp_path: Path):
 def test_plan_refuses_config_dir_at_home_or_above(tmp_path: Path, monkeypatch):
     """底線防呆（ADR-0001）：config_dir 是 home 本身或祖先時 containment 形同不設防。"""
     home = tmp_path / "home"
-    home.mkdir()
+    home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
     src = _staging(tmp_path)
     for bad in (str(home), str(tmp_path), "/"):
@@ -391,6 +396,38 @@ def test_install_keeps_journal_when_provenance_read_degrades(tmp_path: Path, mon
     results = inst.install(p)
     assert any(r.rel_path == "linked" and r.outcome == "failed" for r in results)
     assert inst.journal_path(inst.transaction_id(p)).exists()   # 未誤清
+
+
+def test_journal_open_refuses_symlinked_journal_file(tmp_path: Path, monkeypatch):
+    """~/.fledge/<journal> 是 symlink → 不跟隨、不把 JSONL append 到它指向的檔案，
+    回 journal_unavailable（Codex 票 04 R2 F1）。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home" / ".fledge").mkdir(parents=True)
+    victim = tmp_path / "victim.txt"
+    victim.write_text("SACRED", encoding="utf-8")
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    inst.journal_path(inst.transaction_id(p)).symlink_to(victim)
+    with pytest.raises(ValueError, match="journal_unavailable"):
+        inst.install(p)
+    assert victim.read_text(encoding="utf-8") == "SACRED"   # 零污染
+
+
+def test_journal_open_refuses_symlinked_fledge_dir(tmp_path: Path, monkeypatch):
+    """~/.fledge 本身是 symlink → 不跟隨（O_NOFOLLOW 只擋最後元件不夠，父目錄也要 pin）。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (tmp_path / "home" / ".fledge").symlink_to(outside)   # home 由 autouse fixture 建
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    with pytest.raises(ValueError, match="journal_unavailable"):
+        inst.install(p)
+    assert list(outside.iterdir()) == []
 
 
 def test_journal_id_is_stable_for_same_bundle_and_dest(tmp_path: Path, monkeypatch):

@@ -260,6 +260,9 @@ def test_plan_default_dest_skips_a_previous_restore(tmp_path: Path, monkeypatch)
 
 def _install_config(tmp_path: Path, monkeypatch) -> Path:
     """install 端點用的假 config：一個 work 帳號指向 tmp 內的 live 目錄。回 live。"""
+    # home 要真的建：install 的 provenance journal 走 fd-relative 開啟（票 04 R2 F1），
+    # home 不存在會 journal_unavailable。
+    (tmp_path / "home").mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     live = tmp_path / "live"
     live.mkdir()
