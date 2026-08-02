@@ -13,6 +13,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import hashlib
+import heapq
 import json
 import logging
 import os
@@ -302,10 +303,14 @@ def _peek_cwd(project_dir: Path) -> str | None:
     except OSError:
         return None
     try:
-        names = sorted(e.name for e in os.scandir(dfd)
-                       if e.name.endswith(".jsonl")
-                       and e.is_file(follow_symlinks=False))
-        for name in names[:_PEEK_MAX_FILES]:
+        # nsmallest：O(上限) 記憶體、免全量排序——惡意包塞百萬個 jsonl 也只留 N 個
+        # 名字（Codex 票 06 R2；列舉的線性時間是 plan／install 全樹 walk 的既有基線）。
+        # 不採「超過 N 個就整批放棄」：正常專案常有數十個 session 檔。
+        names = heapq.nsmallest(
+            _PEEK_MAX_FILES,
+            (e.name for e in os.scandir(dfd)
+             if e.name.endswith(".jsonl") and e.is_file(follow_symlinks=False)))
+        for name in names:
             try:
                 fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                              dir_fd=dfd)

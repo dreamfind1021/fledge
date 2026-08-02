@@ -1344,3 +1344,31 @@ def test_peek_skips_fifo_named_jsonl(tmp_path: Path):
         json.dumps({"cwd": "/Users/olduser/x"}) + "\n", encoding="utf-8")
     [found] = inst.project_paths(str(src))
     assert found["old_path"] == "/Users/olduser/x"
+
+
+def test_peek_reads_first_files_even_when_project_has_many(tmp_path: Path):
+    """正常專案常有數十個 session 檔：檔數上限是「只開前 N 個（排序後）」，**不是**
+    「超過 N 個就整批放棄」——後者會把功能對真實備份打壞（Codex 票 06 R2 的但書）。"""
+    src = _staging(tmp_path)
+    proj = src / "accounts" / "work" / "projects" / "-Users-olduser-x"
+    proj.mkdir(parents=True)
+    (proj / "a.jsonl").write_text(
+        json.dumps({"cwd": "/Users/olduser/x"}) + "\n", encoding="utf-8")
+    for i in range(30):
+        (proj / f"z{i:02d}.jsonl").write_text(
+            json.dumps({"note": "no cwd"}) + "\n", encoding="utf-8")
+    [found] = inst.project_paths(str(src))
+    assert found["old_path"] == "/Users/olduser/x"
+
+
+def test_peek_file_cap_excludes_later_files(tmp_path: Path):
+    """cwd 只出現在排序第 N＋1 個檔案之後 → 放棄回 None（上限語意釘住：只開前 N 個）。"""
+    src = _staging(tmp_path)
+    proj = src / "accounts" / "work" / "projects" / "-Users-olduser-x"
+    proj.mkdir(parents=True)
+    for i in range(inst._PEEK_MAX_FILES):
+        (proj / f"a{i:02d}.jsonl").write_text(
+            json.dumps({"note": "no cwd"}) + "\n", encoding="utf-8")
+    (proj / "zz.jsonl").write_text(
+        json.dumps({"cwd": "/Users/olduser/x"}) + "\n", encoding="utf-8")
+    assert inst.project_paths(str(src)) == []
