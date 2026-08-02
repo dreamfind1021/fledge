@@ -1643,17 +1643,19 @@ def test_rollback_spares_user_object_swapped_in_after_link(
             import shutil
             shutil.rmtree(tgt / "commands")
             (tgt / "commands").mkdir()
-        elif state["n"] == 2:                 # 建後重驗回傳後、unlink 前換 link
-            (tgt / "linked").unlink()
-            (tgt / "linked").write_text("USER", encoding="utf-8")
+        elif state["n"] == 2:
+            # 驗證回傳後、發布決策前：使用者在最終名放上**同字面值的 symlink**
+            # （Codex R3：同型別＋同 target 的身分混淆變體）——暫名發布模型下
+            # 最終名從不被回滾，該物件必須原封不動。
+            (tgt / "linked").symlink_to("/Users/olduser/.claude/commands")
         return ok
 
     monkeypatch.setattr(inst, "_node_identity_matches", _hook)
     results = inst.install(p)
-    assert (tgt / "linked").is_file()
-    assert (tgt / "linked").read_text(encoding="utf-8") == "USER"   # 沒被誤刪
+    assert os.path.islink(tgt / "linked")             # 使用者的連結原封不動
     assert any(r.rel_path == "linked" and r.outcome == "failed"
                and r.error == "node_identity_mismatch" for r in results)
+    assert not [e for e in os.listdir(tgt) if e.startswith(".fledge-lnk-")]  # 暫名清乾淨
 
 
 def test_corrupt_prior_journal_lines_fail_closed(tmp_path: Path, monkeypatch):

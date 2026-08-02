@@ -922,39 +922,47 @@ def _publish_links(pending: list[_PendingLink], plan: InstallPlan,
         parts = link.rel_path.split(os.sep)
         opened: list[int] = []
         parent_fd = root_fd
+        # 暫名建立 → 驗證 → hardlink 原子發布 → 清暫名（比照 write_bytes_atomic 的
+        # 發布模型，Codex 票 09 R3）：最終名只在驗證通過後原子出現、**從不回滾**——
+        # R2 的「回滾要證明所有權」問題（同 target 的使用者 symlink 換入通過型別＋
+        # readlink 檢查）與「連結短暫存在過」窗口一併結構性消失。暫名含 PID＋隨機段，
+        # 只可能刪到自己的暫存物。
+        temp = f".fledge-lnk-{os.getpid()}-{os.urandom(4).hex()}"
         try:
             try:
-                # 逐層 O_NOFOLLOW 開到父目錄、不重解析 pathname（票 04 R1 F2）；建立、
-                # 建後重驗與回滾**共用同一個 parent fd**——重新逐層開的父目錄可能在
-                # 階段間被換（Codex 票 09 R2 F1）。
+                # 逐層 O_NOFOLLOW 開到父目錄、不重解析 pathname（票 04 R1 F2）；
+                # 全程共用同一個 parent fd（票 09 R2 F1）。
                 for part in parts[:-1]:
                     parent_fd = _open_dir_pinned(part, dir_fd=parent_fd)
                     opened.append(parent_fd)
-                os.symlink(target, parts[-1], dir_fd=parent_fd)
-            except FileExistsError:
-                results.append(ItemResult(link.account, link.rel_path, "skipped"))
-                continue
+                os.symlink(target, temp, dir_fd=parent_fd)
             except OSError as exc:
                 logger.error("移機建連結失敗：%s", link.rel_path, exc_info=True)
                 results.append(ItemResult(link.account, link.rel_path, "failed",
                                           safe_fs.error_code(exc)))
                 continue
-            # 建後重驗（票 09 R1 F1）：驗證→建立之間是 check-then-act，建完立刻重驗
-            # node；不符＝窗口內被換 → 回滾。「連結短暫存在過」窗口如實記錄於票 09。
-            if not _node_identity_matches(node_root_fd, node_rel,
-                                          installed[f"{spot_key}/{node_rel}"]):
-                # 回滾前驗身分（票 09 R2 F1）：entry 仍是**本輪建的 symlink**（lstat
-                # 型別＋readlink 字面值一致）才刪；被換入的使用者物件不動、只記
-                # failed。lstat→unlink 之間的微窗口如實記錄（無原子交換原語可用）。
+            try:
+                # 發布前重驗 node（票 09 R1 F1）：不符就不發布——最終名根本沒出現過。
+                if not _node_identity_matches(node_root_fd, node_rel,
+                                              installed[f"{spot_key}/{node_rel}"]):
+                    results.append(ItemResult(link.account, link.rel_path, "failed",
+                                              "node_identity_mismatch"))
+                    continue
+                try:
+                    os.link(temp, parts[-1], src_dir_fd=parent_fd,
+                            dst_dir_fd=parent_fd, follow_symlinks=False)
+                except FileExistsError:
+                    results.append(ItemResult(link.account, link.rel_path, "skipped"))
+                    continue
+                except OSError as exc:
+                    logger.error("移機發布連結失敗：%s", link.rel_path, exc_info=True)
+                    results.append(ItemResult(link.account, link.rel_path, "failed",
+                                              safe_fs.error_code(exc)))
+                    continue
+                results.append(ItemResult(link.account, link.rel_path, "installed"))
+            finally:
                 with contextlib.suppress(OSError):
-                    st = os.lstat(parts[-1], dir_fd=parent_fd)
-                    if stat_module.S_ISLNK(st.st_mode) and os.readlink(
-                            parts[-1], dir_fd=parent_fd) == target:
-                        os.unlink(parts[-1], dir_fd=parent_fd)
-                results.append(ItemResult(link.account, link.rel_path, "failed",
-                                          "node_identity_mismatch"))
-                continue
-            results.append(ItemResult(link.account, link.rel_path, "installed"))
+                    os.unlink(temp, dir_fd=parent_fd)
         finally:
             for fd in opened:
                 os.close(fd)
