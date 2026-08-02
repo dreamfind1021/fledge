@@ -389,10 +389,12 @@ def test_install_keeps_journal_when_provenance_read_degrades(tmp_path: Path, mon
     tgt = _home_target(tmp_path, monkeypatch)
     p = inst.plan(str(src), _accounts(tgt))
 
-    def _boom(_tid):
+    def _boom(_source_root):
         raise OSError(5, "io error")
 
-    monkeypatch.setattr(inst, "installed_nodes", _boom)
+    # 第二階段的 provenance 讀取（read_manifest→pread journal_fd）任一降級都該保留 journal。
+    # plan 已跑完，此 monkeypatch 只擊中 install 第二階段的 read_manifest。
+    monkeypatch.setattr(inst, "read_manifest", _boom)
     results = inst.install(p)
     assert any(r.rel_path == "linked" and r.outcome == "failed" for r in results)
     assert inst.journal_path(inst.transaction_id(p)).exists()   # 未誤清
@@ -428,6 +430,33 @@ def test_journal_open_refuses_symlinked_fledge_dir(tmp_path: Path, monkeypatch):
     with pytest.raises(ValueError, match="journal_unavailable"):
         inst.install(p)
     assert list(outside.iterdir()) == []
+
+
+def test_provenance_read_uses_pinned_fd_not_pathname(tmp_path: Path, monkeypatch):
+    """journal 開啟後、第二階段讀取前，被換成 symlink 指向攻擊者的偽 journal（宣稱某個
+    現役既有 node 是本次發布的）→ 讀取走已 pin 的 fd 不跟隨、injected node 不授權 symlink
+    （Codex 票 04 R3：F1 只修了 journal 寫入開啟，讀取還在用 pathname）。"""
+    src = _staging(tmp_path)
+    (src / "accounts" / "work" / "evil").symlink_to("/Users/olduser/.claude/private")
+    tgt = _home_target(tmp_path, monkeypatch)
+    (tgt / "private").mkdir()
+    (tgt / "private" / "secret.md").write_text("MINE", encoding="utf-8")
+    fake = tmp_path / "fake-journal.jsonl"
+    fake.write_text('{"node": "work/private"}\n', encoding="utf-8")   # 冒認 private 是本次裝的
+    p = inst.plan(str(src), _accounts(tgt))
+    real_read_manifest = inst.read_manifest
+
+    def _swap_then_read(source_root):
+        jp = inst.journal_path(inst.transaction_id(p))
+        if jp.exists() and not jp.is_symlink():
+            jp.unlink()
+            jp.symlink_to(fake)            # 階段間把真 journal 換成指向偽 journal 的 symlink
+        return real_read_manifest(source_root)
+
+    monkeypatch.setattr(inst, "read_manifest", _swap_then_read)   # 只第二階段呼叫（plan 已跑完）
+    results = inst.install(p)
+    assert not os.path.lexists(tgt / "evil")   # injected node 未授權，連結沒建
+    assert (tgt / "private" / "secret.md").read_text(encoding="utf-8") == "MINE"
 
 
 def test_journal_id_is_stable_for_same_bundle_and_dest(tmp_path: Path, monkeypatch):
@@ -535,18 +564,19 @@ def test_symlink_phase_does_not_follow_intermediate_dir_swapped_between_phases(
     tgt = _home_target(tmp_path, monkeypatch)
     outside = tmp_path / "outside"
     outside.mkdir()
-    real_installed = inst.installed_nodes
+    p = inst.plan(str(src), _accounts(tgt))
+    real_read_manifest = inst.read_manifest
 
-    def _swap_then_read(tid):
+    def _swap_then_read(source_root):
         sub = tgt / "sub"
         if sub.is_dir() and not sub.is_symlink():
             import shutil
             shutil.rmtree(sub)
             (tgt / "sub").symlink_to(outside)      # 換成指向外部的 symlink
-        return real_installed(tid)
+        return real_read_manifest(source_root)
 
-    monkeypatch.setattr(inst, "installed_nodes", _swap_then_read)
-    p = inst.plan(str(src), _accounts(tgt))
+    # read_manifest 是第二階段第一個 provenance 步驟；plan 已跑完，只擊中第二階段。
+    monkeypatch.setattr(inst, "read_manifest", _swap_then_read)
     results = inst.install(p)
     assert list(outside.iterdir()) == []           # 外部零寫入
     assert any(r.rel_path == os.path.join("sub", "linked") and r.outcome == "failed"

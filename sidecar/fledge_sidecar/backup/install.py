@@ -253,6 +253,12 @@ def installed_nodes(transaction_id: str) -> set[str]:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return set()
+    return _parse_journal_nodes(text)
+
+
+def _parse_journal_nodes(text: str) -> set[str]:
+    """JSONL → node 集合。壞行逐行跳過（損壞容錯）。install 第二階段（pread 已 pin 的
+    journal fd）與公開 installed_nodes（pathname，給還原卡偵測）共用同一份解析。"""
     nodes: set[str] = set()
     for line in text.splitlines():
         if not line.strip():
@@ -282,7 +288,10 @@ def _open_journal_fd(journal: Path) -> int:
     finally:
         os.close(home_fd)
     try:
-        fd = os.open(journal.name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+        # O_RDWR（非 O_WRONLY）：第二階段要從這個 pin 住的 fd 用 pread 讀回 provenance，
+        # 不重解析 pathname——否則 journal 開啟後被換 symlink，讀取仍會被導向偽 journal
+        # 注入授權（Codex 票 04 R3）。O_APPEND 只影響 write，pread 帶 offset 不受它影響。
+        fd = os.open(journal.name, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
                      0o600, dir_fd=fledge_fd)
     finally:
         os.close(fledge_fd)
@@ -579,7 +588,12 @@ def install(plan: InstallPlan) -> list[ItemResult]:
             if pending:
                 try:
                     manifest = read_manifest(plan.source_root)
-                    installed = installed_nodes(transaction_id(plan))
+                    # 從 pin 住的 journal_fd 直接 pread 全檔（含前輪 append 的，故中斷續作
+                    # 天然涵蓋），**不重解析 pathname**——階段間換 .fledge／journal symlink
+                    # 影響不到已開的 fd（Codex 票 04 R3）。
+                    size = os.fstat(journal_fd).st_size
+                    raw = os.pread(journal_fd, size, 0) if size else b""
+                    installed = _parse_journal_nodes(raw.decode("utf-8"))
                 except (OSError, ValueError):
                     # provenance 讀不出（journal 可寫不可讀、manifest 階段間被動）→ 降級：
                     # pending 全判 failed（不是 excluded），清除 gate 因此保留 journal。
