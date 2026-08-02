@@ -1559,3 +1559,68 @@ def test_reparented_prior_round_dir_is_recognized(tmp_path: Path, monkeypatch):
     assert any(r.account == "work" and r.outcome == "failed"
                and r.error == "overlapping_config_dirs" for r in results)
     assert not (tgt_work / "skills" / "a.md").exists()
+
+
+def test_symlink_removed_when_node_swapped_after_verification(
+        tmp_path: Path, monkeypatch):
+    """票 09 R1 F1：_node_identity_matches 通過後、_symlink_at 建立前 node 被換——
+    建後重驗必須抓到、拆掉剛建的連結、記 failed。"""
+    src = _staging_with_link(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    p = inst.plan(str(src), _accounts(tgt))
+    real_match = inst._node_identity_matches
+    state = {"n": 0}
+
+    def _match_then_swap(root_fd, rel, expected):
+        ok = real_match(root_fd, rel, expected)
+        state["n"] += 1
+        if state["n"] == 1 and ok:            # 首次（建前）驗證通過後置換 node
+            import shutil
+            shutil.rmtree(tgt / "commands")
+            (tgt / "commands").mkdir()
+        return ok
+
+    monkeypatch.setattr(inst, "_node_identity_matches", _match_then_swap)
+    results = inst.install(p)
+    assert not os.path.lexists(tgt / "linked")
+    assert any(r.rel_path == "linked" and r.outcome == "failed"
+               and r.error == "node_identity_mismatch" for r in results)
+
+
+def test_unreadable_prior_journal_fails_closed(tmp_path: Path, monkeypatch):
+    """票 09 R1 F2：journal 非空但解不出（invalid UTF-8）→ 全體落點 fail-closed
+    provenance_unavailable、零寫入——跨輪 dir_owners 起底不得靜默降級。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    jp = inst.journal_path(inst.transaction_id(p))
+    jp.parent.mkdir(parents=True, exist_ok=True)
+    jp.write_bytes(b"\xff\xfe not utf8 \xff\n")
+    results = inst.install(p)
+    assert all(r.outcome == "failed" and r.error == "provenance_unavailable"
+               for r in results)
+    assert list(tgt.iterdir()) == []
+
+
+def test_prior_journal_pread_oserror_fails_closed(tmp_path: Path, monkeypatch):
+    """同上、I/O 錯誤變體：pread 拋 OSError → fail-closed 不裸拋、零寫入。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    jp = inst.journal_path(inst.transaction_id(p))
+    jp.parent.mkdir(parents=True, exist_ok=True)
+    jp.write_text(json.dumps({"node": "work/x", "dev": 1, "ino": 2,
+                              "kind": "dir"}) + "\n", encoding="utf-8")
+
+    def _boom(*a, **k):
+        raise OSError(5, "io error")
+
+    monkeypatch.setattr(inst.os, "pread", _boom)
+    results = inst.install(p)
+    assert all(r.outcome == "failed" and r.error == "provenance_unavailable"
+               for r in results)
+    assert list(tgt.iterdir()) == []
