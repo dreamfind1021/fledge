@@ -248,22 +248,31 @@ def _scan_spot(content_dir: Path, target: str,
     return n_install, skip, blocked, walk_excluded
 
 
-def _validate_mapping(mapping: list[tuple[str, str]],
+def _validate_mapping(root: str, mapping: list[tuple[str, str]],
                       project_dirs: dict[str, list[str]]) -> dict[str, str]:
     """驗 mapping（舊專案路徑 → 新專案路徑），回 {舊 encoded 名: 新 encoded 名}。
-    **在寫任何東西之前一次驗完**（spec §4.2.4）：new 必須絕對路徑；old 必須是備份包
-    內確實存在的專案（mapping 也是不可信輸入）；編碼有損（非英數全變 `-`），新名彼此
-    相撞、同一專案對到兩個新路徑、或撞上未改寫專案的既有目錄名，都整批拒。"""
+    **在寫任何東西之前一次驗完**（spec §4.2.4）：old／new 都必須絕對路徑；old 必須
+    是備份包內確實存在的專案（mapping 也是不可信輸入）；編碼有損（非英數全變 `-`），
+    新名彼此相撞、同一專案對到兩個新路徑、或撞上未改寫專案的既有目錄名，都整批拒。
+
+    **old 以 cwd 驗身（Codex 票 06 R1 F2）**：encoded 名是有損投影，不同的 old 能
+    誤中無關專案、跨帳號同名時一筆 mapping 會動到多個帳號。每個被命中的專案目錄都
+    重讀 cwd 與 old 逐字比對，不一致（含讀不出）→ `mapping_ambiguous` 整批拒。"""
     all_names = {n for names in project_dirs.values() for n in names}
     renames: dict[str, str] = {}
     for old, new in mapping:
-        if not isinstance(new, str) or not os.path.isabs(new):
+        if not isinstance(new, str) or not os.path.isabs(new) \
+                or not isinstance(old, str) or not os.path.isabs(old):
             raise ValueError("mapping_not_absolute")
-        old_enc = encode_cc_project_dir(str(old))
+        old_enc = encode_cc_project_dir(old)
         if old_enc not in all_names:
             raise ValueError("mapping_unknown_project")
         if old_enc in renames:
             raise ValueError("mapping_collision")   # 同一專案（或編碼相撞的兩個 old）
+        for key, names in project_dirs.items():
+            if old_enc in names and _peek_cwd(
+                    Path(root, "accounts", key, _PROJECTS_DIR, old_enc)) != old:
+                raise ValueError("mapping_ambiguous")
         renames[old_enc] = encode_cc_project_dir(new)
     # 每個帳號的 projects/ 內，改名後的名字集合不得有重複（含未改寫的既有名）——
     # 不同帳號各有自己的 projects/，跨帳號同名不構成實體衝突。
@@ -274,21 +283,54 @@ def _validate_mapping(mapping: list[tuple[str, str]],
     return renames
 
 
+# _peek_cwd 的讀取上限：cwd 實務上出現在前幾行，惡意／損壞的大檔不讓 sidecar 讀到底。
+_PEEK_MAX_FILES = 8
+_PEEK_MAX_BYTES = 256 * 1024
+
+
 def _peek_cwd(project_dir: Path) -> str | None:
     """讀專案目錄歷史檔裡第一個出現的 `cwd`。**只讀不改**——編碼不可逆，這是知道
     專案舊路徑的唯一辦法（票 01：內容不必動，讀 cwd 純粹為了列給使用者做對應；
-    首行可能是沒有 cwd 的 summary，故逐行找而不是只看第一行）。"""
-    for f in sorted(project_dir.glob("*.jsonl")):
-        try:
-            with f.open(encoding="utf-8") as fh:
-                for line in fh:
-                    if not line.strip():
-                        continue
+    首行可能是沒有 cwd 的 summary，故逐行找而不是只看第一行）。
+
+    備份包不可信（Codex 票 06 R1 F1）：*.jsonl 可能是指向 staging 外的 symlink、
+    或 FIFO——全程 fd-relative＋`O_NOFOLLOW|O_NONBLOCK`＋fstat 判型，比照
+    `_read_file_pinned`；讀取有檔數與位元組上限，超限放棄回 None（列不出舊路徑
+    只是無法給建議值，不能讓惡意包外洩內容或阻塞）。"""
+    try:
+        dfd = _open_dir_pinned(str(project_dir))
+    except OSError:
+        return None
+    try:
+        names = sorted(e.name for e in os.scandir(dfd)
+                       if e.name.endswith(".jsonl")
+                       and e.is_file(follow_symlinks=False))
+        for name in names[:_PEEK_MAX_FILES]:
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=dfd)
+            except OSError:
+                continue
+            try:
+                st = os.fstat(fd)
+                if not stat_module.S_ISREG(st.st_mode):
+                    continue                # scandir 判型後被換成特殊檔——不讀
+                data = os.read(fd, _PEEK_MAX_BYTES)
+            finally:
+                os.close(fd)
+            for line in data.decode("utf-8", errors="replace").splitlines():
+                if not line.strip():
+                    continue
+                try:
                     cwd = json.loads(line).get("cwd")
-                    if isinstance(cwd, str):
-                        return cwd
-        except (OSError, ValueError):
-            continue                        # 壞檔跳過，不讓它擋住整個列表
+                except ValueError:
+                    continue                # 壞行（含被上限截斷的尾行）跳過
+                if isinstance(cwd, str):
+                    return cwd
+    except OSError:
+        return None
+    finally:
+        os.close(dfd)
     return None
 
 
@@ -387,7 +429,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         project_dirs[key] = sorted(
             c.name for c in pdir.iterdir()
             if c.is_dir() and not c.is_symlink()) if pdir.is_dir() else []
-    project_renames = _validate_mapping(list(mapping or []), project_dirs)
+    project_renames = _validate_mapping(root, list(mapping or []), project_dirs)
     unmapped_projects: list[dict] = []
     for key in sorted(project_dirs):
         for name in project_dirs[key]:
@@ -698,8 +740,12 @@ def _authorized_link_target(literal: str, plan: InstallPlan, manifest: dict,
         if rewritten == target or not is_same_or_within(rewritten, target):
             continue                        # 指向 root 本身也不算（那不是某個 node）
         rel = os.path.relpath(rewritten, target)
+        # 指進被改名專案的目標要跟著改名（Codex 票 06 R1 F3）：journal 記的是改名後
+        # 的 node，查詢與回寫都用目的地位置，否則連結被誤判 unauthorized 而丟失。
+        if not key.startswith("extra:"):
+            rel = _dest_rel(rel, plan.project_renames)
         if f"{key}/{rel}" in installed:
-            return rewritten
+            return os.path.join(target, rel)
     return None
 
 

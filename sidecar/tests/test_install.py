@@ -1262,3 +1262,85 @@ def test_project_paths_reads_old_path_from_history(tmp_path: Path):
         "suggested": f"{home}/work/app",
         "suggested_exists": False,
     }]
+
+
+def test_project_paths_does_not_follow_jsonl_symlink(tmp_path: Path):
+    """備份包不可信：專案目錄裡的 *.jsonl 可能是指向 staging 外的 symlink——唯讀
+    端點跟隨它就是把外部檔案內容洩給 caller（Codex 票 06 R1 F1）。不跟隨、該專案
+    因讀不出 cwd 而不列。"""
+    src = _staging(tmp_path)
+    victim = tmp_path / "victim.jsonl"
+    victim.write_text(json.dumps({"cwd": "/LEAKED"}) + "\n", encoding="utf-8")
+    proj = src / "accounts" / "work" / "projects" / "-Users-olduser-x"
+    proj.mkdir(parents=True)
+    (proj / "s.jsonl").symlink_to(victim)
+    assert inst.project_paths(str(src)) == []
+
+
+def test_peek_cwd_is_bounded(tmp_path: Path):
+    """讀取有上限：cwd 出現在讀取上限之後的惡意／損壞 jsonl 不讓 sidecar 讀到底
+    ——放棄、該專案不列（列不出舊路徑只是無法給建議值）。"""
+    src = _staging(tmp_path)
+    proj = src / "accounts" / "work" / "projects" / "-Users-olduser-x"
+    proj.mkdir(parents=True)
+    pad = json.dumps({"filler": "x" * (1 << 20)}) + "\n"     # 1MB 無 cwd 的行
+    (proj / "s.jsonl").write_text(
+        pad + json.dumps({"cwd": "/Users/olduser/x"}) + "\n", encoding="utf-8")
+    assert inst.project_paths(str(src)) == []
+
+
+def test_mapping_rejects_relative_old(tmp_path: Path):
+    """old 必須是絕對路徑：已 encoded 的相對字串（encode 對它是恆等）能直接命中
+    同名目錄、繞過「以真實舊路徑選擇專案」的語意（Codex 票 06 R1 F2）。"""
+    src = _staging_with_history(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    with pytest.raises(ValueError, match="mapping_not_absolute"):
+        inst.plan(str(src), _accounts(tgt),
+                  mapping=[("-Users-olduser-work-app", "/Users/newuser/work/app")])
+
+
+def test_mapping_rejects_lossy_alias_of_different_project(tmp_path: Path):
+    """編碼有損：old=/Users/olduser/work.app 與既有專案 /Users/olduser/work/app 撞出
+    同一個 encoded 名。命中的目錄其 cwd 與 old 不一致 → mapping_ambiguous 整批拒，
+    不能把使用者沒選的專案改名（Codex 票 06 R1 F2）。"""
+    src = _staging_with_history(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    with pytest.raises(ValueError, match="mapping_ambiguous"):
+        inst.plan(str(src), _accounts(tgt),
+                  mapping=[("/Users/olduser/work.app", "/Users/newuser/work/app")])
+
+
+def test_symlink_into_renamed_project_follows_rename(tmp_path: Path, monkeypatch):
+    """絕對 symlink 指進被改名的專案：授權查 journal 與回寫都要用**改名後**的位置
+    ——否則 journal 記新名、查詢用舊名，連結被誤判 unauthorized 而丟失
+    （Codex 票 06 R1 F3）。"""
+    src = _staging_with_history(tmp_path)
+    (src / "accounts" / "work" / "recent").symlink_to(
+        "/Users/olduser/.claude/projects/-Users-olduser-work-app/s.jsonl")
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    new_path = f"{home}/work/app"
+    from fledge_sidecar.project_scanner import encode_cc_project_dir
+    new_enc = encode_cc_project_dir(new_path)
+    p = inst.plan(str(src), _accounts(tgt),
+                  mapping=[("/Users/olduser/work/app", new_path)])
+    results = inst.install(p)
+    assert (tgt / "recent").is_symlink()
+    assert os.readlink(tgt / "recent") == str(tgt / "projects" / new_enc / "s.jsonl")
+    assert any(r.rel_path == "recent" and r.outcome == "installed" for r in results)
+
+
+def test_peek_skips_fifo_named_jsonl(tmp_path: Path):
+    """FIFO 偽裝成 *.jsonl 不 open 不阻塞（scandir 判型＋O_NONBLOCK＋fstat 三層）。
+    本測試在修復前的行為是 open 阻塞卡死整個測試行程，無法安全驗紅——紅驗證由
+    「測試能跑完」本身承擔（修復前它永不返回）。"""
+    src = _staging(tmp_path)
+    proj = src / "accounts" / "work" / "projects" / "-Users-olduser-x"
+    proj.mkdir(parents=True)
+    os.mkfifo(proj / "a.jsonl")             # 排序在真檔前，先被掃到
+    (proj / "b.jsonl").write_text(
+        json.dumps({"cwd": "/Users/olduser/x"}) + "\n", encoding="utf-8")
+    [found] = inst.project_paths(str(src))
+    assert found["old_path"] == "/Users/olduser/x"

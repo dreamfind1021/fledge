@@ -79,6 +79,7 @@ _INSTALL_CLIENT_ERRORS = frozenset({
     "source_not_a_bundle", "invalid_config_dir", "unsafe_config_dir", "source_root_moved",
     "invalid_account_key", "overlapping_config_dirs",
     "mapping_not_absolute", "mapping_collision", "mapping_unknown_project",
+    "mapping_ambiguous",
 })
 
 
