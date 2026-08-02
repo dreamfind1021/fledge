@@ -7,7 +7,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from fledge_sidecar.paths import resolve_best_effort
 
@@ -41,6 +41,25 @@ def default_config_path() -> Path:
     if override:
         return Path(override)
     return Path.home() / ".fledge" / "config.json"
+
+
+def create_if_absent(build: Callable[[AppConfig], None],
+                     path: Path | None = None) -> AppConfig:
+    """建立設定檔，**只在它還不存在時**。已存在 → FileExistsError（票 07，spec §4.3.1）。
+
+    `onboard` 與 `adopt-config` 都會建立同一個 config.json，兩份 first-run 檢查必然
+    漂移，而漂移的樣態是「一支擋住、另一支放行」，結果是後寫者整份覆蓋前者——所以
+    共用這一個原語，各端點只提供「填什麼」。呼叫端自行持 `_config_lock`。
+
+    跨 process 的 race 不在此防護內（沿用 routes/config.py 的既有限制，歸 Plan 04）：
+    兩個 app 實例並存時 sidecar 會先互殺，單實例假設早於此失效。"""
+    target = path or default_config_path()
+    if target.exists():
+        raise FileExistsError(str(target))
+    config = AppConfig.load(target)
+    build(config)
+    config.save()
+    return config
 
 
 def usable_entry(item: Any, *fields: str) -> bool:
@@ -78,6 +97,9 @@ class AppConfig:
     subscriptions: list[dict[str, Any]] = field(default_factory=list)
     kms_root: str = ""  # KMS 根目錄，raw 含 ~，runtime 才 expanduser
     backup_dir: str = ""  # 備份輸出目錄，raw 含 ~，runtime 才 expanduser
+    # 移機 extra（帳號外資產）的使用者確認落點 {name: raw path}（票 07，spec §4.2.2）：
+    # adopt-config 逐項確認後寫入，install 端點從這裡讀——manifest 只能建議不能授權。
+    extra: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | None = None) -> AppConfig:
@@ -162,6 +184,8 @@ class AppConfig:
             subscriptions=data.get("subscriptions", []),
             kms_root=data.get("kms_root", "") or "",
             backup_dir=data.get("backup_dir", "") or "",
+            # 非 dict（手編壞形狀）退空：畸形的 extra 進到 install 端點會變 500
+            extra=data["extra"] if isinstance(data.get("extra"), dict) else {},
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -175,6 +199,7 @@ class AppConfig:
             "subscriptions": self.subscriptions,
             "kms_root": self.kms_root,
             "backup_dir": self.backup_dir,
+            "extra": self.extra,
         }
 
     def save(self) -> None:

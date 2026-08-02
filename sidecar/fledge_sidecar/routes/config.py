@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
+from fledge_sidecar import app_config
 from fledge_sidecar.app_config import AppConfig
 from fledge_sidecar.backup.containment import check_backup_dir, source_roots
 from fledge_sidecar.backup.script import scripts_root
@@ -181,17 +182,17 @@ def clear_override(body: PathBody):
 
 @router.post("/api/config/onboard")
 def onboard(body: OnboardBody):
-    """onboarding 完成：一次原子寫入多個根。任一帳號非法則整批不寫（save 前 raise）。"""
+    """onboarding 完成：一次原子寫入多個根。任一帳號非法則整批不寫（save 前 raise）。
+
+    first-run 判定走 `app_config.create_if_absent`（票 07，spec §4.3.1）：adopt-config
+    也會建立同一個 config.json，兩支各寫一份判定必然漂移——漂移的樣態是一支擋住另一支
+    放行、後寫者整份覆蓋前者。跨 process 的 save race 限制見原語 docstring／Plan 04。
+    既有加根請走 POST /api/config/roots。"""
     if not body.roots:
         raise HTTPException(status_code=400, detail="onboard 需要至少一個根目錄")
-    with _config_lock:
-        config = AppConfig.load()
-        if config.path.exists():
-            # first-run guard：onboard 僅供首次初始化。擋同 process 重複呼叫與「設定檔已存在」重入
-            # （Codex F-1）。注意 _config_lock 是單 process 鎖，跨 process（兩個 app 實例同時首次）的
-            # save race 不在此防護內 → 見 Known Limitations / Plan 04。既有加根請走 POST /api/config/roots。
-            raise HTTPException(status_code=409, detail="已完成初始設定，onboard 僅供首次初始化")
-        for r in body.roots:  # 先全驗證帳號，任一非法則整批不落檔
+
+    def _build(config: AppConfig) -> None:
+        for r in body.roots:  # 先全驗證帳號，任一非法則整批不落檔（raise 在 save 前）
             _require_account(config, r.default_account)
         seen: set[str] = set()
         for r in body.roots:
@@ -200,7 +201,12 @@ def onboard(body: OnboardBody):
                 continue  # 同批重複或已存在 → 略過
             seen.add(path)
             config.add_root(path, r.default_account)
-        config.save()
+
+    with _config_lock:
+        try:
+            config = app_config.create_if_absent(_build)
+        except FileExistsError:
+            raise HTTPException(status_code=409, detail="已完成初始設定，onboard 僅供首次初始化")
         return _with_first_run(config)
 
 

@@ -391,3 +391,146 @@ def test_corrupt_bundles_map_to_stable_code_not_naked_500(tmp_path: Path, monkey
     assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
     resp = client.post("/api/restore/install", json={"dest": str(bad2)})
     assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
+
+
+# ---------- 票 07：adopt-config 與 extra 接線 ----------
+
+
+def _adopt_env(tmp_path: Path, monkeypatch) -> tuple[Path, Path, Path]:
+    """假 HOME＋尚未落檔的 config＋含 extra 的 staging。回 (cfg_path, src, home)。
+
+    staging 帶一條帳號內指向 extra 資產的 symlink——F2 端到端要驗「搬完連結解得開」。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    cfg = tmp_path / "fledge-config.json"
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    src = make_staging(tmp_path)
+    (src / "extra" / "agents" / "skills" / "s").mkdir(parents=True)
+    (src / "extra" / "agents" / "skills" / "s" / "SKILL.md").write_text("X", encoding="utf-8")
+    (src / "accounts" / "work" / "skills" / "s").symlink_to("/Users/olduser/.agents/skills/s")
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["extra"] = {"agents": "/Users/olduser/.agents"}
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return cfg, src, home
+
+
+def test_adopt_config_requires_confirmed_landing_spots(tmp_path: Path, monkeypatch):
+    """manifest 說的落點不算數——body 沒帶 accounts 就一位元組都不寫（spec §4.2.2）。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    resp = TestClient(create_app()).post("/api/restore/adopt-config",
+                                         json={"dest": str(src)})
+    assert resp.status_code == 422
+    assert not cfg.exists()
+
+
+def test_adopt_config_revalidates_landing_spots(tmp_path: Path, monkeypatch):
+    """使用者送回的落點一樣要重驗：home 本身（ADR-0001）與落點互為祖先都擋、零寫入。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home)}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "unsafe_config_dir")
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "extra": [{"name": "agents", "path": str(home / ".claude" / "sub")}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "overlapping_config_dirs")
+    assert not cfg.exists()
+
+
+def test_adopt_config_refuses_when_config_exists(tmp_path: Path, monkeypatch):
+    """設定檔已存在 → 409 且逐位元組不變（票 07 驗收：不是部分寫入）。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    cfg.write_text('{"version": 1, "accounts": {}}', encoding="utf-8")
+    before = cfg.read_bytes()
+    resp = TestClient(create_app()).post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}]})
+    assert (resp.status_code, resp.json()["error"]) == (409, "config_already_initialized")
+    assert cfg.read_bytes() == before
+
+
+def test_adopt_config_rejects_undeclared_or_duplicate_names(tmp_path: Path, monkeypatch):
+    """帳號 key／extra name 必須是備份包宣稱的成員；同名重複（後蓋前的歧義）也拒。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "ghost", "config_dir": str(home / ".x")}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "unknown_account_key")
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "extra": [{"name": "ghost", "path": str(home / ".g")}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "unknown_extra_name")
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".c1")},
+                     {"key": "work", "config_dir": str(home / ".c2")}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "duplicate_account_key")
+    assert not cfg.exists()
+
+
+def test_adopt_config_rejects_root_with_unknown_account(tmp_path: Path, monkeypatch):
+    """root 的 default_account 必須指向本次確認的帳號之一，否則 400、零寫入。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    resp = TestClient(create_app()).post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "roots": [{"path": str(projects), "default_account": "ghost"}]})
+    assert (resp.status_code, resp.json()["error"]) == (400, "unknown_account")
+    assert not cfg.exists()
+
+
+def test_adopt_config_writes_confirmed_spots_not_manifest_suggestions(
+        tmp_path: Path, monkeypatch):
+    """成功路徑：config 收使用者確認的值（raw）；manifest 的舊機路徑一個都不落地。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    resp = TestClient(create_app()).post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "roots": [{"path": str(projects), "default_account": "work"}],
+        "extra": [{"name": "agents", "path": str(home / ".agents")}]})
+    assert resp.status_code == 200
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    assert data["accounts"] == {"work": {"config_dir": str(home / ".claude"), "label": ""}}
+    assert data["extra"] == {"agents": str(home / ".agents")}
+    assert [r["default_account"] for r in data["roots"]] == ["work"]
+    assert "/Users/olduser" not in cfg.read_text(encoding="utf-8")
+
+
+def test_install_endpoints_use_config_extra(tmp_path: Path, monkeypatch):
+    """F2 端到端（Codex 票 05 R1/R2）：adopt-config 確認 extra → install-plan 把 extra
+    數進預覽 → install 落地且帳號內指向它的連結解得開。extra 落點全程只來自 config。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "extra": [{"name": "agents", "path": str(home / ".agents")}]})
+    assert resp.status_code == 200
+    resp = client.post("/api/restore/install-plan", json={"dest": str(src)})
+    assert resp.status_code == 200
+    assert resp.json()["will_install"] == 3      # 帳號 2 檔＋extra 的 SKILL.md
+    resp = client.post("/api/restore/install", json={"dest": str(src)})
+    assert resp.status_code == 200
+    assert (home / ".agents" / "skills" / "s" / "SKILL.md").read_text(encoding="utf-8") == "X"
+    assert (home / ".claude" / "skills" / "s" / "SKILL.md").read_text(encoding="utf-8") == "X"
+
+
+def test_install_plan_excludes_extra_without_config_entry(tmp_path: Path, monkeypatch):
+    """config 沒有該 extra 的確認（使用者跳過）→ 經正式 API 的 plan 列 excluded。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}]})
+    resp = client.post("/api/restore/install-plan", json={"dest": str(src)})
+    assert resp.status_code == 200
+    assert "agents" in resp.json()["excluded"]

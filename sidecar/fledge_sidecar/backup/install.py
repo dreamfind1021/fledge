@@ -93,6 +93,28 @@ def _resolved_config_dir(raw: str) -> str:
     return resolved
 
 
+def validate_landing_spots(spots: dict[str, str]) -> dict[str, str]:
+    """驗使用者確認的落點（adopt-config 專用，票 07）。回 {key: resolved 路徑}；任一
+    不合法即整批 ValueError（判別碼由 route 轉 400）。
+
+    key 用落點命名空間（account key／`extra:<name>`），文法驗冒號後的裸名——與
+    `_SAFE_KEY_RE` 同一條信任邊界。這是**授權發生的那一刻**，驗得比 plan 嚴：除了
+    路徑正規化＋ADR-0001 底線防呆，落點之間（含帳號×extra 交叉）不得互為祖先——
+    外層落點的安裝會把內層目錄整個蓋掉（沿用 build_account_graph 的重疊規則）。"""
+    resolved: dict[str, str] = {}
+    for key, raw in spots.items():
+        bare = key.split(":", 1)[1] if key.startswith("extra:") else key
+        if not _SAFE_KEY_RE.fullmatch(bare):
+            raise ValueError("invalid_account_key")
+        resolved[key] = _resolved_config_dir(raw)
+    ordered = list(resolved.values())
+    for i, path in enumerate(ordered):
+        for other in ordered[:i]:
+            if is_same_or_within(path, other) or is_same_or_within(other, path):
+                raise ValueError("overlapping_config_dirs")
+    return resolved
+
+
 def read_manifest(source_root: str) -> dict:
     """讀展開目錄的 manifest。讀不到或不是物件 → source_not_a_bundle。
 
@@ -230,7 +252,8 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
     extra_targets: dict[str, str] = {}
     for name in manifest.get("extra", {}):
         confirmed = (extra or {}).get(name)
-        if not confirmed:
+        # 確認值來自 config.json（使用者可手編）：非字串視同未確認，不讓 .strip() 炸 500
+        if not confirmed or not isinstance(confirmed, str):
             excluded.append(name)           # 落點沒被使用者確認就整項不搬（spec §4.2.2）
             continue
         if not _SAFE_KEY_RE.fullmatch(name):

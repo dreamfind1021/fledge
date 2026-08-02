@@ -17,12 +17,15 @@ from dataclasses import asdict
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from fledge_sidecar import app_config
 from fledge_sidecar.app_config import AppConfig
 from fledge_sidecar.backup import install, restore
 from fledge_sidecar.backup.containment import source_roots
 from fledge_sidecar.backup.script import scripts_root
+from fledge_sidecar.paths import expand_and_validate, probe_dir, resolve_best_effort
+from fledge_sidecar.routes.config import _config_lock
 from fledge_sidecar.routes.setup import setup_lock
 
 router = APIRouter()
@@ -69,6 +72,97 @@ _INSTALL_CLIENT_ERRORS = frozenset({
 })
 
 
+class AdoptAccount(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    key: str
+    config_dir: str
+
+
+class AdoptExtra(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    path: str
+
+
+class AdoptRoot(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str
+    default_account: str
+
+
+class AdoptConfigBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dest: str
+    accounts: list[AdoptAccount] = Field(min_length=1)   # 落點是使用者的授權，必填
+    roots: list[AdoptRoot] = []
+    extra: list[AdoptExtra] = []
+
+
+_ADOPT_CLIENT_ERRORS = frozenset({
+    "source_not_a_bundle", "invalid_config_dir", "unsafe_config_dir",
+    "invalid_account_key", "overlapping_config_dirs",
+})
+
+
+@router.post("/api/restore/adopt-config")
+def adopt_config(body: AdoptConfigBody):
+    """用備份包重建 config.json（票 07）。**落點由使用者逐項確認後送回**，server 全部
+    重驗（spec §4.2.2：manifest 只能描述來源與建議值，不能授權目的地——限制前端送的
+    欄位並不會讓不可信的資料源變可信）。
+
+    不擴充 onboard：它的 first-run 語意是審查後刻意加的，且「採用備份包」與「手動
+    onboard」是兩種語意。兩支共用 `create_if_absent` 原語與同一把 `_config_lock`
+    （spec §4.3.1——各寫一份 first-run 判定必然漂移）。"""
+    account_keys = [a.key for a in body.accounts]
+    extra_names = [e.name for e in body.extra]
+    # 同名重複＝「後蓋前」的授權歧義，直接拒——不讓 dict 建構默默挑一個
+    if len(set(account_keys)) != len(account_keys):
+        return JSONResponse(status_code=400, content={"error": "duplicate_account_key"})
+    if len(set(extra_names)) != len(extra_names):
+        return JSONResponse(status_code=400, content={"error": "duplicate_extra_name"})
+    try:
+        manifest = install.read_manifest(resolve_best_effort(body.dest))
+        # 只採用備份包宣稱的成員：確認流的對象是 bundle 的內容，不是任意鍵值
+        if not set(account_keys) <= set(manifest["accounts"]):
+            return JSONResponse(status_code=400, content={"error": "unknown_account_key"})
+        if not set(extra_names) <= set(manifest.get("extra", {})):
+            return JSONResponse(status_code=400, content={"error": "unknown_extra_name"})
+        install.validate_landing_spots(
+            {**{a.key: a.config_dir for a in body.accounts},
+             **{f"extra:{e.name}": e.path for e in body.extra}})
+    except ValueError as exc:
+        if str(exc) in _ADOPT_CLIENT_ERRORS:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        raise                               # read_manifest／validate 只拋判別碼，其餘不吞
+    roots: list[tuple[str, str]] = []
+    for r in body.roots:
+        if r.default_account not in set(account_keys):
+            return JSONResponse(status_code=400, content={"error": "unknown_account"})
+        try:
+            abs_ = expand_and_validate(r.path)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"error": "invalid_root"})
+        if probe_dir(abs_) in ("missing", "not_dir"):   # denied 放行，比照 onboard
+            return JSONResponse(status_code=400, content={"error": "invalid_root"})
+        roots.append((resolve_best_effort(abs_), r.default_account))
+
+    def _build(config: AppConfig) -> None:
+        config.accounts = {}                # 不留 DEFAULT_CONFIG 的 default 帳號
+        for a in body.accounts:
+            config.add_account(a.key, a.config_dir.strip(), "")   # 存 raw，比照帳號慣例
+        for path, acct in roots:
+            config.add_root(path, acct)
+        config.extra = {e.name: e.path.strip() for e in body.extra}
+
+    try:
+        with _config_lock:
+            config = app_config.create_if_absent(_build)
+    except FileExistsError:
+        return JSONResponse(status_code=409,
+                            content={"error": "config_already_initialized"})
+    return config.to_dict()
+
+
 @router.post("/api/restore/install-plan")
 def install_plan(body: DestBody):
     """唯讀預覽：會裝幾項、跳過哪些、刻意不處理哪些。不動檔案系統。
@@ -78,7 +172,8 @@ def install_plan(body: DestBody):
     慣例（精靈 pre-onboard 要能看狀態），fallback 下的探測全是唯讀 lstat。"""
     try:
         config = AppConfig.load()            # ValueError → 下方轉 config_unreadable 500
-        plan = install.plan(body.dest, config.accounts)
+        # extra 落點同樣只來自 config（adopt-config 確認後寫入），不由前端送（票 07）
+        plan = install.plan(body.dest, config.accounts, extra=config.extra)
     except ValueError as exc:
         if str(exc) in _INSTALL_CLIENT_ERRORS:
             return JSONResponse(status_code=400, content={"error": str(exc)})
@@ -104,7 +199,7 @@ def install_route(body: DestBody):
             except FileNotFoundError:
                 return JSONResponse(status_code=400,
                                     content={"error": "config_not_initialized"})
-            plan = install.plan(body.dest, config.accounts)
+            plan = install.plan(body.dest, config.accounts, extra=config.extra)
             results = install.install(plan)
     except ValueError as exc:
         if str(exc) in _INSTALL_CLIENT_ERRORS:

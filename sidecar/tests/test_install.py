@@ -628,6 +628,50 @@ def test_install_does_not_follow_symlinked_subdir_out_of_staging(tmp_path: Path)
     assert not (tgt / "escaped" / "x.md").exists()
 
 
+# ---------- 票 07：adopt-config 的授權時刻驗證 ----------
+
+
+def test_validate_landing_spots_resolves_and_rejects(tmp_path: Path, monkeypatch):
+    """授權發生的那一刻驗最嚴（spec §4.2.2）：key 文法（extra 用 extra:<name>，驗冒號
+    後的裸名）、路徑重驗與帳號同一條規則（home／祖先拒）。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    ok = inst.validate_landing_spots(
+        {"work": str(tmp_path / "a"), "extra:agents": str(tmp_path / "b")})
+    assert ok == {"work": str(tmp_path / "a"), "extra:agents": str(tmp_path / "b")}
+    with pytest.raises(ValueError, match="invalid_account_key"):
+        inst.validate_landing_spots({"a/b": str(tmp_path / "a")})
+    with pytest.raises(ValueError, match="invalid_account_key"):
+        inst.validate_landing_spots({"extra:../x": str(tmp_path / "a")})
+    with pytest.raises(ValueError, match="unsafe_config_dir"):
+        inst.validate_landing_spots({"work": str(home)})
+
+
+def test_validate_landing_spots_rejects_overlap(tmp_path: Path, monkeypatch):
+    """落點互為祖先（含帳號×extra 交叉）→ overlapping_config_dirs：外層的安裝會把
+    內層目錄整個蓋掉。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    with pytest.raises(ValueError, match="overlapping_config_dirs"):
+        inst.validate_landing_spots(
+            {"work": str(tmp_path / "a"), "personal": str(tmp_path / "a" / "sub")})
+    with pytest.raises(ValueError, match="overlapping_config_dirs"):
+        inst.validate_landing_spots(
+            {"work": str(tmp_path / "a"), "extra:agents": str(tmp_path / "a")})
+
+
+def test_plan_treats_non_string_extra_confirmation_as_unconfirmed(
+        tmp_path: Path, monkeypatch):
+    """extra 確認值將來自 config.json（使用者可手編）：非字串不讓 plan 炸 500，
+    視同未確認 → excluded。"""
+    src = _staging_with_extra(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    p = inst.plan(str(src), _accounts(tgt), extra={"agents": 7})
+    assert "agents" in p.excluded
+
+
 # ---------- 帳號側來源身分綁定（票 05 收尾裁示：比照 extra，封票 03 殘餘窗口） ----------
 
 

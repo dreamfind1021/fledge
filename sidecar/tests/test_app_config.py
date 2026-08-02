@@ -321,3 +321,43 @@ def test_backup_dir_empty_string_clears(tmp_path: Path):
     cfg.set_backup_dir("")
     cfg.save()
     assert AppConfig.load(p).backup_dir == ""
+
+
+# ---------- 票 07：共用初始化原語與 extra 欄位 ----------
+
+
+def test_create_if_absent_writes_once(tmp_path: Path, monkeypatch):
+    """onboard 與 adopt-config 共用的初始化原語（spec §4.3.1）：不存在才建。"""
+    import pytest  # noqa: F401  （本區段首度使用）
+    from fledge_sidecar import app_config
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    app_config.create_if_absent(lambda c: c.add_account("work", "/tmp/x", ""))
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    assert data["accounts"]["work"]["config_dir"] == "/tmp/x"
+
+
+def test_create_if_absent_refuses_when_config_exists(tmp_path: Path, monkeypatch):
+    """已存在 → FileExistsError 且一位元組不寫——兩支端點各寫一份 first-run 判定
+    必然漂移，漂移的樣態是一支擋住另一支放行、後寫者整份覆蓋前者。"""
+    import pytest
+    from fledge_sidecar import app_config
+    cfg = tmp_path / "config.json"
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    app_config.create_if_absent(lambda c: c.add_account("work", "/tmp/x", ""))
+    before = cfg.read_bytes()
+    with pytest.raises(FileExistsError):
+        app_config.create_if_absent(lambda c: c.add_account("other", "/tmp/y", ""))
+    assert cfg.read_bytes() == before
+
+
+def test_extra_field_roundtrip_and_tolerance(tmp_path: Path):
+    """config 的 extra（帳號外資產落點，票 07）：存 raw、round-trip 不變；舊檔無欄位
+    → 空；非 dict → 空（config 可被手編，壞形狀不讓 install 端點 500）。"""
+    p = _write(tmp_path, {"extra": {"agents": "~/.agents"}})
+    cfg = AppConfig.load(p)
+    assert cfg.extra == {"agents": "~/.agents"}
+    cfg.save()
+    assert json.loads(p.read_text(encoding="utf-8"))["extra"] == {"agents": "~/.agents"}
+    assert AppConfig.load(_write(tmp_path, {})).extra == {}
+    assert AppConfig.load(_write(tmp_path, {"extra": "oops"})).extra == {}
