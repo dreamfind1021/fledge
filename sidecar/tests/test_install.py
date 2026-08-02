@@ -1498,3 +1498,64 @@ def test_symlink_refused_when_node_becomes_symlink_after_first_phase(
                and r.error == "node_identity_mismatch" for r in results)
     assert list(outside.iterdir()) == []
     assert inst.journal_path(inst.transaction_id(p)).exists()
+
+
+def test_reparented_spot_mid_install_stops_both(tmp_path: Path, monkeypatch):
+    """票 09-3：fd 版重疊重驗通過後、寫入中，落點 B 被 rename 進落點 A 的樹（名字對
+    上 A 來源的子目錄）→ A 開該子目錄時認出是別的落點的 root、停寫，雙方 failed
+    overlapping_config_dirs；B 的 inode 不收 A 的內容、journal 不記污染項。"""
+    src = _two_account_staging(tmp_path)
+    tgt_work = tmp_path / "live-work"
+    tgt_work.mkdir()
+    tgt_personal = tmp_path / "live-personal"
+    tgt_personal.mkdir()
+    accounts = {
+        "work": {"config_dir": str(tgt_work), "label": ""},
+        "personal": {"config_dir": str(tgt_personal), "label": ""},
+    }
+    p = inst.plan(str(src), accounts)
+    real_drop = inst._drop_overlapping_spots
+
+    def _drop_then_reparent(prepared, results):
+        kept = real_drop(prepared, results)
+        os.rename(tgt_personal, tgt_work / "skills")   # B 的 root 搬進 A 樹、名字對上
+        return kept
+
+    monkeypatch.setattr(inst, "_drop_overlapping_spots", _drop_then_reparent)
+    results = inst.install(p)
+    assert any(r.account == "work" and r.outcome == "failed"
+               and r.error == "overlapping_config_dirs" for r in results)
+    assert any(r.account == "personal" and r.outcome == "failed"
+               and r.error == "overlapping_config_dirs" for r in results)
+    moved = tgt_work / "skills"                        # ＝B 的 inode
+    assert not (moved / "a.md").exists()               # A 的內容零跨帳號寫入
+    assert not (moved / "P.md").exists()               # B 也停手
+    assert "work/skills" not in inst.installed_nodes(inst.transaction_id(p))
+
+
+def test_reparented_prior_round_dir_is_recognized(tmp_path: Path, monkeypatch):
+    """票 09-3 跨輪變體：**前輪**（中斷續作）裝出的別家目錄被搬進本落點樹裡——
+    dir_owners 以 journal 的身分記錄起底，本輪一開就認得出、雙方停寫。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src = _two_account_staging(tmp_path)
+    tgt_work = tmp_path / "live-work"
+    tgt_work.mkdir()
+    tgt_personal = tmp_path / "live-personal"
+    tgt_personal.mkdir()
+    accounts = {
+        "work": {"config_dir": str(tgt_work), "label": ""},
+        "personal": {"config_dir": str(tgt_personal), "label": ""},
+    }
+    p = inst.plan(str(src), accounts)
+    # 偽造前輪：personal 曾裝出一個目錄，之後被搬到 work 樹裡、名字對上 work 的來源
+    (tgt_work / "skills").mkdir()
+    st = os.stat(tgt_work / "skills")
+    jp = inst.journal_path(inst.transaction_id(p))
+    jp.parent.mkdir(parents=True, exist_ok=True)
+    jp.write_text(json.dumps({"node": "personal/stuff", "dev": st.st_dev,
+                              "ino": st.st_ino, "kind": "dir"}) + "\n",
+                  encoding="utf-8")
+    results = inst.install(p)
+    assert any(r.account == "work" and r.outcome == "failed"
+               and r.error == "overlapping_config_dirs" for r in results)
+    assert not (tgt_work / "skills" / "a.md").exists()

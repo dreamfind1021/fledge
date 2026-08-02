@@ -683,11 +683,21 @@ def _read_file_pinned(name: str, dir_fd: int) -> bytes:
         os.close(fd)
 
 
+class _ForeignSpotError(Exception):
+    """票 09-3：寫入中開到的既有子目錄其實是**另一個落點**的目錄（重疊重驗通過後被
+    rename 進來）。刻意不是 OSError 子類——要穿過逐項容錯直達落點層停寫。"""
+
+    def __init__(self, other_key: str):
+        super().__init__(other_key)
+        self.other_key = other_key
+
+
 def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                   results: list[ItemResult], journal_fd: int,
                   pending: list[_PendingLink],
                   rename_children: dict[str, str] | None = None,
-                  project_renames: dict[str, str] | None = None) -> None:
+                  project_renames: dict[str, str] | None = None,
+                  dir_owners: dict[tuple[int, int], str] | None = None) -> None:
     """遞迴安裝一層。symlink 收集起來延到第二階段（票 04：過 provenance 授權才建）。
 
     `rename_children`＝本層目錄項的目的地改名表（票 06：只有 `projects/` 那一層的
@@ -719,12 +729,19 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                     except FileExistsError:
                         pass
                     child_dst = _open_dir_pinned(dst_name, dir_fd=dst_fd)
+                    st = os.fstat(child_dst)
+                    ident = (st.st_dev, st.st_ino)
+                    if dir_owners is not None:
+                        # 票 09-3：開到的既有子目錄若是別的落點（root 或其已裝子樹）
+                        # 被 rename 進來的，立即停寫——繼續裝就是跨帳號混裝。
+                        owner = dir_owners.setdefault(ident, account)
+                        if owner != account:
+                            os.close(child_dst)
+                            raise _ForeignSpotError(owner)
                     if created:
                         # 身分對著剛開出的 fd 取（票 09-2）：journal 記 (dev, ino, kind)，
                         # 第二階段授權要重驗「現在還是不是這個東西」。
-                        st = os.fstat(child_dst)
-                        _record(journal_fd, account, rel,
-                                (st.st_dev, st.st_ino), "dir")
+                        _record(journal_fd, account, rel, ident, "dir")
                     try:
                         # 只有帳號根層的 projects/ 那一步把改名表傳成下一層的
                         # rename_children；再往下一律原名（票 06）。
@@ -733,7 +750,8 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                                          entry.name == _PROJECTS_DIR else None)
                         _install_tree(child_src, child_dst, account, rel, results,
                                       journal_fd, pending,
-                                      rename_children=child_renames)
+                                      rename_children=child_renames,
+                                      dir_owners=dir_owners)
                         # durability：link／unlink 的目錄項在斷電後不保證持久，光 fsync
                         # 檔案不夠。粒度取「每個目錄一次」而非每檔兩次——一次還原可能
                         # 上千個小檔，後者成本過高（spec §4.2.5）。
@@ -1139,8 +1157,33 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                         prepared.append(_PreparedSpot(spot_key, target, item_fd, dst_fd))
                 finally:
                     os.close(extra_fd)
-            # 寫入階段：fd 版重疊重驗通過的落點才逐一裝樹。
-            for spot in _drop_overlapping_spots(prepared, results):
+            # 寫入階段：fd 版重疊重驗通過的落點才逐一裝樹。dir_owners 以各落點 root
+            # 身分起底、沿路登記每個開出的子目錄——寫入中被 rename 進來的別家目錄
+            # 一開就認得出（票 09-3）。
+            kept = _drop_overlapping_spots(prepared, results)
+            dir_owners: dict[tuple[int, int], str] = {}
+            # 跨輪變體（中斷續作）：前輪 journal 記過的目錄身分也起底——前輪裝出的
+            # 別家目錄被搬進本落點樹裡，本輪一開就認得出（票 09-3）。讀不出時降級為
+            # 只認本輪（fail-open 僅限這層加值防護，主防線是 root 起底）。
+            with contextlib.suppress(OSError):
+                size = os.fstat(journal_fd).st_size
+                prior = os.pread(journal_fd, size, 0) if size else b""
+                for node, (dev, ino, kind) in _parse_journal_records(
+                        prior.decode("utf-8")).items():
+                    if kind == "dir":
+                        dir_owners[(dev, ino)] = node.split("/", 1)[0]
+            for spot in kept:
+                st = os.fstat(spot.dst_fd)
+                dir_owners[(st.st_dev, st.st_ino)] = spot.key
+            aborted: set[str] = set()
+            for spot in kept:
+                if spot.key in aborted:
+                    # 對方先觸發 reparenting——本落點也涉入，停寫。
+                    results.append(ItemResult(spot.key, "", "failed",
+                                              "overlapping_config_dirs"))
+                    os.close(spot.dst_fd)
+                    os.close(spot.src_fd)
+                    continue
                 try:
                     # 專案改名表只作用於帳號落點——extra 是帳號外資產，沒有 projects/
                     # 語意（extra key 帶 "extra:" 前綴，帳號 key 的正則不含冒號）。
@@ -1148,12 +1191,22 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                                   journal_fd, pending,
                                   project_renames=(plan.project_renames
                                                    if not spot.key.startswith("extra:")
-                                                   else None))
+                                                   else None),
+                                  dir_owners=dir_owners)
                     # 根層目錄項的斷電持久性掛在這裡（票 03 R1）；目錄 fsync 不受支援時
                     # 降級不整批失敗。
                     with contextlib.suppress(OSError):
                         os.fsync(spot.dst_fd)
                     account_dst_fds[spot.key] = spot.dst_fd   # 轉交第二階段，此處不關
+                except _ForeignSpotError as exc:
+                    logger.error("移機寫入中偵測到落點 reparenting：key=%s 對方=%s",
+                                 spot.key, exc.other_key)
+                    results.append(ItemResult(spot.key, "", "failed",
+                                              "overlapping_config_dirs"))
+                    results.append(ItemResult(exc.other_key, "", "failed",
+                                              "overlapping_config_dirs"))
+                    aborted.add(exc.other_key)
+                    os.close(spot.dst_fd)
                 except OSError as exc:
                     logger.error("移機落點安裝失敗：key=%s target=%s",
                                  spot.key, spot.target, exc_info=True)
