@@ -527,10 +527,32 @@ def transaction_id(plan: InstallPlan) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
+def _journal_dir() -> Path:
+    return Path.home() / ".fledge"
+
+
 def journal_path(transaction_id: str) -> Path:
     """放 ~/.fledge/：不放 staging（唯讀不變式），不放現役目錄（使用者的，不該被
     我們的簿記污染）。它同時是「這次移機還沒收尾」的訊號（ADR-0006）。"""
-    return Path.home() / ".fledge" / f"{_JOURNAL_PREFIX}{transaction_id}.jsonl"
+    return _journal_dir() / f"{_JOURNAL_PREFIX}{transaction_id}.jsonl"
+
+
+def _has_unfinished_journal() -> bool:
+    """還有沒有**任何**一輪移機沒收尾（只用來決定要不要掃暫存殘骸）。
+
+    **不能只看本次 transaction 的 journal**（Codex 票 08 R2）：`transaction_id` 綁
+    `source_identity`／落點／`project_renames`，使用者中斷之後重新展開 bundle、改了
+    落點或 mapping，再對同一個目的地重跑時，新 transaction 的 journal 還不存在——
+    前一輪留在那個目的地的暫存殘骸就永遠掃不到，而新 transaction 完整成功又會清掉
+    自己的 journal，殘骸永久留在使用者的現役目錄裡。
+
+    粒度**刻意比 provenance 寬**：這只決定要不要多花一次目錄掃描，誤判方向是多掃
+    （無害）。provenance 授權仍嚴格綁本次 transaction，兩者不共用判準——不拿不相符的
+    journal 去授權任何寫入。"""
+    try:
+        return any(_journal_dir().glob(f"{_JOURNAL_PREFIX}*.jsonl"))
+    except OSError:
+        return False
 
 
 def installed_nodes(transaction_id: str) -> set[str]:
@@ -1138,11 +1160,13 @@ def install(plan: InstallPlan) -> list[ItemResult]:
     # journal 開在 source 驗證之後、任何寫入之前：它是 symlink 授權與中斷續作的基礎，
     # 開不起來就不該動使用者的目錄——fail closed 回穩定判別碼，不讓 OSError 裸穿。
     journal = journal_path(transaction_id(plan))
-    # 只有續作才掃暫存殘骸（Codex 票 08 R1 F3）：完整成功會清掉 journal，所以「journal
-    # 還在」正是上一輪沒收尾的訊號，也是唯一可能留下殘骸的情況。首次安裝掃了必然一無所獲，
-    # 而那個掃描是**按目的地既有目錄項計費**——落點已有上千個使用者檔案時每層都要全掃。
+    # 只有續作才掃暫存殘骸（Codex 票 08 R1 F3）：完整成功會清掉 journal，所以「還有
+    # journal 在」正是有一輪沒收尾的訊號，也是唯一可能留下殘骸的情況。首次安裝掃了必然
+    # 一無所獲，而那個掃描是**按目的地既有目錄項計費**——落點已有上千個使用者檔案時每層
+    # 都要全掃。判準是「有沒有任何一輪沒收尾」而不是「本次 transaction 的 journal 在不
+    # 在」（Codex 票 08 R2：後者會讓「中斷後改 mapping／重展 bundle 再跑」永久漏清）。
     # 這不是安全判斷（誤判只會多掃一次或少清一次殘骸），所以用 pathname 探測就夠。
-    resuming = journal.exists()
+    resuming = _has_unfinished_journal()
     try:
         journal_fd = _open_journal_fd(journal)
     except OSError as exc:

@@ -15,6 +15,7 @@ barrier 刻意**不放進 production code**（plan 原本寫的是讀環境變�
 """
 import os
 import select
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -236,3 +237,30 @@ def test_reap_is_skipped_when_there_was_no_prior_round(tmp_path: Path, monkeypat
 
     inst.install(inst.plan(str(src), _accounts(tgt)))
     assert calls == [], "首次安裝不該掃描目的地"
+
+
+def test_reap_runs_when_transaction_changed_after_interrupt(tmp_path: Path):
+    """中斷後重展 bundle（或改 mapping／落點）→ transaction 變了，同一個落點的殘骸
+    仍要回收（Codex 票 08 R2）。
+
+    gating 若綁**本次** `transaction_id` 的 journal，這種情況下新 journal 還不存在、
+    舊殘骸永遠掃不到；而新 transaction 完整成功後又會清掉自己的 journal，殘骸就永久
+    留在使用者的現役目錄裡。粒度必須是「有沒有任何一輪沒收尾」。"""
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+
+    proc = _spawn_until_barrier(tmp_path, src, tgt, "after_temp")
+    proc.kill()
+    proc.wait(timeout=10)
+    assert _temp_leftovers(tgt), "前一輪應該留下了暫存檔"
+    tid_before = inst.transaction_id(inst.plan(str(src), _accounts(tgt)))
+
+    # 使用者重新展開 bundle：內容一樣但實體目錄換了 → source_identity 變 → 新 transaction
+    shutil.rmtree(src)
+    src2 = _staging(tmp_path)
+    plan2 = inst.plan(str(src2), _accounts(tgt))
+    assert inst.transaction_id(plan2) != tid_before, "前提沒成立：transaction 沒有變"
+
+    inst.install(plan2)
+    assert _temp_leftovers(tgt) == [], "換了 transaction 也要回收前一輪的殘骸"
