@@ -1442,3 +1442,59 @@ def test_intermediate_created_after_plan_is_tolerated(tmp_path: Path):
     results = inst.install(p)
     assert {r.outcome for r in results} == {"installed"}
     assert (base / "nest" / "live" / "CLAUDE.md").read_text(encoding="utf-8") == "RULES"
+
+
+def test_symlink_refused_when_node_replaced_after_first_phase(
+        tmp_path: Path, monkeypatch):
+    """票 09-2：node 在第一階段記錄後、第二階段建連結前被換成**別的既有目錄**（同名
+    同型別、不同 inode）→ 身分不符不授權、不建——現行只驗集合 membership（名字沒變）
+    會誤放行，把連結指到不是本次發布的內容。"""
+    src = _staging_with_link(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    p = inst.plan(str(src), _accounts(tgt))
+    real_read_manifest = inst.read_manifest
+
+    def _swap_then_read(source_root):
+        cmds = tgt / "commands"
+        if cmds.is_dir() and not cmds.is_symlink():
+            import shutil
+            shutil.rmtree(cmds)
+            cmds.mkdir()                    # 同名、新 inode
+        return real_read_manifest(source_root)
+
+    monkeypatch.setattr(inst, "read_manifest", _swap_then_read)
+    results = inst.install(p)
+    assert not os.path.lexists(tgt / "linked")
+    # 判 failed 不判 excluded：這是篡改形狀，journal 必須保留（excluded 會放行清除，
+    # 重跑時 node 全 EEXIST 不再記錄、連結永久補不回——票 04 F3 同型）。
+    assert any(r.rel_path == "linked" and r.outcome == "failed"
+               and r.error == "node_identity_mismatch" for r in results)
+    assert inst.journal_path(inst.transaction_id(p)).exists()
+
+
+def test_symlink_refused_when_node_becomes_symlink_after_first_phase(
+        tmp_path: Path, monkeypatch):
+    """同上、symlink 變體：node 被換成指向外部的 symlink → O_NOFOLLOW 拒開、不授權
+    不建，外部零觸碰。"""
+    src = _staging_with_link(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    p = inst.plan(str(src), _accounts(tgt))
+    real_read_manifest = inst.read_manifest
+
+    def _swap_then_read(source_root):
+        cmds = tgt / "commands"
+        if cmds.is_dir() and not cmds.is_symlink():
+            import shutil
+            shutil.rmtree(cmds)
+            cmds.symlink_to(outside)
+        return real_read_manifest(source_root)
+
+    monkeypatch.setattr(inst, "read_manifest", _swap_then_read)
+    results = inst.install(p)
+    assert not os.path.lexists(tgt / "linked")
+    assert any(r.rel_path == "linked" and r.outcome == "failed"
+               and r.error == "node_identity_mismatch" for r in results)
+    assert list(outside.iterdir()) == []
+    assert inst.journal_path(inst.transaction_id(p)).exists()

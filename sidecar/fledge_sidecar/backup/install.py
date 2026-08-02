@@ -548,9 +548,31 @@ def installed_nodes(transaction_id: str) -> set[str]:
     return _parse_journal_nodes(text)
 
 
+def _parse_journal_records(text: str) -> dict[str, tuple[int, int, str]]:
+    """JSONL → {node: (dev, ino, kind)}。壞行與**缺身分欄位**的行逐行跳過——第二階段
+    的授權以此為準，缺身分＝無從驗證＝不授權（票 09-2 fail-safe）。"""
+    records: dict[str, tuple[int, int, str]] = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        node, dev, ino, kind = (entry.get("node"), entry.get("dev"),
+                                entry.get("ino"), entry.get("kind"))
+        if isinstance(node, str) and isinstance(dev, int) \
+                and isinstance(ino, int) and kind in ("dir", "file"):
+            records[node] = (dev, ino, kind)
+    return records
+
+
 def _parse_journal_nodes(text: str) -> set[str]:
-    """JSONL → node 集合。壞行逐行跳過（損壞容錯）。install 第二階段（pread 已 pin 的
-    journal fd）與公開 installed_nodes（pathname，給還原卡偵測）共用同一份解析。"""
+    """JSONL → node 集合。壞行逐行跳過（損壞容錯）。公開 `installed_nodes`（pathname，
+    給還原卡偵測）用——**維持寬鬆**：缺身分欄位仍算「發布過」，那只是「上次未收尾」
+    的偵測訊號；第二階段授權另走 `_parse_journal_records` 的嚴格版（票 09-2）。"""
     nodes: set[str] = set()
     for line in text.splitlines():
         if not line.strip():
@@ -594,14 +616,17 @@ def _open_journal_fd(journal: Path) -> int:
     return fd
 
 
-def _record(fd: int, account: str, rel_path: str) -> None:
+def _record(fd: int, account: str, rel_path: str,
+            identity: tuple[int, int], kind: str) -> None:
     """append 一筆並 fsync。
 
     **順序是「發布成功 → 記錄」，不是 intent-first 的 WAL**：先記「打算裝 X」但實際被
     EEXIST 跳過的話，重跑會把使用者原本就有的 X 誤認成我們裝的——那正是這份簿記要擋的
     東西。代價是 link 與 fsync 之間有極小窗口，崩在那裡的 node 重跑時不被認作本次發布、
     依賴它的 symlink 補不回來。**刻意選的保守方向**：寧可少建一條連結，也不冒認。"""
-    line = json.dumps({"node": f"{account}/{rel_path}"}, ensure_ascii=False) + "\n"
+    line = json.dumps({"node": f"{account}/{rel_path}",
+                       "dev": identity[0], "ino": identity[1], "kind": kind},
+                      ensure_ascii=False) + "\n"
     os.write(fd, line.encode("utf-8"))
     os.fsync(fd)
 
@@ -687,12 +712,19 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                     # **只有本次新建的目錄才記進 journal**：symlink 常指向目錄（共通設置
                     # 的 commands／plugins），授權判準要認得出「這個目錄是我們裝的」；
                     # 已存在的目錄是使用者的，記了就等於讓 symlink 能指向現役內容（R4）。
+                    created = False
                     try:
                         os.mkdir(dst_name, 0o700, dir_fd=dst_fd)
-                        _record(journal_fd, account, rel)
+                        created = True
                     except FileExistsError:
                         pass
                     child_dst = _open_dir_pinned(dst_name, dir_fd=dst_fd)
+                    if created:
+                        # 身分對著剛開出的 fd 取（票 09-2）：journal 記 (dev, ino, kind)，
+                        # 第二階段授權要重驗「現在還是不是這個東西」。
+                        st = os.fstat(child_dst)
+                        _record(journal_fd, account, rel,
+                                (st.st_dev, st.st_ino), "dir")
                     try:
                         # 只有帳號根層的 projects/ 那一步把改名表傳成下一層的
                         # rename_children；再往下一律原名（票 06）。
@@ -718,9 +750,10 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                 results.append(ItemResult(account, rel, "excluded", "not_a_regular_file"))
                 continue
             data = _read_file_pinned(entry.name, src_fd)
-            safe_fs.write_bytes_atomic(data, dst_name, dir_fd=dst_fd,
-                                       mode=entry.stat(follow_symlinks=False).st_mode & 0o777)
-            _record(journal_fd, account, rel)   # 發布成功才記（不是 intent-first）
+            ident = safe_fs.write_bytes_atomic(
+                data, dst_name, dir_fd=dst_fd,
+                mode=entry.stat(follow_symlinks=False).st_mode & 0o777)
+            _record(journal_fd, account, rel, ident, "file")   # 發布成功才記
             results.append(ItemResult(account, rel, "installed"))
         except FileExistsError:
             results.append(ItemResult(account, rel, "skipped"))
@@ -752,8 +785,11 @@ def _rewrite_home_prefix(path: str, old_home: str, new_home: str) -> str | None:
 
 
 def _authorized_link_target(literal: str, plan: InstallPlan, manifest: dict,
-                            installed: set[str]) -> str | None:
-    """symlink 的字面目標 → 改寫後的目標路徑；不獲授權回 None。
+                            installed: dict[str, tuple[int, int, str]]
+                            ) -> tuple[str, str, str] | None:
+    """symlink 的字面目標 → (落點 key, node rel, 改寫後目標路徑)；不獲授權回 None。
+    呼叫端（_publish_links）還要以 journal 記錄的身分對 node 做 fd 級重驗（票 09-2）
+    ——「曾發布」是 membership，不等於「現在還是那個東西」。
 
     授權判準是「對應本次 transaction 確實發布的 node」，**不是 root containment**：
     後者會放行指向 root 內任意既有檔案、root 本身乃至循環的連結，等於把「連回已還原
@@ -776,8 +812,41 @@ def _authorized_link_target(literal: str, plan: InstallPlan, manifest: dict,
         if not key.startswith("extra:"):
             rel = _dest_rel(rel, plan.project_renames)
         if f"{key}/{rel}" in installed:
-            return os.path.join(target, rel)
+            return key, rel, os.path.join(target, rel)
     return None
+
+
+def _node_identity_matches(root_fd: int, rel: str,
+                           expected: tuple[int, int, str]) -> bool:
+    """票 09-2：從已驗身分的落點 root fd 逐層 `O_NOFOLLOW` 開到 node，fstat 比對
+    journal 記錄的 (dev, ino, kind)。開不到／被換成 symlink／型別或 inode 不符一律
+    False——node 在第一階段記錄後、第二階段建連結前被換掉就不授權；中斷續作時前輪
+    記的 inode 已不在，同樣不當本次 provenance。"""
+    parts = rel.split(os.sep)
+    opened: list[int] = []
+    fd = None
+    try:
+        cur = root_fd
+        for part in parts[:-1]:
+            cur = _open_dir_pinned(part, dir_fd=cur)
+            opened.append(cur)
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     dir_fd=cur)
+        st = os.fstat(fd)
+        if stat_module.S_ISDIR(st.st_mode):
+            kind = "dir"
+        elif stat_module.S_ISREG(st.st_mode):
+            kind = "file"
+        else:
+            return False
+        return (st.st_dev, st.st_ino, kind) == expected
+    except OSError:
+        return False
+    finally:
+        if fd is not None:
+            os.close(fd)
+        for f in opened:
+            os.close(f)
 
 
 def _symlink_at(root_fd: int, rel_path: str, target: str) -> None:
@@ -803,7 +872,8 @@ def _symlink_at(root_fd: int, rel_path: str, target: str) -> None:
 
 def _publish_links(pending: list[_PendingLink], plan: InstallPlan,
                    account_dst_fds: dict[str, int], manifest: dict,
-                   installed: set[str], results: list[ItemResult]) -> None:
+                   installed: dict[str, tuple[int, int, str]],
+                   results: list[ItemResult]) -> None:
     """第二階段：第一階段全部發布完、journal 記妥之後才建 symlink。"""
     for link in pending:
         root_fd = account_dst_fds.get(link.account)
@@ -812,10 +882,22 @@ def _publish_links(pending: list[_PendingLink], plan: InstallPlan,
             results.append(ItemResult(link.account, link.rel_path, "failed",
                                       "account_not_installed"))
             continue
-        target = _authorized_link_target(link.literal_target, plan, manifest, installed)
-        if target is None:
+        auth = _authorized_link_target(link.literal_target, plan, manifest, installed)
+        if auth is None:
             results.append(ItemResult(link.account, link.rel_path, "excluded",
                                       "symlink_target_unauthorized"))
+            continue
+        spot_key, node_rel, target = auth
+        node_root_fd = account_dst_fds.get(spot_key)
+        # node 身分重驗（票 09-2）：membership 之外，node 當下必須仍是 journal 記錄的
+        # 那個 inode／型別。**驗證失敗判 failed 不判 excluded**——excluded 不阻止
+        # journal 清除，而這是篡改／降級的形狀：清了 journal，重跑時 node 全 EEXIST
+        # 不再記錄，連結永久補不回（票 04 F3 的同型陷阱）。excluded 只留給設計性拒絕
+        # （字面目標不合法／範圍外／非本次發布）。
+        if node_root_fd is None or not _node_identity_matches(
+                node_root_fd, node_rel, installed[f"{spot_key}/{node_rel}"]):
+            results.append(ItemResult(link.account, link.rel_path, "failed",
+                                      "node_identity_mismatch"))
             continue
         try:
             _symlink_at(root_fd, link.rel_path, target)
@@ -1091,7 +1173,7 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                     # 影響不到已開的 fd（Codex 票 04 R3）。
                     size = os.fstat(journal_fd).st_size
                     raw = os.pread(journal_fd, size, 0) if size else b""
-                    installed = _parse_journal_nodes(raw.decode("utf-8"))
+                    installed = _parse_journal_records(raw.decode("utf-8"))
                 except (OSError, ValueError):
                     # provenance 讀不出（journal 可寫不可讀、manifest 階段間被動）→ 降級：
                     # pending 全判 failed（不是 excluded），清除 gate 因此保留 journal。

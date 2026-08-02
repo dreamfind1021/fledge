@@ -57,7 +57,8 @@ def copy_file_no_clobber(source_path: str, target_path: str, *, dir_fd: int | No
 _TEMP_PREFIX = ".fledge-install-"
 
 
-def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int, mode: int = 0o600) -> None:
+def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int,
+                       mode: int = 0o600) -> tuple[int, int]:
     """把 data 寫成 dir_fd 底下的 name：內容完整落盤之後，最終檔名才會出現。
 
     `O_EXCL` 只保證「不覆蓋」，不保證「原子」：先以最終名建立再逐段寫入的話，SIGKILL、
@@ -92,6 +93,9 @@ def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int, mode: int = 0o600
                     raise OSError(errno.EIO, "write made no progress")
                 written += n
             os.fsync(fd)      # 先確保內容落盤，再讓它以最終名可見
+            # 發布物身分（票 09-2 journal provenance 用）：對自己的 fd 取——link 之後
+            # 用名字 lstat 會有「已被換檔」的窗口
+            st = os.fstat(fd)
         finally:
             os.close(fd)
     except BaseException:
@@ -110,6 +114,7 @@ def write_bytes_atomic(data: bytes, name: str, *, dir_fd: int, mode: int = 0o600
         raise
     with contextlib.suppress(OSError):
         os.unlink(temp_name, dir_fd=dir_fd)
+    return (st.st_dev, st.st_ino)
 
 
 # errno → 穩定判別碼。`str(OSError)` 夾帶 errno 文字與絕對路徑，是診斷細節而非前端
