@@ -1624,3 +1624,56 @@ def test_prior_journal_pread_oserror_fails_closed(tmp_path: Path, monkeypatch):
     assert all(r.outcome == "failed" and r.error == "provenance_unavailable"
                for r in results)
     assert list(tgt.iterdir()) == []
+
+
+def test_rollback_spares_user_object_swapped_in_after_link(
+        tmp_path: Path, monkeypatch):
+    """票 09 R2 F1：建後重驗失敗、回滾 unlink 前 link 被換成使用者的同名一般檔——
+    回滾必須先驗「仍是本輪建的 symlink 且字面值一致」才刪，換入的檔案不得誤刪。"""
+    src = _staging_with_link(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    p = inst.plan(str(src), _accounts(tgt))
+    real_match = inst._node_identity_matches
+    state = {"n": 0}
+
+    def _hook(root_fd, rel, expected):
+        ok = real_match(root_fd, rel, expected)
+        state["n"] += 1
+        if state["n"] == 1 and ok:            # 建前驗證後換 node → 建後重驗必失敗
+            import shutil
+            shutil.rmtree(tgt / "commands")
+            (tgt / "commands").mkdir()
+        elif state["n"] == 2:                 # 建後重驗回傳後、unlink 前換 link
+            (tgt / "linked").unlink()
+            (tgt / "linked").write_text("USER", encoding="utf-8")
+        return ok
+
+    monkeypatch.setattr(inst, "_node_identity_matches", _hook)
+    results = inst.install(p)
+    assert (tgt / "linked").is_file()
+    assert (tgt / "linked").read_text(encoding="utf-8") == "USER"   # 沒被誤刪
+    assert any(r.rel_path == "linked" and r.outcome == "failed"
+               and r.error == "node_identity_mismatch" for r in results)
+
+
+def test_corrupt_prior_journal_lines_fail_closed(tmp_path: Path, monkeypatch):
+    """票 09 R2 F2：journal 非空且內容損壞（**合法 UTF-8**）——malformed JSON／缺身分
+    欄位／好壞行混雜，跨輪起底一律全體 fail-closed provenance_unavailable、零寫入；
+    寬鬆容錯只留給公開 installed_nodes。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src = _staging(tmp_path)
+    good = json.dumps({"node": "work/x", "dev": 1, "ino": 2, "kind": "dir"})
+    cases = ["NOT JSON\n",
+             json.dumps({"node": "work/x"}) + "\n",
+             good + "\nNOT JSON\n"]
+    for i, payload in enumerate(cases):
+        tgt = tmp_path / f"live{i}"
+        tgt.mkdir()
+        p = inst.plan(str(src), _accounts(tgt))
+        jp = inst.journal_path(inst.transaction_id(p))
+        jp.parent.mkdir(parents=True, exist_ok=True)
+        jp.write_text(payload, encoding="utf-8")
+        results = inst.install(p)
+        assert all(r.outcome == "failed" and r.error == "provenance_unavailable"
+                   for r in results), payload
+        assert list(tgt.iterdir()) == [], payload

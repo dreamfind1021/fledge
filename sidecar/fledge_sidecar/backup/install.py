@@ -548,6 +548,29 @@ def installed_nodes(transaction_id: str) -> set[str]:
     return _parse_journal_nodes(text)
 
 
+def _parse_journal_records_strict(text: str) -> dict[str, tuple[int, int, str]]:
+    """嚴格版：任何非空白行解析不出完整記錄（malformed JSON／非物件／缺身分欄位）
+    即 ValueError——跨輪 dir_owners 起底用，「讀得到但內容損壞」與「讀不到」同等
+    fail-closed（Codex 票 09 R2 F2）；寬鬆容錯只留給公開 installed_nodes。"""
+    records: dict[str, tuple[int, int, str]] = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError as exc:
+            raise ValueError("journal_corrupt") from exc
+        if not isinstance(entry, dict):
+            raise ValueError("journal_corrupt")
+        node, dev, ino, kind = (entry.get("node"), entry.get("dev"),
+                                entry.get("ino"), entry.get("kind"))
+        if not (isinstance(node, str) and isinstance(dev, int)
+                and isinstance(ino, int) and kind in ("dir", "file")):
+            raise ValueError("journal_corrupt")
+        records[node] = (dev, ino, kind)
+    return records
+
+
 def _parse_journal_records(text: str) -> dict[str, tuple[int, int, str]]:
     """JSONL → {node: (dev, ino, kind)}。壞行與**缺身分欄位**的行逐行跳過——第二階段
     的授權以此為準，缺身分＝無從驗證＝不授權（票 09-2 fail-safe）。"""
@@ -867,43 +890,6 @@ def _node_identity_matches(root_fd: int, rel: str,
             os.close(f)
 
 
-def _unlink_at(root_fd: int, rel_path: str) -> None:
-    """fd-relative 刪除（票 09 R1 F1 的回滾用）：逐層 O_NOFOLLOW 開父目錄再 unlink，
-    只可能刪到剛由同一 root fd 建出的那條連結。"""
-    parts = rel_path.split(os.sep)
-    opened: list[int] = []
-    parent_fd = root_fd
-    try:
-        for part in parts[:-1]:
-            parent_fd = _open_dir_pinned(part, dir_fd=parent_fd)
-            opened.append(parent_fd)
-        os.unlink(parts[-1], dir_fd=parent_fd)
-    finally:
-        for fd in opened:
-            os.close(fd)
-
-
-def _symlink_at(root_fd: int, rel_path: str, target: str) -> None:
-    """從 root_fd 逐層 `O_NOFOLLOW` 開到父目錄，再 `os.symlink(dir_fd=父)`。
-
-    **全程不重解析完整 pathname**（Codex 票 04 R1 F2）：第二階段若用
-    `plan.targets[account]/rel_path` 這種絕對路徑，target root 或中間目錄在階段間被
-    rename＋換成 symlink，`os.symlink` 會跟著中間元件寫到 target 外。root_fd 是第一階段
-    驗過身分的 fd（釘 inode，rename 影響不到），逐層 O_NOFOLLOW 讓任一層被換成 symlink
-    直接 ENOTDIR 失敗。"""
-    parts = rel_path.split(os.sep)
-    opened: list[int] = []
-    parent_fd = root_fd
-    try:
-        for part in parts[:-1]:
-            parent_fd = _open_dir_pinned(part, dir_fd=parent_fd)
-            opened.append(parent_fd)
-        os.symlink(target, parts[-1], dir_fd=parent_fd)
-    finally:
-        for fd in opened:
-            os.close(fd)
-
-
 def _publish_links(pending: list[_PendingLink], plan: InstallPlan,
                    account_dst_fds: dict[str, int], manifest: dict,
                    installed: dict[str, tuple[int, int, str]],
@@ -933,28 +919,45 @@ def _publish_links(pending: list[_PendingLink], plan: InstallPlan,
             results.append(ItemResult(link.account, link.rel_path, "failed",
                                       "node_identity_mismatch"))
             continue
+        parts = link.rel_path.split(os.sep)
+        opened: list[int] = []
+        parent_fd = root_fd
         try:
-            _symlink_at(root_fd, link.rel_path, target)
-        except FileExistsError:
-            results.append(ItemResult(link.account, link.rel_path, "skipped"))
-            continue
-        except OSError as exc:
-            logger.error("移機建連結失敗：%s", link.rel_path, exc_info=True)
-            results.append(ItemResult(link.account, link.rel_path, "failed",
-                                      safe_fs.error_code(exc)))
-            continue
-        # 建後重驗（Codex 票 09 R1 F1）：驗證→建立之間仍是 check-then-act，建完立刻
-        # 以同一 root fd 重驗 node；不符＝窗口內被換 → 拆掉剛建的連結、記 failed。
-        # 連結「短暫存在過」的窗口如實記錄於票 09——pathname symlink 讀時才解析，
-        # 模型上無法提供更強保證。
-        if not _node_identity_matches(node_root_fd, node_rel,
-                                      installed[f"{spot_key}/{node_rel}"]):
-            with contextlib.suppress(OSError):
-                _unlink_at(root_fd, link.rel_path)
-            results.append(ItemResult(link.account, link.rel_path, "failed",
-                                      "node_identity_mismatch"))
-            continue
-        results.append(ItemResult(link.account, link.rel_path, "installed"))
+            try:
+                # 逐層 O_NOFOLLOW 開到父目錄、不重解析 pathname（票 04 R1 F2）；建立、
+                # 建後重驗與回滾**共用同一個 parent fd**——重新逐層開的父目錄可能在
+                # 階段間被換（Codex 票 09 R2 F1）。
+                for part in parts[:-1]:
+                    parent_fd = _open_dir_pinned(part, dir_fd=parent_fd)
+                    opened.append(parent_fd)
+                os.symlink(target, parts[-1], dir_fd=parent_fd)
+            except FileExistsError:
+                results.append(ItemResult(link.account, link.rel_path, "skipped"))
+                continue
+            except OSError as exc:
+                logger.error("移機建連結失敗：%s", link.rel_path, exc_info=True)
+                results.append(ItemResult(link.account, link.rel_path, "failed",
+                                          safe_fs.error_code(exc)))
+                continue
+            # 建後重驗（票 09 R1 F1）：驗證→建立之間是 check-then-act，建完立刻重驗
+            # node；不符＝窗口內被換 → 回滾。「連結短暫存在過」窗口如實記錄於票 09。
+            if not _node_identity_matches(node_root_fd, node_rel,
+                                          installed[f"{spot_key}/{node_rel}"]):
+                # 回滾前驗身分（票 09 R2 F1）：entry 仍是**本輪建的 symlink**（lstat
+                # 型別＋readlink 字面值一致）才刪；被換入的使用者物件不動、只記
+                # failed。lstat→unlink 之間的微窗口如實記錄（無原子交換原語可用）。
+                with contextlib.suppress(OSError):
+                    st = os.lstat(parts[-1], dir_fd=parent_fd)
+                    if stat_module.S_ISLNK(st.st_mode) and os.readlink(
+                            parts[-1], dir_fd=parent_fd) == target:
+                        os.unlink(parts[-1], dir_fd=parent_fd)
+                results.append(ItemResult(link.account, link.rel_path, "failed",
+                                          "node_identity_mismatch"))
+                continue
+            results.append(ItemResult(link.account, link.rel_path, "installed"))
+        finally:
+            for fd in opened:
+                os.close(fd)
 
 
 def _open_verified_source(name: str, dir_fd: int, expected: tuple[int, int] | None,
@@ -1199,11 +1202,11 @@ def install(plan: InstallPlan) -> list[ItemResult]:
             try:
                 size = os.fstat(journal_fd).st_size
                 prior = os.pread(journal_fd, size, 0) if size else b""
-                for node, (dev, ino, kind) in _parse_journal_records(
+                for node, (dev, ino, kind) in _parse_journal_records_strict(
                         prior.decode("utf-8")).items():
                     if kind == "dir":
                         dir_owners[(dev, ino)] = node.split("/", 1)[0]
-            except (OSError, UnicodeError):
+            except (OSError, UnicodeError, ValueError):
                 logger.error("移機前輪 journal 讀取失敗，全體落點 fail-closed",
                              exc_info=True)
                 for spot in kept:
