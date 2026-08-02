@@ -693,7 +693,12 @@ def _drop_overlapping_spots(prepared: list[_PreparedSpot],
     才收斂」的落點——APFS 大小寫別名（尚不存在時字串不同、建立後同一實體）與中間
     目錄被換成 symlink 都會讓兩個落點變同一目錄或互為祖先，內容混裝、no-clobber
     靜默 skip。以已開 fd 的 identity 祖先鏈 pairwise 比對，涉入的落點全 failed、
-    一個位元組都不寫。"""
+    一個位元組都不寫。
+
+    **這是縮小窗口不是關閉**（票 03／10 的措辭紀律）：比對只反映檢查當下的親緣，
+    返回後、寫入中的 rename reparenting（把另一落點搬進本落點的樹）仍是
+    check-then-act——該窗口與祖先釘鎖、node 身分重驗同族，收攏在票 09（Codex
+    票 07 R3，威脅前提為已擁有兩側寫入權的本機行為者）。"""
     chains: dict[str, list[tuple[int, int]] | None] = {}
     for spot in prepared:
         try:
