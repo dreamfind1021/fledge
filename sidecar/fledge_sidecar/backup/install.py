@@ -265,6 +265,13 @@ def _record(fd: int, account: str, rel_path: str) -> None:
     os.fsync(fd)
 
 
+@dataclass
+class _PendingLink:
+    account: str
+    rel_path: str
+    literal_target: str
+
+
 def _open_dir_pinned(name: str, *, dir_fd: int | None = None) -> int:
     """從父 fd 開出子目錄，不跟隨 symlink。開失敗一律讓 OSError 往上拋。
 
@@ -311,27 +318,35 @@ def _read_file_pinned(name: str, dir_fd: int) -> bytes:
 
 
 def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
-                  results: list[ItemResult], journal_fd: int) -> None:
-    """遞迴安裝一層。symlink 在本階段一律略過（票 04 的第二階段處理）。"""
+                  results: list[ItemResult], journal_fd: int,
+                  pending: list[_PendingLink]) -> None:
+    """遞迴安裝一層。symlink 收集起來延到第二階段（票 04：過 provenance 授權才建）。"""
     for entry in os.scandir(src_fd):
         rel = os.path.join(rel_prefix, entry.name) if rel_prefix else entry.name
         if entry.name in EXCLUDED_NAMES and not rel_prefix:
             results.append(ItemResult(account, rel, "excluded", "not_migrated_by_design"))
             continue
         if entry.is_symlink():
-            continue                        # 第二階段處理，見票 04
+            # 延到第一階段全部發布完才建，且判準是 provenance（見 _publish_links）。
+            pending.append(_PendingLink(account, rel, os.readlink(entry.name, dir_fd=src_fd)))
+            continue
         try:
             if entry.is_dir(follow_symlinks=False):
                 child_src = _open_dir_pinned(entry.name, dir_fd=src_fd)
                 try:
-                    # 目標目錄不存在才建；已存在不算衝突（目錄本身沒有內容會被覆蓋）
+                    # 目標目錄不存在才建；已存在不算衝突（目錄本身沒有內容會被覆蓋）。
+                    # **只有本次新建的目錄才記進 journal**：symlink 常指向目錄（共通設置
+                    # 的 commands／plugins），授權判準要認得出「這個目錄是我們裝的」；
+                    # 已存在的目錄是使用者的，記了就等於讓 symlink 能指向現役內容（R4）。
                     try:
                         os.mkdir(entry.name, 0o700, dir_fd=dst_fd)
+                        _record(journal_fd, account, rel)
                     except FileExistsError:
                         pass
                     child_dst = _open_dir_pinned(entry.name, dir_fd=dst_fd)
                     try:
-                        _install_tree(child_src, child_dst, account, rel, results, journal_fd)
+                        _install_tree(child_src, child_dst, account, rel, results,
+                                      journal_fd, pending)
                         # durability：link／unlink 的目錄項在斷電後不保證持久，光 fsync
                         # 檔案不夠。粒度取「每個目錄一次」而非每檔兩次——一次還原可能
                         # 上千個小檔，後者成本過高（spec §4.2.5）。
@@ -359,6 +374,65 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
             results.append(ItemResult(account, rel, "failed", safe_fs.error_code(exc)))
 
 
+def _rewrite_home_prefix(path: str, old_home: str, new_home: str) -> str | None:
+    """舊 home 底下的路徑換成新 home 的同一相對位置；不在舊 home 底下回 None。
+
+    回 None 代表「無法決定新位置」——ADR-0001 允許 config_dir 是任意路徑，所以沒有
+    正確答案可推。**不猜**。"""
+    if path == old_home:
+        return new_home
+    prefix = old_home.rstrip("/") + "/"
+    if not path.startswith(prefix):
+        return None
+    return os.path.join(new_home, path[len(prefix):])
+
+
+def _authorized_link_target(literal: str, plan: InstallPlan, manifest: dict,
+                            installed: set[str]) -> str | None:
+    """symlink 的字面目標 → 改寫後的目標路徑；不獲授權回 None。
+
+    授權判準是「對應本次 transaction 確實發布的 node」，**不是 root containment**：
+    後者會放行指向 root 內任意既有檔案、root 本身乃至循環的連結，等於把「連回已還原
+    的資產」放大成「連到整棵 active config tree 任意位置」（spec §4.2.3）。"""
+    # 相對路徑（往上逃逸）與含 `..`／非正規化的絕對路徑一律不處理——不靠「改寫後對不上
+    # node」的巧合擋，直接在源頭 fail closed。
+    if not os.path.isabs(literal) or os.path.normpath(literal) != literal:
+        return None
+    old_home = manifest.get("home", "")
+    new_home = str(Path.home().resolve())
+    rewritten = _rewrite_home_prefix(literal, old_home, new_home) if old_home else None
+    if rewritten is None:
+        return None
+    for key, target in plan.targets.items():
+        if rewritten == target or not is_same_or_within(rewritten, target):
+            continue                        # 指向 root 本身也不算（那不是某個 node）
+        rel = os.path.relpath(rewritten, target)
+        if f"{key}/{rel}" in installed:
+            return rewritten
+    return None
+
+
+def _publish_links(pending: list[_PendingLink], plan: InstallPlan, manifest: dict,
+                   installed: set[str], results: list[ItemResult]) -> None:
+    """第二階段：第一階段全部發布完、journal 記妥之後才建 symlink。"""
+    for link in pending:
+        target = _authorized_link_target(link.literal_target, plan, manifest, installed)
+        if target is None:
+            results.append(ItemResult(link.account, link.rel_path, "excluded",
+                                      "symlink_target_unauthorized"))
+            continue
+        full = os.path.join(plan.targets[link.account], link.rel_path)
+        try:
+            os.symlink(target, full)
+            results.append(ItemResult(link.account, link.rel_path, "installed"))
+        except FileExistsError:
+            results.append(ItemResult(link.account, link.rel_path, "skipped"))
+        except OSError as exc:
+            logger.error("移機建連結失敗：%s", link.rel_path, exc_info=True)
+            results.append(ItemResult(link.account, link.rel_path, "failed",
+                                      safe_fs.error_code(exc)))
+
+
 def install(plan: InstallPlan) -> list[ItemResult]:
     """依 plan 把資產寫進各落點。逐項盡力——單項失敗不阻斷其餘。
 
@@ -371,6 +445,7 @@ def install(plan: InstallPlan) -> list[ItemResult]:
     之間仍是 check-then-act；plan 時不存在、由 install 新建的 target 沒有基準可比。"""
     src_root_fd = _require_source_identity(plan)
     results: list[ItemResult] = []
+    pending: list[_PendingLink] = []        # symlink 收集起來，第一階段全完成才發布
     logger.info("移機開始：source=%s targets=%s", plan.source_root, sorted(plan.targets))
     # journal 開在 source 驗證之後、任何寫入之前：它是 symlink 授權與中斷續作的基礎，
     # 開不起來就不該動使用者的目錄——fail closed 回穩定判別碼，不讓 OSError 裸穿。
@@ -405,7 +480,8 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                             # 落點已不是 plan 驗過的那個目錄——寫下去就是寫進替身。
                             results.append(ItemResult(key, "", "failed", "target_moved"))
                             continue
-                        _install_tree(account_fd, dst_fd, key, "", results, journal_fd)
+                        _install_tree(account_fd, dst_fd, key, "", results,
+                                      journal_fd, pending)
                         # 根層檔案的目錄項持久性掛在這裡——_install_tree 只 fsync 遞迴
                         # 開出的子目錄，root 這層漏掉的話 CLAUDE.md 這種根層檔案斷電後
                         # 連目錄項都可能消失（Codex 票 03 R1）。suppress 與子層一致：
@@ -425,6 +501,13 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                             os.close(dst_fd)
                 finally:
                     os.close(account_fd)
+            # 第二階段：所有帳號的一般檔／目錄都發布完、journal 也記妥了，才建 symlink。
+            # 授權集合從 journal 重讀（不是本輪記憶體）——中斷續作時前一輪發布的 node
+            # 也算數（ADR-0006／spec §4.2.3.1）。
+            if pending:
+                manifest = read_manifest(plan.source_root)
+                installed = installed_nodes(transaction_id(plan))
+                _publish_links(pending, plan, manifest, installed, results)
         finally:
             os.close(accounts_fd)
     finally:

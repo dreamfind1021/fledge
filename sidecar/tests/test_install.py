@@ -313,6 +313,99 @@ def test_journal_id_is_stable_for_same_bundle_and_dest(tmp_path: Path, monkeypat
     assert a == b
 
 
+def _home_target(tmp_path: Path, monkeypatch) -> Path:
+    """symlink 授權判準假設新機帳號目錄落在 new_home 的對應位置（spec §4.2.2／§4.2.3
+    決策 9／10：舊路徑 `<old_home>/.claude` → `<new_home>/.claude`）。自訂 config_dir
+    下 rewrite 對不上任何 node、symlink 一律 fail-safe 不建，那不是本區塊要測的。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir(exist_ok=True)
+    tgt = tmp_path / "home" / ".claude"
+    tgt.mkdir()
+    return tgt
+
+
+def _staging_with_link(tmp_path: Path) -> Path:
+    """備份包裡有一條指向同帳號內另一個項目的 symlink（共通設置的典型形狀）。"""
+    src = _staging(tmp_path)
+    work = src / "accounts" / "work"
+    (work / "commands").mkdir()
+    (work / "commands" / "c.md").write_text("CMD", encoding="utf-8")
+    (work / "linked").symlink_to("/Users/olduser/.claude/commands")
+    return src
+
+
+def test_symlink_built_when_target_was_installed(tmp_path: Path, monkeypatch):
+    src = _staging_with_link(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    inst.install(inst.plan(str(src), _accounts(tgt)))
+    assert (tgt / "linked").is_symlink()
+    assert (tgt / "linked" / "c.md").read_text(encoding="utf-8") == "CMD"
+
+
+def test_symlink_refused_when_target_outside_authorized_set(tmp_path: Path, monkeypatch):
+    """指向授權集合外的絕對路徑 → 不建立，列進 excluded。"""
+    src = _staging(tmp_path)
+    (src / "accounts" / "work" / "evil").symlink_to("/etc/hosts")
+    tgt = _home_target(tmp_path, monkeypatch)
+    results = inst.install(inst.plan(str(src), _accounts(tgt)))
+    assert not os.path.lexists(tgt / "evil")
+    assert any(r.rel_path == "evil" and r.outcome == "excluded" for r in results)
+
+
+def test_symlink_refused_when_target_exists_but_not_installed_by_us(tmp_path: Path, monkeypatch):
+    """R4 抓到的具體攻擊：目標在授權 root 內、型別也相符，但不是本次搬過去的。
+
+    對目錄而言，型別相符會一次暴露整棵既有內容——所以判準是 provenance 不是型別。"""
+    src = _staging(tmp_path)
+    (src / "accounts" / "work" / "peek").symlink_to("/Users/olduser/.claude/private")
+    tgt = _home_target(tmp_path, monkeypatch)
+    (tgt / "private").mkdir(parents=True)
+    (tgt / "private" / "secret.md").write_text("MINE", encoding="utf-8")
+    results = inst.install(inst.plan(str(src), _accounts(tgt)))
+    assert not os.path.lexists(tgt / "peek")
+    assert (tgt / "private" / "secret.md").read_text(encoding="utf-8") == "MINE"
+    assert any(r.rel_path == "peek" and r.outcome == "excluded" for r in results)
+
+
+def test_symlink_refused_when_relative_or_dotdot_escape(tmp_path: Path, monkeypatch):
+    """相對路徑往上逃逸、或前綴合法但內嵌 `..` 的字面目標 → 都不建立。"""
+    src = _staging(tmp_path)
+    work = src / "accounts" / "work"
+    (work / "esc1").symlink_to("../../../outside/secret")
+    (work / "esc2").symlink_to("/Users/olduser/.claude/commands/../../../etc")
+    tgt = _home_target(tmp_path, monkeypatch)
+    results = inst.install(inst.plan(str(src), _accounts(tgt)))
+    for name in ("esc1", "esc2"):
+        assert not os.path.lexists(tgt / name)
+        assert any(r.rel_path == name and r.outcome == "excluded" for r in results)
+
+
+def test_symlink_refused_when_pointing_at_account_root_or_ancestor(tmp_path: Path, monkeypatch):
+    """指向帳號目錄本身或其祖先 → 不建立（根不是 node、祖先更不是）。"""
+    src = _staging(tmp_path)
+    work = src / "accounts" / "work"
+    (work / "self").symlink_to("/Users/olduser/.claude")
+    (work / "up").symlink_to("/Users/olduser")
+    tgt = _home_target(tmp_path, monkeypatch)
+    results = inst.install(inst.plan(str(src), _accounts(tgt)))
+    for name in ("self", "up"):
+        assert not os.path.lexists(tgt / name)
+        assert any(r.rel_path == name and r.outcome == "excluded" for r in results)
+
+
+def test_symlink_cycle_builds_neither(tmp_path: Path, monkeypatch):
+    """兩條互相指向的連結：目標都是 symlink、都不是本次發布的 node → 都不建立。"""
+    src = _staging(tmp_path)
+    work = src / "accounts" / "work"
+    (work / "a").symlink_to("/Users/olduser/.claude/b")
+    (work / "b").symlink_to("/Users/olduser/.claude/a")
+    tgt = _home_target(tmp_path, monkeypatch)
+    results = inst.install(inst.plan(str(src), _accounts(tgt)))
+    for name in ("a", "b"):
+        assert not os.path.lexists(tgt / name)
+        assert any(r.rel_path == name and r.outcome == "excluded" for r in results)
+
+
 def test_install_does_not_follow_symlinked_subdir_out_of_staging(tmp_path: Path):
     """惡意 bundle：staging 內的子目錄是指向外面的 symlink → 不得跟隨、不得寫出去。"""
     src = _staging(tmp_path)
