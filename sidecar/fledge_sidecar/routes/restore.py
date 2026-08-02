@@ -33,6 +33,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# 讀 config 時代表「這份設定檔讀不出來」的例外，本檔三支端點共用：
+#   `ValueError`                  壞 JSON／缺 accounts（`JSONDecodeError` 是它的子類）
+#   `TypeError`／`AttributeError` 頂層容器欄位形狀畸形（手編出 `roots: 1`、
+#                                 `project_overrides: []`），`_from_data` 對容器不驗形狀
+#   `OSError`                     讀檔就失敗（config path 是目錄、權限被收走、I/O 錯）
+#
+# **刻意只包住 `AppConfig.load*()` 那一行**，不包業務邏輯——包大了會把模組自己的
+# TypeError 也吞成「設定檔壞掉」，掩蓋真 bug。
+#
+# ⚠ `FileNotFoundError` 是 `OSError` 子類：`install_route` 的 `except FileNotFoundError`
+# 必須排在這個 tuple 之前，否則「還沒初始化」（引導精靈該接手）會被吞成「設定檔壞掉」
+# （叫使用者去修一個不存在的檔案）。有測試釘住那個順序。
+#
+# 這裡只保證**端點合約**（讀不出來就回穩定判別碼）。「畸形 config 該由哪一層、用什麼
+# 標準處理」是另一張票的主題（`.scratch/config-resilience/issues/01`）：在 `load()` 丟棄
+# 或改寫畸形資料會造成不可逆遺失（所有寫入端點都是 load→改一欄→save 整份覆蓋），那張票
+# 的四輪 PR-gate 正是栽在這個範圍問題上，不在這裡順手修。
+_CONFIG_UNREADABLE = (ValueError, TypeError, AttributeError, OSError)
+
+
 class RestorePlanBody(BaseModel):
     model_config = ConfigDict(extra="forbid")  # 未知欄位（如注入 "command"）→ 422
     bundle: str
@@ -44,9 +64,11 @@ def restore_plan(body: RestorePlanBody):
     """回「這份備份包會解到哪裡、那個位置能不能用」。唯讀，不動檔案系統。"""
     try:
         config = AppConfig.load()
-    except ValueError:
-        # json.JSONDecodeError 是 ValueError 子類：與判別碼共用一個 except 的話，JSON 剖析
-        # 訊息會被當成 error code 回給前端（CLAUDE.md §4.6.13）。也不是 client 輸入錯誤。
+    except _CONFIG_UNREADABLE:
+        # 與兩支 install 端點同一份合約（Codex 階段 10 守門 R3：同一份畸形 config 不該
+        # 在這裡卡死在框架 500）。剖析訊息不可當 error code 外洩（CLAUDE.md §4.6.13），
+        # 完整例外只進 log。
+        logger.error("還原預覽讀不出 config", exc_info=True)
         return JSONResponse(status_code=500, content={"error": "config_unreadable"})
     try:
         backup_dir = restore.resolve_backup_dir(config)
@@ -83,19 +105,6 @@ _INSTALL_CLIENT_ERRORS = frozenset({
     "mapping_not_absolute", "mapping_collision", "mapping_unknown_project",
     "mapping_ambiguous",
 })
-
-
-# 讀 config 時代表「這份設定檔讀不出來」的例外。`ValueError`＝壞 JSON／缺 accounts；
-# `TypeError`／`AttributeError`＝頂層容器欄位形狀畸形（手編出 `roots: 1`、
-# `project_overrides: []`），`_from_data` 對容器不驗形狀就會這樣拋（Codex 階段 10 守門 R2）。
-# **刻意只包住 `AppConfig.load*()` 那一行**，不包業務邏輯——包大了會把模組自己的
-# TypeError 也吞成「設定檔壞掉」，掩蓋真 bug。
-#
-# 這裡只保證**端點合約**（讀不出來就回穩定判別碼）。「畸形 config 該由哪一層、用什麼
-# 標準處理」是另一張票的主題（`.scratch/config-resilience/issues/01`）：在 `load()` 丟棄
-# 或改寫畸形資料會造成不可逆遺失（所有寫入端點都是 load→改一欄→save 整份覆蓋），那張票
-# 的四輪 PR-gate 正是栽在這個範圍問題上，不在這裡順手修。
-_CONFIG_UNREADABLE = (ValueError, TypeError, AttributeError)
 
 
 def _module_error(exc: ValueError) -> JSONResponse:

@@ -705,3 +705,50 @@ def test_install_endpoints_report_config_unreadable_for_malformed_containers(
             resp = client.post(path, json={"dest": str(staging)})
             assert resp.status_code == 500, (path, malformed)
             assert resp.json()["error"] == "config_unreadable", (path, malformed)
+        # /api/restore/plan 走同一份 config，合約要一致（Codex 階段 10 守門 R3）
+        resp = client.post("/api/restore/plan", json={"bundle": BUNDLE})
+        assert resp.status_code == 500, malformed
+        assert resp.json()["error"] == "config_unreadable", malformed
+
+
+def test_config_read_failures_are_part_of_the_endpoint_contract(
+        tmp_path: Path, monkeypatch):
+    """設定檔讀不出來（是目錄、沒權限）也是「讀不出來」——同樣回穩定判別碼。
+
+    `Path.read_text()` 拋的是 `OSError` 家族（`IsADirectoryError`／`PermissionError`），
+    不在原本的 tuple 裡就會裸穿成非合約 500（Codex 階段 10 守門 R3）。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    client = TestClient(create_app())
+
+    as_dir = tmp_path / "config-as-dir.json"
+    as_dir.mkdir()
+    no_perm = tmp_path / "config-no-perm.json"
+    no_perm.write_text(json.dumps({"accounts": {}}), encoding="utf-8")
+    no_perm.chmod(0o000)
+    try:
+        for broken in (as_dir, no_perm):
+            monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(broken))
+            for path, body in (("/api/restore/install-plan", {"dest": str(staging)}),
+                               ("/api/restore/install", {"dest": str(staging)}),
+                               ("/api/restore/plan", {"bundle": BUNDLE})):
+                resp = client.post(path, json=body)
+                assert resp.status_code == 500, (path, broken.name)
+                assert resp.json()["error"] == "config_unreadable", (path, broken.name)
+    finally:
+        no_perm.chmod(0o600)          # 讓 tmp_path 清得掉
+
+
+def test_missing_config_still_reads_as_not_initialized_not_unreadable(
+        tmp_path: Path, monkeypatch):
+    """**`FileNotFoundError` 是 `OSError` 子類**——把 OSError 納進「讀不出來」之後，
+    `except FileNotFoundError` 必須排在前面，否則「還沒初始化」會被吞成「設定檔壞掉」，
+    而前者是引導精靈該接手的狀態、後者是叫使用者去修檔案。這條釘住那個順序。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(tmp_path / "does-not-exist.json"))
+
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "config_not_initialized"
