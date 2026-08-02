@@ -684,6 +684,70 @@ def test_plan_rejects_overlapping_landing_spots(tmp_path: Path, monkeypatch):
                   extra={"agents": str(tmp_path / "a" / "agents")})
 
 
+def test_install_fails_when_spots_converge_to_same_directory(tmp_path: Path, monkeypatch):
+    """plan 的字串重疊檢查擋不住「plan 後才收斂」的落點（Codex 票 07 R2）：兩個字串
+    不重疊的落點，經 plan→install 間換掉中間目錄成 symlink（或 APFS 大小寫別名）會
+    變成**同一實體目錄**——內容混裝、no-clobber 靜默 skip。install 必須在寫入前以
+    fd 身分做 pairwise 重驗，兩個落點都 failed、零內容落地。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    src = _staging(tmp_path)
+    (src / "accounts" / "personal").mkdir()
+    (src / "accounts" / "personal" / "P.md").write_text("P", encoding="utf-8")
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["personal"] = "/Users/olduser/.claude-tc"
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (tmp_path / "mid").mkdir()
+    real = tmp_path / "real"
+    real.mkdir()
+    accounts = {
+        "work": {"config_dir": str(tmp_path / "mid" / "spot"), "label": ""},
+        "personal": {"config_dir": str(real / "spot"), "label": ""},
+    }
+    p = inst.plan(str(src), accounts)                 # 字串不重疊 → plan 過
+    (tmp_path / "mid").rmdir()
+    (tmp_path / "mid").symlink_to(real)               # 兩落點自此收斂到 real/spot
+    results = inst.install(p)
+    assert any(r.account == "work" and r.outcome == "failed"
+               and r.error == "overlapping_config_dirs" for r in results)
+    assert any(r.account == "personal" and r.outcome == "failed"
+               and r.error == "overlapping_config_dirs" for r in results)
+    assert list((real / "spot").iterdir()) == []      # 零內容落地（空目錄本身可留）
+
+
+def test_install_fails_when_spot_becomes_ancestor_of_another(tmp_path: Path, monkeypatch):
+    """同上、祖先變體：收斂後一個落點變成另一個的祖先——identity 相等比對抓不到，
+    要走祖先鏈（fd-relative 逐層 ..）比對。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    src = _staging(tmp_path)
+    (src / "accounts" / "personal").mkdir()
+    (src / "accounts" / "personal" / "P.md").write_text("P", encoding="utf-8")
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["personal"] = "/Users/olduser/.claude-tc"
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (tmp_path / "mid").mkdir()
+    real = tmp_path / "real"
+    real.mkdir()
+    accounts = {
+        "work": {"config_dir": str(tmp_path / "mid" / "spot"), "label": ""},
+        "personal": {"config_dir": str(real / "spot" / "inner"), "label": ""},
+    }
+    p = inst.plan(str(src), accounts)
+    (tmp_path / "mid").rmdir()
+    (tmp_path / "mid").symlink_to(real)               # work 落點收斂成 personal 的祖先
+    results = inst.install(p)
+    assert any(r.account == "work" and r.outcome == "failed"
+               and r.error == "overlapping_config_dirs" for r in results)
+    assert any(r.account == "personal" and r.outcome == "failed"
+               and r.error == "overlapping_config_dirs" for r in results)
+    assert list((real / "spot").iterdir()) in ([], [real / "spot" / "inner"])
+    if (real / "spot" / "inner").exists():
+        assert list((real / "spot" / "inner").iterdir()) == []
+
+
 def test_plan_treats_non_string_extra_confirmation_as_unconfirmed(
         tmp_path: Path, monkeypatch):
     """extra 確認值將來自 config.json（使用者可手編）：非字串不讓 plan 炸 500，

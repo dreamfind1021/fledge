@@ -630,14 +630,20 @@ def _open_verified_source(name: str, dir_fd: int, expected: tuple[int, int] | No
     return fd
 
 
-def _install_spot(src_item_fd: int, key: str, target: str, plan: InstallPlan,
-                  results: list[ItemResult], journal_fd: int,
-                  pending: list[_PendingLink], account_dst_fds: dict[str, int]) -> None:
-    """安裝一個落點（帳號或 extra 共用）：mkdir target → 開 dst_fd → target identity
-    重驗（不符 `target_moved`）→ `_install_tree` → root fsync → dst_fd 轉交第二階段。
+@dataclass(frozen=True)
+class _PreparedSpot:
+    key: str
+    target: str
+    src_fd: int
+    dst_fd: int
 
-    單一落點失敗只讓它自己 failed、不株連也不讓 OSError 穿出（票 03 R2）。src_item_fd
-    是來源內容目錄的 fd，由呼叫端開好與關閉。"""
+
+def _prepare_spot(key: str, target: str, plan: InstallPlan,
+                  results: list[ItemResult]) -> int | None:
+    """落點準備（帳號或 extra 共用）：mkdir target → 開 dst_fd → plan 時 target
+    identity 重驗（不符 `target_moved`）。回 dst_fd（呼叫端負責關或轉交）；不可用回
+    None（該記的 failed 已記）。單一落點失敗只讓它自己 failed、不株連也不讓 OSError
+    穿出（票 03 R2）。"""
     dst_fd = None
     try:
         Path(target).mkdir(parents=True, exist_ok=True)
@@ -647,21 +653,72 @@ def _install_spot(src_item_fd: int, key: str, target: str, plan: InstallPlan,
         if expected is not None and (st.st_dev, st.st_ino) != expected:
             # 落點已不是 plan 驗過的那個目錄——寫下去就是寫進替身。
             results.append(ItemResult(key, "", "failed", "target_moved"))
-            return
-        _install_tree(src_item_fd, dst_fd, key, "", results, journal_fd, pending)
-        # 根層目錄項的斷電持久性掛在這裡（票 03 R1）；目錄 fsync 不受支援時降級不整批失敗。
-        with contextlib.suppress(OSError):
-            os.fsync(dst_fd)
-        account_dst_fds[key] = dst_fd       # 轉交第二階段，此處不關
-        dst_fd = None
+            os.close(dst_fd)
+            return None
+        return dst_fd
     except OSError as exc:
         # 落點被檔案占用、權限被收走等只讓「這個落點」失敗——例外穿出去 route 只接
         # ValueError 會變裸 500，且排序在後的落點全裝不到（票 03 R2）。
-        logger.error("移機落點安裝失敗：key=%s target=%s", key, target, exc_info=True)
+        logger.error("移機落點準備失敗：key=%s target=%s", key, target, exc_info=True)
         results.append(ItemResult(key, "", "failed", safe_fs.error_code(exc)))
-    finally:
-        if dst_fd is not None:              # target_moved 或 OSError 才在這裡關
+        if dst_fd is not None:
             os.close(dst_fd)
+        return None
+
+
+def _identity_chain(fd: int) -> list[tuple[int, int]]:
+    """fd 的 (st_dev, st_ino) 加上其全部祖先——fd-relative 逐層開 `..`，不經 pathname
+    （symlink 換不掉已開的 fd）。到根時 `..` 指向自己即停。"""
+    st = os.fstat(fd)
+    chain = [(st.st_dev, st.st_ino)]
+    cur = os.open("..", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+    try:
+        while True:
+            st = os.fstat(cur)
+            ident = (st.st_dev, st.st_ino)
+            if ident == chain[-1]:
+                break
+            chain.append(ident)
+            nxt = os.open("..", os.O_RDONLY | os.O_DIRECTORY, dir_fd=cur)
+            os.close(cur)
+            cur = nxt
+    finally:
+        os.close(cur)
+    return chain
+
+
+def _drop_overlapping_spots(prepared: list[_PreparedSpot],
+                            results: list[ItemResult]) -> list[_PreparedSpot]:
+    """寫入前的 **fd 版**重疊重驗（Codex 票 07 R2）：plan 的字串比對擋不住「plan 後
+    才收斂」的落點——APFS 大小寫別名（尚不存在時字串不同、建立後同一實體）與中間
+    目錄被換成 symlink 都會讓兩個落點變同一目錄或互為祖先，內容混裝、no-clobber
+    靜默 skip。以已開 fd 的 identity 祖先鏈 pairwise 比對，涉入的落點全 failed、
+    一個位元組都不寫。"""
+    chains: dict[str, list[tuple[int, int]] | None] = {}
+    for spot in prepared:
+        try:
+            chains[spot.key] = _identity_chain(spot.dst_fd)
+        except OSError:
+            logger.error("移機落點祖先鏈計算失敗：key=%s", spot.key, exc_info=True)
+            chains[spot.key] = None          # 算不出 → fail-closed 視同重疊
+    bad: set[str] = {k for k, c in chains.items() if c is None}
+    for i, a in enumerate(prepared):
+        for b in prepared[:i]:
+            ca, cb = chains[a.key], chains[b.key]
+            if ca is None or cb is None:
+                continue
+            if ca[0] in cb or cb[0] in ca:   # 同一目錄（鏈頭相等）或互為祖先
+                bad.add(a.key)
+                bad.add(b.key)
+    kept: list[_PreparedSpot] = []
+    for spot in prepared:
+        if spot.key in bad:
+            results.append(ItemResult(spot.key, "", "failed", "overlapping_config_dirs"))
+            os.close(spot.dst_fd)
+            os.close(spot.src_fd)
+        else:
+            kept.append(spot)
+    return kept
 
 
 def install(plan: InstallPlan) -> list[ItemResult]:
@@ -698,18 +755,22 @@ def install(plan: InstallPlan) -> list[ItemResult]:
             # 而不是讓 OSError 穿出去變裸 500。
             raise ValueError("source_not_a_bundle") from exc
         try:
+            # 準備階段：所有落點（帳號＋extra）先開好 src／dst fd 並各自驗證——寫入
+            # 延到全體 fd 版重疊重驗通過之後（Codex 票 07 R2）。fd 釘 inode，準備與
+            # 寫入之間的 rename／symlink 置換影響不到已開的 fd。
+            prepared: list[_PreparedSpot] = []
             for key, target in plan.targets.items():
                 account_fd = _open_verified_source(
                     key, accounts_fd, plan.spot_source_identities.get(key),
                     key, results)
                 if account_fd is None:
                     continue
-                try:
-                    _install_spot(account_fd, key, target, plan, results,
-                                  journal_fd, pending, account_dst_fds)
-                finally:
+                dst_fd = _prepare_spot(key, target, plan, results)
+                if dst_fd is None:
                     os.close(account_fd)
-            # extra（帳號目錄外資產）走同一支 _install_spot，key 用 extra:<name> 命名空間。
+                    continue
+                prepared.append(_PreparedSpot(key, target, account_fd, dst_fd))
+            # extra（帳號目錄外資產）同一套準備，key 用 extra:<name> 命名空間。
             # 從 src_root_fd 開 extra/——「不存在」是正常（多數備份包沒有），但「存在
             # 而開不了」（被換成 symlink、權限被收走）必須記 failed：靜默跳過會讓
             # 「plan 說會裝」的整組 extra 無聲消失、journal 也被誤清（票 04 F3 的
@@ -740,13 +801,31 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                             spot_key, results)
                         if item_fd is None:
                             continue
-                        try:
-                            _install_spot(item_fd, spot_key, target, plan, results,
-                                          journal_fd, pending, account_dst_fds)
-                        finally:
+                        dst_fd = _prepare_spot(spot_key, target, plan, results)
+                        if dst_fd is None:
                             os.close(item_fd)
+                            continue
+                        prepared.append(_PreparedSpot(spot_key, target, item_fd, dst_fd))
                 finally:
                     os.close(extra_fd)
+            # 寫入階段：fd 版重疊重驗通過的落點才逐一裝樹。
+            for spot in _drop_overlapping_spots(prepared, results):
+                try:
+                    _install_tree(spot.src_fd, spot.dst_fd, spot.key, "", results,
+                                  journal_fd, pending)
+                    # 根層目錄項的斷電持久性掛在這裡（票 03 R1）；目錄 fsync 不受支援時
+                    # 降級不整批失敗。
+                    with contextlib.suppress(OSError):
+                        os.fsync(spot.dst_fd)
+                    account_dst_fds[spot.key] = spot.dst_fd   # 轉交第二階段，此處不關
+                except OSError as exc:
+                    logger.error("移機落點安裝失敗：key=%s target=%s",
+                                 spot.key, spot.target, exc_info=True)
+                    results.append(ItemResult(spot.key, "", "failed",
+                                              safe_fs.error_code(exc)))
+                    os.close(spot.dst_fd)
+                finally:
+                    os.close(spot.src_fd)
             # 第二階段：所有帳號／extra 的一般檔／目錄都發布完、journal 也記妥了，才建 symlink。
             # 授權集合從 journal 重讀（不是本輪記憶體）——中斷續作時前一輪發布的 node
             # 也算數（ADR-0006／spec §4.2.3.1）。
