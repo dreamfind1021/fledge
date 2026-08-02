@@ -356,6 +356,43 @@ def test_transaction_id_changes_when_target_changes(tmp_path: Path, monkeypatch)
     assert tid1 != tid2
 
 
+def test_installed_nodes_distinguishes_missing_from_unreadable(tmp_path: Path, monkeypatch):
+    """journal 不存在＝正常（回空）；存在但讀不出＝降級（拋，呼叫端據此保留）——
+    兩者混為一談會把 IO 錯誤當「沒發布過」（Codex 票 04 R1 F3）。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert inst.installed_nodes("missing0000000000") == set()   # 不存在 → 空
+    tid = "cafe000000000000"
+    jp = inst.journal_path(tid)
+    jp.parent.mkdir(parents=True, exist_ok=True)
+    jp.write_text('{"node": "work/a.md"}\n', encoding="utf-8")
+    real_read = Path.read_text
+
+    def _boom(self, *a, **k):
+        if self == jp:
+            raise PermissionError(13, "unreadable")
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", _boom)
+    with pytest.raises(OSError):
+        inst.installed_nodes(tid)
+
+
+def test_install_keeps_journal_when_provenance_read_degrades(tmp_path: Path, monkeypatch):
+    """第二階段 journal 重讀降級 → pending symlink 判 failed（不是 excluded）、journal
+    保留：不能靜默略過 symlink 又清掉續作依據並誤報成功（Codex 票 04 R1 F3）。"""
+    src = _staging_with_link(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    p = inst.plan(str(src), _accounts(tgt))
+
+    def _boom(_tid):
+        raise OSError(5, "io error")
+
+    monkeypatch.setattr(inst, "installed_nodes", _boom)
+    results = inst.install(p)
+    assert any(r.rel_path == "linked" and r.outcome == "failed" for r in results)
+    assert inst.journal_path(inst.transaction_id(p)).exists()   # 未誤清
+
+
 def test_journal_id_is_stable_for_same_bundle_and_dest(tmp_path: Path, monkeypatch):
     """同一次還原的重跑必須接上同一份 journal，否則續作認不出前一輪。"""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))

@@ -242,12 +242,17 @@ def journal_path(transaction_id: str) -> Path:
 
 
 def installed_nodes(transaction_id: str) -> set[str]:
-    """本 transaction 已確實發布的 node（`<account>/<rel_path>`）。讀不到就是空集合。"""
+    """本 transaction 已確實發布的 node（`<account>/<rel_path>`）。
+
+    **不存在 → 回空集合**（還沒建、或完整成功已清，都是正常）；**存在但讀不出**（權限、
+    IO 錯）→ 讓 OSError 往上拋。兩者不可混為一談（Codex 票 04 R1 F3）：把 IO 錯誤當成
+    「沒發布過」會讓 symlink 階段靜默略過、清除 gate 又誤判完整成功刪掉續作依據。
+    壞行（JSON parse 失敗）仍逐行跳過——那是損壞容錯，與整檔讀不出是兩回事。"""
     path = journal_path(transaction_id)
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError:
-        return set()      # 簿記讀不到不讓移機失敗——代價是這輪 symlink 補不齊（保守方向）
+    except FileNotFoundError:
+        return set()
     nodes: set[str] = set()
     for line in text.splitlines():
         if not line.strip():
@@ -514,9 +519,19 @@ def install(plan: InstallPlan) -> list[ItemResult]:
             # 授權集合從 journal 重讀（不是本輪記憶體）——中斷續作時前一輪發布的 node
             # 也算數（ADR-0006／spec §4.2.3.1）。
             if pending:
-                manifest = read_manifest(plan.source_root)
-                installed = installed_nodes(transaction_id(plan))
-                _publish_links(pending, plan, manifest, installed, results)
+                try:
+                    manifest = read_manifest(plan.source_root)
+                    installed = installed_nodes(transaction_id(plan))
+                except (OSError, ValueError):
+                    # provenance 讀不出（journal 可寫不可讀、manifest 階段間被動）→ 降級：
+                    # pending 全判 failed（不是 excluded），清除 gate 因此保留 journal。
+                    # 靜默略過 symlink 又刪 journal 會誤報成功且永久失去續作依據（F3）。
+                    logger.error("移機 symlink 階段 provenance 讀取降級", exc_info=True)
+                    for link in pending:
+                        results.append(ItemResult(link.account, link.rel_path,
+                                                  "failed", "provenance_unavailable"))
+                else:
+                    _publish_links(pending, plan, manifest, installed, results)
         finally:
             os.close(accounts_fd)
     finally:
