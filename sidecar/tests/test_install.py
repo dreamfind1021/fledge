@@ -684,68 +684,67 @@ def test_plan_rejects_overlapping_landing_spots(tmp_path: Path, monkeypatch):
                   extra={"agents": str(tmp_path / "a" / "agents")})
 
 
-def test_install_fails_when_spots_converge_to_same_directory(tmp_path: Path, monkeypatch):
-    """plan 的字串重疊檢查擋不住「plan 後才收斂」的落點（Codex 票 07 R2）：兩個字串
-    不重疊的落點，經 plan→install 間換掉中間目錄成 symlink（或 APFS 大小寫別名）會
-    變成**同一實體目錄**——內容混裝、no-clobber 靜默 skip。install 必須在寫入前以
-    fd 身分做 pairwise 重驗，兩個落點都 failed、零內容落地。"""
-    home = tmp_path / "home"
-    home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HOME", str(home))
+def _require_case_insensitive_fs(tmp_path: Path) -> None:
+    probe = tmp_path / "CaseProbe"
+    probe.mkdir(exist_ok=True)
+    if not (tmp_path / "caseprobe").exists():
+        pytest.skip("需要 case-insensitive 檔案系統（APFS 預設）")
+
+
+def _two_account_staging(tmp_path: Path) -> Path:
     src = _staging(tmp_path)
     (src / "accounts" / "personal").mkdir()
     (src / "accounts" / "personal" / "P.md").write_text("P", encoding="utf-8")
     manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
     manifest["accounts"]["personal"] = "/Users/olduser/.claude-tc"
     (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    (tmp_path / "mid").mkdir()
-    real = tmp_path / "real"
-    real.mkdir()
+    return src
+
+
+def test_install_fails_when_spots_converge_to_same_directory(tmp_path: Path, monkeypatch):
+    """plan 的字串重疊檢查擋不住「plan 後才收斂」的落點（Codex 票 07 R2）。symlink
+    置換構型已被票 09-1 祖先釘鎖在更早階段攔下（target 側 failed），本測試改用
+    **APFS 大小寫別名**構型：兩個尚不存在、字串不同的落點建立後是同一實體目錄——
+    fd 版 pairwise 重驗必須把兩個落點都 failed、零內容落地。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    _require_case_insensitive_fs(tmp_path)
+    src = _two_account_staging(tmp_path)
     accounts = {
-        "work": {"config_dir": str(tmp_path / "mid" / "spot"), "label": ""},
-        "personal": {"config_dir": str(real / "spot"), "label": ""},
+        "work": {"config_dir": str(tmp_path / "Alias" / "spot"), "label": ""},
+        "personal": {"config_dir": str(tmp_path / "alias" / "spot"), "label": ""},
     }
     p = inst.plan(str(src), accounts)                 # 字串不重疊 → plan 過
-    (tmp_path / "mid").rmdir()
-    (tmp_path / "mid").symlink_to(real)               # 兩落點自此收斂到 real/spot
     results = inst.install(p)
     assert any(r.account == "work" and r.outcome == "failed"
                and r.error == "overlapping_config_dirs" for r in results)
     assert any(r.account == "personal" and r.outcome == "failed"
                and r.error == "overlapping_config_dirs" for r in results)
-    assert list((real / "spot").iterdir()) == []      # 零內容落地（空目錄本身可留）
+    assert list((tmp_path / "alias" / "spot").iterdir()) == []   # 零內容落地
 
 
 def test_install_fails_when_spot_becomes_ancestor_of_another(tmp_path: Path, monkeypatch):
-    """同上、祖先變體：收斂後一個落點變成另一個的祖先——identity 相等比對抓不到，
-    要走祖先鏈（fd-relative 逐層 ..）比對。"""
+    """同上、祖先變體（大小寫別名構型）：收斂後一個落點變成另一個的祖先——identity
+    相等比對抓不到，要走祖先鏈（fd-relative 逐層 ..）比對。"""
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
-    src = _staging(tmp_path)
-    (src / "accounts" / "personal").mkdir()
-    (src / "accounts" / "personal" / "P.md").write_text("P", encoding="utf-8")
-    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
-    manifest["accounts"]["personal"] = "/Users/olduser/.claude-tc"
-    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
-    (tmp_path / "mid").mkdir()
-    real = tmp_path / "real"
-    real.mkdir()
+    _require_case_insensitive_fs(tmp_path)
+    src = _two_account_staging(tmp_path)
     accounts = {
-        "work": {"config_dir": str(tmp_path / "mid" / "spot"), "label": ""},
-        "personal": {"config_dir": str(real / "spot" / "inner"), "label": ""},
+        "work": {"config_dir": str(tmp_path / "Alias" / "spot"), "label": ""},
+        "personal": {"config_dir": str(tmp_path / "alias" / "spot" / "inner"),
+                     "label": ""},
     }
     p = inst.plan(str(src), accounts)
-    (tmp_path / "mid").rmdir()
-    (tmp_path / "mid").symlink_to(real)               # work 落點收斂成 personal 的祖先
     results = inst.install(p)
     assert any(r.account == "work" and r.outcome == "failed"
                and r.error == "overlapping_config_dirs" for r in results)
     assert any(r.account == "personal" and r.outcome == "failed"
                and r.error == "overlapping_config_dirs" for r in results)
-    assert list((real / "spot").iterdir()) in ([], [real / "spot" / "inner"])
-    if (real / "spot" / "inner").exists():
-        assert list((real / "spot" / "inner").iterdir()) == []
+    spot = tmp_path / "alias" / "spot"
+    assert [q for q in spot.rglob("*") if q.is_file()] == []   # 兩側零內容落地
 
 
 def test_plan_treats_non_string_extra_confirmation_as_unconfirmed(
@@ -1393,3 +1392,53 @@ def test_peek_cwd_does_not_materialize_full_sort(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(builtins, "sorted", _boom)
     assert inst._peek_cwd(proj) == "/Users/olduser/x"
+
+
+# ---------- 票 09：install 寫入面 target 側身分階段間硬化 ----------
+
+
+def test_new_target_ancestor_swapped_to_symlink_after_plan(tmp_path: Path):
+    """票 09-1：plan 時 target 不存在→釘最深既存祖先；install 前祖先被換成指向外部
+    的 symlink → 該帳號 failed（O_NOFOLLOW 拒開、穩定判別碼）、外部零寫入。"""
+    src = _staging(tmp_path)
+    base = tmp_path / "base"
+    base.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    p = inst.plan(str(src), {"work": {"config_dir": str(base / "nest" / "live"),
+                                      "label": ""}})
+    base.rmdir()
+    base.symlink_to(outside)
+    results = inst.install(p)
+    assert any(r.account == "work" and r.outcome == "failed" for r in results)
+    assert list(outside.iterdir()) == []
+
+
+def test_new_target_ancestor_swapped_to_real_dir_after_plan(tmp_path: Path):
+    """同上、真目錄變體：祖先被換成另一個真目錄（O_NOFOLLOW 攔不到）→ 身分不符
+    target_moved、替身零寫入。"""
+    src = _staging(tmp_path)
+    base = tmp_path / "base"
+    base.mkdir()
+    p = inst.plan(str(src), {"work": {"config_dir": str(base / "nest" / "live"),
+                                      "label": ""}})
+    import shutil
+    shutil.rmtree(base)
+    base.mkdir()                                # 同名、新 inode
+    results = inst.install(p)
+    assert any(r.account == "work" and r.outcome == "failed"
+               and r.error == "target_moved" for r in results)
+    assert list(base.rglob("*")) == []          # 替身樹零寫入
+
+
+def test_intermediate_created_after_plan_is_tolerated(tmp_path: Path):
+    """中間元件在 plan 後被第三方建成**真目錄** → 不算衝突、EEXIST 容忍照常往下建。"""
+    src = _staging(tmp_path)
+    base = tmp_path / "base"
+    base.mkdir()
+    p = inst.plan(str(src), {"work": {"config_dir": str(base / "nest" / "live"),
+                                      "label": ""}})
+    (base / "nest").mkdir()
+    results = inst.install(p)
+    assert {r.outcome for r in results} == {"installed"}
+    assert (base / "nest" / "live" / "CLAUDE.md").read_text(encoding="utf-8") == "RULES"

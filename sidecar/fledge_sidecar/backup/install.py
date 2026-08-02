@@ -72,6 +72,12 @@ class InstallPlan:
     # fstat 比對。None＝plan 時不存在（全新機器的主流情境）、由 install 新建，沒有
     # 基準可比——那條窗口是殘餘，記錄於票 03。
     target_identities: dict[str, tuple[int, int] | None]
+    # 票 09-1：每個落點的（最深既存祖先, 其 plan 時身分, 剩餘路徑元件）。target 已存在
+    # 時祖先＝target 本身、剩餘為空。install 從驗過身分的祖先 fd 逐層 mkdir＋O_NOFOLLOW
+    # 往下建——取代 Path.mkdir(parents)＋絕對路徑重開（兩者的祖先解析都跟隨 symlink，
+    # plan→install 間换掉祖先就寫出授權落點外）。信任錨是「plan 當下存在的那一層」，
+    # 對任意 config_dir 都成立、不與 ADR-0001 衝突。
+    target_anchors: dict[str, tuple[str, tuple[int, int] | None, list[str]]]
     extra_targets: dict[str, str]           # extra 項名 -> resolved 落點
     # 各落點來源在 plan 時的身分（Codex 票 05 R1 F1；帳號側比照＝票 05 收尾裁示，封
     # 票 03 殘餘窗口）。key 用落點命名空間（account key／`extra:<name>`）。install 只在
@@ -90,6 +96,23 @@ class InstallPlan:
     # 這些葉檔根本到不了，算進 will_install 就是預覽說謊（Codex 票 03 R2）。
     blocked: list[str]
     excluded: list[str]
+
+
+def _anchor_for(target: str) -> tuple[str, tuple[int, int] | None, list[str]]:
+    """回（最深既存祖先, 其身分, 剩餘路徑元件）。target 已存在 → (target, 身分, [])。
+    理論上 `/` 一定 stat 得到，identity None 只在整條鏈都探不到時出現（fail-closed，
+    install 端會拒）。"""
+    cur = target
+    remaining: list[str] = []
+    while True:
+        ident = dir_identity(cur)
+        if ident is not None:
+            return cur, ident, remaining
+        parent, name = os.path.split(cur)
+        if not name or parent == cur:
+            return cur, None, remaining
+        remaining.insert(0, name)
+        cur = parent
 
 
 def _resolved_config_dir(raw: str) -> str:
@@ -462,11 +485,14 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
 
     identities = {key: dir_identity(t) for key, t in targets.items()}
     identities.update({f"extra:{name}": dir_identity(t) for name, t in extra_targets.items()})
+    anchors = {key: _anchor_for(t) for key, t in targets.items()}
+    anchors.update({f"extra:{name}": _anchor_for(t) for name, t in extra_targets.items()})
     return InstallPlan(
         source_root=root,
         source_identity=dir_identity(root),
         targets=targets,
         target_identities=identities,
+        target_anchors=anchors,
         extra_targets=extra_targets,
         spot_source_identities=spot_source_identities,
         project_renames=project_renames,
@@ -845,8 +871,27 @@ def _prepare_spot(key: str, target: str, plan: InstallPlan,
     穿出（票 03 R2）。"""
     dst_fd = None
     try:
-        Path(target).mkdir(parents=True, exist_ok=True)
-        dst_fd = _open_dir_pinned(target)
+        # 票 09-1：從驗過身分的最深既存祖先 fd 逐層往下建——Path.mkdir(parents)＋
+        # 絕對路徑重開的祖先解析都跟隨 symlink，plan 後換掉祖先就寫出授權落點外。
+        anchor_path, anchor_ident, remaining = plan.target_anchors.get(
+            key, (target, None, []))
+        fd = _open_dir_pinned(anchor_path)
+        try:
+            st = os.fstat(fd)
+            if anchor_ident is None or (st.st_dev, st.st_ino) != anchor_ident:
+                results.append(ItemResult(key, "", "failed", "target_moved"))
+                return None                 # finally 關 fd
+            for part in remaining:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(part, 0o700, dir_fd=fd)   # plan 後被建成真目錄＝EEXIST 容忍
+                nxt = _open_dir_pinned(part, dir_fd=fd)  # symlink 任一層 → OSError 拒
+                os.close(fd)
+                fd = nxt
+            dst_fd = fd
+            fd = None
+        finally:
+            if fd is not None:
+                os.close(fd)
         expected = plan.target_identities.get(key)
         st = os.fstat(dst_fd)
         if expected is not None and (st.st_dev, st.st_ino) != expected:
