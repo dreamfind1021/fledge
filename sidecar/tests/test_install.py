@@ -331,6 +331,31 @@ def test_journal_corrupt_lines_do_not_break_reading(tmp_path: Path, monkeypatch)
     assert inst.installed_nodes(tid) == {"work/a.md", "work/b.md"}
 
 
+def test_transaction_id_changes_when_staging_reexpanded(tmp_path: Path, monkeypatch):
+    """同一 staging 路徑換一份 bundle（刪掉重展＝新 inode）→ 新 transaction_id，不讀到
+    前次殘留的 journal node（Codex 票 04 R1 F1：provenance 跨 bundle／落點污染）。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    tid1 = inst.transaction_id(inst.plan(str(src), _accounts(tgt)))
+    import shutil
+    shutil.rmtree(src)
+    src2 = _staging(tmp_path)                # 同路徑、新 inode
+    tid2 = inst.transaction_id(inst.plan(str(src2), _accounts(tgt)))
+    assert tid1 != tid2
+
+
+def test_transaction_id_changes_when_target_changes(tmp_path: Path, monkeypatch):
+    """同一 staging、改落點重跑 → 新 transaction_id：舊 journal 記的 node 相對舊落點，
+    不該拿來授權新落點的既有內容（Codex 票 04 R1 F1）。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src = _staging(tmp_path)
+    tid1 = inst.transaction_id(inst.plan(str(src), _accounts(tmp_path / "live1")))
+    tid2 = inst.transaction_id(inst.plan(str(src), _accounts(tmp_path / "live2")))
+    assert tid1 != tid2
+
+
 def test_journal_id_is_stable_for_same_bundle_and_dest(tmp_path: Path, monkeypatch):
     """同一次還原的重跑必須接上同一份 journal，否則續作認不出前一輪。"""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))

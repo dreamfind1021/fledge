@@ -220,10 +220,19 @@ _JOURNAL_PREFIX = "restore-journal-"
 
 
 def transaction_id(plan: InstallPlan) -> str:
-    """同一份備份包 + 同一個展開位置 = 同一個 transaction，重跑才接得上前一輪。
+    """同一個實體 staging + 同一組落點 = 同一個 transaction，重跑才接得上前一輪。
 
-    用雜湊而非路徑本身：路徑會含使用者名與中文，直接當檔名會有跳脫問題。"""
-    return hashlib.sha256(plan.source_root.encode("utf-8")).hexdigest()[:16]
+    **不能只綁 source_root 路徑**（Codex 票 04 R1）：同一路徑失敗後換一份 bundle 重展、
+    或改落點重跑，都會讀到前次殘留的 journal node——journal 記的是「本次發布的 node」，
+    跨 bundle／落點沿用等於把舊 provenance 拿來授權新落點的既有內容，推翻整個判準。
+    所以綁 `source_identity`（實體 inode，重展即變）＋落點 mapping：三者任一變就是新
+    transaction，舊 journal 不被讀。用雜湊：路徑含使用者名與中文，直接當檔名會跳脫問題。"""
+    material = "\x00".join([
+        plan.source_root,
+        repr(plan.source_identity),
+        repr(sorted(plan.targets.items())),
+    ])
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
 def journal_path(transaction_id: str) -> Path:
