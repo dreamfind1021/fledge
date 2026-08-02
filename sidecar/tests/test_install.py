@@ -276,30 +276,59 @@ def test_install_excludes_claude_json_from_target(tmp_path: Path):
     assert any(r.rel_path == ".claude.json" and r.outcome == "excluded" for r in results)
 
 
-def test_journal_records_installed_nodes(tmp_path: Path, monkeypatch):
+def _staging_two_accounts_second_blocked(tmp_path: Path) -> tuple[Path, dict]:
+    """雙帳號 staging，第二帳號（personal）的落點被一般檔占用 → 帳號級 failed →
+    整體未完整成功。回 (src, accounts)。"""
+    src = _staging(tmp_path)
+    (src / "accounts" / "personal").mkdir()
+    (src / "accounts" / "personal" / "P.md").write_text("P", encoding="utf-8")
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["personal"] = "/Users/olduser/.claude-tc"
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    tgt_work = tmp_path / "live-work"
+    tgt_work.mkdir()
+    tgt_personal = tmp_path / "live-personal"
+    tgt_personal.write_text("occupied", encoding="utf-8")
+    accounts = {
+        "work": {"config_dir": str(tgt_work), "label": ""},
+        "personal": {"config_dir": str(tgt_personal), "label": ""},
+    }
+    return src, accounts
+
+
+def test_journal_cleared_on_full_success(tmp_path: Path, monkeypatch):
+    """完整成功 → journal 清除（ADR-0006：留著會讓還原卡永遠顯示「上次移機未完成」）。"""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     src = _staging(tmp_path)
     tgt = tmp_path / "live"
     tgt.mkdir()
     p = inst.plan(str(src), _accounts(tgt))
     inst.install(p)
+    assert not inst.journal_path(inst.transaction_id(p)).exists()
+    assert inst.installed_nodes(inst.transaction_id(p)) == set()
+
+
+def test_journal_kept_and_records_nodes_when_incomplete(tmp_path: Path, monkeypatch):
+    """中途失敗 → journal 保留，且記錄了成功帳號的 node（中斷續作的基礎）。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src, accounts = _staging_two_accounts_second_blocked(tmp_path)
+    p = inst.plan(str(src), accounts)
+    results = inst.install(p)
+    assert any(r.outcome == "failed" for r in results)
     recorded = inst.installed_nodes(inst.transaction_id(p))
     assert "work/CLAUDE.md" in recorded
     assert "work/skills/a.md" in recorded
 
 
-def test_journal_survives_rerun_and_marks_prior_nodes(tmp_path: Path, monkeypatch):
-    """中斷續作的核心：第二次跑時，第一次裝的東西仍認得出來是「我們裝的」。"""
+def test_journal_corrupt_lines_do_not_break_reading(tmp_path: Path, monkeypatch):
+    """簿記損壞（壞行）不讓移機失敗：壞行跳過、好行照讀。"""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    src = _staging(tmp_path)
-    tgt = tmp_path / "live"
-    tgt.mkdir()
-    p = inst.plan(str(src), _accounts(tgt))
-    inst.install(p)
-    first = inst.installed_nodes(inst.transaction_id(p))
-    p2 = inst.plan(str(src), _accounts(tgt))
-    inst.install(p2)                      # 全部 skipped
-    assert inst.installed_nodes(inst.transaction_id(p2)) >= first
+    tid = "deadbeef00000000"
+    jp = inst.journal_path(tid)
+    jp.parent.mkdir(parents=True, exist_ok=True)
+    jp.write_text('{"node": "work/a.md"}\nNOT JSON AT ALL\n{"node": "work/b.md"}\n',
+                  encoding="utf-8")
+    assert inst.installed_nodes(tid) == {"work/a.md", "work/b.md"}
 
 
 def test_journal_id_is_stable_for_same_bundle_and_dest(tmp_path: Path, monkeypatch):

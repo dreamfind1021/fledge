@@ -514,4 +514,10 @@ def install(plan: InstallPlan) -> list[ItemResult]:
         os.close(journal_fd)
         os.close(src_root_fd)
     logger.info("移機完成：%s", dict(Counter(r.outcome for r in results)))
+    # 完整成功才清 journal：它是「這次移機還沒收尾」的訊號（ADR-0006），留著會讓還原卡
+    # 永遠顯示「上次移機未完成」。有 failed 則保留——供修好後重跑，中斷續作靠它認得
+    # 前一輪已發布的 node（excluded 是刻意拒絕、不算未完成，不阻止清除）。
+    if not any(r.outcome == "failed" for r in results):
+        with contextlib.suppress(OSError):
+            journal.unlink()
     return results
