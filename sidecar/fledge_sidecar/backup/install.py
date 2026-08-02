@@ -430,7 +430,12 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
             continue                        # 使用者沒為這個帳號指定落點 → 不裝
         if not _SAFE_KEY_RE.fullmatch(key):
             raise ValueError("invalid_account_key")   # 進得了 targets 的 key 才會拼路徑
-        targets[key] = _resolved_config_dir(entry.get("config_dir", ""))
+        # config.json 是使用者可手編的：帳號項不是物件、或 config_dir 不是字串，
+        # 直接 `.get()`／往下傳會變成 AttributeError／TypeError 裸穿成非合約 500。
+        # 票 07 對 extra 已做同款形狀檢查（非字串視同未確認），帳號側比照。
+        if not isinstance(entry, dict) or not isinstance(entry.get("config_dir"), str):
+            raise ValueError("invalid_account_entry")
+        targets[key] = _resolved_config_dir(entry["config_dir"])
         spot_source_identities[key] = dir_identity(str(Path(root, "accounts", key)))
 
     extra_targets: dict[str, str] = {}
@@ -1151,7 +1156,14 @@ def install(plan: InstallPlan) -> list[ItemResult]:
     的 target 身分，install 開出 fd 後 fstat 比對，不符回 `target_moved`、該帳號停手
     （各帳號的落點彼此獨立，不株連整批）。**這是縮小窗口不是關閉**：比對到 mutation
     之間仍是 check-then-act；plan 時不存在、由 install 新建的 target 沒有基準可比。"""
-    src_root_fd = _require_source_identity(plan)
+    try:
+        src_root_fd = _require_source_identity(plan)
+    except OSError as exc:
+        # plan 之後 staging 被刪／權限被收走：`_open_dir_pinned` 拋的是 OSError，不正規化
+        # 就會穿出模組變成非合約的 500。判別碼與 plan 對同一情形的回答一致
+        #（`read_manifest`／`accounts` lstat 失敗都是 source_not_a_bundle）——預覽與執行
+        # 對「來源還在不在」要給同一個答案（Codex 階段 10 守門）。
+        raise ValueError("source_not_a_bundle") from exc
     results: list[ItemResult] = []
     pending: list[_PendingLink] = []        # symlink 收集起來，第一階段全完成才發布
     # 每個帳號第一階段驗過身分的 dst_fd 延到第二階段用——symlink 一律從這個 fd 逐層

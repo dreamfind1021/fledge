@@ -4,12 +4,14 @@
 展開任何東西**（成功路徑攔截 create_session，只驗後端組出來的 argv）。
 """
 import json
+import shutil
 from pathlib import Path
 
 from conftest import make_staging
 from fastapi.testclient import TestClient
 
 from fledge_sidecar.app import create_app
+from fledge_sidecar.backup import install
 
 BUNDLE = "claude-backup-20260101-1200.tar.gz"
 
@@ -601,3 +603,81 @@ def test_install_endpoints_apply_mapping(tmp_path: Path, monkeypatch):
         "dest": str(src),
         "mapping": [{"old": "/Users/olduser/work/app", "new": "rel/path"}]})
     assert (resp.status_code, resp.json()["error"]) == (400, "mapping_not_absolute")
+
+
+# ── 票 08 收官守門：install 端點的錯誤合約完整性（Codex 階段 10 F6） ──────────────
+
+
+def test_install_reports_stable_code_when_staging_vanishes_after_plan(
+        tmp_path: Path, monkeypatch):
+    """server 重算 plan 之後、真正寫入之前 staging 被刪 → 穩定判別碼，不得裸穿 500。
+
+    `_require_source_identity` 的 `os.open` 失敗拋的是 OSError，而 route 只接 ValueError
+    ——不正規化就會變成非合約的 500，前端分不出「來源不見了」與「設定檔壞了」。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    real_plan = install.plan
+
+    def _plan_then_remove(*args, **kwargs):
+        result = real_plan(*args, **kwargs)
+        shutil.rmtree(staging)          # plan 過了、install 還沒開始
+        return result
+
+    monkeypatch.setattr(install, "plan", _plan_then_remove)
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "source_not_a_bundle"
+
+
+def test_install_reports_journal_unavailable_as_itself(tmp_path: Path, monkeypatch):
+    """journal 開不起來是**環境問題**，不是設定檔問題——判別碼要說實話。
+
+    誤報成 `config_unreadable` 會讓使用者去修一個沒壞的檔案。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    # ~/.fledge 佔成一般檔 → fd-relative 開啟必失敗
+    (tmp_path / "home" / ".fledge").write_text("not a dir", encoding="utf-8")
+
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.json()["error"] == "journal_unavailable"
+    assert resp.status_code == 500          # 環境問題不是 client 送錯
+    assert not (live / "CLAUDE.md").exists(), "journal 開不起來就不該動使用者目錄"
+
+
+def test_install_rejects_malformed_account_entry_in_config(tmp_path: Path, monkeypatch):
+    """config.json 是使用者可手編的：帳號項不是物件 → 穩定判別碼，不得 AttributeError 裸穿。
+
+    票 07 對 extra 已做「非字串視同未確認」，帳號側要有同等的形狀檢查。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    cfg = tmp_path / "config.json"
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    data["accounts"]["work"] = "/somewhere"          # 手編成字串
+    cfg.write_text(json.dumps(data), encoding="utf-8")
+
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_account_entry"
+
+
+def test_install_still_reports_source_root_moved_as_client_error(
+        tmp_path: Path, monkeypatch):
+    """回歸保護：`source_root_moved` 本來就在 client 錯誤清單裡，別在修上面三條時弄丟。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    real_plan = install.plan
+
+    def _plan_then_swap(*args, **kwargs):
+        result = real_plan(*args, **kwargs)
+        shutil.rmtree(staging)
+        make_staging(tmp_path)          # 同路徑、換一個 inode
+        return result
+
+    monkeypatch.setattr(install, "plan", _plan_then_swap)
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "source_root_moved"

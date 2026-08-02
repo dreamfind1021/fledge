@@ -77,10 +77,24 @@ class DestBody(BaseModel):
 # 的剖析失敗（JSONDecodeError 是 ValueError 子類，訊息不可外洩當判別碼）。
 _INSTALL_CLIENT_ERRORS = frozenset({
     "source_not_a_bundle", "invalid_config_dir", "unsafe_config_dir", "source_root_moved",
-    "invalid_account_key", "overlapping_config_dirs",
+    "invalid_account_key", "invalid_account_entry", "overlapping_config_dirs",
     "mapping_not_absolute", "mapping_collision", "mapping_unknown_project",
     "mapping_ambiguous",
 })
+
+
+def _module_error(exc: ValueError) -> JSONResponse:
+    """`backup/install.py` 拋的 ValueError → HTTP 回應。
+
+    模組只拋**穩定判別碼**，所以照實回傳：清單內的是使用者能修的輸入問題（400），
+    其餘是環境問題（500，如 `journal_unavailable`）。**不冒充 `config_unreadable`**
+    ——把來源不見了、journal 開不起來都說成「設定檔壞了」，會讓使用者去修一個沒壞的
+    檔案，也讓前端分不出該重新展開來源、修權限、還是修設定（Codex 階段 10 守門）。
+    設定檔本身的 ValueError 在 `AppConfig.load*()` 那一層就攔掉，不會走到這裡。"""
+    code = str(exc)
+    if code in _INSTALL_CLIENT_ERRORS:
+        return JSONResponse(status_code=400, content={"error": code})
+    return JSONResponse(status_code=500, content={"error": code})
 
 
 class AdoptAccount(BaseModel):
@@ -198,14 +212,16 @@ def install_plan(body: DestBody):
     目的地）。預覽沿用會 fallback 的 `AppConfig.load()`——與 common-config 的預覽同一
     慣例（精靈 pre-onboard 要能看狀態），fallback 下的探測全是唯讀 lstat。"""
     try:
-        config = AppConfig.load()            # ValueError → 下方轉 config_unreadable 500
+        # 設定檔本身壞掉只有這一層會拋（JSON 剖析訊息不可當判別碼外洩，故不透傳）
+        config = AppConfig.load()
+    except ValueError:
+        return JSONResponse(status_code=500, content={"error": "config_unreadable"})
+    try:
         # extra 落點同樣只來自 config（adopt-config 確認後寫入），不由前端送（票 07）
         plan = install.plan(body.dest, config.accounts, extra=config.extra,
                             mapping=[(m.old, m.new) for m in body.mapping])
     except ValueError as exc:
-        if str(exc) in _INSTALL_CLIENT_ERRORS:
-            return JSONResponse(status_code=400, content={"error": str(exc)})
-        return JSONResponse(status_code=500, content={"error": "config_unreadable"})
+        return _module_error(exc)
     return asdict(plan)
 
 
@@ -227,11 +243,15 @@ def install_route(body: DestBody):
             except FileNotFoundError:
                 return JSONResponse(status_code=400,
                                     content={"error": "config_not_initialized"})
+            except ValueError:
+                # 設定檔本身壞掉（壞 JSON／缺 accounts）**只有這一層**會拋——模組的
+                # ValueError 一律是判別碼，把兩者混在同一個 except 會讓「來源不見了」
+                # 「journal 開不起來」全被誤報成設定檔損壞（Codex 階段 10 守門）。
+                return JSONResponse(status_code=500,
+                                    content={"error": "config_unreadable"})
             plan = install.plan(body.dest, config.accounts, extra=config.extra,
                                 mapping=[(m.old, m.new) for m in body.mapping])
             results = install.install(plan)
     except ValueError as exc:
-        if str(exc) in _INSTALL_CLIENT_ERRORS:
-            return JSONResponse(status_code=400, content={"error": str(exc)})
-        return JSONResponse(status_code=500, content={"error": "config_unreadable"})
+        return _module_error(exc)
     return {"results": [asdict(r) for r in results]}
