@@ -626,3 +626,124 @@ def test_install_does_not_follow_symlinked_subdir_out_of_staging(tmp_path: Path)
     tgt.mkdir()
     inst.install(inst.plan(str(src), _accounts(tgt)))
     assert not (tgt / "escaped" / "x.md").exists()
+
+
+# ---------- 票 05：帳號目錄外的資產（extra/） ----------
+
+
+def _staging_with_extra(tmp_path: Path) -> Path:
+    """備份包含 extra/agents（帳號外資產）＋帳號內指向它的連結——票 05 的存在理由：
+    skill 真身在 ~/.agents，帳號目錄裡只有一條 symlink 指過去。"""
+    src = _staging(tmp_path)
+    (src / "extra" / "agents" / "skills" / "s").mkdir(parents=True)
+    (src / "extra" / "agents" / "skills" / "s" / "SKILL.md").write_text("X", encoding="utf-8")
+    (src / "accounts" / "work" / "skills" / "s").symlink_to("/Users/olduser/.agents/skills/s")
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["extra"] = {"agents": "/Users/olduser/.agents"}
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return src
+
+
+def test_extra_asset_installed_and_account_link_resolves(tmp_path: Path, monkeypatch):
+    """回歸測試（票 05 的存在理由）：skill 真身在帳號外時，extra 搬到使用者確認的落點，
+    且帳號目錄裡指向它的連結搬完**解得開**——只搬 accounts/ 的話這條連結必斷，而共通
+    設置的 repair 救不了指向第三位置的斷鏈（spec §4.2.1）。"""
+    src = _staging_with_extra(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    p = inst.plan(str(src), _accounts(tgt), extra={"agents": str(home / ".agents")})
+    assert p.will_install == 3              # 帳號 2 檔＋extra 的 SKILL.md 也數進預覽
+    inst.install(p)
+    assert (home / ".agents" / "skills" / "s" / "SKILL.md").read_text(encoding="utf-8") == "X"
+    assert (tgt / "skills" / "s").is_symlink()
+    assert (tgt / "skills" / "s" / "SKILL.md").read_text(encoding="utf-8") == "X"
+
+
+def test_extra_without_confirmed_landing_spot_is_excluded(tmp_path: Path, monkeypatch):
+    """使用者沒確認落點的 extra 整項不搬且列 excluded——manifest 只能描述來源，不能
+    自行指定目的地（spec §4.2.2 的 authz 邊界）；不說出來使用者會以為搬完了。"""
+    src = _staging_with_extra(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    p = inst.plan(str(src), _accounts(tgt))          # 沒給 extra
+    assert "agents" in p.excluded
+    assert p.extra_targets == {}
+    inst.install(p)
+    assert not (tmp_path / "home" / ".agents").exists()   # 整項未落地
+
+
+def test_plan_rejects_path_like_extra_names(tmp_path: Path, monkeypatch):
+    """extra name 會被拼進 Path(root, 'extra', name) 與 fd-relative open——與 account
+    key 同一條信任邊界、同規則重驗（manifest 是不可信輸入）。"""
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    spot = tmp_path / "spot"
+    for bad in ("/etc", "../outside", "a/b", ".", ".."):
+        manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+        manifest["extra"] = {bad: "/Users/olduser/.agents"}
+        (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(ValueError, match="invalid_account_key"):
+            inst.plan(str(src), _accounts(tgt), extra={bad: str(spot)})
+
+
+def test_plan_refuses_extra_spot_at_home_or_above(tmp_path: Path, monkeypatch):
+    """extra 落點的驗證規則與帳號完全一致（不因它不是帳號而放寬）：home 本身或祖先
+    一律 unsafe_config_dir（ADR-0001 底線防呆）。"""
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    src = _staging_with_extra(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    for bad in (str(home), str(tmp_path), "/"):
+        with pytest.raises(ValueError, match="unsafe_config_dir"):
+            inst.plan(str(src), _accounts(tgt), extra={"agents": bad})
+
+
+def test_plan_refuses_manifest_with_malformed_extra(tmp_path: Path):
+    """manifest.extra 不是 {str: str} → source_not_a_bundle：它是 extra 迭代與拼路徑的
+    基礎，不驗的話字串會被迭代成單字元 name、null 直接 TypeError 裸穿成 500（與
+    accounts 的型別驗證同款）。"""
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+    for bad in (None, "oops", 7, ["agents"], {"agents": 7}, {"agents": None}):
+        manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+        manifest["extra"] = bad
+        (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(ValueError, match="source_not_a_bundle"):
+            inst.plan(str(src), _accounts(tgt))
+
+
+def test_install_records_failed_when_extra_item_unopenable(tmp_path: Path, monkeypatch):
+    """plan 之後 extra/<name> 被換成 symlink → 開啟失敗（O_NOFOLLOW）但不是「不存在」：
+    要記 failed 而非靜默跳過——「plan 說會裝」的整項無聲消失就是誤報成功（票 04 F3
+    「不存在≠讀不出」的同款區分）；有 failed 則 journal 保留。"""
+    src = _staging_with_extra(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    p = inst.plan(str(src), _accounts(tgt), extra={"agents": str(home / ".agents")})
+    import shutil
+    shutil.rmtree(src / "extra" / "agents")
+    (src / "extra" / "agents").symlink_to(tmp_path / "elsewhere")
+    results = inst.install(p)
+    assert any(r.account == "extra:agents" and r.outcome == "failed" for r in results)
+    assert not (home / ".agents").exists()                      # 開失敗發生在任何寫入之前
+    assert inst.journal_path(inst.transaction_id(p)).exists()   # failed → journal 保留
+
+
+def test_install_records_failed_when_extra_dir_unopenable(tmp_path: Path, monkeypatch):
+    """extra/ 整個被換成 symlink → 確認過落點的 extra 全記 failed，不得無聲消失。
+    「備份包沒有 extra/」才是正常的不存在，那走 ENOENT 靜默路徑，兩者不得混同。"""
+    src = _staging_with_extra(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    p = inst.plan(str(src), _accounts(tgt), extra={"agents": str(home / ".agents")})
+    replacement = tmp_path / "elsewhere"
+    replacement.mkdir()
+    import shutil
+    shutil.rmtree(src / "extra")
+    (src / "extra").symlink_to(replacement)
+    results = inst.install(p)
+    assert any(r.account == "extra:agents" and r.outcome == "failed" for r in results)
+    assert list(replacement.iterdir()) == []                    # 替身目錄零讀寫
+    assert inst.journal_path(inst.transaction_id(p)).exists()

@@ -51,7 +51,7 @@ _SAFE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 @dataclass(frozen=True)
 class ItemResult:
-    account: str        # target account key，extra 項用 "" 表示不屬於任何帳號
+    account: str        # target account key；extra 項用 "extra:<name>" 命名空間
     rel_path: str       # 相對該落點的路徑
     outcome: Outcome
     error: str | None = None      # 穩定判別碼；完整例外只進 log
@@ -102,6 +102,11 @@ def read_manifest(source_root: str) -> dict:
     # 會在 plan 內變成未捕捉的 TypeError 穿出去成裸 500，違反 error-code 合約。
     if not isinstance(data.get("accounts"), dict):
         raise ValueError("source_not_a_bundle")
+    # extra 同款（票 05）：字串會被迭代成單字元 name、null 直接 TypeError。缺欄位容忍
+    # （視為空），有欄位就必須是 {str: str}——JSON 物件的 key 必為字串，驗 value 即可。
+    extra = data.get("extra", {})
+    if not isinstance(extra, dict) or any(not isinstance(v, str) for v in extra.values()):
+        raise ValueError("source_not_a_bundle")
     return data
 
 
@@ -133,8 +138,61 @@ def _walk_account(account_dir: Path) -> tuple[list[str], list[str]]:
     return installable, excluded
 
 
-def plan(source_root: str, accounts: dict[str, dict[str, str]]) -> InstallPlan:
-    """掃描展開目錄與各落點，回「會裝什麼、會跳過什麼、不處理什麼」。純唯讀。"""
+def _scan_spot(content_dir: Path, target: str) -> tuple[int, list[str], list[str], list[str]]:
+    """掃一個落點的來源目錄，回 (會裝數, 跳過, 被祖先擋, walk 排除)。純唯讀。
+
+    帳號與 extra 共用同一支——落點的驗證規則不因它不是帳號而放寬（票 05 驗收）。"""
+    if not content_dir.is_dir():
+        return 0, [], [], []
+    installable, walk_excluded = _walk_account(content_dir)
+    n_install = 0
+    skip: list[str] = []
+    blocked: list[str] = []
+    # 目的地祖先鏈逐層 lstat（與 install 的 O_NOFOLLOW 同語意：symlink 也算占用）。
+    # 快取按相對前綴——同一子樹的葉檔不必重複探測。
+    blocked_dirs: set[str] = set()
+    ok_dirs: set[str] = set()
+    for rel in installable:
+        parent = os.path.dirname(rel)
+        bad = False
+        cur = ""
+        for part in parent.split(os.sep) if parent else []:
+            cur = os.path.join(cur, part) if cur else part
+            if cur in blocked_dirs:
+                bad = True
+                break
+            if cur in ok_dirs:
+                continue
+            try:
+                st = os.lstat(os.path.join(target, cur))
+            except FileNotFoundError:
+                ok_dirs.add(cur)            # 不存在 → install 會自己建
+                continue
+            except OSError:
+                blocked_dirs.add(cur)       # 探測不了就 fail-closed 當占用，不虛報
+                bad = True
+                break
+            if stat_module.S_ISDIR(st.st_mode):
+                ok_dirs.add(cur)
+            else:
+                blocked_dirs.add(cur)
+                bad = True
+                break
+        if bad:
+            blocked.append(rel)
+        elif os.path.lexists(os.path.join(target, rel)):
+            skip.append(rel)
+        else:
+            n_install += 1
+    return n_install, skip, blocked, walk_excluded
+
+
+def plan(source_root: str, accounts: dict[str, dict[str, str]],
+         extra: dict[str, str] | None = None) -> InstallPlan:
+    """掃描展開目錄與各落點，回「會裝什麼、會跳過什麼、不處理什麼」。純唯讀。
+
+    `extra`＝帳號目錄外資產（如 `~/.agents`）的**使用者確認落點** `{name: config_dir}`；
+    manifest 只提供建議值、不能自行指定目的地（spec §4.2.2）——沒確認的整項不搬、列 excluded。"""
     root = resolve_best_effort(source_root)
     manifest = read_manifest(root)          # 順便驗它確實是我們展開的目錄
     # 實體 accounts/ 目錄也是 bundle 形狀的一部分：缺了它 plan 會回一份空預覽、install
@@ -147,6 +205,11 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]]) -> InstallPlan:
     if not stat_module.S_ISDIR(accounts_st.st_mode):
         raise ValueError("source_not_a_bundle")
 
+    will_install = 0
+    will_skip: list[str] = []
+    blocked: list[str] = []
+    excluded: list[str] = []
+
     targets: dict[str, str] = {}
     for key in manifest.get("accounts", {}):
         entry = accounts.get(key)
@@ -156,59 +219,37 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]]) -> InstallPlan:
             raise ValueError("invalid_account_key")   # 進得了 targets 的 key 才會拼路徑
         targets[key] = _resolved_config_dir(entry.get("config_dir", ""))
 
-    will_install = 0
-    will_skip: list[str] = []
-    blocked: list[str] = []
-    excluded: list[str] = []
-    for key, target in targets.items():
-        account_dir = Path(root, "accounts", key)
-        if not account_dir.is_dir():
+    extra_targets: dict[str, str] = {}
+    for name in manifest.get("extra", {}):
+        confirmed = (extra or {}).get(name)
+        if not confirmed:
+            excluded.append(name)           # 落點沒被使用者確認就整項不搬（spec §4.2.2）
             continue
-        installable, ex = _walk_account(account_dir)
-        excluded.extend(ex)
-        # 目的地祖先鏈逐層 lstat（與 install 的 O_NOFOLLOW 同語意：symlink 也算占用）。
-        # 快取按相對前綴——同一子樹的葉檔不必重複探測。
-        blocked_dirs: set[str] = set()
-        ok_dirs: set[str] = set()
-        for rel in installable:
-            parent = os.path.dirname(rel)
-            bad = False
-            cur = ""
-            for part in parent.split(os.sep) if parent else []:
-                cur = os.path.join(cur, part) if cur else part
-                if cur in blocked_dirs:
-                    bad = True
-                    break
-                if cur in ok_dirs:
-                    continue
-                try:
-                    st = os.lstat(os.path.join(target, cur))
-                except FileNotFoundError:
-                    ok_dirs.add(cur)        # 不存在 → install 會自己建
-                    continue
-                except OSError:
-                    blocked_dirs.add(cur)   # 探測不了就 fail-closed 當占用，不虛報
-                    bad = True
-                    break
-                if stat_module.S_ISDIR(st.st_mode):
-                    ok_dirs.add(cur)
-                else:
-                    blocked_dirs.add(cur)
-                    bad = True
-                    break
-            if bad:
-                blocked.append(rel)
-            elif os.path.lexists(os.path.join(target, rel)):
-                will_skip.append(rel)
-            else:
-                will_install += 1
+        if not _SAFE_KEY_RE.fullmatch(name):
+            raise ValueError("invalid_account_key")   # extra name 同樣拼進路徑，同規則重驗
+        extra_targets[name] = _resolved_config_dir(confirmed)
 
+    for key, target in targets.items():
+        n, sk, bl, ex = _scan_spot(Path(root, "accounts", key), target)
+        will_install += n
+        will_skip.extend(sk)
+        blocked.extend(bl)
+        excluded.extend(ex)
+    for name, target in extra_targets.items():
+        n, sk, bl, ex = _scan_spot(Path(root, "extra", name), target)
+        will_install += n
+        will_skip.extend(sk)
+        blocked.extend(bl)
+        excluded.extend(ex)
+
+    identities = {key: dir_identity(t) for key, t in targets.items()}
+    identities.update({f"extra:{name}": dir_identity(t) for name, t in extra_targets.items()})
     return InstallPlan(
         source_root=root,
         source_identity=dir_identity(root),
         targets=targets,
-        target_identities={key: dir_identity(t) for key, t in targets.items()},
-        extra_targets={},                   # 票 05（extra 資產）填
+        target_identities=identities,
+        extra_targets=extra_targets,
         will_install=will_install,
         will_skip=will_skip,
         blocked=blocked,
@@ -231,6 +272,7 @@ def transaction_id(plan: InstallPlan) -> str:
         plan.source_root,
         repr(plan.source_identity),
         repr(sorted(plan.targets.items())),
+        repr(sorted(plan.extra_targets.items())),   # 改 extra 落點也是新 transaction
     ])
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
@@ -423,6 +465,15 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
             results.append(ItemResult(account, rel, "failed", safe_fs.error_code(exc)))
 
 
+def _all_landing_spots(plan: InstallPlan) -> list[tuple[str, str]]:
+    """所有落點 (key, target)：帳號用 account key、extra 用 `extra:<name>` 命名空間
+    （不與帳號 key 撞——後者是 `^[A-Za-z0-9_-]+$` 不含冒號）。symlink 授權與 install
+    的 dst_fd 索引都靠它統一，故 `~/.agents` 的資產能作為 symlink 的授權目標（票 05）。"""
+    spots = list(plan.targets.items())
+    spots += [(f"extra:{name}", target) for name, target in plan.extra_targets.items()]
+    return spots
+
+
 def _rewrite_home_prefix(path: str, old_home: str, new_home: str) -> str | None:
     """舊 home 底下的路徑換成新 home 的同一相對位置；不在舊 home 底下回 None。
 
@@ -452,7 +503,7 @@ def _authorized_link_target(literal: str, plan: InstallPlan, manifest: dict,
     rewritten = _rewrite_home_prefix(literal, old_home, new_home) if old_home else None
     if rewritten is None:
         return None
-    for key, target in plan.targets.items():
+    for key, target in _all_landing_spots(plan):
         if rewritten == target or not is_same_or_within(rewritten, target):
             continue                        # 指向 root 本身也不算（那不是某個 node）
         rel = os.path.relpath(rewritten, target)
@@ -509,6 +560,40 @@ def _publish_links(pending: list[_PendingLink], plan: InstallPlan,
                                       safe_fs.error_code(exc)))
 
 
+def _install_spot(src_item_fd: int, key: str, target: str, plan: InstallPlan,
+                  results: list[ItemResult], journal_fd: int,
+                  pending: list[_PendingLink], account_dst_fds: dict[str, int]) -> None:
+    """安裝一個落點（帳號或 extra 共用）：mkdir target → 開 dst_fd → target identity
+    重驗（不符 `target_moved`）→ `_install_tree` → root fsync → dst_fd 轉交第二階段。
+
+    單一落點失敗只讓它自己 failed、不株連也不讓 OSError 穿出（票 03 R2）。src_item_fd
+    是來源內容目錄的 fd，由呼叫端開好與關閉。"""
+    dst_fd = None
+    try:
+        Path(target).mkdir(parents=True, exist_ok=True)
+        dst_fd = _open_dir_pinned(target)
+        expected = plan.target_identities.get(key)
+        st = os.fstat(dst_fd)
+        if expected is not None and (st.st_dev, st.st_ino) != expected:
+            # 落點已不是 plan 驗過的那個目錄——寫下去就是寫進替身。
+            results.append(ItemResult(key, "", "failed", "target_moved"))
+            return
+        _install_tree(src_item_fd, dst_fd, key, "", results, journal_fd, pending)
+        # 根層目錄項的斷電持久性掛在這裡（票 03 R1）；目錄 fsync 不受支援時降級不整批失敗。
+        with contextlib.suppress(OSError):
+            os.fsync(dst_fd)
+        account_dst_fds[key] = dst_fd       # 轉交第二階段，此處不關
+        dst_fd = None
+    except OSError as exc:
+        # 落點被檔案占用、權限被收走等只讓「這個落點」失敗——例外穿出去 route 只接
+        # ValueError 會變裸 500，且排序在後的落點全裝不到（票 03 R2）。
+        logger.error("移機落點安裝失敗：key=%s target=%s", key, target, exc_info=True)
+        results.append(ItemResult(key, "", "failed", safe_fs.error_code(exc)))
+    finally:
+        if dst_fd is not None:              # target_moved 或 OSError 才在這裡關
+            os.close(dst_fd)
+
+
 def install(plan: InstallPlan) -> list[ItemResult]:
     """依 plan 把資產寫進各落點。逐項盡力——單項失敗不阻斷其餘。
 
@@ -549,40 +634,46 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                 except OSError:
                     continue                # 備份包裡沒有這個帳號的內容
                 try:
-                    dst_fd = None
-                    try:
-                        Path(target).mkdir(parents=True, exist_ok=True)
-                        dst_fd = _open_dir_pinned(target)
-                        expected = plan.target_identities.get(key)
-                        st = os.fstat(dst_fd)
-                        if expected is not None and (st.st_dev, st.st_ino) != expected:
-                            # 落點已不是 plan 驗過的那個目錄——寫下去就是寫進替身。
-                            results.append(ItemResult(key, "", "failed", "target_moved"))
-                            continue
-                        _install_tree(account_fd, dst_fd, key, "", results,
-                                      journal_fd, pending)
-                        # 根層檔案的目錄項持久性掛在這裡——_install_tree 只 fsync 遞迴
-                        # 開出的子目錄，root 這層漏掉的話 CLAUDE.md 這種根層檔案斷電後
-                        # 連目錄項都可能消失（Codex 票 03 R1）。suppress 與子層一致：
-                        # 目錄 fsync 不受支援時把斷電移出保證範圍，不是整批失敗（spec
-                        # §4.2.5 保證表第三列）。
-                        with contextlib.suppress(OSError):
-                            os.fsync(dst_fd)
-                        account_dst_fds[key] = dst_fd   # 轉交第二階段，本迴圈不關
-                        dst_fd = None
-                    except OSError as exc:
-                        # 帳號級隔離（Codex 票 03 R2）：落點被檔案占用、權限被收走等
-                        # 只讓「這個帳號」失敗——例外穿出去的話 route 只接 ValueError，
-                        # 會變裸 500，且排序在後的帳號全部裝不到，違反逐項盡力語意。
-                        logger.error("移機帳號級失敗：account=%s target=%s",
-                                     key, target, exc_info=True)
-                        results.append(ItemResult(key, "", "failed", safe_fs.error_code(exc)))
-                    finally:
-                        if dst_fd is not None:      # 失敗或 target_moved 才在這裡關
-                            os.close(dst_fd)
+                    _install_spot(account_fd, key, target, plan, results,
+                                  journal_fd, pending, account_dst_fds)
                 finally:
                     os.close(account_fd)
-            # 第二階段：所有帳號的一般檔／目錄都發布完、journal 也記妥了，才建 symlink。
+            # extra（帳號目錄外資產）走同一支 _install_spot，key 用 extra:<name> 命名空間。
+            # 從 src_root_fd 開 extra/——「不存在」是正常（多數備份包沒有），但「存在
+            # 而開不了」（被換成 symlink、權限被收走）必須記 failed：靜默跳過會讓
+            # 「plan 說會裝」的整組 extra 無聲消失、journal 也被誤清（票 04 F3 的
+            # 「不存在≠讀不出」同款區分，票 05）。
+            try:
+                extra_fd = _open_dir_pinned("extra", dir_fd=src_root_fd)
+            except FileNotFoundError:
+                extra_fd = None
+            except OSError as exc:
+                logger.error("移機 extra/ 開啟失敗", exc_info=True)
+                for name in plan.extra_targets:
+                    results.append(ItemResult(f"extra:{name}", "", "failed",
+                                              safe_fs.error_code(exc)))
+                extra_fd = None
+            if extra_fd is not None:
+                try:
+                    for name, target in plan.extra_targets.items():
+                        try:
+                            item_fd = _open_dir_pinned(name, dir_fd=extra_fd)
+                        except FileNotFoundError:
+                            continue        # 備份包裡沒有這個 extra 的內容——正常
+                        except OSError as exc:
+                            logger.error("移機 extra 來源開啟失敗：name=%s", name,
+                                         exc_info=True)
+                            results.append(ItemResult(f"extra:{name}", "", "failed",
+                                                      safe_fs.error_code(exc)))
+                            continue
+                        try:
+                            _install_spot(item_fd, f"extra:{name}", target, plan, results,
+                                          journal_fd, pending, account_dst_fds)
+                        finally:
+                            os.close(item_fd)
+                finally:
+                    os.close(extra_fd)
+            # 第二階段：所有帳號／extra 的一般檔／目錄都發布完、journal 也記妥了，才建 symlink。
             # 授權集合從 journal 重讀（不是本輪記憶體）——中斷續作時前一輪發布的 node
             # 也算數（ADR-0006／spec §4.2.3.1）。
             if pending:
