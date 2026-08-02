@@ -681,3 +681,27 @@ def test_install_still_reports_source_root_moved_as_client_error(
                                          json={"dest": str(staging)})
     assert resp.status_code == 400
     assert resp.json()["error"] == "source_root_moved"
+
+
+def test_install_endpoints_report_config_unreadable_for_malformed_containers(
+        tmp_path: Path, monkeypatch):
+    """config 的頂層容器欄位畸形（手編出 `roots: 1`／`project_overrides: []`）→ 兩支
+    install 端點都回 `config_unreadable`，不得讓框架產生非合約 500。
+
+    `_from_data` 對容器欄位不驗形狀，拋的是 TypeError／AttributeError 而非 ValueError
+    （Codex 階段 10 守門 R2 實測）。**config 的容錯判準是另一張票的主題**
+    （`.scratch/config-resilience/issues/01`——在 `load()` 丟棄畸形資料會造成不可逆
+    遺失，那張票的四輪 PR-gate 就是栽在這裡）；這裡只保證端點合約。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    cfg = tmp_path / "config.json"
+    client = TestClient(create_app())
+
+    for malformed in ({"accounts": {}, "roots": 1},
+                      {"accounts": {}, "project_overrides": []},
+                      {"accounts": {}, "manual_projects": 5}):
+        cfg.write_text(json.dumps(malformed), encoding="utf-8")
+        for path in ("/api/restore/install-plan", "/api/restore/install"):
+            resp = client.post(path, json={"dest": str(staging)})
+            assert resp.status_code == 500, (path, malformed)
+            assert resp.json()["error"] == "config_unreadable", (path, malformed)

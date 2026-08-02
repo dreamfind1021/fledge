@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 
 from fastapi import APIRouter
@@ -28,6 +29,7 @@ from fledge_sidecar.paths import expand_and_validate, probe_dir, resolve_best_ef
 from fledge_sidecar.routes.config import _config_lock
 from fledge_sidecar.routes.setup import setup_lock
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -81,6 +83,19 @@ _INSTALL_CLIENT_ERRORS = frozenset({
     "mapping_not_absolute", "mapping_collision", "mapping_unknown_project",
     "mapping_ambiguous",
 })
+
+
+# 讀 config 時代表「這份設定檔讀不出來」的例外。`ValueError`＝壞 JSON／缺 accounts；
+# `TypeError`／`AttributeError`＝頂層容器欄位形狀畸形（手編出 `roots: 1`、
+# `project_overrides: []`），`_from_data` 對容器不驗形狀就會這樣拋（Codex 階段 10 守門 R2）。
+# **刻意只包住 `AppConfig.load*()` 那一行**，不包業務邏輯——包大了會把模組自己的
+# TypeError 也吞成「設定檔壞掉」，掩蓋真 bug。
+#
+# 這裡只保證**端點合約**（讀不出來就回穩定判別碼）。「畸形 config 該由哪一層、用什麼
+# 標準處理」是另一張票的主題（`.scratch/config-resilience/issues/01`）：在 `load()` 丟棄
+# 或改寫畸形資料會造成不可逆遺失（所有寫入端點都是 load→改一欄→save 整份覆蓋），那張票
+# 的四輪 PR-gate 正是栽在這個範圍問題上，不在這裡順手修。
+_CONFIG_UNREADABLE = (ValueError, TypeError, AttributeError)
 
 
 def _module_error(exc: ValueError) -> JSONResponse:
@@ -214,7 +229,8 @@ def install_plan(body: DestBody):
     try:
         # 設定檔本身壞掉只有這一層會拋（JSON 剖析訊息不可當判別碼外洩，故不透傳）
         config = AppConfig.load()
-    except ValueError:
+    except _CONFIG_UNREADABLE:
+        logger.error("移機預覽讀不出 config", exc_info=True)
         return JSONResponse(status_code=500, content={"error": "config_unreadable"})
     try:
         # extra 落點同樣只來自 config（adopt-config 確認後寫入），不由前端送（票 07）
@@ -243,10 +259,11 @@ def install_route(body: DestBody):
             except FileNotFoundError:
                 return JSONResponse(status_code=400,
                                     content={"error": "config_not_initialized"})
-            except ValueError:
-                # 設定檔本身壞掉（壞 JSON／缺 accounts）**只有這一層**會拋——模組的
-                # ValueError 一律是判別碼，把兩者混在同一個 except 會讓「來源不見了」
-                # 「journal 開不起來」全被誤報成設定檔損壞（Codex 階段 10 守門）。
+            except _CONFIG_UNREADABLE:
+                # 設定檔本身壞掉**只有這一層**會拋——模組的 ValueError 一律是判別碼，
+                # 把兩者混在同一個 except 會讓「來源不見了」「journal 開不起來」全被
+                # 誤報成設定檔損壞（Codex 階段 10 守門 R1）。
+                logger.error("移機安裝讀不出 config", exc_info=True)
                 return JSONResponse(status_code=500,
                                     content={"error": "config_unreadable"})
             plan = install.plan(body.dest, config.accounts, extra=config.extra,
