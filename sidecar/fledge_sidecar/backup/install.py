@@ -720,7 +720,8 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                   pending: list[_PendingLink],
                   rename_children: dict[str, str] | None = None,
                   project_renames: dict[str, str] | None = None,
-                  dir_owners: dict[tuple[int, int], str] | None = None) -> None:
+                  dir_owners: dict[tuple[int, int], str] | None = None,
+                  reap_temps: bool = False) -> None:
     """遞迴安裝一層。symlink 收集起來延到第二階段（票 04：過 provenance 授權才建）。
 
     `rename_children`＝本層目錄項的目的地改名表（票 06：只有 `projects/` 那一層的
@@ -729,8 +730,9 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
     **目的地**位置。"""
     # 前一輪硬中斷留在這一層的暫存殘骸（票 08）：`write_bytes_atomic` 只清得掉本進程
     # 活著走到例外路徑的那些，SIGKILL／斷電留下的要靠這裡掃。掃的範圍就是本輪會寫入
-    # 的目錄，不額外走訪使用者的其他位置。
-    safe_fs.reap_stale_temps(dst_fd)
+    # 的目錄，不額外走訪使用者的其他位置；`reap_temps` 只在續作時為真（見 install()）。
+    if reap_temps:
+        safe_fs.reap_stale_temps(dst_fd)
     for entry in os.scandir(src_fd):
         dst_name = (rename_children or {}).get(entry.name, entry.name)
         rel = os.path.join(rel_prefix, dst_name) if rel_prefix else dst_name
@@ -778,7 +780,8 @@ def _install_tree(src_fd: int, dst_fd: int, account: str, rel_prefix: str,
                         _install_tree(child_src, child_dst, account, rel, results,
                                       journal_fd, pending,
                                       rename_children=child_renames,
-                                      dir_owners=dir_owners)
+                                      dir_owners=dir_owners,
+                                      reap_temps=reap_temps)
                         # durability：link／unlink 的目錄項在斷電後不保證持久，光 fsync
                         # 檔案不夠。粒度取「每個目錄一次」而非每檔兩次——一次還原可能
                         # 上千個小檔，後者成本過高（spec §4.2.5）。
@@ -1135,6 +1138,11 @@ def install(plan: InstallPlan) -> list[ItemResult]:
     # journal 開在 source 驗證之後、任何寫入之前：它是 symlink 授權與中斷續作的基礎，
     # 開不起來就不該動使用者的目錄——fail closed 回穩定判別碼，不讓 OSError 裸穿。
     journal = journal_path(transaction_id(plan))
+    # 只有續作才掃暫存殘骸（Codex 票 08 R1 F3）：完整成功會清掉 journal，所以「journal
+    # 還在」正是上一輪沒收尾的訊號，也是唯一可能留下殘骸的情況。首次安裝掃了必然一無所獲，
+    # 而那個掃描是**按目的地既有目錄項計費**——落點已有上千個使用者檔案時每層都要全掃。
+    # 這不是安全判斷（誤判只會多掃一次或少清一次殘骸），所以用 pathname 探測就夠。
+    resuming = journal.exists()
     try:
         journal_fd = _open_journal_fd(journal)
     except OSError as exc:
@@ -1247,7 +1255,8 @@ def install(plan: InstallPlan) -> list[ItemResult]:
                                   project_renames=(plan.project_renames
                                                    if not spot.key.startswith("extra:")
                                                    else None),
-                                  dir_owners=dir_owners)
+                                  dir_owners=dir_owners,
+                                  reap_temps=resuming)
                     # 根層目錄項的斷電持久性掛在這裡（票 03 R1）；目錄 fsync 不受支援時
                     # 降級不整批失敗。
                     with contextlib.suppress(OSError):

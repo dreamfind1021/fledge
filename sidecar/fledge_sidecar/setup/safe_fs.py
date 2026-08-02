@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import stat as stat_module
 from pathlib import Path
 
 
@@ -150,18 +151,37 @@ def reap_stale_temps(dir_fd: int) -> int:
     且永遠不會自己消失（票 02 判定「屬呼叫端簿記」的殘餘，收在這裡）。
 
     只認自己的命名空間、只清產生者已不在的、只碰一般檔（同名目錄或 symlink 不是我們
-    產生的）。是簿記不是安裝的一部分——讀不到目錄或刪不掉都不阻斷安裝。"""
+    產生的）。是簿記不是安裝的一部分——讀不到目錄或刪不掉都不阻斷安裝。
+
+    **保證等級（宣稱與實際逐字對齊）**：刪除前重驗身分，但 **POSIX 沒有「按 fd 刪除」
+    的原語**（macOS 無 `funlinkat`，Python 只有 pathname 版 `unlink`），所以「驗身分」
+    與「刪除」之間必然還有一次名稱解析——**這是縮小窗口不是關閉**（Codex 票 08 R1 F1；
+    同票 09 對 symlink 暫名的裁定）。殘餘窗口內若名字被抽換成另一個一般檔，刪到的會是
+    替代物；能做到這件事的主體必須對落點目錄有寫入權，而那等於已經能直接刪任何檔案。
+
+    **適用邊界**：liveness 判斷是單機語意。跨 PID namespace 共享同一檔案系統時，
+    `kill(0)` 對別的 namespace 的活 writer 會回 ESRCH——當前部署（macOS 桌面 app、
+    sidecar 由 Tauri 殼直接 spawn）沒有這個情形。"""
     try:
         with os.scandir(dir_fd) as entries:
-            # 先 materialize 再刪：邊迭代邊 unlink 的行為未定義。
-            names = [e.name for e in entries
-                     if e.name.startswith(TEMP_PREFIX) and e.is_file(follow_symlinks=False)]
+            # 先 materialize 再刪：邊迭代邊 unlink 的行為未定義。身分連 name 一起記，
+            # 刪之前要拿它比對（`is_file` 的結果屬於 scandir 那一刻，不能授權稍後的刪除）。
+            candidates = [(e.name, (e.stat(follow_symlinks=False).st_dev, e.inode()))
+                          for e in entries
+                          if e.name.startswith(TEMP_PREFIX)
+                          and e.is_file(follow_symlinks=False)]
     except OSError:
         return 0
     reaped = 0
-    for name in names:
+    for name, identity in candidates:
         if not _creator_is_gone(name):
             continue
+        try:
+            st = os.lstat(name, dir_fd=dir_fd)
+        except OSError:
+            continue                    # 已經不在，或問不出來——都不刪
+        if (st.st_dev, st.st_ino) != identity or not stat_module.S_ISREG(st.st_mode):
+            continue                    # 名字已指向另一個物件，不是我們掃到的那個
         try:
             os.unlink(name, dir_fd=dir_fd)
         except OSError:

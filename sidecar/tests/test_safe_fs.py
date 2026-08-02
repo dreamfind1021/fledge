@@ -263,3 +263,55 @@ def test_reap_only_touches_regular_files(tmp_path: Path):
     assert (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0001").is_dir()
     assert (tmp_path / f"{safe_fs.TEMP_PREFIX}{pid}-dead0002").is_symlink()
     assert victim.read_bytes() == b"MINE"
+
+
+def test_reap_rechecks_identity_before_unlink(tmp_path: Path, monkeypatch):
+    """scandir 判型到 unlink 之間名字被抽換 → 身分不符就不刪（Codex 票 08 R1 F1）。
+
+    POSIX 沒有「按 fd 刪除」的原語（macOS 無 `funlinkat`，Python 只有 pathname 版
+    `unlink`），所以無法原子地「驗身分再刪」——**這是縮小窗口不是關閉**，同票 09 對
+    symlink 暫名的裁定。這條釘住的是「至少不能拿 scandir 當時的型別結果去授權稍後的
+    刪除」。"""
+    pid = _dead_pid()
+    name = f"{safe_fs.TEMP_PREFIX}{pid}-a1b2c3d4"
+    (tmp_path / name).write_bytes(b"stale")
+    victim = tmp_path / "user-data.md"
+    victim.write_bytes(b"MINE")
+
+    real_lstat = safe_fs.os.lstat
+    swapped: list[bool] = []
+
+    def _swap_then_lstat(path, **kwargs):
+        # 抽換發生在重驗之前：reaper 拿到的會是「另一個物件」的身分
+        if path == name and not swapped:
+            swapped.append(True)
+            (tmp_path / name).unlink()
+            victim.rename(tmp_path / name)
+        return real_lstat(path, **kwargs)
+
+    monkeypatch.setattr(safe_fs.os, "lstat", _swap_then_lstat)
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        assert safe_fs.reap_stale_temps(d) == 0
+    finally:
+        os.close(d)
+    assert swapped, "抽換沒有發生過，這條測試沒測到東西"
+    assert (tmp_path / name).read_bytes() == b"MINE", "抽換進來的使用者檔案不得被刪"
+
+
+def test_reap_spares_temp_when_liveness_cannot_be_determined(tmp_path: Path, monkeypatch):
+    """`kill(0)` 回 EPERM（進程存在但不屬於我們）→ 問不出來一律留著。
+
+    `ProcessLookupError`（ESRCH）才是「確定不在」的唯一訊號。"""
+    def _eperm(pid, sig):
+        raise PermissionError(errno.EPERM, "not yours")
+
+    monkeypatch.setattr(safe_fs.os, "kill", _eperm)
+    orphan = tmp_path / f"{safe_fs.TEMP_PREFIX}{_dead_pid()}-a1b2c3d4"
+    orphan.write_bytes(b"half")
+    d = os.open(str(tmp_path), os.O_DIRECTORY)
+    try:
+        assert safe_fs.reap_stale_temps(d) == 0
+    finally:
+        os.close(d)
+    assert orphan.exists()

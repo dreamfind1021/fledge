@@ -219,3 +219,20 @@ def test_sigkill_between_phases_still_creates_symlinks_on_rerun(tmp_path: Path):
     inst.install(inst.plan(str(src), _accounts(tgt)))
     assert (tgt / "linked").is_symlink(), "重跑必須把 symlink 補上"
     assert (tgt / "linked" / "c.md").read_text(encoding="utf-8") == "CMD"
+
+
+def test_reap_is_skipped_when_there_was_no_prior_round(tmp_path: Path, monkeypatch):
+    """正常首次安裝不掃暫存殘骸：沒有前一輪就不可能有殘骸，掃描是純成本。
+
+    這個掃描是**按目的地既有目錄項計費**而非按殘骸數計費（Codex 票 08 R1 F3）——落點
+    若已有上千個使用者檔案，每一層都要全掃一次。前一輪完整成功會清掉 journal，所以
+    「journal 還在」正是「上一輪沒收尾」的訊號，也就是唯一可能有殘骸的情況。"""
+    calls: list[int] = []
+    monkeypatch.setattr(inst.safe_fs, "reap_stale_temps",
+                        lambda fd: calls.append(fd) or 0)
+    src = _staging(tmp_path)
+    tgt = tmp_path / "live"
+    tgt.mkdir()
+
+    inst.install(inst.plan(str(src), _accounts(tgt)))
+    assert calls == [], "首次安裝不該掃描目的地"
