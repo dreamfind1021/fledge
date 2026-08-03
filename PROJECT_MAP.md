@@ -264,7 +264,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `sidecar/resources/templates-public/**`（seed 內容增刪） | 同目錄的 `manifest.json` 必須一起重產（`build_manifest_entries`），否則 `test_templates.py` 的 drift 測試與 release workflow 的 ③ 都會失敗 |
 | `src/lib/tabOrder.ts`（排序/插入邏輯變更） | `store/useAppStore.ts`、`tabOrder.test.ts` |
 | `src/lib/terminalRegistry.ts`（handle contract 變更） | `Terminal.tsx`、`App.tsx`（onDragEnd 貼路徑） |
-| `src/lib/onboardingSteps.ts`（頁面序列增刪／降級規則變更） | `Onboarding.tsx`（每個 `step` 一個渲染分支，移機的 `roots` 另需 `mode` 判別）、`onboardingSteps.test.ts`、`Onboarding.test.tsx`、`.scratch/onboarding-wizard/spec-b4.md` 定案 9（全新設定序列）、`docs/superpowers/specs/2026-07-31-restore-into-empty-target-design.md` §5.1（移機序列） |
+| `src/lib/onboardingSteps.ts`（頁面序列增刪／降級規則變更） | `Onboarding.tsx`（每個 `step` 一個渲染分支；移機的落點頁是獨立的 `targets` 身分，不與 `roots` 共用、渲染不必判 `mode`）、`onboardingSteps.test.ts`、`Onboarding.test.tsx`、`.scratch/onboarding-wizard/spec-b4.md` 定案 9（全新設定序列）、`docs/superpowers/specs/2026-07-31-restore-into-empty-target-design.md` §5.1（移機序列） |
 | `src/locales/*/sidebar.json`（key 增刪） | 另一語言 catalog 同步（`sidebar-parity.test.ts` 會擋）、`Sidebar.tsx`/`TabBar.tsx`/`FileTree*.tsx`/`Terminal.tsx` 的 t() 引用 |
 | `src/locales/*/onboarding.json`（key 增刪） | 另一語言 catalog 同步（`onboarding-parity.test.ts` 會擋）、`Onboarding.tsx` 與 B-4 各設置卡（含 `DevEnvSection`）的 t() 引用 |
 | `src/components/CommonConfigCard.tsx`（props／行為變更） | **兩處掛載**：`Onboarding.tsx`（精靈版，無 `allowOverwrite`）與 `DevEnvSection.tsx`（設定頁版，逐項授權）、`CommonConfigCard.test.tsx` 的兩個 describe |
