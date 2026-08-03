@@ -678,3 +678,159 @@ def test_abandoned_staging_is_reclaimed_immediately(tmp_path: Path):
 
     assert _run([str(bundle), "-o", str(tmp_path / "restored")], home).returncode == 0
     assert not dead.exists()
+
+
+# ── 惡意備份包：內容是不可信輸入（票 12）──────────────────────────────────────
+#
+# 威脅情境是**社交工程**——使用者從網路下載一份假的「備份包」。這在名字模式下就成立
+# （把它放進 backup_dir 即可），不是票 11 的路徑模式新增的。
+
+SENTINEL = "SHELL-LEAK-SENTINEL-4711"
+
+
+def _evil_bundle(tmp_path: Path, members) -> Path:
+    """手工造包。`members` 是 (name, kind, payload) 的序列：
+    kind="file" → payload 是內容字串；kind="link" → payload 是 symlink 目標。
+
+    這裡**不能**用 `_make_bundle`（真的備份腳本）——它產不出惡意成員。"""
+    import io
+    import tarfile
+
+    d = tmp_path / "evil"
+    d.mkdir(exist_ok=True)
+    bundle = d / "claude-backup-20260101-1200.tar.gz"
+    with tarfile.open(bundle, "w:gz") as tf:
+        for name, kind, payload in members:
+            if kind == "file":
+                raw = payload.encode()
+                ti = tarfile.TarInfo(name)
+                ti.size = len(raw)
+                tf.addfile(ti, io.BytesIO(raw))
+            else:
+                ti = tarfile.TarInfo(name)
+                ti.type = tarfile.SYMTYPE
+                ti.linkname = payload
+                tf.addfile(ti)
+    return bundle
+
+
+def test_manifest_that_is_a_symlink_is_refused_and_never_read(tmp_path: Path):
+    """**這是本票的核心**：`[ -f ]` 與 `json.load(open(...))` 都跟隨 symlink，所以一份把
+    `manifest.json` 做成 symlink 的包，會讓腳本解析包外的檔案並把欄位印在 PTY 上。
+
+    哨兵斷言比「回非零」重要得多——擋下來卻還是把內容印出去，等於沒擋。"""
+    home, _ = _fake_home(tmp_path)
+    secret = tmp_path / "secret.json"
+    secret.write_text(json.dumps({"created": SENTINEL, "host": SENTINEL}), encoding="utf-8")
+    bundle = _evil_bundle(tmp_path, [
+        ("accounts/default/settings.json", "file", "{}"),
+        ("manifest.json", "link", str(secret)),
+    ])
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode != 0, proc.stdout
+    assert SENTINEL not in proc.stdout
+    assert SENTINEL not in proc.stderr
+    assert not dest.exists()          # 不完整的包不留半套目錄
+
+
+def test_diff_only_also_refuses_a_symlinked_manifest(tmp_path: Path):
+    """`--diff-only` 跳過解壓、直接讀既有展開目錄的 manifest——那條路上原本沒有任何驗證。"""
+    home, _ = _fake_home(tmp_path)
+    secret = tmp_path / "secret.json"
+    secret.write_text(json.dumps({"created": SENTINEL, "host": SENTINEL}), encoding="utf-8")
+    dest = tmp_path / "already-unpacked"
+    (dest / "accounts").mkdir(parents=True)
+    (dest / "manifest.json").symlink_to(secret)
+
+    proc = _run(["--diff-only", "-o", str(dest)], home)
+
+    assert proc.returncode != 0, proc.stdout
+    assert SENTINEL not in proc.stdout
+    assert SENTINEL not in proc.stderr
+
+
+def test_archive_members_cannot_escape_the_staging_directory(tmp_path: Path):
+    """**釘住 libarchive 的預設行為**，不是我們自己寫的防線：絕對路徑成員被剝掉前導 `/`、
+    含 `..` 的成員被拒、透過包內 symlink 往外寫被拒（三者皆實測）。
+
+    哪天有人加 `-P`、換成 GNU tar、或 libarchive 改預設，這條會變紅——那正是重點。
+    我們刻意**不自己寫受控 extractor**（重寫一份只是多一份要維護的安全程式碼）。"""
+    home, _ = _fake_home(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    bundle = _evil_bundle(tmp_path, [
+        ("accounts/default/settings.json", "file", "{}"),
+        ("manifest.json", "file", json.dumps({"created": "x", "accounts": {}})),
+        (str(outside / "pwned_abs.txt"), "file", "ABS"),
+        ("../outside/pwned_dotdot.txt", "file", "DOTDOT"),
+        ("link_out", "link", str(outside)),
+        ("link_out/pwned_via_link.txt", "file", "VIALINK"),
+    ])
+    dest = tmp_path / "unpacked"
+
+    _run([str(bundle), "-o", str(dest)], home)
+
+    assert sorted(p.name for p in outside.iterdir()) == []
+
+
+def test_absurd_expansion_ratio_is_refused_and_leaves_nothing(tmp_path: Path):
+    """tar bomb：壓縮後幾 KB、展開後爆量。判準用**壓縮比**而不是絕對大小——後者會誤擋
+    「真的有很多資產」的誠實大包，而壓縮比正是 tar bomb 的特徵。
+
+    宣稱等級：這**不是**「防止磁碟耗盡」。解壓當下的空間已經被佔掉了（磁碟真的滿的話是
+    tar 自己失敗，由既有的 cleanup 處理）；這一層擋的是「不讓一個離譜的展開目錄留在磁碟上」。"""
+    import io
+    import tarfile
+
+    home, _ = _fake_home(tmp_path)
+    d = tmp_path / "bomb"
+    d.mkdir()
+    bundle = d / "claude-backup-20260101-1200.tar.gz"
+    zeros = b"\0" * (9 << 20)          # 9 MiB 的零：壓縮後幾 KB，比例上千倍
+    with tarfile.open(bundle, "w:gz") as tf:
+        manifest = json.dumps({"created": "x", "accounts": {}}).encode()
+        ti = tarfile.TarInfo("manifest.json")
+        ti.size = len(manifest)
+        tf.addfile(ti, io.BytesIO(manifest))
+        ti = tarfile.TarInfo("accounts/default/huge.bin")
+        ti.size = len(zeros)
+        tf.addfile(ti, io.BytesIO(zeros))
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode != 0, proc.stdout
+    assert not dest.exists()                                   # 沒有發布
+    residue = list(dest.parent.glob(".*fledge-restore-*.partial"))
+    assert residue == [], residue                              # staging 也清掉了
+
+
+def test_an_honest_large_bundle_is_not_refused(tmp_path: Path):
+    """**誠實的大包不能被誤擋**：內容不可壓縮（隨機位元組）時比例接近 1，遠低於門檻。
+    只用絕對大小當判準的話這一條會紅——那正是不該做的事。"""
+    import io
+    import os as _os
+    import tarfile
+
+    home, _ = _fake_home(tmp_path)
+    d = tmp_path / "big"
+    d.mkdir()
+    bundle = d / "claude-backup-20260101-1200.tar.gz"
+    payload = _os.urandom(9 << 20)     # 9 MiB 隨機：壓不掉，比例 ≈ 1
+    with tarfile.open(bundle, "w:gz") as tf:
+        manifest = json.dumps({"created": "x", "accounts": {}}).encode()
+        ti = tarfile.TarInfo("manifest.json")
+        ti.size = len(manifest)
+        tf.addfile(ti, io.BytesIO(manifest))
+        ti = tarfile.TarInfo("accounts/default/big.bin")
+        ti.size = len(payload)
+        tf.addfile(ti, io.BytesIO(payload))
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode == 0, proc.stderr
+    assert (dest / "accounts" / "default" / "big.bin").exists()

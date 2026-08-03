@@ -43,6 +43,94 @@ fi
 
 DEST="${DEST:-${HOME}/.claude-restore-$(basename "${BUNDLE}" .tar.gz | sed 's/^claude-backup-//')}"
 
+# ── 展開量的防呆（票 12）──────────────────────────────────────────────────────
+# tar bomb：壓縮後幾 KB、展開後爆量。判準用**壓縮比**而不是絕對大小——後者會誤擋「真的
+# 有很多資產」的誠實大包，而壓縮比正是 tar bomb 的特徵。
+#
+# **宣稱等級**：這不是「防止磁碟耗盡」。解壓當下的空間已經被佔掉了（磁碟真的滿的話是 tar
+# 自己失敗，由既有的 cleanup 處理），這一層擋的是**不讓一個離譜的展開目錄留在磁碟上**。
+# 也擋不住「宣告小、實際大」——因為我們量的就是實際落地的大小，不看 header 宣告值。
+EXPANSION_MIN_BYTES=8388608   # 8 MiB 以下不看比例：小包的 gzip 固定開銷會讓比例失真
+EXPANSION_MAX_RATIO=200       # 真實備份包多是文字（jsonl／md），實測比例個位數到十幾倍
+
+check_expansion() {
+  python3 - "$1" "$2" "${EXPANSION_MIN_BYTES}" "${EXPANSION_MAX_RATIO}" <<'PYEOF'
+import os, stat, sys
+
+staging, bundle, floor, max_ratio = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+
+# 只加總**一般檔**的大小：目錄項本身的 st_size 在 APFS 有幾百 bytes，算進去會讓「很多
+# 空目錄」的包被誤判。symlink 不跟隨（lstat），它的 size 是目標字串長度。
+total = 0
+for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
+    for name in filenames:
+        try:
+            st = os.lstat(os.path.join(dirpath, name))
+        except OSError:
+            continue
+        if stat.S_ISREG(st.st_mode):
+            total += st.st_size
+
+if total <= floor:
+    raise SystemExit(0)
+try:
+    packed = os.stat(bundle).st_size
+except OSError:
+    raise SystemExit(0)          # 量不到來源就不做這個判斷，不擋合法的還原
+if packed > 0 and total // packed > max_ratio:
+    print(
+        f"拒絕發布：這份備份包展開後是它本身的 {total // packed} 倍"
+        f"（{total // (1 << 20)} MiB ← {packed // 1024} KiB）。",
+        file=sys.stderr,
+    )
+    print("正常的備份包不會有這種比例，多半是一份惡意或損壞的包。", file=sys.stderr)
+    raise SystemExit(1)
+PYEOF
+}
+
+# ── manifest 的安全讀取（票 12）───────────────────────────────────────────────
+# 備份包的內容是**不可信輸入**（使用者可能從網路下載到一份假的）。原本用 `[ -f ]` 判存在、
+# 再 `json.load(open(...))` 讀——兩者都跟隨 symlink，所以一份把 `manifest.json` 做成 symlink
+# 的包，會讓腳本解析包外的檔案並把欄位印在畫面上。
+#
+# **與 sidecar 的 `backup/install.py::read_manifest` 是同一組判準的兩份實作**：腳本要能獨立
+# 執行（不能 import sidecar），所以無法共用程式碼。**改一邊務必改另一邊**（票 10／票 12）。
+#
+# 錯誤訊息刻意**不含檔案內容**——擋下來卻仍把內容印出去，等於沒擋。
+MANIFEST_MAX_BYTES=1048576   # 1 MiB。manifest 只有帳號清單與幾個欄位，實測不到 1 KB。
+
+verify_manifest() {
+  python3 - "$1" "${MANIFEST_MAX_BYTES}" <<'PYEOF'
+import json, os, stat, sys
+
+path, limit = sys.argv[1], int(sys.argv[2])
+BAD = "這不是一份可用的備份包"
+try:
+    # O_NOFOLLOW：manifest.json 自己是 symlink 就直接失敗，不跟著讀出包外的檔案。
+    # O_NONBLOCK：它若是 FIFO，唯讀 open 會阻塞而根本走不到下面的型別判定。
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+except OSError:
+    print(f"{BAD}（manifest.json 讀不到，或它是連結而不是檔案）。", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
+        print(f"{BAD}（manifest.json 不是一般檔案）。", file=sys.stderr)
+        raise SystemExit(1)
+    if st.st_size > limit:
+        print(f"{BAD}（manifest.json 大得不合理）。", file=sys.stderr)
+        raise SystemExit(1)
+    raw = os.read(fd, limit)
+finally:
+    os.close(fd)
+try:
+    json.loads(raw)
+except ValueError:
+    print(f"{BAD}（manifest.json 不是合法的 JSON）。", file=sys.stderr)
+    raise SystemExit(1)
+PYEOF
+}
+
 expand_home() { case "$1" in "~/"*) echo "${HOME}/${1#\~/}" ;; "~") echo "${HOME}" ;; *) echo "$1" ;; esac; }
 
 # ── 展開位置的 containment 防呆 ─────────────────────────────────────────────
@@ -237,10 +325,13 @@ if [ "${DIFF_ONLY}" = false ]; then
     exit 1
   fi
 
-  # 備份包必須自帶 manifest.json：它是差異報告的唯一依據，缺了它比對無從進行。
-  # 在**發布前**檢查，不完整的包因此不會留下任何半套目錄。
-  [ -f "${staging}/manifest.json" ] || {
-    echo "這不是一份完整的備份包（缺 manifest.json）：${BUNDLE}" >&2; exit 1; }
+  # 備份包必須自帶一份**讀得出來的** manifest.json：它是差異報告的唯一依據。
+  # 在**發布前**檢查，不完整的包因此不會留下任何半套目錄；而且 symlink manifest 必須在
+  # 這裡就被擋掉——`rename` 整棵樹時 symlink 會跟著過去，發布後才驗等於沒驗。
+  verify_manifest "${staging}/manifest.json" || exit 1
+
+  # 展開量的防呆同樣在**發布前**：拒絕時 staging 由 EXIT trap 清掉，磁碟上不留東西。
+  check_expansion "${staging}" "${BUNDLE}" || exit 1
 
   # **發布走 os.rename 而不是 mv**：`mv A B` 在 B 是既有目錄時會把 A 移**進去**變成
   # B/<staging名>，於是兩個同時還原到同一個 DEST 的程序，第二個會把自己整棵樹藏進第一份
@@ -259,7 +350,8 @@ except OSError as exc:
 fi
 
 MANIFEST="${DEST}/manifest.json"
-[ -f "${MANIFEST}" ] || { echo "展開目錄裡沒有 manifest.json：${DEST}" >&2; exit 1; }
+# `--diff-only` 跳過解壓直接走到這裡，所以這一道不能省——那條路上的展開目錄不是本次驗過的。
+verify_manifest "${MANIFEST}" || exit 1
 
 python3 - "${MANIFEST}" <<'PY'
 import json, sys
