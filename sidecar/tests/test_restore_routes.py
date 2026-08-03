@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from fledge_sidecar.app import create_app
 from fledge_sidecar.backup import install
+from fledge_sidecar.backup import restore as restore_mod
 
 BUNDLE = "claude-backup-20260101-1200.tar.gz"
 
@@ -933,3 +934,81 @@ def test_restore_session_path_mode_still_enforces_containment(tmp_path: Path, mo
     })
     assert resp.status_code == 400
     assert resp.json()["error"] == "dest_inside_source"
+
+
+# ── spawn 前的閘與實際 argv 必須是同一組值（Codex 票 11 審查）──────────────────
+# 閘驗過一組 `(bundle, dest)` 之後，若組 argv 時再解析一次，實際跑的可能是**沒被驗過**的
+# 另一組——`resolve_dest` 的撞名迴圈會探測檔案系統，兩次之間狀態變了就會給出不同答案。
+
+
+def _spawn_capture(monkeypatch) -> dict:
+    captured: dict = {}
+
+    class _Session:
+        session_id = "s"
+
+    monkeypatch.setattr(
+        "fledge_sidecar.routes.sessions._bridge.create_session",
+        lambda **kw: (captured.update(kw), _Session())[1],
+    )
+    return captured
+
+
+def _occupy_after_gate(monkeypatch, victim: Path):
+    """在閘的最後一步（`check_dest`）跑完之後占用 `victim`，模擬「驗過到用之間」的變化。"""
+    real = restore_mod.check_dest
+
+    def _hook(abs_path: str, roots: list[str]):
+        verdict = real(abs_path, roots)
+        victim.mkdir(parents=True, exist_ok=True)
+        (victim / "someone-elses").write_bytes(b"x")
+        return verdict
+
+    monkeypatch.setattr("fledge_sidecar.backup.restore.check_dest", _hook)
+
+
+def test_restore_session_spawns_exactly_what_the_gate_approved(tmp_path: Path, monkeypatch):
+    """閘算出預設位置 `base` 並驗過；驗完後 `base` 被占用。若組 argv 時重新解析，
+    `resolve_dest` 的撞名迴圈會改回 `base-1`——那一個**沒有經過 check_dest**。"""
+    _config(tmp_path, monkeypatch, backup_dir="", with_bundle=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    bundle = _loose_bundle(tmp_path)
+    base = home / ".claude-restore-20260101-1200"
+    _occupy_after_gate(monkeypatch, base)
+    captured = _spawn_capture(monkeypatch)
+
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": "", "kind": "restore", "restore_bundle_path": str(bundle),
+    })
+
+    assert resp.status_code == 200, resp.text
+    assert captured["command"][-1] == str(base)      # 閘驗過的那一個，不是 base-1
+
+
+def test_restore_session_does_not_500_when_the_bundle_vanishes_mid_request(
+    tmp_path: Path, monkeypatch,
+):
+    """驗過之後備份包被拔掉（隨身碟拔除）。這個窗口關不掉——tar 終究要以 pathname 重開——
+    但它**不該變成裸 500**：閘已經放行，就用閘驗過的那組值往下走，讓展開自己失敗並把訊息
+    顯示在 PTY 上（票 02 的「展開失敗要有明確訊息」）。"""
+    _config(tmp_path, monkeypatch, backup_dir="", with_bundle=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    bundle = _loose_bundle(tmp_path)
+    real = restore_mod.check_dest
+
+    def _hook(abs_path: str, roots: list[str]):
+        verdict = real(abs_path, roots)
+        bundle.unlink()          # 驗完之後才消失
+        return verdict
+
+    monkeypatch.setattr("fledge_sidecar.backup.restore.check_dest", _hook)
+    captured = _spawn_capture(monkeypatch)
+
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": "", "kind": "restore", "restore_bundle_path": str(bundle),
+    })
+
+    assert resp.status_code == 200, resp.text
+    assert captured["command"][2] == str(bundle)
