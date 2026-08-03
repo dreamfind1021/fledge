@@ -688,7 +688,7 @@ def test_abandoned_staging_is_reclaimed_immediately(tmp_path: Path):
 SENTINEL = "SHELL-LEAK-SENTINEL-4711"
 
 
-def _evil_bundle(tmp_path: Path, members) -> Path:
+def _evil_bundle(where: Path, members) -> Path:
     """手工造包。`members` 是 (name, kind, payload) 的序列：
     kind="file" → payload 是內容字串；kind="link" → payload 是 symlink 目標。
 
@@ -696,9 +696,8 @@ def _evil_bundle(tmp_path: Path, members) -> Path:
     import io
     import tarfile
 
-    d = tmp_path / "evil"
-    d.mkdir(exist_ok=True)
-    bundle = d / "claude-backup-20260101-1200.tar.gz"
+    where.mkdir(parents=True, exist_ok=True)
+    bundle = where / "claude-backup-20260101-1200.tar.gz"
     with tarfile.open(bundle, "w:gz") as tf:
         for name, kind, payload in members:
             if kind == "file":
@@ -722,7 +721,7 @@ def test_manifest_that_is_a_symlink_is_refused_and_never_read(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     secret = tmp_path / "secret.json"
     secret.write_text(json.dumps({"created": SENTINEL, "host": SENTINEL}), encoding="utf-8")
-    bundle = _evil_bundle(tmp_path, [
+    bundle = _evil_bundle(tmp_path / "evil", [
         ("accounts/default/settings.json", "file", "{}"),
         ("manifest.json", "link", str(secret)),
     ])
@@ -752,29 +751,82 @@ def test_diff_only_also_refuses_a_symlinked_manifest(tmp_path: Path):
     assert SENTINEL not in proc.stderr
 
 
-def test_archive_members_cannot_escape_the_staging_directory(tmp_path: Path):
-    """**釘住 libarchive 的預設行為**，不是我們自己寫的防線：絕對路徑成員被剝掉前導 `/`、
-    含 `..` 的成員被拒、透過包內 symlink 往外寫被拒（三者皆實測）。
+def _escape_bundle(tmp_path: Path, name: str, extra_members) -> Path:
+    """一份**正常**的包（manifest + 一個帳號檔）再加上一個逃逸成員。
 
-    哪天有人加 `-P`、換成 GNU tar、或 libarchive 改預設，這條會變紅——那正是重點。
-    我們刻意**不自己寫受控 extractor**（重寫一份只是多一份要維護的安全程式碼）。"""
+    正常成員是必要的：沒有它就無法分辨「逃逸被擋下」與「整個包根本沒被解開」。"""
+    return _evil_bundle(tmp_path / name, [
+        ("manifest.json", "file", json.dumps({"created": "x", "accounts": {}})),
+        ("accounts/default/ok.txt", "file", "fine"),
+        *extra_members,
+    ])
+
+
+def test_absolute_member_lands_inside_the_container_not_outside(tmp_path: Path):
+    """釘住 libarchive 的預設：絕對路徑成員被剝掉前導 `/`，內容落在展開目錄**裡面**。
+
+    實測 tar 對這一種**回 0**（只是警告），所以整個還原會正常走完——斷言的重點是
+    「那個成員確實被處理了、而且落在容器內」，不是「腳本失敗」。"""
     home, _ = _fake_home(tmp_path)
     outside = tmp_path / "outside"
     outside.mkdir()
-    bundle = _evil_bundle(tmp_path, [
-        ("accounts/default/settings.json", "file", "{}"),
-        ("manifest.json", "file", json.dumps({"created": "x", "accounts": {}})),
-        (str(outside / "pwned_abs.txt"), "file", "ABS"),
-        ("../outside/pwned_dotdot.txt", "file", "DOTDOT"),
-        ("link_out", "link", str(outside)),
-        ("link_out/pwned_via_link.txt", "file", "VIALINK"),
+    bundle = _escape_bundle(tmp_path, "b-abs", [(str(outside / "pwned.txt"), "file", "ABS")])
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode == 0, proc.stderr
+    assert list(outside.iterdir()) == []                       # 沒逃出去
+    assert (dest / "accounts" / "default" / "ok.txt").exists()  # 解壓確實發生了
+    # 被剝成相對路徑之後落在展開目錄內——證明該成員被處理而不是被略過
+    assert list(dest.rglob("pwned.txt")) != []
+
+
+def test_dotdot_member_is_rejected_by_the_extractor(tmp_path: Path):
+    """釘住 libarchive 的預設：含 `..` 的成員被拒，且 tar 以非零結束。
+
+    腳本因此走「備份包解不開」那條路——DEST 不存在、包外沒東西。斷言腳本自己的文案
+    （而不是 tar 的英文訊息）是為了不被 libarchive 的措辭變動誤傷。"""
+    home, _ = _fake_home(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    bundle = _escape_bundle(tmp_path, "b-dd", [("../outside/pwned.txt", "file", "DD")])
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode != 0
+    assert "備份包解不開" in proc.stderr, proc.stderr   # 確實是解壓失敗那條路，不是別的
+    # **刻意綁在 libarchive 的訊息上**：只斷言「腳本失敗了」的話，tar 對任何包都失敗時
+    # 這條也會綠（那正是 Codex 抓到的假綠形狀）。訊息變了就代表我們依賴的行為可能也變了，
+    # 該回頭重新確認，不是把斷言放寬。
+    assert "Path contains" in proc.stderr, proc.stderr
+    assert list(outside.iterdir()) == []
+    assert not dest.exists()
+
+
+def test_member_writing_through_a_symlink_is_rejected_by_the_extractor(tmp_path: Path):
+    """釘住 libarchive 的預設：包內先放一個指向包外的 symlink、再放一個寫進它的成員，
+    extractor 拒絕「穿過 symlink 寫入」。這三條合起來就是我們**不自己寫受控 extractor**
+    的理由——libarchive 已經做對了，重寫一份只會多一份要維護的安全程式碼。
+
+    哪天有人給 tar 加上保留絕對路徑的旗標、換成 GNU tar、或 libarchive 改預設，這三條會紅。"""
+    home, _ = _fake_home(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    bundle = _escape_bundle(tmp_path, "b-link", [
+        ("escape_link", "link", str(outside)),
+        ("escape_link/pwned.txt", "file", "LK"),
     ])
     dest = tmp_path / "unpacked"
 
-    _run([str(bundle), "-o", str(dest)], home)
+    proc = _run([str(bundle), "-o", str(dest)], home)
 
-    assert sorted(p.name for p in outside.iterdir()) == []
-
+    assert proc.returncode != 0
+    assert "備份包解不開" in proc.stderr, proc.stderr
+    assert "through symlink" in proc.stderr, proc.stderr   # 理由同上一條
+    assert list(outside.iterdir()) == []
+    assert not dest.exists()
 
 def test_absurd_expansion_ratio_is_refused_and_leaves_nothing(tmp_path: Path):
     """tar bomb：壓縮後幾 KB、展開後爆量。判準用**壓縮比**而不是絕對大小——後者會誤擋
@@ -834,3 +886,102 @@ def test_an_honest_large_bundle_is_not_refused(tmp_path: Path):
 
     assert proc.returncode == 0, proc.stderr
     assert (dest / "accounts" / "default" / "big.bin").exists()
+
+
+def test_huge_entry_count_is_refused_even_when_the_bytes_are_zero(tmp_path: Path):
+    """**大小配額擋不住「多」**：symlink、目錄與零大小檔案的 `st_size` 全是 0，所以幾十萬個
+    這種成員可以讓 `total` 停在 0 而完全繞過比例判準——留下的正是一個「離譜的展開目錄」
+    （inode 耗用、清理極慢）。這是 Codex 票 12 審查抓到的，我原本的宣稱等級因此過寬。
+
+    上限用環境變數覆寫是**測試接縫**（比照既有的 `FLEDGE_BACKUP_SCRIPTS_DIR`）：真實門檻是
+    20 萬，造那麼多成員的測試會慢到不可接受。"""
+    import io
+    import tarfile
+
+    home, _ = _fake_home(tmp_path)
+    d = tmp_path / "many"
+    d.mkdir()
+    bundle = d / "claude-backup-20260101-1200.tar.gz"
+    with tarfile.open(bundle, "w:gz") as tf:
+        manifest = json.dumps({"created": "x", "accounts": {}}).encode()
+        ti = tarfile.TarInfo("manifest.json")
+        ti.size = len(manifest)
+        tf.addfile(ti, io.BytesIO(manifest))
+        for i in range(60):
+            tf.addfile(tarfile.TarInfo(f"accounts/default/empty-{i}"), io.BytesIO(b""))
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home, {"FLEDGE_MAX_ENTRIES": "50"})
+
+    assert proc.returncode != 0, proc.stdout
+    assert not dest.exists()
+    assert list(dest.parent.glob(".*fledge-restore-*.partial")) == []
+
+
+def test_hardlinked_names_are_not_counted_twice(tmp_path: Path):
+    """hardlink 的每個名字都 lstat 得到相同的 `st_size`，逐名加總會把一份內容算 N 次——
+    誤擋方向（安全的那一邊），但仍然是誤擋。以 `(st_dev, st_ino)` 去重。"""
+    import io
+    import tarfile
+
+    home, _ = _fake_home(tmp_path)
+    d = tmp_path / "hard"
+    d.mkdir()
+    bundle = d / "claude-backup-20260101-1200.tar.gz"
+    payload = os.urandom(1 << 20)      # 1 MiB 不可壓縮
+    with tarfile.open(bundle, "w:gz") as tf:
+        manifest = json.dumps({"created": "x", "accounts": {}}).encode()
+        ti = tarfile.TarInfo("manifest.json")
+        ti.size = len(manifest)
+        tf.addfile(ti, io.BytesIO(manifest))
+        ti = tarfile.TarInfo("accounts/default/real.bin")
+        ti.size = len(payload)
+        tf.addfile(ti, io.BytesIO(payload))
+        for i in range(300):           # 300 條 hardlink 指向同一份 1 MiB
+            li = tarfile.TarInfo(f"accounts/default/link-{i}.bin")
+            li.type = tarfile.LNKTYPE
+            li.linkname = "accounts/default/real.bin"
+            tf.addfile(li)
+    dest = tmp_path / "unpacked"
+
+    # 去重後 total ≈ 1 MiB（在 8 MiB 門檻以下，連比例都不看）；逐名加總則是 301 MiB
+    # 配上 1 MiB 的包＝約 300 倍，遠超過 200 倍門檻而被拒。**數字是實測挑的**：先寫的
+    # 「3 MiB × 4 條」版本兩種實作都會放行——它對「有沒有去重」根本不敏感，是假綠。
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode == 0, proc.stderr
+    assert (dest / "accounts" / "default" / "real.bin").exists()
+
+
+def test_manifest_cannot_point_the_diff_at_an_arbitrary_local_directory(tmp_path: Path):
+    """**manifest 的 accounts／extra value 是不可信輸入**：差異報告原本直接拿它當「現役側」
+    去 `expanduser` + 遞迴 `snapshot`，於是一份惡意包可以指定掃描本機任意目錄，並把檔名
+    印在畫面上（Codex 票 12 審查，已實測可利用——指向 `/` 就是掃整個檔案系統）。
+
+    只驗 manifest 是真檔案且是合法 JSON **不夠**——那驗的是 inode、大小與語法，不是語意。
+
+    攻擊要成立還需要包內有同名的頂層目錄（差異報告對「只在現役有」有個過濾條件），所以
+    這裡一併造出來——否則測到的是過濾條件而不是路徑信任邊界。"""
+    home, _ = _fake_home(tmp_path)
+    victim = tmp_path / "victim"
+    (victim / "private-notes").mkdir(parents=True)
+    (victim / "private-notes" / f"{SENTINEL}.txt").write_text("x", encoding="utf-8")
+    bundle = _evil_bundle(tmp_path / "evil-scan", [
+        ("manifest.json", "file", json.dumps({
+            "created": "20260101-1200", "host": "evil", "home": "/old",
+            "accounts": {"x": str(victim)}})),
+        ("accounts/x/private-notes/decoy", "file", "y"),
+    ])
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    # 核心斷言：**受害目錄的檔名沒有被列舉出來**。
+    assert SENTINEL not in proc.stdout, proc.stdout
+    assert SENTINEL not in proc.stderr
+    # 而且是被這道邊界擋下的，不是碰巧（例如流程更早就失敗）。
+    assert "不在本機登記的範圍內" in proc.stdout, proc.stdout
+
+    # 刻意**不**斷言「那個路徑字串完全不出現」：「備份包資訊」那一段會照實顯示 manifest
+    # 宣稱的舊機路徑，那是「這包來自哪裡」的合法資訊，而且那個字串本來就是攻擊者自己寫的
+    # ——他不會從中得知任何新東西。要防的是掃描本機目錄並洩漏**其內容**。

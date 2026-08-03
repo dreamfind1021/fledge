@@ -47,29 +47,57 @@ DEST="${DEST:-${HOME}/.claude-restore-$(basename "${BUNDLE}" .tar.gz | sed 's/^c
 # tar bomb：壓縮後幾 KB、展開後爆量。判準用**壓縮比**而不是絕對大小——後者會誤擋「真的
 # 有很多資產」的誠實大包，而壓縮比正是 tar bomb 的特徵。
 #
-# **宣稱等級**：這不是「防止磁碟耗盡」。解壓當下的空間已經被佔掉了（磁碟真的滿的話是 tar
-# 自己失敗，由既有的 cleanup 處理），這一層擋的是**不讓一個離譜的展開目錄留在磁碟上**。
-# 也擋不住「宣告小、實際大」——因為我們量的就是實際落地的大小，不看 header 宣告值。
+# **宣稱等級**：這不是「防止磁碟耗盡」，也不是「防止 inode 耗盡」。解壓當下的空間與 inode
+# 都已經被佔掉了（磁碟真的滿的話是 tar 自己失敗，由既有的 cleanup 處理），這一層擋的是
+# **不讓一個離譜的展開目錄留在磁碟上**——大得離譜或項目多得離譜都算。
+# 它擋得住「宣告小、實際大」（量的是實際落地的東西，不看 header 宣告值），擋不住「解壓
+# 過程中就把磁碟塞爆」（那需要 streaming 計量）。
 EXPANSION_MIN_BYTES=8388608   # 8 MiB 以下不看比例：小包的 gzip 固定開銷會讓比例失真
 EXPANSION_MAX_RATIO=200       # 真實備份包多是文字（jsonl／md），實測比例個位數到十幾倍
+# **大小配額擋不住「多」**：symlink、目錄與零大小檔案的 st_size 全是 0，幾十萬個這種成員
+# 可以讓總量停在 0 而完全繞過比例判準，留下的正是一個離譜的展開目錄（inode 耗用、清理極慢）。
+# 上限依實測定：本機真實 `~/.claude` 是 1.5 萬個項目，留 13 倍餘裕。
+# `FLEDGE_MAX_ENTRIES` 只是**測試接縫**（比照 FLEDGE_BACKUP_SCRIPTS_DIR）——造 20 萬個成員的
+# 測試會慢到不可接受。能設環境變數的人本來就能執行任意命令，它不是安全邊界。
+MAX_ENTRIES="${FLEDGE_MAX_ENTRIES:-200000}"
 
 check_expansion() {
-  python3 - "$1" "$2" "${EXPANSION_MIN_BYTES}" "${EXPANSION_MAX_RATIO}" <<'PYEOF'
+  python3 - "$1" "$2" "${EXPANSION_MIN_BYTES}" "${EXPANSION_MAX_RATIO}" "${MAX_ENTRIES}" <<'PYEOF'
 import os, stat, sys
 
-staging, bundle, floor, max_ratio = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+staging, bundle = sys.argv[1], sys.argv[2]
+floor, max_ratio, max_entries = int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
 
 # 只加總**一般檔**的大小：目錄項本身的 st_size 在 APFS 有幾百 bytes，算進去會讓「很多
 # 空目錄」的包被誤判。symlink 不跟隨（lstat），它的 size 是目標字串長度。
 total = 0
+entries = 0
+seen = set()
 for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
+    entries += len(dirnames) + len(filenames)
     for name in filenames:
         try:
             st = os.lstat(os.path.join(dirpath, name))
         except OSError:
             continue
-        if stat.S_ISREG(st.st_mode):
-            total += st.st_size
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        # hardlink：同一個 inode 的每個名字 lstat 都回相同的 st_size，逐名加總會把一份
+        # 內容算 N 次。誤擋方向雖然安全，但仍然是誤擋。
+        key = (st.st_dev, st.st_ino)
+        if key in seen:
+            continue
+        seen.add(key)
+        total += st.st_size
+
+# **項目數的上限與大小無關**：零大小的成員不貢獻 total，只有這一道擋得住「多」。
+if entries > max_entries:
+    print(
+        f"拒絕發布：這份備份包展開後有 {entries} 個項目，遠超過正常備份包的規模。",
+        file=sys.stderr,
+    )
+    print("正常的備份包不會有這種數量，多半是一份惡意或損壞的包。", file=sys.stderr)
+    raise SystemExit(1)
 
 if total <= floor:
     raise SystemExit(0)
@@ -77,7 +105,8 @@ try:
     packed = os.stat(bundle).st_size
 except OSError:
     raise SystemExit(0)          # 量不到來源就不做這個判斷，不擋合法的還原
-if packed > 0 and total // packed > max_ratio:
+# 不用整數截斷比較——`total // packed > 200` 會讓實際 200.9 倍的包通過。
+if packed > 0 and total > packed * max_ratio:
     print(
         f"拒絕發布：這份備份包展開後是它本身的 {total // packed} 倍"
         f"（{total // (1 << 20)} MiB ← {packed // 1024} KiB）。",
@@ -367,11 +396,49 @@ PY
 # 已足以決定要搬什麼。要逐位元請對個別檔案自行 cmp。
 echo
 echo "── 差異（備份 vs 現役）─────────────────────────────"
-python3 - "${DEST}" "${MANIFEST}" <<'PY'
+python3 - "${DEST}" "${MANIFEST}" "${CONFIG_JSON}" "${EXTRA_PATHS_FILE}" <<'PY'
 import json, os, sys
 
-dest, manifest_path = sys.argv[1], sys.argv[2]
+dest, manifest_path, config_json, extra_file = sys.argv[1:5]
 m = json.load(open(manifest_path))
+
+
+def registered_live_paths():
+    """本機**登記過**的現役資產位置。差異報告只允許比對這些路徑。
+
+    **為什麼需要這道**：manifest 的 `accounts`／`extra` value 是備份包提供的，也就是
+    不可信輸入。原本直接拿它當現役側 `expanduser` + 遞迴 `snapshot`，於是一份惡意包可以
+    指定掃描本機任意目錄（指向 `/` 就是整個檔案系統）並把檔名印在差異報告裡——已實測
+    可利用（票 12 的 Codex 審查）。
+
+    `verify_manifest` 擋不住這個：它驗的是 inode、大小與 JSON 語法，**不是語意**。
+    """
+    out = set()
+    try:
+        with open(config_json, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError):
+        cfg = {}
+    for acct in (cfg.get("accounts") or {}).values():
+        if isinstance(acct, dict) and isinstance(acct.get("config_dir"), str):
+            out.add(os.path.normpath(os.path.expanduser(acct["config_dir"])))
+    for path in (cfg.get("extra") or {}).values():          # 票 07 起 config 有 extra
+        if isinstance(path, str):
+            out.add(os.path.normpath(os.path.expanduser(path)))
+    try:
+        with open(extra_file, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    out.add(os.path.normpath(os.path.expanduser(line)))
+    except OSError:
+        pass
+    # 讀不出任何登記位置時只允許預設帳號目錄——與 containment 段落同一個理由：移機到新機
+    # 還沒設定 Fledge 是最常見的還原情境。**不是**放行任意路徑。
+    return out or {os.path.normpath(os.path.expanduser("~/.claude"))}
+
+
+ALLOWED_LIVE = registered_live_paths()
 
 def snapshot(root):
     out = {}
@@ -400,7 +467,11 @@ targets = [(k, v, os.path.join(dest, "accounts", k)) for k, v in m.get("accounts
 targets += [(f"帳號外:{k}", v, os.path.join(dest, "extra", k)) for k, v in m.get("extra", {}).items()]
 
 for key, raw, backed in targets:
-    live = os.path.expanduser(raw)
+    live = os.path.normpath(os.path.expanduser(raw))
+    if live not in ALLOWED_LIVE:
+        # 備份包宣稱的舊路徑不是本機登記過的資產位置——不掃描、也不把它當現役側印出來。
+        print(f"\n[{key}] 這個帳號的舊位置不在本機登記的範圍內，略過比對")
+        continue
     if not os.path.isdir(backed):
         print(f"\n[{key}] 備份包裡沒有這個帳號")
         continue
