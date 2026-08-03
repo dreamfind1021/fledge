@@ -280,7 +280,7 @@ describe("Onboarding 精靈外殼", () => {
     ui.getByText(zh.welcome.restore).click();
     for (const heading of [
       zh.mig.bundle.h,
-      zh.mig.roots.h,
+      zh.mig.targets.h,
       zh.mig.paths.h,
       zh.mig.install.h,
       zh.env.h,

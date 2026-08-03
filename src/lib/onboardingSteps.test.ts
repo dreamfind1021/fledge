@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { wizardSteps, clampStepIndex, progressCells } from "./onboardingSteps";
+import { wizardSteps, stepIndex, clampStepIndex, progressCells } from "./onboardingSteps";
 
 describe("wizardSteps（全新設定）", () => {
   it("雙帳號走完整七頁（spec-b4 定案 9）", () => {
@@ -31,7 +31,7 @@ describe("wizardSteps（我有備份）", () => {
     expect(wizardSteps({ accountCount: 2, mode: "restore" })).toEqual([
       "welcome",
       "bundle",
-      "roots",
+      "targets",
       "paths",
       "install",
       "env",
@@ -41,14 +41,13 @@ describe("wizardSteps（我有備份）", () => {
     ]);
   });
 
-  // 旗標未給＝包還沒展開、還不知道有沒有專案歷史。此時 paths 先留著（上一條與下一條都釘住
-  // 這個預設）：縮短只會發生在 bundle 頁得知包內容的那一刻，而 bundle 早於 paths，所以
-  // clampStepIndex 的「序列縮短不重新定位」不會指錯頁。
+  // 旗標未給＝包還沒展開、還不知道有沒有專案歷史，此時 paths 先留著（上一條與下一條都釘住
+  // 這個預設）。序列在導覽途中縮短是被允許的——定位靠 stepIndex() 的身分比對，見該支測試。
   it("備份包裡沒有專案歷史時 paths 整頁不出現（比照單帳號的 common）", () => {
     expect(wizardSteps({ accountCount: 1, mode: "restore", hasProjectHistory: false })).toEqual([
       "welcome",
       "bundle",
-      "roots",
+      "targets",
       "install",
       "env",
       "login",
@@ -63,7 +62,7 @@ describe("wizardSteps（我有備份）", () => {
     expect(wizardSteps({ accountCount: 1, mode: "restore" })).toEqual([
       "welcome",
       "bundle",
-      "roots",
+      "targets",
       "paths",
       "install",
       "env",
@@ -71,6 +70,30 @@ describe("wizardSteps（我有備份）", () => {
       "repair",
       "done",
     ]);
+  });
+});
+
+describe("stepIndex", () => {
+  const withPaths = wizardSteps({ accountCount: 1, mode: "restore" });
+  const noPaths = wizardSteps({ accountCount: 1, mode: "restore", hasProjectHistory: false });
+
+  // Codex 對抗式審查 F1：`bundle-info` 是非同步的，序列可能在使用者已經走到 `install`
+  // 之後才增刪 `paths`（遲到的回應、或從 install 回頭換一包）。存索引會讓同一個數字指到
+  // 另一個語意頁；存 step 身分才停得住。
+  it("序列縮短時仍停在同一頁——而同一個索引已經是別頁了", () => {
+    expect(withPaths[stepIndex("install", withPaths, "restore")]).toBe("install");
+    expect(noPaths[stepIndex("install", noPaths, "restore")]).toBe("install");
+    expect(withPaths.indexOf("install")).toBe(4);
+    expect(noPaths[4]).toBe("env"); // 索引定位會把使用者從安裝頁丟到環境頁
+  });
+
+  it("目前這一頁被移除時退到它前面最近的一頁（不跳過安裝確認）", () => {
+    expect(noPaths[stepIndex("paths", noPaths, "restore")]).toBe("targets");
+  });
+
+  it("全新設定的單帳號降級同理：共通設置頁消失時退到登入頁", () => {
+    const single = wizardSteps({ accountCount: 1, mode: "fresh" });
+    expect(single[stepIndex("common", single, "fresh")]).toBe("login");
   });
 });
 

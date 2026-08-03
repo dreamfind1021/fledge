@@ -17,7 +17,7 @@
   },
   "mig": {
     "bundle": { "h": "Choose your backup bundle" },
-    "roots": { "h": "Confirm landing spots" },
+    "targets": { "h": "Confirm landing spots" },
     "paths": { "h": "Map project paths" },
     "install": { "h": "Install onto this machine" },
     "repair": { "h": "Repair links" }
