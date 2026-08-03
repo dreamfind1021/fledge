@@ -68,7 +68,10 @@ class CreateSessionRequest(BaseModel):
     install_id: str | None = None   # kind=install 必填
     login_target: Literal["claude", "codex"] = "claude"  # kind=login 用
     backup_mode: Literal["list", "run"] | None = None    # kind=backup 必填
-    restore_bundle: str | None = None   # kind=restore 必填（**備份包名，不是路徑**）
+    # kind=restore 的來源，二擇一（票 11）：名字過 `list_bundles` 的 allowlist；
+    # 路徑是使用者用系統檔案選擇器挑的（移機時包不在備份輸出目錄裡）。
+    restore_bundle: str | None = None
+    restore_bundle_path: str | None = None
     restore_dest: str | None = None     # kind=restore 選填，未給＝後端算的預設展開位置
 
 
@@ -143,23 +146,40 @@ def _backup_blocked(config: AppConfig) -> str | None:
     return None
 
 
-def _restore_blocked(config: AppConfig, bundle: str, dest: str | None) -> str | None:
+def _restore_blocked(
+    config: AppConfig, bundle: str | None, bundle_path: str | None, dest: str | None,
+) -> str | None:
     """kind=restore 的 spawn 前閘。同 `_backup_blocked`：**route 才是安全邊界，不是 UI**。
 
-    順序即優先序，與還原卡顯示阻斷原因的順序一致：備份目錄（沒有它就沒有備份包可選）→
-    環境前提 → 備份包 → 展開位置。`dest_*` 的判別碼與 `check_dest` 的 verdict 同名，
-    前端以顯式表映射（動態組 i18n key 會讓沒見過的狀態變成畫面上的 key 原文）。"""
-    try:
-        backup_dir = restore.resolve_backup_dir(config)
-    except ValueError as exc:
-        return str(exc)
+    順序即優先序，與還原卡顯示阻斷原因的順序一致：來源給了沒有（請求本身壞掉優先於環境
+    問題）→ 備份目錄（**只有名字模式需要**）→ 環境前提 → 備份包 → 展開位置。
+    `dest_*` 的判別碼與 `check_dest` 的 verdict 同名，前端以顯式表映射（動態組 i18n key 會讓
+    沒見過的狀態變成畫面上的 key 原文）。
+
+    **來源的二擇一在這裡多判一次**（`resolve_source_and_dest` 內也有）：不是為了規則，而是
+    為了**優先序與判別碼**——本端點的欄位叫 `restore_bundle`，缺席碼是既有的
+    `restore_bundle_required`（前端映射表與既有測試都依賴它），而模組層是欄位中立的
+    `bundle_required`。實際解析仍只走模組那一份。"""
+    has_name = bool((bundle or "").strip())
+    has_path = bool((bundle_path or "").strip())
+    if has_name and has_path:
+        return "bundle_source_ambiguous"
+    if not has_name and not has_path:
+        return "restore_bundle_required"
+    # 路徑模式跳過備份目錄：新機器上 `backup_dir` 還是空字串是**正常狀態**，那正是路徑模式
+    # 存在的理由（票 11／增補 spec §2.7）——拿它擋只會擋死移機。
+    if not has_path:
+        try:
+            restore.resolve_backup_dir(config)
+        except ValueError as exc:
+            return str(exc)
     if not restore_script_available():
         return "restore_script_missing"
     if not python3_available():
         return "python3_missing"
     try:
-        restore.bundle_path(backup_dir, bundle)      # allowlist：名字不在清單內就擋
-        dest_abs = restore.resolve_dest(dest, bundle)
+        _, dest_abs = restore.resolve_source_and_dest(
+            config, name=bundle, path=bundle_path, dest_raw=dest)
     except ValueError as exc:
         return str(exc)
     verdict = restore.check_dest(dest_abs, source_roots(config, scripts_root()))
@@ -209,18 +229,16 @@ def create_session(req: CreateSessionRequest):
     #     這條路沒有任何寫入現役目錄的能力**（票 09 驗收 #6）。修復共通設置斷鏈是另一條
     #     路（POST /api/setup/common-config/repair），要使用者明確按下去。---
     if req.kind == "restore":
-        if not (req.restore_bundle or "").strip():
-            return JSONResponse(status_code=400, content={"error": "restore_bundle_required"})
-        blocked = _restore_blocked(config, req.restore_bundle, req.restore_dest)
+        blocked = _restore_blocked(
+            config, req.restore_bundle, req.restore_bundle_path, req.restore_dest)
         if blocked is not None:
             return JSONResponse(status_code=400, content={"error": blocked})
-        # argv 由後端組：前端只送**備份包名**與展開位置，備份包名還要過 list_bundles 的
-        # allowlist 才變成路徑（沿用 kind=install 只送 install_id 的不變式）。
-        backup_dir = restore.resolve_backup_dir(config)
-        argv = restore.build_restore_argv(
-            restore.bundle_path(backup_dir, req.restore_bundle),
-            restore.resolve_dest(req.restore_dest, req.restore_bundle),
-        )
+        # argv 由後端組。名字模式仍走 list_bundles 的 allowlist（沿用 kind=install 只送
+        # install_id 的不變式）；路徑模式的鬆綁與其理由見 `restore.bundle_from_path`。
+        bundle_abs, dest_abs = restore.resolve_source_and_dest(
+            config, name=req.restore_bundle, path=req.restore_bundle_path,
+            dest_raw=req.restore_dest)
+        argv = restore.build_restore_argv(bundle_abs, dest_abs)
         return _unattributed_session(argv, req.path)
 
     # --- codex 登入是全域的（不分帳號，B-1 收尾票已確認）→ 與 install 同樣不綁帳號 ---

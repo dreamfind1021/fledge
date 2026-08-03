@@ -37,6 +37,21 @@ def _parse_stamp(day: str, hhmm: str) -> datetime | None:
         return None
 
 
+def _bundle_stamp(name: str) -> datetime | None:
+    """檔名 → 時間戳；形狀不符或時間戳無效回 None。`list_bundles` 與 `is_bundle_name` 共用。"""
+    m = _BUNDLE_RE.match(name)
+    return _parse_stamp(m.group(1), m.group(2)) if m else None
+
+
+def is_bundle_name(name: str) -> bool:
+    """這個檔名是不是一份有效的備份包名（形狀對**且**時間戳有效）。
+
+    路徑模式（票 11）要據此決定「能不能從檔名推出預設展開位置」。**與 `list_bundles` 共用
+    同一組判準**——兩邊各寫一份 regex 必然漂移，而漂移的樣態是「清單裡看得到、卻推不出
+    預設位置」這種說不清楚的行為。"""
+    return _bundle_stamp(name) is not None
+
+
 def list_bundles(directory: str) -> list[Bundle]:
     """倒序（新到舊）。目錄不存在或讀不到回空清單。"""
     try:
@@ -46,12 +61,9 @@ def list_bundles(directory: str) -> list[Bundle]:
 
     out: list[Bundle] = []
     for entry in entries:
-        m = _BUNDLE_RE.match(entry.name)
-        if m is None:
-            continue
-        stamp = _parse_stamp(m.group(1), m.group(2))
+        stamp = _bundle_stamp(entry.name)
         if stamp is None:
-            continue  # 形狀對但時間戳無效（如 20261340）
+            continue  # 形狀不符，或形狀對但時間戳無效（如 20261340）
         try:
             if not entry.is_file(follow_symlinks=False):
                 continue  # 同名資料夾不算備份包

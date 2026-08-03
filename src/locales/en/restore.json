@@ -49,6 +49,13 @@
     "repairFailed": "Could not repoint the shared setup links.",
     "unknown_bundle": "That backup is no longer in the backup folder.",
     "dest_invalid": "That is not a valid folder path.",
-    "restore_bundle_required": "Pick a backup first."
+    "restore_bundle_required": "Pick a backup first.",
+    "bundle_source_ambiguous": "You've given both a bundle name and a file path — pick just one.",
+    "bundle_required": "Choose a backup bundle first.",
+    "bundle_path_invalid": "Please give the full path to the backup bundle.",
+    "bundle_not_found": "That file isn't there — it may have been moved or renamed.",
+    "bundle_not_a_file": "That isn't a file. Pick the backup bundle itself (.tar.gz).",
+    "bundle_unreadable": "That file can't be read. Check its permissions and try again.",
+    "dest_required": "This filename doesn't say when the backup was taken, so pick where to unpack it yourself."
   }
 }

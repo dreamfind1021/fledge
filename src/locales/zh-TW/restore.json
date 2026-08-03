@@ -49,6 +49,13 @@
     "repairFailed": "無法重新指向共通設置的連結。",
     "unknown_bundle": "那份備份包已經不在備份資料夾裡了。",
     "dest_invalid": "那不是一個合法的資料夾路徑。",
-    "restore_bundle_required": "請先選一份備份。"
+    "restore_bundle_required": "請先選一份備份。",
+    "bundle_source_ambiguous": "同時指定了備份包名稱與檔案路徑，請只留一個。",
+    "bundle_required": "請先選一份備份包。",
+    "bundle_path_invalid": "請提供備份包的完整路徑。",
+    "bundle_not_found": "找不到這個檔案，它可能被移走或改名了。",
+    "bundle_not_a_file": "那不是一個檔案。請選擇備份包本身（.tar.gz）。",
+    "bundle_unreadable": "這個檔案讀不到，請確認權限後再試。",
+    "dest_required": "這個檔名看不出備份時間，請自行選擇要展開到哪裡。"
   }
 }

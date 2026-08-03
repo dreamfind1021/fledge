@@ -752,3 +752,184 @@ def test_missing_config_still_reads_as_not_initialized_not_unreadable(
                                          json={"dest": str(staging)})
     assert resp.status_code == 400
     assert resp.json()["error"] == "config_not_initialized"
+
+
+# ── 路徑模式：使用者用系統檔案選擇器挑的包（票 11）────────────────────────────
+#
+# 移機情境的存在理由：新機器上 `backup_dir` 還是空字串（config 要到 targets 頁的
+# adopt-config 才落檔），而備份包在隨身碟／NAS——名字模式必然撞 backup_dir_not_set。
+
+
+def _loose_bundle(tmp_path: Path, name: str = BUNDLE) -> Path:
+    """一個**不在** backup_dir 裡的備份包（隨身碟／下載資料夾的模擬）。"""
+    d = tmp_path / "usb"
+    d.mkdir(exist_ok=True)
+    f = d / name
+    f.write_bytes(b"x")
+    return f
+
+
+def test_plan_accepts_a_bundle_path_outside_the_backup_dir(tmp_path: Path, monkeypatch):
+    """**這條測試就是本票存在的理由**：`backup_dir` 是空字串（全新機器的預設狀態）時，
+    名字模式會撞 `backup_dir_not_set`，而路徑模式要照樣走得完。"""
+    _config(tmp_path, monkeypatch, backup_dir="", with_bundle=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    bundle = _loose_bundle(tmp_path)
+    client = TestClient(create_app())
+
+    named = client.post("/api/restore/plan", json={"bundle": BUNDLE})
+    assert named.status_code == 400
+    assert named.json()["error"] == "backup_dir_not_set"
+
+    resp = client.post("/api/restore/plan", json={"bundle_path": str(bundle)})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["bundle"] == str(bundle)
+    assert body["dest"] == str(tmp_path / "home" / ".claude-restore-20260101-1200")
+    assert body["dest_status"] == "ok"
+
+
+def test_plan_rejects_giving_both_bundle_and_bundle_path(tmp_path: Path, monkeypatch):
+    """兩個來源都給＝授權歧義。**不讓後蓋前**（比照 adopt-config 的 duplicate_account_key）
+    ——默默挑一個，使用者就無從知道實際用了哪一份包。"""
+    _config(tmp_path, monkeypatch)
+    bundle = _loose_bundle(tmp_path, "claude-backup-20260202-0900.tar.gz")
+    client = TestClient(create_app())
+
+    resp = client.post("/api/restore/plan", json={"bundle": BUNDLE, "bundle_path": str(bundle)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "bundle_source_ambiguous"
+
+
+def test_plan_rejects_giving_neither_source(tmp_path: Path, monkeypatch):
+    _config(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+
+    resp = client.post("/api/restore/plan", json={})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "bundle_required"
+
+
+def test_plan_path_mode_refuses_to_guess_a_dest_from_an_odd_filename(tmp_path: Path, monkeypatch):
+    """檔名不符命名規則且沒指定位置 → 要使用者挑，不猜一個目錄名。"""
+    _config(tmp_path, monkeypatch, backup_dir="")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    bundle = _loose_bundle(tmp_path, "my-backup.tgz")
+    client = TestClient(create_app())
+
+    resp = client.post("/api/restore/plan", json={"bundle_path": str(bundle)})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "dest_required"
+
+    ok = client.post("/api/restore/plan",
+                     json={"bundle_path": str(bundle), "dest": str(tmp_path / "here")})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["dest"] == str(tmp_path / "here")
+
+
+def test_plan_path_mode_still_validates_the_source(tmp_path: Path, monkeypatch):
+    """沒有 allowlist **不等於**不驗：型別與可讀性的判別碼要原樣透出去。"""
+    _config(tmp_path, monkeypatch, backup_dir="")
+    client = TestClient(create_app())
+    adir = tmp_path / "adir"
+    adir.mkdir()
+
+    for path, code in (
+        ("relative/x.tar.gz", "bundle_path_invalid"),
+        (str(tmp_path / "gone.tar.gz"), "bundle_not_found"),
+        (str(adir), "bundle_not_a_file"),
+    ):
+        resp = client.post("/api/restore/plan", json={"bundle_path": path})
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["error"] == code
+
+
+def test_restore_session_accepts_a_bundle_path_outside_the_backup_dir(tmp_path: Path, monkeypatch):
+    """移機的實際形狀：`backup_dir` 空字串、包在隨身碟，argv 仍由後端組且不經 shell。"""
+    _config(tmp_path, monkeypatch, backup_dir="", with_bundle=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    bundle = _loose_bundle(tmp_path, "my backup.tar.gz")   # 含空白，驗證不經 shell
+    dest = tmp_path / "My Restore"
+    captured: dict = {}
+
+    class _Session:
+        session_id = "s"
+
+    monkeypatch.setattr(
+        "fledge_sidecar.routes.sessions._bridge.create_session",
+        lambda **kw: (captured.update(kw), _Session())[1],
+    )
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": "", "kind": "restore",
+        "restore_bundle_path": str(bundle), "restore_dest": str(dest),
+    })
+    assert resp.status_code == 200, resp.text
+    argv = captured["command"]
+    assert argv[0] == "/bin/bash"
+    assert argv[1].endswith("restore-claude.sh")
+    assert argv[2] == str(bundle)          # 路徑原樣進 argv，不經 shell 拼接
+    assert argv[3:] == ["-o", str(dest)]
+
+
+def test_restore_session_rejects_both_sources(tmp_path: Path, monkeypatch):
+    _config(tmp_path, monkeypatch)
+    bundle = _loose_bundle(tmp_path, "claude-backup-20260202-0900.tar.gz")
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": "", "kind": "restore",
+        "restore_bundle": BUNDLE, "restore_bundle_path": str(bundle),
+    })
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "bundle_source_ambiguous"
+
+
+def test_restore_session_keeps_its_own_missing_source_code(tmp_path: Path, monkeypatch):
+    """模組層拋的是 `bundle_required`，但這支端點的欄位叫 `restore_bundle`——既有判別碼
+    不改（前端的映射表與既有測試都依賴它）。規則仍只有一份，只在 route 映射碼。"""
+    _config(tmp_path, monkeypatch)
+    resp = TestClient(create_app()).post("/api/sessions", json={"path": "", "kind": "restore"})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "restore_bundle_required"
+
+
+def test_restore_session_path_mode_skips_the_backup_dir_gate(tmp_path: Path, monkeypatch):
+    """閘序：路徑模式**跳過** backup_dir（新機器沒有它是正常狀態），但環境前提照擋。"""
+    _config(tmp_path, monkeypatch, backup_dir="", with_script=False, with_bundle=False)
+    bundle = _loose_bundle(tmp_path)
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": "", "kind": "restore", "restore_bundle_path": str(bundle),
+    })
+    assert resp.json()["error"] == "restore_script_missing"   # 不是 backup_dir_not_set
+
+
+def test_restore_session_path_mode_revalidates_the_source(tmp_path: Path, monkeypatch):
+    """spawn 前的閘照樣重驗來源——plan 說可以，到按下去之間 FS 可能已經變了。"""
+    _config(tmp_path, monkeypatch, backup_dir="", with_bundle=False)
+    adir = tmp_path / "adir"
+    adir.mkdir()
+    client = TestClient(create_app())
+    for path, code in (
+        ("relative/x.tar.gz", "bundle_path_invalid"),
+        (str(tmp_path / "gone.tar.gz"), "bundle_not_found"),
+        (str(adir), "bundle_not_a_file"),
+    ):
+        resp = client.post("/api/sessions", json={
+            "path": "", "kind": "restore", "restore_bundle_path": path,
+        })
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["error"] == code
+
+
+def test_restore_session_path_mode_still_enforces_containment(tmp_path: Path, monkeypatch):
+    """**containment 不因來源模式而鬆動**：展開位置落在現役資料裡面，路徑模式一樣擋。
+
+    後果不是「檔案被覆蓋」而是更難察覺的——把一份完整副本折回備份來源，下一次備份會把它
+    整包再收一遍。"""
+    _config(tmp_path, monkeypatch, backup_dir="", with_bundle=False)
+    bundle = _loose_bundle(tmp_path)
+    inside = tmp_path / "claude" / "restored"     # `claude` 是 config 裡的帳號目錄
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": "", "kind": "restore",
+        "restore_bundle_path": str(bundle), "restore_dest": str(inside),
+    })
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "dest_inside_source"

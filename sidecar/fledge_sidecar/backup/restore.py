@@ -8,11 +8,12 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 from typing import Literal
 
 from fledge_sidecar.app_config import AppConfig
-from fledge_sidecar.backup.bundles import list_bundles
+from fledge_sidecar.backup.bundles import is_bundle_name, list_bundles
 from fledge_sidecar.backup.containment import check_backup_dir
 from fledge_sidecar.backup.script import restore_script_path
 from fledge_sidecar.paths import expand_and_validate, probe_dir
@@ -108,6 +109,53 @@ def bundle_path(backup_dir_abs: str, name: str) -> str:
     return os.path.join(backup_dir_abs, name)
 
 
+def bundle_from_path(raw: str) -> str:
+    """使用者透過系統檔案選擇器指定的備份包 → 絕對路徑。**這條路沒有 allowlist**（票 11）。
+
+    **為什麼可以沒有 allowlist**——不是因為「檔案選擇器的結果是使用者本人的選擇」（後端
+    驗證不了那件事，前端能構造任意字串送進同一個欄位），而是因為 sidecar 已經有一條等價於
+    任意命令執行的通道：`POST /api/sessions` `kind=restore` 之外的 `kind=terminal` 會開一個
+    登入 shell，WS binary frame 直接寫進它的 stdin。在那條能力基準線之上，本函式不新增任何
+    讀取能力，而擋著它會讓移機根本做不到（新機器的備份包不可能已經在「備份輸出目錄」裡）。
+
+    ⚠ **這個評估依賴 `kind=terminal` 的現況**。那個端點若被移除或收窄成 allowlist 命令，
+    本函式就會變成真正的 confused deputy，屆時要改成由原生對話框產生一次性 grant。
+
+    仍當**不可信路徑**驗：絕對路徑 → 開得起來 → 是一般檔。**symlink 不拒**（前端大可直接
+    送它的目標，拒絕不減少攻擊面，只擋掉「家目錄放一個指向隨身碟的連結」這種合理用法）。
+    tar 形狀不在這裡驗——那要讀整個包，而展開之後讀 manifest 本來就會驗（增補 spec §2.7.3）。
+
+    **先 open 再 fstat，不是先 stat 再 open**：`O_NONBLOCK` 讓 FIFO 的唯讀 open 立即返回而不是
+    等 writer（少了它，型別判定根本執行不到），而型別與可讀性用同一個 fd 判掉，不必驗兩次
+    pathname。**殘餘窗口**：驗完之後 `tar` 會以 pathname 重新開一次，中間那段仍是
+    check-then-act——POSIX 下沒有把 fd 交給子進程 argv 的辦法，故**只縮小不關閉**（票 10 教訓：
+    宣稱要與實際保證等級逐字對齊）。
+    """
+    try:
+        abs_path = expand_and_validate(raw)
+    except ValueError as exc:
+        raise ValueError("bundle_path_invalid") from exc
+    try:
+        fd = os.open(abs_path, os.O_RDONLY | os.O_NONBLOCK)
+    except FileNotFoundError as exc:
+        raise ValueError("bundle_not_found") from exc
+    except OSError as exc:
+        # socket 的 open 直接 ENOTSUP（實測），型別資訊只能從 stat 拿。這一步只做**錯誤
+        # 分類**，不是驗證——放行與否仍由下面的 fstat 決定。
+        try:
+            if not stat.S_ISREG(os.stat(abs_path).st_mode):
+                raise ValueError("bundle_not_a_file") from exc
+        except OSError:
+            pass
+        raise ValueError("bundle_unreadable") from exc
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("bundle_not_a_file")
+    finally:
+        os.close(fd)
+    return abs_path
+
+
 def default_dest(bundle_name: str) -> str:
     """預設展開位置：`~/.claude-restore-<備份包時間戳>`。
 
@@ -115,6 +163,47 @@ def default_dest(bundle_name: str) -> str:
     而非索引切片，畸形名字最壞只是目錄名醜，不會切出一個奇怪的路徑。"""
     stamp = bundle_name.removeprefix(_BUNDLE_PREFIX).removesuffix(_BUNDLE_SUFFIX)
     return str(Path.home() / f"{_DEST_PREFIX}{stamp}")
+
+
+def dest_for_bundle_path(dest_raw: str | None, bundle_abs: str) -> str:
+    """路徑模式的展開位置（票 11）。使用者指定了就用他的；沒指定就從檔名推。
+
+    **推不出來就不猜**——比照 `project_paths()` 的建議值規則（舊路徑不在舊 home 底下就留空
+    不猜）。路徑模式的檔名是任意的，而 basename 會變成展開目錄名的一部分：猜一個就得去
+    sanitize 它，那條路只會長出更多邊界情況。不符命名規則一律 `dest_required`，由前端請
+    使用者指定位置。"""
+    if (dest_raw or "").strip():
+        return resolve_dest(dest_raw, "")   # 有 raw 時 resolve_dest 不看 bundle_name
+    name = os.path.basename(bundle_abs)
+    if not is_bundle_name(name):
+        raise ValueError("dest_required")
+    return resolve_dest(None, name)
+
+
+def resolve_source_and_dest(
+    config: AppConfig, *, name: str | None, path: str | None, dest_raw: str | None,
+) -> tuple[str, str]:
+    """二擇一分派 → `(備份包絕對路徑, 展開位置絕對路徑)`。
+
+    **`plan` 與 spawn 前的閘共用同一支**——兩邊各自分派必然漂移，而漂移的後果是預覽說可以、
+    按下去卻被擋（`resolve_dest` 的 docstring 已記過同一個理由）。
+
+    兩個來源都給 → `bundle_source_ambiguous`（**不讓後蓋前**：默默挑一個，使用者就無從知道
+    實際用了哪一份包）；都不給 → `bundle_required`（`kind=restore` 的 route 會把它映射回
+    既有的 `restore_bundle_required`，欄位名不同、碼跟著不同）。
+
+    名字模式仍然只有 allowlist 一個入口，路徑模式的鬆綁與其理由見 `bundle_from_path`。"""
+    has_name = bool((name or "").strip())
+    has_path = bool((path or "").strip())
+    if has_name and has_path:
+        raise ValueError("bundle_source_ambiguous")
+    if not has_name and not has_path:
+        raise ValueError("bundle_required")
+    if has_path:
+        bundle_abs = bundle_from_path(path or "")
+        return bundle_abs, dest_for_bundle_path(dest_raw, bundle_abs)
+    backup_dir = resolve_backup_dir(config)
+    return bundle_path(backup_dir, name or ""), resolve_dest(dest_raw, name or "")
 
 
 def check_dest(abs_path: str, roots: list[str]) -> DestVerdict:
