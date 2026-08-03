@@ -266,6 +266,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `src/lib/terminalRegistry.ts`（handle contract 變更） | `Terminal.tsx`、`App.tsx`（onDragEnd 貼路徑） |
 | `src/lib/onboardingSteps.ts`（頁面序列增刪／降級規則變更） | `Onboarding.tsx`（每個 `step` 一個渲染分支）、`onboardingSteps.test.ts`、`Onboarding.test.tsx`、`.scratch/onboarding-wizard/spec-b4.md` 定案 9 |
 | `src/locales/*/sidebar.json`（key 增刪） | 另一語言 catalog 同步（`sidebar-parity.test.ts` 會擋）、`Sidebar.tsx`/`TabBar.tsx`/`FileTree*.tsx`/`Terminal.tsx` 的 t() 引用 |
+| `src/locales/*/restore.json`（key 增刪） | 另一語言 catalog 同步（`restore-parity.test.ts` 會擋）、`RestoreCard.tsx` 的 `CODE_KEY` 映射表與 `t()` 引用；後端新增判別碼時**兩語都要加**（前端沿用 `i18n.exists` 動態查表，沒有文案就退通用訊息） |
 | `src/locales/*/onboarding.json`（key 增刪） | 另一語言 catalog 同步（`onboarding-parity.test.ts` 會擋）、`Onboarding.tsx` 與 B-4 各設置卡（含 `DevEnvSection`）的 t() 引用 |
 | `src/components/CommonConfigCard.tsx`（props／行為變更） | **兩處掛載**：`Onboarding.tsx`（精靈版，無 `allowOverwrite`）與 `DevEnvSection.tsx`（設定頁版，逐項授權）、`CommonConfigCard.test.tsx` 的兩個 describe |
 | `src/components/TemplateCard.tsx`（props／行為變更） | **兩處掛載**：`SystemSettingsCard.tsx`（精靈系統設置頁第三區）與 `DevEnvSection.tsx`（設定頁常用卡）、`TemplateCard.test.tsx` |
