@@ -4,7 +4,7 @@ import { useTranslation, Trans } from "react-i18next";
 import { useAppStore } from "../store/useAppStore";
 import { scanPreview, DEFAULT_ACCOUNT_KEY } from "../lib/sidecar";
 import { pickDirectory } from "../lib/dialog";
-import { wizardSteps, clampStepIndex, progressCells } from "../lib/onboardingSteps";
+import { wizardSteps, clampStepIndex, progressCells, type WizardMode } from "../lib/onboardingSteps";
 import { FeatherMark } from "./Logo";
 import { LangSwitch } from "./LangSwitch";
 import { EnvCard } from "./EnvCard";
@@ -33,6 +33,8 @@ export function Onboarding({ onClose }: OnboardingProps) {
   // 首次時 config 為 in-memory DEFAULT（票 31 起是單一帳號 default）
   const accountKeys = config ? Object.keys(config.accounts) : [DEFAULT_ACCOUNT_KEY];
 
+  // 歡迎頁的二選一。移機分支（票 12 Plan B）的頁面序列與全新設定從第二頁起就完全分岔。
+  const [mode, setMode] = useState<WizardMode>("fresh");
   const [stepIndex, setStepIndex] = useState(0);
   const [draftRoots, setDraftRoots] = useState<DraftRoot[]>([]);
   const [newPath, setNewPath] = useState("");
@@ -47,9 +49,10 @@ export function Onboarding({ onClose }: OnboardingProps) {
   const [configCreated, setConfigCreated] = useState(config?.is_first_run !== true);
   const overlayRef = useRef<HTMLDivElement>(null);
 
-  const steps = wizardSteps(accountKeys.length);
-  // 夾取只為擋住兩端越界（首頁上一步、末頁下一步）。精靈內帳號數不變，序列不會中途縮短，
-  // 故不需要「索引 → step 語意」的重新定位，詳見 onboardingSteps.clampStepIndex 註解。
+  const steps = wizardSteps({ accountCount: accountKeys.length, mode });
+  // 夾取只為擋住兩端越界（首頁上一步、末頁下一步）。序列不會在目前索引之前縮短（全新設定的
+  // 帳號數不變；移機的 `paths` 去留在 bundle 頁就定案，而 bundle 早於 paths），故不需要
+  // 「索引 → step 語意」的重新定位，詳見 onboardingSteps.clampStepIndex 註解。
   const index = clampStepIndex(stepIndex, steps.length);
   const step = steps[index];
 
@@ -61,6 +64,25 @@ export function Onboarding({ onClose }: OnboardingProps) {
   };
   const next = () => goTo(index + 1);
   const prev = () => goTo(index - 1);
+  // 選路線與前進是同一個動作：兩條序列的第 2 頁不同，先定路線索引 1 才有意義
+  const start = (picked: WizardMode) => {
+    setMode(picked);
+    goTo(1);
+  };
+
+  /**
+   * 移機分支的空殼頁：只有標題與導覽，內容由票 02–08 逐一填實。
+   * 這張票（票 01）只負責「兩條路的序列不同、每一頁走得過去」。
+   */
+  const migShell = (key: "bundle" | "roots" | "paths" | "install" | "repair") => (
+    <div>
+      <h2 className="ob-h">{t(`mig.${key}.h`)}</h2>
+      <div className="ob-actions">
+        <button onClick={prev} className="ob-btn-ghost">{t("common.prev")}</button>
+        <button onClick={next} className="ob-btn">{t("common.next")}</button>
+      </div>
+    </div>
+  );
 
   const browse = async () => {
     const p = await pickDirectory();
@@ -211,13 +233,17 @@ export function Onboarding({ onClose }: OnboardingProps) {
               <h2 className="ob-h">{t("welcome.h")}</h2>
               <p className="ob-sub"><Trans t={t} i18nKey="welcome.sub" /></p>
               <div className="ob-actions-center">
-                <button onClick={next} className="ob-btn">{t("welcome.cta")}</button>
+                <button onClick={() => start("fresh")} className="ob-btn">{t("welcome.fresh")}</button>
+                <button onClick={() => start("restore")} className="ob-btn-ghost">
+                  {t("welcome.restore")}
+                </button>
               </div>
             </div>
           )}
 
-          {/* ── 根目錄（本頁落檔）── */}
-          {step === "roots" && (
+          {/* ── 根目錄（本頁落檔）：全新設定專用。移機的同名頁是「確認落點」，性質完全不同
+                 （授權每個帳號與 extra 的寫入目標、走 adopt-config 而非 onboard），見票 03 ── */}
+          {step === "roots" && mode === "fresh" && (
             <div>
               <h2 className="ob-h">{t("roots.h")}</h2>
               <p className="ob-sub">{t("roots.sub")}</p>
@@ -279,6 +305,13 @@ export function Onboarding({ onClose }: OnboardingProps) {
               </div>
             </div>
           )}
+
+          {/* ── 移機分支的四頁（票 12 Plan B）：目前是空殼，票 02–08 逐一填實 ── */}
+          {step === "bundle" && migShell("bundle")}
+          {step === "roots" && mode === "restore" && migShell("roots")}
+          {step === "paths" && migShell("paths")}
+          {step === "install" && migShell("install")}
+          {step === "repair" && migShell("repair")}
 
           {/* ── 環境偵測（票 23）：標題、清單與導覽都在卡片內，重新檢查與下一步同列 ── */}
           {step === "env" && <EnvCard port={port} onPrev={prev} onNext={next} />}
