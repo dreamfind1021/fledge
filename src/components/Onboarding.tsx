@@ -359,8 +359,22 @@ export function Onboarding({ onClose }: OnboardingProps) {
                   // 頁面（登入卡等）讀的是 store 的 accounts，只翻旗標會讓使用者看到
                   // in-memory 的預設帳號。讀不回來就 throw 回卡片——它會顯示錯誤且不轉
                   // 唯讀，下一步也就仍然被擋著。
-                  onSaved={async () => {
+                  onSaved={async (confirmed) => {
                     await loadConfig();
+                    // **對帳**（Codex 票 03 R4 F1）：後端回 409 時只證明「有一份 config」，
+                    // 不證明它是這次建立的。後續 install-plan／install 直接從這份 config 取
+                    // 目的地——沿用一份無關的設定等於把備份內容寫進使用者沒確認過的現役
+                    // 目錄。讀回來的落點必須逐一等於剛才確認的那組，否則不放行。
+                    const cfg = useAppStore.getState().config;
+                    const live = cfg?.accounts ?? {};
+                    const same =
+                      Object.keys(live).length === confirmed.accounts.length
+                      && confirmed.accounts.every(
+                        (a) => live[a.key]?.config_dir === a.config_dir);
+                    if (!same) {
+                      throw Object.assign(new Error("config mismatch"),
+                                          { code: "config_mismatch" });
+                    }
                     setConfigCreated(true);
                   }}
                 />

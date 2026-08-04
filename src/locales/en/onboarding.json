@@ -69,7 +69,8 @@
         "saveFailed": "Couldn't create the settings file.",
         "reloadFailed": "Your settings file was created — it just hasn't been read back yet. Hit “Read again” to retry; nothing gets created twice."
       },
-      "retry": "Read again"
+      "retry": "Read again",
+      "reused": "This machine already had a settings file, so it was reused instead of creating another."
     },
     "paths": {
       "h": "Map project paths"

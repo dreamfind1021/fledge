@@ -41,7 +41,9 @@ vi.mock("./TargetsCard", async () => {
   const catalog = (await import("../locales/zh-TW/onboarding.json")).default;
   return {
     TargetsCard: ({ dest, saved, onSaved }: {
-      dest: string; saved: boolean; onSaved: () => void | Promise<void>;
+      dest: string; saved: boolean;
+      onSaved: (c: { dest: string; accounts: { key: string; config_dir: string }[] })
+        => void | Promise<void>;
     }) => (
       <div>
         <h2>{catalog.mig.targets.h}</h2>
@@ -49,7 +51,18 @@ vi.mock("./TargetsCard", async () => {
         {/* 真卡片的形狀：`adopt-config` 只會成功一次（`create_if_absent`），收尾失敗時
             重按**只重跑 `onSaved()`**、不再 POST。mock 保留這個形狀，否則父層測試會在
             一條真實流程走不到的路徑上變綠（Codex 票 03 R2 指出的假綠） */}
-        <button onClick={() => void Promise.resolve(onSaved()).catch(() => {})} disabled={saved}>
+        <button
+          onClick={() => void Promise.resolve(onSaved({
+            // 與 `baseConfig.accounts` 一致：父層會拿讀回來的 config 跟這一組對帳
+            // （Codex 票 03 R4 F1），對不上就不放行
+            dest,
+            accounts: [
+              { key: "work", config_dir: "~/.claude" },
+              { key: "personal", config_dir: "~/.claude" },
+            ],
+          })).catch(() => {})}
+          disabled={saved}
+        >
           adopt
         </button>
       </div>
@@ -414,6 +427,37 @@ describe("Onboarding 精靈外殼", () => {
     await waitFor(() =>
       expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
     expect(loads).toBe(2);
+  });
+
+  // Codex 票 03 R4 F1：409 只證明「有一份 config」。後續 install 直接從那份 config 取
+  // 目的地，沿用一份無關的設定＝把備份內容寫進使用者沒確認過的現役目錄。
+  it("讀回來的設定與剛確認的落點對不上 → 不放行", async () => {
+    useAppStore.setState({
+      config: { ...baseConfig, is_first_run: true },
+      loadConfig: async () => {
+        // 後端其實有一份**別的** config（不是這次建立的）
+        useAppStore.setState({
+          config: {
+            ...baseConfig, is_first_run: false,
+            accounts: { stranger: { config_dir: "/somewhere/else", label: "" } },
+          },
+        });
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+
+    ui.getByText("adopt").click();
+    // 對帳不符 → 收尾 throw → 精靈不放行
+    await waitFor(() => expect(useAppStore.getState().config?.accounts).toHaveProperty("stranger"));
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true);
   });
 
   // Codex 票 02 R1 F2：包資訊與「選了哪一包」原本分居兩處（前者在精靈、後者在卡片），

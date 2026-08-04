@@ -149,8 +149,10 @@ describe("TargetsCard", () => {
     await loaded(ui);
     ui.getByText(zh.mig.targets.save).click();
 
-    await waitFor(() =>
-      expect(ui.getByText(zhRestore.errors.config_already_initialized)).toBeTruthy());
+    // 說明是**中性 notice**，不含「移除既有設定檔」那種指示（Codex 票 03 R4 F2）：
+    // 收尾成功之後這段還會留在畫面上，配著成功狀態一起顯示刪檔建議會讓人做危險的事
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.reused)).toBeTruthy());
+    expect(ui.queryByText(zhRestore.errors.config_already_initialized)).toBeNull();
     expect(onSaved).toHaveBeenCalledTimes(1);          // 收尾照跑（父層把實際的 config 讀回來）
     // 主按鈕轉成「重新讀取」——再按不會重複 POST（那只會再撞一次 409）
     await waitFor(() => expect(ui.getByText(zh.mig.targets.retry)).toBeTruthy());
@@ -252,6 +254,25 @@ describe("TargetsCard", () => {
       expect(ui.getByText(zhRestore.errors.invalid_config_dir)).toBeTruthy());
     ui.getByText(zh.mig.targets.save).click();        // 主按鈕仍是「建立」不是「重新讀取」
     await waitFor(() => expect(adoptConfig).toHaveBeenCalledTimes(2));
+  });
+
+  // Codex 票 03 R4 F1：409 只證明「有一份 config」，不證明它是這次建立的、更不證明它含
+  // 使用者剛確認的落點。後續 install 明確從那份 config 取目的地——沿用一份無關的設定
+  // 等於把備份內容寫進使用者沒有確認過的現役目錄。父層對帳失敗時要擋住。
+  it("既有設定與剛確認的落點對不上 → 不放行並說明衝突", async () => {
+    adoptConfig.mockRejectedValueOnce(new RestoreError("config_already_initialized", 409));
+    const onSaved = vi.fn(async () => {
+      throw Object.assign(new Error("mismatch"), { code: "config_mismatch" });
+    });
+    const ui = render(
+      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
+                   onSaved={onSaved} />,
+    );
+    await loaded(ui);
+    ui.getByText(zh.mig.targets.save).click();
+    await waitFor(() =>
+      expect(ui.getByText(zhRestore.errors.config_mismatch)).toBeTruthy());
+    expect(ui.getByText(zh.mig.targets.retry)).toBeTruthy();   // 不再重複 POST
   });
 
   it("載入建議值失敗 → 通用訊息，例外原文不進畫面", async () => {

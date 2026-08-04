@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import {
   fetchLandingSuggestions,
   adoptConfig,
+  type AdoptConfigBody,
   type BundleInfo,
   type LandingSpot,
 } from "../lib/sidecar";
@@ -22,6 +23,9 @@ const CODE_KEY: Record<string, string> = {
   unknown_account_key: "restore:errors.unknown_account_key",
   unknown_extra_name: "restore:errors.unknown_extra_name",
   config_already_initialized: "restore:errors.config_already_initialized",
+  // 父層對帳失敗（既有 config 的落點與本次確認的不符）——不是後端判別碼，
+  // 但走同一條映射，前端錯誤與後端錯誤在使用者眼裡沒有分別
+  config_mismatch: "restore:errors.config_mismatch",
 };
 
 /** 落點的穩定識別。**帳號與 extra 是兩個命名空間**——後端一直用 `extra:<name>` 區分
@@ -36,8 +40,12 @@ interface TargetsCardProps {
   info: BundleInfo;
   saved: boolean;
   /** 落檔成功後的收尾。**允許非同步且允許失敗**——父層要先把新 config 讀回 store 才算
-   *  完成（後面的頁面讀的是 store 的 accounts），失敗就不該轉唯讀、也不該放行下一步。 */
-  onSaved: () => void | Promise<void>;
+   *  完成（後面的頁面讀的是 store 的 accounts），失敗就不該轉唯讀、也不該放行下一步。
+   *
+   *  帶上**本次確認的落點**讓父層對帳：`config_already_initialized` 只證明「有一份
+   *  config」，不證明它是這次建立的、更不證明它含這些落點，而後續的 install 會直接從
+   *  那份 config 取目的地（Codex 票 03 R4 F1）。 */
+  onSaved: (confirmed: AdoptConfigBody) => void | Promise<void>;
 }
 
 /**
@@ -58,6 +66,9 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
+  // 409 的說明是**中性 notice** 而不是錯誤：收尾成功後它還會留著，配著成功狀態顯示
+  // 「請移除既有設定檔」那種指示會讓使用者做危險的事（Codex 票 03 R4 F2）
+  const [reused, setReused] = useState(false);
   // 後端已經落檔了嗎。與父層的 `saved`（store 已刷新）**是兩件事**——中間失敗時，
   // 重試只能重跑收尾，不能再 POST 一次（見 `save`）。
   const [adopted, setAdopted] = useState(false);
@@ -128,15 +139,16 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
     // `create_if_absent`，成功之後再 POST 一次只會拿到 409。所以落檔成功就記下來，
     // 收尾失敗時的重試**只重跑收尾**——否則使用者會卡在「設定已經建好、卻永遠讀不回來
     // 也走不下去」的死路。兩段各自 catch，訊息才說得準是哪一步失敗。
+    const confirmed: AdoptConfigBody = {
+      dest,
+      accounts,
+      extra: spots
+        .filter((s) => s.kind === "extra" && filled(s))
+        .map((s) => ({ name: s.key, path: filled(s) })),
+    };
     try {
       if (!adopted) {
-        await adoptConfig(port, {
-          dest,
-          accounts,
-          extra: spots
-            .filter((s) => s.kind === "extra" && filled(s))
-            .map((s) => ({ name: s.key, path: filled(s) })),
-        });
+        await adoptConfig(port, confirmed);
         if (!mounted.current) return;
         setAdopted(true);
       }
@@ -158,15 +170,19 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
         return;
       }
       setAdopted(true);
-      setSaveError(t(CODE_KEY[code]));   // 說清楚：設定檔已經在了，不是這次新建的
+      setReused(true);     // 中性說明；是否放行由父層對帳決定（見下方 onSaved）
     }
     try {
-      await onSaved();
+      await onSaved(confirmed);
     } catch (e) {
       console.error("[TargetsCard] 讀回新設定失敗", e);
+      if (!mounted.current) return;
       // 這一步失敗**不是**「建立失敗」——設定檔已經在了，說錯會讓使用者去做危險的事
-      // （刪掉剛建立的設定檔重來）
-      if (mounted.current) setSaveError(t("mig.targets.errors.reloadFailed"));
+      // （刪掉剛建立的設定檔重來）。父層的對帳不符則有自己的說法：那是真的衝突，
+      // 不是暫時讀不到（Codex 票 03 R4 F1）。
+      const code = (e as { code?: string | null }).code ?? null;
+      setSaveError(code !== null && CODE_KEY[code]
+        ? t(CODE_KEY[code]) : t("mig.targets.errors.reloadFailed"));
     } finally {
       if (mounted.current) setBusy(false);
     }
@@ -226,6 +242,7 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
           {t("mig.targets.skipNote", { names: skipped.map((s) => s.key).join("、") })}
         </p>
       )}
+      {reused && <p className="ob-note">{t("mig.targets.reused")}</p>}
       {(loadError ?? saveError) && <p className="ob-error">{loadError ?? saveError}</p>}
       {saved
         ? <p className="ob-note">{t("mig.targets.created")}</p>

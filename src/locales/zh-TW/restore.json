@@ -66,6 +66,7 @@
     "duplicate_extra_name": "同一項資產出現了兩次。",
     "unknown_account_key": "這個帳號不在這份備份包裡。",
     "unknown_extra_name": "這項資產不在這份備份包裡。",
-    "config_already_initialized": "這台機器上已經有 Fledge 的設定檔了，所以不會再建立一份。要調整位置請到設定頁；要重來請先移除既有設定檔。"
+    "config_already_initialized": "這台機器上已經有 Fledge 的設定檔了，所以不會再建立一份。要調整位置請到設定頁；要重來請先移除既有設定檔。",
+    "config_mismatch": "這台機器上已經有一份設定檔，但它的落點與你剛才確認的不一樣——它不是這一次建立的。請先到設定頁看看現有設定，或移除它之後重新走一次引導。"
   }
 }

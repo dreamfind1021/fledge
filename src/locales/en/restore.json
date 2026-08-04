@@ -66,6 +66,7 @@
     "duplicate_extra_name": "That asset appears twice.",
     "unknown_account_key": "That account isn't in this backup bundle.",
     "unknown_extra_name": "That asset isn't in this backup bundle.",
-    "config_already_initialized": "This machine already has a Fledge settings file, so a new one won't be created. Adjust locations from Settings, or remove the existing file to start over."
+    "config_already_initialized": "This machine already has a Fledge settings file, so a new one won't be created. Adjust locations from Settings, or remove the existing file to start over.",
+    "config_mismatch": "This machine already has a settings file, but its landing spots differ from what you just confirmed — it wasn't created by this run. Check the existing settings first, or remove it and run onboarding again."
   }
 }
