@@ -37,6 +37,38 @@ vi.mock("./BundleCard", async () => {
     },
   };
 });
+vi.mock("./TargetsCard", async () => {
+  const catalog = (await import("../locales/zh-TW/onboarding.json")).default;
+  return {
+    TargetsCard: ({ dest, saved, onSaved }: {
+      dest: string; saved: boolean;
+      onSaved: (c: { dest: string; accounts: { key: string; config_dir: string }[] })
+        => void | Promise<void>;
+    }) => (
+      <div>
+        <h2>{catalog.mig.targets.h}</h2>
+        <span data-testid="targets-dest">{dest}</span>
+        {/* 真卡片的形狀：`adopt-config` 只會成功一次（`create_if_absent`），收尾失敗時
+            重按**只重跑 `onSaved()`**、不再 POST。mock 保留這個形狀，否則父層測試會在
+            一條真實流程走不到的路徑上變綠（Codex 票 03 R2 指出的假綠） */}
+        <button
+          onClick={() => void Promise.resolve(onSaved({
+            // 與 `baseConfig.accounts` 一致：父層會拿讀回來的 config 跟這一組對帳
+            // （Codex 票 03 R4 F1），對不上就不放行
+            dest,
+            accounts: [
+              { key: "work", config_dir: "~/.claude" },
+              { key: "personal", config_dir: "~/.claude" },
+            ],
+          })).catch(() => {})}
+          disabled={saved}
+        >
+          adopt
+        </button>
+      </div>
+    ),
+  };
+});
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   scanPreview: vi.fn(async (_port: number, path: string) => ({ path, count: 3, status: "ok" as const })),
@@ -328,9 +360,104 @@ describe("Onboarding 精靈外殼", () => {
     await waitFor(() => expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(8));
     ui.getByText(zh.common.next).click();
     await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
     ui.getByText(zh.common.next).click();
     await waitFor(() => expect(ui.getByText(zh.mig.install.h)).toBeTruthy());
     expect(ui.queryByText(zh.mig.paths.h)).toBeNull();
+  });
+
+  // 票 03：落點頁的落檔是**不可逆**的（建立設定檔），確認之前不讓精靈往下走——後面的
+  // 預覽與安裝都從落檔後的 config.json 讀落點
+  it("落點還沒確認就走不出落點頁；落檔後才放行", async () => {
+    useAppStore.setState({ config: { ...baseConfig, is_first_run: true } });
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+
+    // 落點頁拿到的是上一頁那一包的展開位置，不是別的
+    expect(ui.getByTestId("targets-dest").textContent).toBe("/d");
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true);
+
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+  });
+
+  // Codex 票 03 R1 F2：落檔只翻旗標不夠——後面的頁面（登入卡等）讀的是 store 裡的
+  // accounts，不把剛建立的 config 讀回來，使用者會看到 in-memory 的預設帳號
+  // 這裡測的是**父層的職責**：收尾被呼叫時刷新 store、失敗就不放行。卡片那側「重試不
+  // 重複 POST」的狀態機在 `TargetsCard.test.tsx`（R2 F1）。
+  it("落點落檔後把新設定讀回 store，讀不回來就不放行", async () => {
+    let loads = 0;
+    let failNext = true;
+    useAppStore.setState({
+      config: { ...baseConfig, is_first_run: true },
+      loadConfig: async () => {
+        loads += 1;
+        if (failNext) {
+          failNext = false;
+          throw new Error("RELOAD-SENTINEL");
+        }
+        useAppStore.setState({ config: { ...baseConfig, is_first_run: false } });
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+
+    ui.getByText("adopt").click();          // 第一次：刷新失敗
+    await waitFor(() => expect(loads).toBe(1));
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true);
+
+    ui.getByText("adopt").click();          // 第二次：刷新成功才放行
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    expect(loads).toBe(2);
+  });
+
+  // Codex 票 03 R4 F1：409 只證明「有一份 config」。後續 install 直接從那份 config 取
+  // 目的地，沿用一份無關的設定＝把備份內容寫進使用者沒確認過的現役目錄。
+  it("讀回來的設定與剛確認的落點對不上 → 不放行", async () => {
+    useAppStore.setState({
+      config: { ...baseConfig, is_first_run: true },
+      loadConfig: async () => {
+        // 後端其實有一份**別的** config（不是這次建立的）
+        useAppStore.setState({
+          config: {
+            ...baseConfig, is_first_run: false,
+            accounts: { stranger: { config_dir: "/somewhere/else", label: "" } },
+          },
+        });
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+
+    ui.getByText("adopt").click();
+    // 對帳不符 → 收尾 throw → 精靈不放行
+    await waitFor(() => expect(useAppStore.getState().config?.accounts).toHaveProperty("stranger"));
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true);
   });
 
   // Codex 票 02 R1 F2：包資訊與「選了哪一包」原本分居兩處（前者在精靈、後者在卡片），
@@ -390,6 +517,11 @@ describe("Onboarding 精靈外殼", () => {
     for (const heading of [zh.mig.targets.h, zh.mig.paths.h, zh.mig.install.h]) {
       ui.getByText(zh.common.next).click();
       await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+      if (heading === zh.mig.targets.h) {
+        ui.getByText("adopt").click();
+        await waitFor(() =>
+          expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      }
     }
     for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
       ui.getByText(zh.common.prev).click();
@@ -420,6 +552,12 @@ describe("Onboarding 精靈外殼", () => {
       await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
       expect(ui.queryByText(zh.cc.h)).toBeNull();
       expect(ui.queryByText(zh.sys.h)).toBeNull();
+      // 落點頁的落檔是往下走的前提（票 03）：不落檔就過不去，這一步不是裝飾
+      if (heading === zh.mig.targets.h) {
+        ui.getByText("adopt").click();
+        await waitFor(() =>
+          expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      }
       ui.getByText(zh.common.next).click();
     }
 

@@ -19,6 +19,7 @@ import { LoginCard } from "./LoginCard";
 import { CommonConfigCard } from "./CommonConfigCard";
 import { SystemSettingsCard } from "./SystemSettingsCard";
 import { BundleCard, EMPTY_BUNDLE_SELECTION, type BundleSelection } from "./BundleCard";
+import { TargetsCard } from "./TargetsCard";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -343,7 +344,44 @@ export function Onboarding({ onClose }: OnboardingProps) {
               {migNav(bundle.probe.kind === "unknown")}
             </div>
           )}
-          {step === "targets" && migShell("targets")}
+          {/* 落點頁（票 03）：落檔是不可逆的，確認之前不放行——後面每一頁都從落檔後的
+              config.json 讀落點。包資訊還是 unknown 就沒有展開位置可用（正常流程走不到
+              這裡，bundle 頁的 gating 擋著），退回空殼而不是拿 undefined 去打端點 */}
+          {step === "targets" && (
+            bundle.probe.kind === "unknown" ? migShell("targets") : (
+              <div>
+                <TargetsCard
+                  port={port}
+                  dest={bundle.probe.dest}
+                  info={bundle.probe.info}
+                  saved={configCreated}
+                  // **先把剛建立的設定讀回 store 才算完成**（Codex 票 03 R1 F2）：後面的
+                  // 頁面（登入卡等）讀的是 store 的 accounts，只翻旗標會讓使用者看到
+                  // in-memory 的預設帳號。讀不回來就 throw 回卡片——它會顯示錯誤且不轉
+                  // 唯讀，下一步也就仍然被擋著。
+                  onSaved={async (confirmed) => {
+                    await loadConfig();
+                    // **對帳**（Codex 票 03 R4 F1）：後端回 409 時只證明「有一份 config」，
+                    // 不證明它是這次建立的。後續 install-plan／install 直接從這份 config 取
+                    // 目的地——沿用一份無關的設定等於把備份內容寫進使用者沒確認過的現役
+                    // 目錄。讀回來的落點必須逐一等於剛才確認的那組，否則不放行。
+                    const cfg = useAppStore.getState().config;
+                    const live = cfg?.accounts ?? {};
+                    const same =
+                      Object.keys(live).length === confirmed.accounts.length
+                      && confirmed.accounts.every(
+                        (a) => live[a.key]?.config_dir === a.config_dir);
+                    if (!same) {
+                      throw Object.assign(new Error("config mismatch"),
+                                          { code: "config_mismatch" });
+                    }
+                    setConfigCreated(true);
+                  }}
+                />
+                {migNav(!configCreated)}
+              </div>
+            )
+          )}
           {step === "paths" && migShell("paths")}
           {step === "install" && migShell("install")}
           {step === "repair" && migShell("repair")}

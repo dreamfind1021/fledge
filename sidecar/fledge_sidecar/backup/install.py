@@ -923,17 +923,83 @@ def _all_landing_spots(plan: InstallPlan) -> list[tuple[str, str]]:
     return spots
 
 
+def _is_normalized_abs(path: object) -> bool:
+    """是「絕對且 lexically normalized」的路徑字串（`normpath` 不會改變它）。
+
+    這是不可信路徑拼進**建議值**之前的最低要求（Codex 票 03 階段 4 F1）：manifest 的
+    `home` 與 `config_dir`、歷史檔裡的 `cwd` 都由備份包提供。少了這道，`/old/../../etc`
+    這種值會被前綴改寫成 `<new_home>/../../etc`，而那個值既是輸入框預設值（使用者按下
+    確認就成了授權），又會被 `suggested_exists` 交給 `os.path.isdir` resolve——**等於讓
+    一份惡意備份包探測本機任意路徑的存在性**。"""
+    return (isinstance(path, str) and path.startswith("/")
+            and os.path.normpath(path) == path)
+
+
 def _rewrite_home_prefix(path: str, old_home: str, new_home: str) -> str | None:
     """舊 home 底下的路徑換成新 home 的同一相對位置；不在舊 home 底下回 None。
 
     回 None 代表「無法決定新位置」——ADR-0001 允許 config_dir 是任意路徑，所以沒有
-    正確答案可推。**不猜**。"""
+    正確答案可推。**不猜**。
+
+    **兩個輸入都不可信**（見 `_is_normalized_abs`），不合格一律回 None：不產生建議值，
+    呼叫端也就不會對它做存在性探測。containment 判定走**路徑元件**（`old_home` 加分隔符
+    當前綴）而不是裸字串比對——`/olduser` 不該被當成在 `/old` 底下。"""
+    if not (_is_normalized_abs(path) and _is_normalized_abs(old_home)):
+        return None
     if path == old_home:
         return new_home
     prefix = old_home.rstrip("/") + "/"
     if not path.startswith(prefix):
         return None
     return os.path.join(new_home, path[len(prefix):])
+
+
+def _landing_spot(key: str, kind: str, old: object,
+                  old_home: str | None, new_home: str) -> dict:
+    """一個落點的建議值。`old_home` 為 None＝manifest 的 home 不可用 → 留空且**不探測**。"""
+    old_path = old if isinstance(old, str) else ""
+    suggested = ""
+    if old_home is not None and old_path:
+        suggested = _rewrite_home_prefix(old_path, old_home, new_home) or ""
+    return {
+        "key": key,
+        "kind": kind,
+        "old_path": old_path,
+        "suggested": suggested,
+        # 不存在**不擋**：舊機的 NAS 掛載點在新機多半不存在，使用者可能還沒把東西接上
+        "suggested_exists": bool(suggested) and os.path.isdir(suggested),
+    }
+
+
+def landing_suggestions(source_root: str) -> dict:
+    """每個帳號與 extra 的落點建議值（票 03，增補 spec 缺口 7）。純唯讀。
+
+    `targets` 頁靠它預填。規則見上游 spec §4.2.2 決策 9：舊路徑在舊 home 底下 → 換 home
+    前綴；其餘留空**不猜**。**manifest 只產生建議值**——這裡回的每個位元組都不具授權
+    效力，授權是使用者送回 `adopt-config` 的那一份（§4.2.2 第 2 點）。
+
+    `home` 不是合格的絕對正規化路徑時 **fail-soft**：回空字串、所有建議值留空、完全不做
+    存在性探測。不 fail-closed 的理由與 `_display_text` 同一條——它只影響建議值這個便利
+    功能，為它拒絕整包會讓手編過 manifest 的使用者連落點都沒得填（增補 spec §2.8.2）。
+    """
+    root = resolve_best_effort(source_root)
+    manifest = read_manifest(root)
+    raw_home = manifest.get("home")
+    old_home = raw_home if _is_normalized_abs(raw_home) else None
+    new_home = str(Path.home().resolve())
+
+    spots: list[dict] = []
+    for key, old in manifest.get("accounts", {}).items():
+        # key／name 會被顯示、也會被送回 adopt-config：與其他讀取面同一條信任邊界
+        if not _SAFE_KEY_RE.fullmatch(key):
+            raise ValueError("invalid_account_key")
+        spots.append(_landing_spot(key, "account", old, old_home, new_home))
+    for name, old in manifest.get("extra", {}).items():
+        if not _safe_extra_name(name):
+            raise ValueError("invalid_account_key")   # extra 的判準見 _safe_extra_name（票 13）
+        spots.append(_landing_spot(name, "extra", old, old_home, new_home))
+    spots.sort(key=lambda s: s["key"])
+    return {"home": old_home or "", "spots": spots}
 
 
 def _authorized_link_target(literal: str, plan: InstallPlan, manifest: dict,

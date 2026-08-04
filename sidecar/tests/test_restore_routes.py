@@ -650,6 +650,38 @@ def test_bundle_info_route_needs_no_config(tmp_path: Path, monkeypatch):
     assert resp.json()["accounts"] == ["work"]
 
 
+def test_landing_suggestions_route_returns_spots(tmp_path: Path, monkeypatch):
+    """唯讀端點（票 03）：帳號與 extra 各一筆，建議值只在舊路徑位於舊 home 底下時給。
+    非 bundle → 400（沿用 `_INSTALL_CLIENT_ERRORS` 分流）。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    resp = client.get("/api/restore/landing-suggestions", params={"dest": str(src)})
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "home": "/Users/olduser",
+        "spots": [
+            {"key": "agents", "kind": "extra", "old_path": "/Users/olduser/.agents",
+             "suggested": f"{home}/.agents", "suggested_exists": False},
+            {"key": "work", "kind": "account", "old_path": "/Users/olduser/.claude",
+             "suggested": f"{home}/.claude", "suggested_exists": False},
+        ],
+    }
+    resp = client.get("/api/restore/landing-suggestions", params={"dest": str(tmp_path)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
+
+
+def test_landing_suggestions_route_needs_no_config(tmp_path: Path, monkeypatch):
+    """與 `bundle-info` 同一條：移機的常態是設定檔還沒落檔（`adopt-config` 是下一步），
+    端點不得因為讀不到 config 就失敗。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(tmp_path / "nonexistent.json"))
+    src = make_staging(tmp_path)
+    resp = TestClient(create_app()).get("/api/restore/landing-suggestions",
+                                        params={"dest": str(src)})
+    assert resp.status_code == 200
+    assert [s["key"] for s in resp.json()["spots"]] == ["work"]
+
+
 def test_project_paths_route_reads_bundle(tmp_path: Path, monkeypatch):
     """唯讀端點（票 06）：列備份包裡的專案、舊路徑（讀歷史檔 cwd）、建議新路徑；
     非 bundle 400。"""

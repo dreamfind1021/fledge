@@ -478,3 +478,52 @@ describe("restore 路徑模式與 bundle-info", () => {
       .rejects.toMatchObject({ code: "source_not_a_bundle" });
   });
 });
+
+describe("落點建議值與 adopt-config（票 03）", () => {
+  const captureBody = (json: unknown) => {
+    const seen: Array<{ url: string; body: Record<string, unknown> | null }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      seen.push({ url, body: init?.body ? JSON.parse(init.body as string) : null });
+      return { ok: true, json: async () => json } as unknown as Response;
+    }));
+    return seen;
+  };
+
+  it("fetchLandingSuggestions 以 dest 查詢並回 home + spots", async () => {
+    const payload = {
+      home: "/Users/olduser",
+      spots: [{ key: "work", kind: "account", old_path: "/Users/olduser/.claude",
+                suggested: "/Users/me/.claude", suggested_exists: false }],
+    };
+    const seen = captureBody(payload);
+    const m = await import("./sidecar");
+    expect(await m.fetchLandingSuggestions(1234, "/tmp/x")).toEqual(payload);
+    expect(seen[0].url).toContain(`dest=${encodeURIComponent("/tmp/x")}`);
+  });
+
+  // 落點是**使用者的授權**：manifest 只產生建議值，送回去的才算數（spec §4.2.2）
+  it("adoptConfig 送使用者確認的落點，帳號與 extra 分開兩個欄位", async () => {
+    const seen = captureBody({ ok: true });
+    const m = await import("./sidecar");
+    await m.adoptConfig(1234, {
+      dest: "/tmp/x",
+      accounts: [{ key: "work", config_dir: "/Users/me/.claude" }],
+      extra: [{ name: ".agents", path: "/Users/me/.agents" }],
+    });
+    expect(seen[0].body).toEqual({
+      dest: "/tmp/x",
+      accounts: [{ key: "work", config_dir: "/Users/me/.claude" }],
+      extra: [{ name: ".agents", path: "/Users/me/.agents" }],
+      roots: [],
+    });
+  });
+
+  it("adoptConfig 的判別碼保留在 RestoreError 上供 i18n 映射", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false, status: 400, json: async () => ({ error: "overlapping_config_dirs" }),
+    }) as unknown as Response));
+    const m = await import("./sidecar");
+    await expect(m.adoptConfig(1234, { dest: "/tmp/x", accounts: [] }))
+      .rejects.toMatchObject({ code: "overlapping_config_dirs" });
+  });
+});

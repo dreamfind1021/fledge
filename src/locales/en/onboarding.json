@@ -43,10 +43,44 @@
         "infoFailed": "The bundle was expanded, but its contents couldn't be read."
       }
     },
-    "targets": { "h": "Confirm landing spots" },
-    "paths": { "h": "Map project paths" },
-    "install": { "h": "Install onto this machine" },
-    "repair": { "h": "Repair links" }
+    "targets": {
+      "h": "Confirm landing spots",
+      "sub": "Confirm where each account and each asset outside the accounts should go on this machine. Your settings file is created once you confirm.",
+      "old": "Was at",
+      "kind": {
+        "account": "Account",
+        "extra": "Outside accounts"
+      },
+      "placeholder": "/absolute/path/for/this/item",
+      "browse": "Choose…",
+      "exists": "Already there",
+      "missing": "Not there yet",
+      "missingNote": "A location that doesn't exist yet is fine — just connect it later (a network drive from the old machine usually isn't mounted yet).",
+      "noSuggestion": "The old location wasn't under the home folder, so fill this one in yourself.",
+      "skip": "Leave empty to skip this item",
+      "skipNote": "Items left empty won't be brought over: {{names}}",
+      "needOne": "Give at least one account a location.",
+      "save": "Confirm and create settings",
+      "saving": "Creating…",
+      "created": "Your settings file has been created. Adjust it later from Settings.",
+      "stale": "This bundle's contents no longer match what you saw on the previous step. Go back and confirm the bundle again.",
+      "errors": {
+        "loadFailed": "Couldn't read landing spot suggestions for this bundle.",
+        "saveFailed": "Couldn't create the settings file.",
+        "reloadFailed": "Your settings file was created — it just hasn't been read back yet. Hit “Read again” to retry; nothing gets created twice."
+      },
+      "retry": "Read again",
+      "reused": "This machine already had a settings file, so it was reused instead of creating another."
+    },
+    "paths": {
+      "h": "Map project paths"
+    },
+    "install": {
+      "h": "Install onto this machine"
+    },
+    "repair": {
+      "h": "Repair links"
+    }
   },
   "roots": {
     "h": "Choose your root folders",
