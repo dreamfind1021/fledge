@@ -58,6 +58,12 @@ export function RepairCard({ port, accounts, rescanToken }: RepairCardProps) {
   // effect dep 用簽章而非 accounts 物件：父層每次 render 都給新引用。只看 key——
   // 誰是 source 由 key 的順序決定，config_dir 的內容由後端自己讀。
   const accountsSig = JSON.stringify(Object.keys(accounts));
+  // 這一輪操作面對的**資料上下文**（比照 `CommonConfigCard` 的 `ctx`）。render body 同步
+  // 寫回 ref，非同步流程才比對得到「回來的時候還是不是同一個世界」——`scanReq` 管的是
+  // load-vs-load 的先後，管不到 `onRepair`（同族的第三處，掃 diff 時找到的）。
+  const ctx = JSON.stringify([port, accountsSig]);
+  const liveCtx = useRef(ctx);
+  liveCtx.current = ctx;
 
   useEffect(() => {
     mounted.current = true;   // StrictMode 會 mount→cleanup→再 mount，這裡要重設回來
@@ -67,13 +73,16 @@ export function RepairCard({ port, accounts, rescanToken }: RepairCardProps) {
   }, []);
 
   const scanLinks = useCallback(async () => {
+    // **序號先遞增再判前提**（Codex 票 08 R1 F2）：兩條「還沒送出就返回」的分支
+    // （port 為 null、只剩一個帳號）若不作廢在飛的那一輪，舊回應抵達時序號仍然相等，
+    // 就把畫面覆寫回舊帳號組合的結果——連修復按鈕都會重新出現。
+    const myId = ++scanReq.current;
     if (port == null) return;
     const scope = repairScope(Object.keys(accounts));
     if (scope === null) {
       setScan({ phase: "not_applicable" });
       return;
     }
-    const myId = ++scanReq.current;
     setScan({ phase: "scanning" });
     try {
       // 偵測用既有的 common-config/plan：它已經回逐項 state，不需要另做一個端點
@@ -116,18 +125,22 @@ export function RepairCard({ port, accounts, rescanToken }: RepairCardProps) {
     if (scope === null) return;
     setRepairing(true);
     setError(null);
+    const myCtx = ctx;
     try {
       const next = await commonConfigRepair(port, { ...scope, entries: RESTORE_REPAIR_ENTRIES });
-      if (!mounted.current) return;
+      // 回應遲到而帳號／port 已經換過 → 這份結果描述的是**別組帳號**，不得寫進畫面
+      if (!mounted.current || myCtx !== liveCtx.current) return;
       setResults(next);
       await scanLinks();   // 修完重測：畫面顯示的必須是修復後的現況，不是按下去前的
     } catch (e) {
       console.error("[RepairCard] 修復共通設置連結失敗", e);
-      if (mounted.current) setError(t("errors.repairFailed"));
+      if (mounted.current && myCtx === liveCtx.current) setError(t("errors.repairFailed"));
     } finally {
+      // 忙碌旗標一律解除（不看 ctx）：它是**這個元件實例**的按鈕狀態，不是那一輪的資料。
+      // 綁 ctx 的話，換帳號後按鈕會永遠停在「重新指向中…」
       if (mounted.current) setRepairing(false);
     }
-  }, [port, accountsSig, scanLinks, t]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [port, accountsSig, ctx, scanLinks, t]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>

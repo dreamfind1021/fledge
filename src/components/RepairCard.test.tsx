@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/restore.json";
 import { SetupError, type CommonConfigOpResult, type CommonConfigPlan } from "../lib/sidecar";
@@ -120,6 +120,69 @@ describe("RepairCard", () => {
     render(<RepairCard port={1234} accounts={ACCOUNTS} rescanToken={0} />);
     await screen.findByText(zh.links.none);
     expect(commonConfigPlan).toHaveBeenCalledTimes(1);
+  });
+
+  // ── 遲到的回應不得覆蓋當下的狀態（Codex 票 08 R1 F2）─────────────────────────
+  //
+  // latest-request-wins 的序號原本只在**真的送出請求**時才遞增，於是「還沒送出就返回」的
+  // 兩條前提分支（port 為 null、只剩一個帳號）不會作廢在飛的那一輪——舊回應抵達時序號
+  // 仍然相等，就把畫面覆寫回舊帳號組合的結果，連修復按鈕都會重新出現。
+
+  /** 可以由測試決定何時 resolve 的 promise。 */
+  function deferred<T>() {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => { resolve = r; });
+    return { promise, resolve };
+  }
+
+  it("掃描在飛時帳號變成只剩一個 → 舊回應不得把畫面覆寫回去", async () => {
+    const first = deferred<CommonConfigPlan>();
+    commonConfigPlan.mockReturnValueOnce(first.promise);
+    const ui = render(<RepairCard port={1234} accounts={ACCOUNTS} />);
+    await screen.findByText(zh.links.scanning);
+
+    ui.rerender(<RepairCard port={1234} accounts={{ work: ACCOUNTS.work }} />);
+    await screen.findByText(zh.links.notApplicable);
+
+    first.resolve(planWith(["broken_link"]));       // 舊帳號組合的回應遲到
+    await waitFor(() => expect(screen.getByText(zh.links.notApplicable)).toBeTruthy());
+    expect(screen.queryByRole("button", { name: zh.links.repair })).toBeNull();
+  });
+
+  it("掃描在飛時 port 斷了 → 舊回應不得覆寫", async () => {
+    const first = deferred<CommonConfigPlan>();
+    commonConfigPlan.mockReturnValueOnce(first.promise);
+    const ui = render(<RepairCard port={1234} accounts={ACCOUNTS} />);
+    await screen.findByText(zh.links.scanning);
+
+    ui.rerender(<RepairCard port={null} accounts={ACCOUNTS} />);
+    // **正向斷言＋確實 flush**：第一版寫成 `waitFor(queryByRole(...)).toBeNull()`，那在
+    // 舊回應被處理**之前**就成立，waitFor 立刻返回——測試名稱說的事沒真的驗（把作廢
+    // 邏輯整個拿掉也照樣綠）。改成「畫面必須仍停在檢查中」，被覆寫就會紅。
+    await act(async () => {
+      first.resolve(planWith(["broken_link"]));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText(zh.links.scanning)).toBeTruthy();
+  });
+
+  it("修復在飛時帳號換了 → 舊結果不得寫進畫面", async () => {
+    // 同一族的第三處（掃同族時找到的，Codex 只點名掃描那兩條）：`onRepair` 沒有任何
+    // 上下文比對，回應遲到就會把**別組帳號**的修復結果顯示成當下的
+    commonConfigPlan.mockResolvedValue(planWith(["broken_link"]));
+    const job = deferred<CommonConfigOpResult[]>();
+    commonConfigRepair.mockReturnValueOnce(job.promise);
+    const ui = render(<RepairCard port={1234} accounts={ACCOUNTS} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.links.repair }));
+
+    ui.rerender(<RepairCard port={1234} accounts={{ work: ACCOUNTS.work }} />);
+    await screen.findByText(zh.links.notApplicable);
+
+    job.resolve([{ account: "personal", entry: "skills", outcome: "relinked",
+                   backup_path: null, error: null }]);
+    await waitFor(() => expect(screen.getByText(zh.links.notApplicable)).toBeTruthy());
+    expect(screen.queryByText(zh.repair.result.relinked)).toBeNull();
   });
 
   it("rescanToken 一變就重測並清掉上一輪結果", async () => {

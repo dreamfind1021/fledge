@@ -115,6 +115,11 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   // 不屬於新的包——留著會讓使用者以為新的包也已經裝過了
   const [installRun, setInstallRun] = useState<{ gen: number; value: InstallRun }>(
     { gen: -1, value: { kind: "idle" } });
+  // 本次流程（同一個 `bundle.gen`）累積裝成的 node。與 `installRun` 是兩件事：那個是
+  // 「最後一輪跑出什麼」（結果頁要照實顯示這一輪），這個是「這次移機總共搬回了什麼」
+  // （完成頁要的）。重試會覆寫前者，但不該讓後者忘掉前幾輪。
+  const [installedTally, setInstalledTally] =
+    useState<{ gen: number; keys: string[] }>({ gen: -1, keys: [] });
   // 當下的來源身分（render body 同步寫回）：續作探測的錯誤路徑要靠它判斷「這個訊息還
   // 屬不屬於現在這一包」——`setBundle` 的 functional update 讀得到最新的 gen，`setError`
   // 讀不到（比照 `InstallPreviewCard.liveSource`）
@@ -138,10 +143,13 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   const run: InstallRun = installRun.gen === bundle.gen
     ? installRun.value : { kind: "idle" };
   const previewReady = previewStatus.gen === bundle.gen && previewStatus.value === "loaded";
-  // 完成頁的移機總結（票 16 第 2 項）。`run` 已經綁著 `bundle.gen`——換包會把它退回 `idle`，
-  // 所以這個數字不可能是上一包的。裝完才走得到完成頁（票 06：沒裝完就沒有下一步）。
-  const installedCount = run.kind === "done"
-    ? run.results.filter((r) => r.outcome === "installed").length : 0;
+  // 完成頁的移機總結（票 16 第 2 項）。**累積本次流程裝成的 node，不是最後一輪的結果**
+  // （Codex 票 08 R1 F1）：部分成功後按「再試一次」會覆寫 `run`，而第二輪因 no-clobber
+  // 把前一輪裝好的回報成 `skipped`——只看最後一輪就會少報。存 node 身分而不是計數，
+  // 是為了讓「同一項在兩輪都算成」不會被數兩次（no-clobber 下不該發生，但這是計數的
+  // 正確性前提，不該建立在別處的行為上）。
+  // 同樣綁 `bundle.gen`：換包就重新開始數，上一包裝了什麼與這一包無關。
+  const installedCount = installedTally.gen === bundle.gen ? installedTally.keys.length : 0;
   const adoptedFromBundle = adoptedFrom.gen === bundle.gen && adoptedFrom.value;
   const overlayRef = useRef<HTMLDivElement>(null);
 
@@ -258,6 +266,15 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
       setInstallRun({
         gen,
         value: { kind: "done", results: outcome.results, staleTemps: outcome.stale_temps },
+      });
+      // 完成頁要的是「這次移機總共搬回了什麼」，所以**累積**而不是覆寫（Codex 票 08 R1 F1）。
+      // `gen` 不同就從頭數——那是換了一包，上一包裝了什麼與這一包無關。
+      setInstalledTally((cur) => {
+        const keys = new Set(cur.gen === gen ? cur.keys : []);
+        for (const r of outcome.results) {
+          if (r.outcome === "installed") keys.add(`${r.account}/${r.rel_path}`);
+        }
+        return { gen, keys: [...keys] };
       });
     } catch (e) {
       // 判別碼與例外原文只進 console（CLAUDE.md §4.6.13）——`HTTP 500` 對使用者沒有意義
