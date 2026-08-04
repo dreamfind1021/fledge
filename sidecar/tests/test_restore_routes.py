@@ -1523,3 +1523,58 @@ def test_adopt_config_reads_the_bundle_config_through_the_safe_primitive(
     (src / "fledge").symlink_to(outside, target_is_directory=True)
     assert _adopt(TestClient(create_app()), src, home).status_code == 200
     assert json.loads(cfg.read_text(encoding="utf-8"))["kms_root"] == ""
+
+
+# ---------- 票 09 R1 F1：不是每種壞值都以 ValueError 現身 ----------
+
+
+_HUGE_COST = json.loads('{"c": ' + "9" * 400 + "}")["c"]     # float() 會 OverflowError
+_GHOST_USER = "~fledge_no_such_user__/x"                     # expanduser() 會 RuntimeError
+_NUL_PATH = "/tmp/x\0y"                                      # os.stat 才會 ValueError
+
+
+def test_adopt_config_survives_values_that_blow_up_the_stdlib(
+        tmp_path: Path, monkeypatch):
+    """**不是每種壞值都以 `ValueError` 現身**（Codex 票 09 R1 F1，三個反例都實測過）：
+
+    | 值 | 誰拋 | 例外 |
+    |---|---|---|
+    | `monthly_cost` 是 309 位以上的整數 | `float()` | `OverflowError` |
+    | 路徑是 `~不存在的使用者/x` | `Path.expanduser()` | `RuntimeError` |
+    | 路徑含 NUL | `probe_dir` 的 `os.stat`（`expand_and_validate` 放行） | `ValueError` |
+
+    三種都由合法 JSON 產生、都遠小於大小上限，原本全部穿成裸 500——正好違反「惡意包
+    不得阻斷移機」。`except ValueError` 一種接不完，**只補被點名那一種也不行**。"""
+    hostile = [
+        {"subscriptions": [{"name": "x", "monthly_cost": _HUGE_COST}]},
+        {"kms_root": _GHOST_USER},
+        {"kms_root": _NUL_PATH},
+        {"roots": [{"path": _GHOST_USER, "default_account": "work"}]},
+        {"roots": [{"path": _NUL_PATH, "default_account": "work"}]},
+    ]
+    for i, payload in enumerate(hostile):
+        base = tmp_path / f"blowup{i}"
+        base.mkdir()
+        cfg, src, home = _adopt_env(base, monkeypatch)
+        _plant_bundle_config(src, payload)
+        resp = _adopt(TestClient(create_app()), src, home)
+        assert resp.status_code == 200, f"{payload!r} → {resp.status_code}"
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+        assert (data["subscriptions"], data["kms_root"], data["roots"]) == ([], "", [])
+
+
+def test_adopt_config_rejects_a_user_sent_root_that_blows_up_expanduser(
+        tmp_path: Path, monkeypatch):
+    """**同族的不對稱**（同一個 finding 掃出來的第二處）：`body.roots` 走的是同一組路徑
+    驗證，卻也只接 `ValueError`——使用者送 `~不存在的使用者/x` 會裸 500 而不是
+    `invalid_root` 400。
+
+    三處（`body.roots`、包裡的 roots、`kms_root`）現在共用同一支 `_usable_dir`，
+    「一邊有一邊沒有」就不會再發生。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    for bad in (_GHOST_USER, _NUL_PATH):
+        resp = _adopt(client, src, home,
+                      roots=[{"path": bad, "default_account": "work"}])
+        assert (resp.status_code, resp.json()["error"]) == (400, "invalid_root"), bad
+    assert not cfg.exists()

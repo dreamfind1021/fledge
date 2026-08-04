@@ -141,7 +141,8 @@ describe("TargetsCard", () => {
   // 於是每一次重試都再撞一次 409。**設定檔已經在了就是「這一步完成了」**，往下走收尾。
   it("設定檔已經存在 → 不是死路：轉入收尾並說明設定不是這次建立的", async () => {
     adoptConfig.mockRejectedValueOnce(new RestoreError("config_already_initialized", 409));
-    const onSaved = vi.fn(async () => {});
+    // 明寫參數型別：`vi.fn(async () => {})` 會被推成零參數，`mock.calls[n][1]` 取不到
+    const onSaved = vi.fn(async (_confirmed: unknown, _reused: boolean) => {});
     const ui = render(
       <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
                    onSaved={onSaved} />,
@@ -159,6 +160,27 @@ describe("TargetsCard", () => {
     ui.getByText(zh.mig.targets.retry).click();
     await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(2));
     expect(adoptConfig).toHaveBeenCalledTimes(1);
+    // 沿用既有設定檔這件事要**傳給父層**（票 09 R1 F2）：它據此決定能不能說「這些設定
+    // 是從備份包帶回來的」。**重試那一輪也要照樣是 true**——那一輪不再 POST，409 的
+    // 事實只留在 state 裡，讀 callback 內的 state 會拿到舊值。
+    expect(onSaved.mock.calls.map((c) => c[1])).toEqual([true, true]);
+  });
+
+  // 票 09 R1 F2 的另一半：**沒有**沿用時要回報 false，否則父層永遠不敢說帶回了什麼。
+  // 兩格分開測——只測其中一格的話，把回報寫死成常數也會綠。
+  it("真的建立了新設定檔 → 回報「不是沿用」", async () => {
+    // 明寫參數型別：`vi.fn(async () => {})` 會被推成零參數，`mock.calls[n][1]` 取不到
+    const onSaved = vi.fn(async (_confirmed: unknown, _reused: boolean) => {});
+    const ui = render(
+      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
+                   onSaved={onSaved} />,
+    );
+    await loaded(ui);
+    ui.getByText(zh.mig.targets.save).click();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(onSaved.mock.calls[0][1]).toBe(false);
+    expect(ui.queryByText(zh.mig.targets.reused)).toBeNull();
   });
 
   // 增補 spec §2.8.4（Codex 階段 4 F2 的輕量緩解）：三支端點各自讀 manifest，成員清單

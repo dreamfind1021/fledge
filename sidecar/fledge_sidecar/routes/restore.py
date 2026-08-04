@@ -192,6 +192,27 @@ def _adopted_subscriptions(bundle_config: dict) -> list[dict]:
     return adopted
 
 
+def _usable_dir(raw: str) -> str | None:
+    """這個路徑在這台機器上是不是一個用得了的目錄。回絕對路徑；不可用回 None。
+    `denied` 放行（比照 onboard：探不到不等於不存在）。
+
+    **例外不是只有 `ValueError` 一種**（Codex 票 09 R1 F1，三種都實測過）：
+    `~不存在的使用者/x` 讓 `Path.expanduser()` 拋 `RuntimeError`；含 NUL 的路徑通得過
+    `expand_and_validate`，要到 `probe_dir` 的 `os.stat` 才拋 `ValueError`。兩者都能由
+    不可信的備份包**或使用者的輸入**構造出來。
+
+    三個呼叫端共用這一支（`body.roots`／包裡的 roots／`kms_root`）：處置不同（400 vs
+    丟棄），但「什麼算可用的目錄」只能有一份判準——`body.roots` 原本自己接
+    `ValueError`，那正是「一邊有一邊沒有」的形狀。"""
+    try:
+        abs_ = expand_and_validate(raw)
+        if probe_dir(abs_) in ("missing", "not_dir"):
+            return None
+    except (ValueError, RuntimeError, OSError):
+        return None
+    return abs_
+
+
 def _adopted_kms_root(bundle_config: dict) -> str:
     """包裡的 `kms_root` 是**舊機的路徑**，走與 `roots` 相同的驗證（`expand_and_validate`
     ＋ `probe_dir`，`denied` 放行比照 roots）；`missing`／`not_dir` 就不帶回。
@@ -201,13 +222,7 @@ def _adopted_kms_root(bundle_config: dict) -> str:
     raw = bundle_config.get("kms_root")
     if not isinstance(raw, str) or not raw.strip():
         return ""
-    try:
-        abs_ = expand_and_validate(raw)
-    except ValueError:
-        return ""
-    if probe_dir(abs_) in ("missing", "not_dir"):
-        return ""
-    return raw.strip()
+    return raw.strip() if _usable_dir(raw) is not None else ""
 
 
 def _adopted_roots(bundle_config: dict, account_keys: set[str]) -> list[tuple[str, str]]:
@@ -226,11 +241,8 @@ def _adopted_roots(bundle_config: dict, account_keys: set[str]) -> list[tuple[st
             continue
         if r["default_account"] not in account_keys:
             continue
-        try:
-            abs_ = expand_and_validate(r["path"])
-        except ValueError:
-            continue
-        if probe_dir(abs_) in ("missing", "not_dir"):
+        abs_ = _usable_dir(r["path"])
+        if abs_ is None:
             continue
         adopted.append((resolve_best_effort(abs_), r["default_account"]))
     return adopted
@@ -274,11 +286,8 @@ def adopt_config(body: AdoptConfigBody):
     for r in body.roots:
         if r.default_account not in set(account_keys):
             return JSONResponse(status_code=400, content={"error": "unknown_account"})
-        try:
-            abs_ = expand_and_validate(r.path)
-        except ValueError:
-            return JSONResponse(status_code=400, content={"error": "invalid_root"})
-        if probe_dir(abs_) in ("missing", "not_dir"):   # denied 放行，比照 onboard
+        abs_ = _usable_dir(r.path)      # 判準與包裡的 roots／kms_root 同一份，處置不同
+        if abs_ is None:
             return JSONResponse(status_code=400, content={"error": "invalid_root"})
         roots.append((resolve_best_effort(abs_), r.default_account))
 

@@ -57,7 +57,9 @@ def normalize_subscription(item: Any) -> dict[str, Any]:
     name = str(item.get("name") or "").strip()
     try:
         cost = float(item.get("monthly_cost"))
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
+        # `OverflowError`：309 位以上的整數（JSON 產得出來）讓 `float()` 爆，而它**不是**
+        # ValueError 的子類——原本會裸穿成 500（Codex 票 09 R1 F1，實測）。
         raise ValueError("bad_cost") from exc
     if not name or cost < 0 or not math.isfinite(cost):
         raise ValueError("bad_values")

@@ -215,3 +215,18 @@ def test_codex_usage_passes_through_unavailable(tmp_path: Path, monkeypatch):
     with TestClient(create_app()) as client:
         r = client.get("/usage/codex")
         assert r.json() == {"source": "unavailable", "failure_reason": "no_auth", "observed_at": None}
+
+
+def test_put_subscriptions_rejects_a_huge_cost_instead_of_crashing(
+        tmp_path: Path, monkeypatch):
+    """309 位以上的整數讓 `float()` 拋 `OverflowError`——原本只接 `TypeError/ValueError`，
+    於是這支會裸 500（**既有 bug，不是本票引入**）。
+
+    判準抽成共用 helper 時一併把它正規化成 `bad_cost`。**500 → 400 不算改對外行為**：
+    裸例外是未定義行為不是合約，而移機那一側必須 200，同一份判準不能一邊修一邊不修。"""
+    _env(tmp_path, monkeypatch)
+    huge = json.loads('{"c": ' + "9" * 400 + "}")["c"]
+    with TestClient(create_app()) as client:
+        resp = client.put("/api/config/subscriptions",
+                          json={"subscriptions": [{"name": "Codex", "monthly_cost": huge}]})
+        assert (resp.status_code, resp.json()["detail"]) == (400, "monthly_cost 須為數字")

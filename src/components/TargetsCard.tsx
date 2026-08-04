@@ -44,8 +44,12 @@ interface TargetsCardProps {
    *
    *  帶上**本次確認的落點**讓父層對帳：`config_already_initialized` 只證明「有一份
    *  config」，不證明它是這次建立的、更不證明它含這些落點，而後續的 install 會直接從
-   *  那份 config 取目的地（Codex 票 03 R4 F1）。 */
-  onSaved: (confirmed: AdoptConfigBody) => void | Promise<void>;
+   *  那份 config 取目的地（Codex 票 03 R4 F1）。
+   *
+   *  `reused`＝這一輪是沿用既有設定檔（409），**沒有**建立新的。父層據此決定能不能說
+   *  「這些設定是從備份包帶回來的」——沿用時 config 裡的東西是使用者原本就有的，說成
+   *  帶回來的就是宣稱了沒發生過的事（Codex 票 09 R1 F2）。 */
+  onSaved: (confirmed: AdoptConfigBody, reused: boolean) => void | Promise<void>;
 }
 
 /**
@@ -135,6 +139,10 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
     }
     setBusy(true);
     setSaveError(null);
+    // 用區域變數而不是讀 `reused` state：同一個 callback 內 `setReused` 之後讀到的還是
+    // 舊值。初值取 state 是為了「收尾失敗後重試」——那一輪不再 POST，409 的事實只留在
+    // state 裡（Codex 票 09 R1 F2）。
+    let reusedNow = reused;
     // **落檔與收尾不是同一個原子操作**（Codex 票 03 R2 F1）：`adopt-config` 走
     // `create_if_absent`，成功之後再 POST 一次只會拿到 409。所以落檔成功就記下來，
     // 收尾失敗時的重試**只重跑收尾**——否則使用者會卡在「設定已經建好、卻永遠讀不回來
@@ -171,9 +179,10 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
       }
       setAdopted(true);
       setReused(true);     // 中性說明；是否放行由父層對帳決定（見下方 onSaved）
+      reusedNow = true;
     }
     try {
-      await onSaved(confirmed);
+      await onSaved(confirmed, reusedNow);
     } catch (e) {
       console.error("[TargetsCard] 讀回新設定失敗", e);
       if (!mounted.current) return;
@@ -187,7 +196,7 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
       if (mounted.current) setBusy(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [port, dest, spots, values, adopted, onSaved, t]);
+  }, [port, dest, spots, values, adopted, reused, onSaved, t]);
 
   if (stale) {
     return (
