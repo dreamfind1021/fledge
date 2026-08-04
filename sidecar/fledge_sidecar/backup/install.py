@@ -412,6 +412,65 @@ def project_paths(source_root: str) -> list[dict]:
     return found
 
 
+def _real_subdir(parent: str, name: str) -> str | None:
+    """`parent/name` 是**實體目錄**（lstat 語意）就回路徑，否則 None。
+
+    **每一層都要驗**（Codex 票 02 R1 F3）：`Path.is_dir()` 會跟隨 symlink，一份惡意備份包
+    只要把 `accounts/<key>` 或它底下的 `projects` 做成指向包外的連結，唯讀的計數就會走出
+    展開目錄去遍歷本機任意目錄。與 `plan()` 對 `accounts/` 的 `os.lstat` 判型同一條判準。
+
+    這一層是 pathname-based 而非 fd-relative：本函式只服務**唯讀計數**，TOCTOU 的後果是
+    數字不準，不是寫錯位置（寫入路徑一律走 fd-relative + `O_NOFOLLOW`）。"""
+    path = os.path.join(parent, name)
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    return path if stat_module.S_ISDIR(st.st_mode) else None
+
+
+def _display_text(value: object) -> str:
+    """manifest 裡只用來顯示的欄位取字串，非字串一律空。`read_manifest` 只驗參與路徑
+    與迭代的欄位（`accounts`／`extra`），顯示欄位是什麼型別都不該讓端點回出非字串。"""
+    return value if isinstance(value, str) else ""
+
+
+def bundle_info(source_root: str) -> dict:
+    """備份包摘要：來源機器、備份時間、帳號與 extra 清單、專案數（增補 spec 缺口 1）。
+    純唯讀，`bundle` 頁用它讓使用者確認「這是不是我要的那一包」。
+
+    `host`／`created` 缺席或非字串一律回空字串——它們只影響顯示、不參與任何路徑或安全
+    決策，為一個顯示欄位讓整包看不到摘要是過度（與 `restore-claude.sh::verify_manifest`
+    刻意不把 `created` 列入形狀驗證同一個取捨）。
+
+    專案數只 `iterdir` 計數**不讀 cwd**（下一頁的 `project_paths()` 才做完整遍歷），判準
+    與它一致：`is_dir()` 且非 symlink。**因此 `project_count` 會比 `paths` 頁列出的筆數多**
+    ——後者跳過讀不出 `cwd` 的專案（無從對應）。兩者語意不同，`paths` 頁的文案要自己講清楚。
+    """
+    root = resolve_best_effort(source_root)
+    manifest = read_manifest(root)
+    count = 0
+    accounts_dir = _real_subdir(root, "accounts")
+    for key in manifest.get("accounts", {}):
+        if not _SAFE_KEY_RE.fullmatch(key):
+            raise ValueError("invalid_account_key")   # key 拼進路徑，同規則重驗
+        acct = None if accounts_dir is None else _real_subdir(accounts_dir, key)
+        pdir = None if acct is None else _real_subdir(acct, _PROJECTS_DIR)
+        if pdir is None:
+            continue                                  # 從沒用過 /resume 的帳號＝0 不是錯
+        with os.scandir(pdir) as entries:
+            count += sum(1 for c in entries if c.is_dir(follow_symlinks=False))
+    return {
+        "host": _display_text(manifest.get("host")),
+        "created": _display_text(manifest.get("created")),
+        "accounts": sorted(manifest.get("accounts", {})),
+        # extra 的 name 只是回給前端顯示、不在此處拼路徑，故不驗名——壞名字會在
+        # `adopt-config`／`plan` 的信任邊界被擋（`_safe_extra_name`）。
+        "extra": sorted(manifest.get("extra", {})),
+        "project_count": count,
+    }
+
+
 def plan(source_root: str, accounts: dict[str, dict[str, str]],
          extra: dict[str, str] | None = None,
          mapping: list[tuple[str, str]] | None = None) -> InstallPlan:

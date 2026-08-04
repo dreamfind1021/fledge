@@ -7,7 +7,36 @@ import { useAppStore } from "../store/useAppStore";
 import { scanPreview } from "../lib/sidecar";
 import { Onboarding } from "./Onboarding";
 
-vi.mock("../lib/dialog", () => ({ pickDirectory: vi.fn() }));
+vi.mock("../lib/dialog", () => ({ pickDirectory: vi.fn(), pickFile: vi.fn() }));
+// 備份包頁自己的行為在 `BundleCard.test.tsx`；這裡測的是**精靈的導覽**，所以只保留
+// 「回報包資訊」這個對外介面——`paths` 頁的去留與能不能離開 bundle 頁都綁在它上面。
+vi.mock("./BundleCard", async () => {
+  // vi.mock 會被 hoist 到 import 之前，工廠裡不能引用頂部的 `zh`（尚未初始化）
+  const catalog = (await import("../locales/zh-TW/onboarding.json")).default;
+  const info = { host: "old", created: "x", accounts: ["work"], extra: [], project_count: 0 };
+  type Sel = { gen: number; bundlePath: string | null; plan: unknown; probe: unknown };
+  return {
+    EMPTY_BUNDLE_SELECTION: { gen: 0, bundlePath: null, plan: null, probe: { kind: "unknown" } },
+    BundleCard: ({ selection, onSelection }: {
+      selection: Sel; onSelection: (s: Sel) => void;
+    }) => {
+      const probe = (p: unknown) => onSelection({
+        ...selection, gen: selection.gen + 1, bundlePath: "/tmp/picked.tar.gz", probe: p,
+      });
+      return (
+        <div>
+          <h2>{catalog.mig.bundle.h}</h2>
+          {/* 選包狀態住在精靈：卡片卸載再掛回來，這一格必須還在 */}
+          <span data-testid="picked">{selection.bundlePath ?? "no-bundle"}</span>
+          <button onClick={() => probe({ kind: "present", info: { ...info, project_count: 9 }, dest: "/d" })}>
+            probe-present
+          </button>
+          <button onClick={() => probe({ kind: "absent", info, dest: "/d" })}>probe-absent</button>
+        </div>
+      );
+    },
+  };
+});
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   scanPreview: vi.fn(async (_port: number, path: string) => ({ path, count: 3, status: "ok" as const })),
@@ -274,10 +303,111 @@ describe("Onboarding 精靈外殼", () => {
 
   // 骨架的驗收條件：九頁一頁一頁走得過去，且移機分支不經共通設置與範本部署——那兩頁是給
   // 新使用者鋪底的，東西都跟著備份搬回來的人不需要（上游 spec §5.1）
+  // 票 02 的 gating：包還沒展開（`unknown`）就往下走，後面每一頁都沒有資料可依據——
+  // 落點頁要列的帳號、`paths` 頁在不在，全都來自這一包
+  it("包資訊還不知道時走不出備份包頁", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true);
+    expect(ui.getByText(zh.mig.bundle.needInfo)).toBeTruthy();
+    ui.getByText(zh.common.next).click();
+    expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy();      // 還在同一頁
+  });
+
+  // 包裡沒有專案歷史 → `paths` 整頁不出現（不是顯示「不適用」，比照 common 的降級）
+  it("包裡沒有專案歷史時，路徑對應頁整頁不出現", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-absent").click();
+
+    await waitFor(() => expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(8));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.install.h)).toBeTruthy());
+    expect(ui.queryByText(zh.mig.paths.h)).toBeNull();
+  });
+
+  // Codex 票 02 R1 F2：包資訊與「選了哪一包」原本分居兩處（前者在精靈、後者在卡片），
+  // 卡片一卸載選包狀態就沒了、摘要卻還在。三者一起提升到精靈之後，離開再回來看到的
+  // 是**同一組**狀態——摘要與它描述的那一包始終對得上。
+  it("離開備份包頁再回來：選包狀態與包資訊一起留著，不會只剩半邊", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    expect(ui.getByTestId("picked").textContent).toBe("no-bundle");
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+
+    ui.getByText(zh.common.next).click();                 // 走到落點頁（卡片卸載）
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText(zh.common.prev).click();                 // 回來（卡片重新掛載）
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+
+    expect(ui.getByTestId("picked").textContent).toBe("/tmp/picked.tar.gz");
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false);
+  });
+
+  // 同一條的另一半：回到歡迎頁再選一次「我有備份」。**保留**是正確的——選包路徑、展開
+  // 位置與摘要是完整的一組，展開目錄也還在磁碟上，使用者不必重選。要擋的是「只剩摘要、
+  // 沒有包」那種半邊狀態，而那已由狀態提升消滅。
+  it("回歡迎頁再進移機：整組狀態一致地留著，不是只剩摘要", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+
+    ui.getByText(zh.common.prev).click();                 // 回歡迎頁
+    await waitFor(() => expect(ui.getByText(zh.welcome.restore)).toBeTruthy());
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+
+    expect(ui.getByTestId("picked").textContent).toBe("/tmp/picked.tar.gz");
+  });
+
+  // 票 01 F1 的整合層守護：導覽 state 存的是**頁面身分**不是索引。從 `install` 回頭換一包、
+  // 新的一包沒有專案歷史 → 序列少一頁，此時若存的是索引，同一個數字會把使用者丟到別頁。
+  it("從安裝頁回頭換包、序列因此縮短時，使用者仍停在備份包頁", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    // 等 gating 解除再走：同一個 tick 內按鈕還是 disabled，click 不會有任何作用
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    // 每步之間要等——連續 click 在同一個 tick 內用的是同一份閉包，只會前進一頁
+    for (const heading of [zh.mig.targets.h, zh.mig.paths.h, zh.mig.install.h]) {
+      ui.getByText(zh.common.next).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+    for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
+      ui.getByText(zh.common.prev).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+    ui.getByText("probe-absent").click();        // 新的一包沒有專案歷史 → `paths` 頁消失
+
+    await waitFor(() => expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(8));
+    expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy();
+    expect(ui.queryByText(zh.mig.targets.h)).toBeNull();
+  });
+
   it("移機分支一路走到完成頁，全程不出現共通設置與範本部署", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
     ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();       // 有專案歷史＝完整九頁序列
     for (const heading of [
       zh.mig.bundle.h,
       zh.mig.targets.h,

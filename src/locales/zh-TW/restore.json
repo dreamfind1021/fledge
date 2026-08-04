@@ -56,6 +56,7 @@
     "bundle_not_found": "找不到這個檔案，它可能被移走或改名了。",
     "bundle_not_a_file": "那不是一個檔案。請選擇備份包本身（.tar.gz）。",
     "bundle_unreadable": "這個檔案讀不到，請確認權限後再試。",
-    "dest_required": "這個檔名看不出備份時間，請自行選擇要展開到哪裡。"
+    "dest_required": "這個檔名看不出備份時間，請自行選擇要展開到哪裡。",
+    "source_not_a_bundle": "展開出來的東西不是 Fledge 的備份包。"
   }
 }

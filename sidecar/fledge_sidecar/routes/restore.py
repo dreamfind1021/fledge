@@ -221,6 +221,21 @@ def adopt_config(body: AdoptConfigBody):
     return config.to_dict()
 
 
+@router.get("/api/restore/bundle-info")
+def bundle_info_route(dest: str):
+    """唯讀（票 02，增補 spec 缺口 1）：展開目錄的摘要——來源機器、備份時間、帳號與
+    extra 清單、專案數。`bundle` 頁靠它讓使用者確認「這是不是我要的那一包」。
+
+    **刻意不讀 config**：移機的常態是設定檔還沒落檔（`adopt-config` 在下一頁），
+    摘要只解讀展開目錄本身。"""
+    try:
+        return install.bundle_info(dest)
+    except ValueError as exc:
+        if str(exc) in _INSTALL_CLIENT_ERRORS:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        raise                               # 模組只拋判別碼，其餘不吞
+
+
 @router.get("/api/restore/project-paths")
 def project_paths_route(dest: str):
     """唯讀（票 06）：備份包裡有哪些專案、各自的舊路徑（讀歷史檔 cwd——編碼不可逆，
