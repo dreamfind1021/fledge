@@ -1014,6 +1014,147 @@ def test_bundle_info_tolerates_manifest_without_host_or_created(tmp_path: Path):
     assert (info["host"], info["created"], info["accounts"]) == ("", "", [])
 
 
+# ---------- 票 03：落點建議值（landing-suggestions，增補 spec 缺口 7） ----------
+
+
+def _staging_for_suggestions(tmp_path: Path, **manifest_overrides) -> Path:
+    """一個帳號在舊 home 底下、一個不在（NAS 掛載點），外加一個 extra。
+
+    `base` 每次不同：`make_staging` 固定建 `<base>/staging`，同一個 tmp_path 呼叫兩次會
+    `FileExistsError`，而下面有兩條測試要在迴圈裡造好幾份。"""
+    base = tmp_path / f"case{len(list(tmp_path.glob('case*')))}"
+    base.mkdir()
+    src = _staging(base)
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["nas"] = "/Volumes/NAS/claude"
+    manifest["extra"] = {".agents": "/Users/olduser/.agents"}
+    manifest.update(manifest_overrides)
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return src
+
+
+def test_landing_suggestions_rewrites_home_prefix_and_refuses_to_guess(
+        tmp_path: Path, monkeypatch):
+    """建議值規則（上游 spec §4.2.2 決策 9）：舊路徑在舊 home 底下 → 換 home 前綴；
+    **其餘留空不猜**（ADR-0001 允許 config_dir 是任意路徑，沒有正確答案可推）。
+
+    extra 與帳號走同一條規則，只用 `kind` 區分——兩者的落點確認在 UI 上是同一件事。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    (home / ".agents").mkdir()          # 新機已經有這個目錄 → suggested_exists
+
+    out = inst.landing_suggestions(str(_staging_for_suggestions(tmp_path)))
+
+    assert out["home"] == "/Users/olduser"
+    assert out["spots"] == [
+        {"key": ".agents", "kind": "extra", "old_path": "/Users/olduser/.agents",
+         "suggested": f"{home}/.agents", "suggested_exists": True},
+        {"key": "nas", "kind": "account", "old_path": "/Volumes/NAS/claude",
+         "suggested": "", "suggested_exists": False},      # 不在舊 home 底下 → 不猜
+        {"key": "work", "kind": "account", "old_path": "/Users/olduser/.claude",
+         "suggested": f"{home}/.claude", "suggested_exists": False},
+    ]
+
+
+def test_landing_suggestions_refuses_non_normalized_manifest_paths(
+        tmp_path: Path, monkeypatch):
+    """**建議值不得逃逸到新 home 之外**（Codex 階段 4 審查 F1）：`_rewrite_home_prefix`
+    原本是裸字串前綴＋`os.path.join`，於是 `home=/old` 配 `old_path=/old/../../etc` 會產出
+    `<new_home>/../../etc`——那個值既是輸入框預設值（click-through 授權誘導），又會被
+    `suggested_exists` 交給 `os.path.isdir`，**等於讓一份惡意備份包探測本機任意路徑存在性**。
+
+    不合格的 `old_path` → 該項 `suggested` 留空且**完全不探測**。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    src = _staging_for_suggestions(tmp_path, home="/old", accounts={
+        "escape": "/old/../../etc",
+        "dotdot": "/old/x/../../../etc",
+        "trailing": "/old/x/",
+        "relative": "old/x",
+        "ok": "/old/x",
+    })
+
+    spots = {s["key"]: s for s in inst.landing_suggestions(str(src))["spots"]}
+
+    for key in ("escape", "dotdot", "trailing", "relative"):
+        assert spots[key]["suggested"] == "", key
+        assert spots[key]["suggested_exists"] is False, key
+    assert spots["ok"]["suggested"] == f"{home}/x"       # 正常的那一個照樣有建議值
+
+
+def test_landing_suggestions_does_not_treat_sibling_prefix_as_inside_home(
+        tmp_path: Path, monkeypatch):
+    """containment 是**路徑元件**不是字串前綴：`/olduser/x` 不在 `/old` 底下。
+
+    裸 `startswith("/old")` 會把它改寫成 `<new_home>ser/x`——一個既不存在也沒意義的
+    建議值，而使用者看到預填值多半就按下去了。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    src = _staging_for_suggestions(tmp_path, home="/old", accounts={
+        "sibling": "/olduser/x", "inside": "/old/x"})
+
+    spots = {s["key"]: s for s in inst.landing_suggestions(str(src))["spots"]}
+
+    assert spots["sibling"]["suggested"] == ""
+    assert spots["inside"]["suggested"] == f"{home}/x"
+
+
+def test_landing_suggestions_probes_nothing_when_home_is_unusable(
+        tmp_path: Path, monkeypatch):
+    """`read_manifest` 不驗 `home`（它只驗 accounts／extra 的形狀）。`home` 不是合格字串時
+    **fail-soft**：回空字串、所有 suggested 留空、**完全不執行存在性探測**（Codex 階段 4 F3）。
+
+    不 fail-closed 的理由與票 02 的 `_display_text` 同一條——`home` 只影響建議值這個便利功能、
+    不參與任何授權決策，為它拒絕整包會讓手編過 manifest 的使用者連落點都沒得填。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    for bad in (None, 7, ["/old"], {"a": 1}, "relative/home", "/old/../x", ""):
+        src = _staging_for_suggestions(tmp_path, home=bad)      # 每次一份新的 staging
+        out = inst.landing_suggestions(str(src))
+        assert out["home"] == "", bad
+        assert all(s["suggested"] == "" for s in out["spots"]), bad
+        assert all(s["suggested_exists"] is False for s in out["spots"]), bad
+
+
+def test_landing_suggestions_tolerates_non_string_old_path(tmp_path: Path, monkeypatch):
+    """`old_path` 非字串（manifest 可被手編）→ 該項留空，**不整份拒絕**：一個壞欄位不該
+    讓使用者連其餘正常帳號的落點都沒得填。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    src = _staging_for_suggestions(tmp_path, accounts={"work": 7, "ok": "/Users/olduser/.c"})
+
+    spots = {s["key"]: s for s in inst.landing_suggestions(str(src))["spots"]}
+
+    assert (spots["work"]["old_path"], spots["work"]["suggested"]) == ("", "")
+    assert spots["ok"]["suggested"] == f"{home}/.c"
+
+
+def test_landing_suggestions_rejects_path_like_names(tmp_path: Path, monkeypatch):
+    """key／name 與其他讀取面同一條信任邊界：帳號走 `_SAFE_KEY_RE`、extra 走
+    `_safe_extra_name`（票 13）。它們會被顯示、也會被送回 `adopt-config`。"""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(home))
+    with pytest.raises(ValueError, match="invalid_account_key"):
+        inst.landing_suggestions(str(_staging_for_suggestions(
+            tmp_path, accounts={"../outside": "/Users/olduser/.claude"})))
+    with pytest.raises(ValueError, match="invalid_account_key"):
+        inst.landing_suggestions(str(_staging_for_suggestions(
+            tmp_path, extra={"a/b": "/Users/olduser/.agents"})))
+
+
+def test_landing_suggestions_refuses_a_directory_that_is_not_a_bundle(tmp_path: Path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(ValueError, match="source_not_a_bundle"):
+        inst.landing_suggestions(str(plain))
+
+
 # ---------- 票 13：extra name 的判準與帳號 key 分開 ----------
 
 

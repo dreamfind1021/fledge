@@ -57,6 +57,15 @@
     "bundle_not_a_file": "That isn't a file. Pick the backup bundle itself (.tar.gz).",
     "bundle_unreadable": "That file can't be read. Check its permissions and try again.",
     "dest_required": "This filename doesn't say when the backup was taken, so pick where to unpack it yourself.",
-    "source_not_a_bundle": "What was expanded isn't a Fledge backup bundle."
+    "source_not_a_bundle": "What was expanded isn't a Fledge backup bundle.",
+    "invalid_config_dir": "That isn't a valid folder path.",
+    "unsafe_config_dir": "The home folder itself (or anything above it) is too broad — pick a dedicated folder.",
+    "invalid_account_key": "That name can't be used to build a path. Pick another one.",
+    "overlapping_config_dirs": "Two items overlap — one sits inside the other. Installing the outer one would bury the inner one, so keep them apart.",
+    "duplicate_account_key": "That account appears twice.",
+    "duplicate_extra_name": "That asset appears twice.",
+    "unknown_account_key": "That account isn't in this backup bundle.",
+    "unknown_extra_name": "That asset isn't in this backup bundle.",
+    "config_already_initialized": "This machine already has a Fledge settings file, so a new one won't be created. Adjust locations from Settings, or remove the existing file to start over."
   }
 }

@@ -236,6 +236,20 @@ def bundle_info_route(dest: str):
         raise                               # 模組只拋判別碼，其餘不吞
 
 
+@router.get("/api/restore/landing-suggestions")
+def landing_suggestions_route(dest: str):
+    """唯讀（票 03，增補 spec 缺口 7）：每個帳號與 extra 的落點建議值與存在性。
+
+    `targets` 頁靠它預填。**manifest 只產生建議值**——授權是使用者送回 `adopt-config`
+    的那一份（spec §4.2.2 第 2 點）。與 `bundle-info` 同樣不讀 config（落檔在下一步）。"""
+    try:
+        return install.landing_suggestions(dest)
+    except ValueError as exc:
+        if str(exc) in _INSTALL_CLIENT_ERRORS:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        raise                               # 模組只拋判別碼，其餘不吞
+
+
 @router.get("/api/restore/project-paths")
 def project_paths_route(dest: str):
     """唯讀（票 06）：備份包裡有哪些專案、各自的舊路徑（讀歷史檔 cwd——編碼不可逆，

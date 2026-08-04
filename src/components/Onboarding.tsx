@@ -19,6 +19,7 @@ import { LoginCard } from "./LoginCard";
 import { CommonConfigCard } from "./CommonConfigCard";
 import { SystemSettingsCard } from "./SystemSettingsCard";
 import { BundleCard, EMPTY_BUNDLE_SELECTION, type BundleSelection } from "./BundleCard";
+import { TargetsCard } from "./TargetsCard";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -343,7 +344,23 @@ export function Onboarding({ onClose }: OnboardingProps) {
               {migNav(bundle.probe.kind === "unknown")}
             </div>
           )}
-          {step === "targets" && migShell("targets")}
+          {/* 落點頁（票 03）：落檔是不可逆的，確認之前不放行——後面每一頁都從落檔後的
+              config.json 讀落點。包資訊還是 unknown 就沒有展開位置可用（正常流程走不到
+              這裡，bundle 頁的 gating 擋著），退回空殼而不是拿 undefined 去打端點 */}
+          {step === "targets" && (
+            bundle.probe.kind === "unknown" ? migShell("targets") : (
+              <div>
+                <TargetsCard
+                  port={port}
+                  dest={bundle.probe.dest}
+                  info={bundle.probe.info}
+                  saved={configCreated}
+                  onSaved={() => setConfigCreated(true)}
+                />
+                {migNav(!configCreated)}
+              </div>
+            )
+          )}
           {step === "paths" && migShell("paths")}
           {step === "install" && migShell("install")}
           {step === "repair" && migShell("repair")}

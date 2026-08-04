@@ -37,6 +37,20 @@ vi.mock("./BundleCard", async () => {
     },
   };
 });
+vi.mock("./TargetsCard", async () => {
+  const catalog = (await import("../locales/zh-TW/onboarding.json")).default;
+  return {
+    TargetsCard: ({ dest, saved, onSaved }: {
+      dest: string; saved: boolean; onSaved: () => void;
+    }) => (
+      <div>
+        <h2>{catalog.mig.targets.h}</h2>
+        <span data-testid="targets-dest">{dest}</span>
+        <button onClick={onSaved} disabled={saved}>adopt</button>
+      </div>
+    ),
+  };
+});
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   scanPreview: vi.fn(async (_port: number, path: string) => ({ path, count: 3, status: "ok" as const })),
@@ -328,9 +342,35 @@ describe("Onboarding 精靈外殼", () => {
     await waitFor(() => expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(8));
     ui.getByText(zh.common.next).click();
     await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
     ui.getByText(zh.common.next).click();
     await waitFor(() => expect(ui.getByText(zh.mig.install.h)).toBeTruthy());
     expect(ui.queryByText(zh.mig.paths.h)).toBeNull();
+  });
+
+  // 票 03：落點頁的落檔是**不可逆**的（建立設定檔），確認之前不讓精靈往下走——後面的
+  // 預覽與安裝都從落檔後的 config.json 讀落點
+  it("落點還沒確認就走不出落點頁；落檔後才放行", async () => {
+    useAppStore.setState({ config: { ...baseConfig, is_first_run: true } });
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+
+    // 落點頁拿到的是上一頁那一包的展開位置，不是別的
+    expect(ui.getByTestId("targets-dest").textContent).toBe("/d");
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true);
+
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
   });
 
   // Codex 票 02 R1 F2：包資訊與「選了哪一包」原本分居兩處（前者在精靈、後者在卡片），
@@ -390,6 +430,11 @@ describe("Onboarding 精靈外殼", () => {
     for (const heading of [zh.mig.targets.h, zh.mig.paths.h, zh.mig.install.h]) {
       ui.getByText(zh.common.next).click();
       await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+      if (heading === zh.mig.targets.h) {
+        ui.getByText("adopt").click();
+        await waitFor(() =>
+          expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      }
     }
     for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
       ui.getByText(zh.common.prev).click();
@@ -420,6 +465,12 @@ describe("Onboarding 精靈外殼", () => {
       await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
       expect(ui.queryByText(zh.cc.h)).toBeNull();
       expect(ui.queryByText(zh.sys.h)).toBeNull();
+      // 落點頁的落檔是往下走的前提（票 03）：不落檔就過不去，這一步不是裝飾
+      if (heading === zh.mig.targets.h) {
+        ui.getByText("adopt").click();
+        await waitFor(() =>
+          expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      }
       ui.getByText(zh.common.next).click();
     }
 

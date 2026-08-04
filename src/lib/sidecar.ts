@@ -676,6 +676,54 @@ export const restorePlan = (port: number, bundle: string, dest?: string) =>
 export const restorePlanForPath = (port: number, bundlePath: string, dest?: string) =>
   postRestorePlan(port, { bundle_path: bundlePath }, dest);
 
+/** 一個落點的建議值。`suggested` 空字串＝**推不出來**（舊路徑不在舊 home 底下，或 manifest
+ *  的路徑不合格）——欄位留空要求使用者自己填，不猜（spec §4.2.2 決策 9）。 */
+export interface LandingSpot {
+  key: string;
+  kind: "account" | "extra";
+  old_path: string;
+  suggested: string;
+  suggested_exists: boolean;
+}
+
+export interface LandingSuggestions {
+  home: string;                  // 舊機 home；空字串＝manifest 的 home 不可用
+  spots: LandingSpot[];
+}
+
+/** 落點建議值（增補 spec 缺口 7）：`targets` 頁靠它預填。唯讀。
+ *  **回的每個位元組都不具授權效力**——授權是使用者送回 `adoptConfig` 的那一份。 */
+export async function fetchLandingSuggestions(
+  port: number, dest: string,
+): Promise<LandingSuggestions> {
+  const resp = await fetch(
+    `${base(port)}/api/restore/landing-suggestions?dest=${encodeURIComponent(dest)}`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
+  return resp.json();
+}
+
+export interface AdoptConfigBody {
+  dest: string;
+  accounts: { key: string; config_dir: string }[];
+  extra?: { name: string; path: string }[];
+}
+
+/** 用備份包重建 `config.json`（票 07 的端點、票 03 的呼叫端）。**落點是使用者的授權**：
+ *  manifest 只產生建議值，送回去的這一份才算數（spec §4.2.2），server 全部重驗。
+ *
+ *  `roots` 一律送空陣列——移機分支此時還沒有工作根目錄的資料來源，那份在備份包的
+ *  `fledge/config.json` 裡，由票 09 帶回（增補 spec §2.8.3）。這不是遺漏。 */
+export async function adoptConfig(port: number, body: AdoptConfigBody): Promise<void> {
+  const resp = await fetch(`${base(port)}/api/restore/adopt-config`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ roots: [], extra: [], ...body }),
+  });
+  if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
+}
+
 /** 備份包摘要（增補 spec 缺口 1）：展開之後讓使用者確認「這是不是我要的那一包」。唯讀。 */
 export async function fetchBundleInfo(port: number, dest: string): Promise<BundleInfo> {
   const resp = await fetch(

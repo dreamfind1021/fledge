@@ -57,6 +57,15 @@
     "bundle_not_a_file": "那不是一個檔案。請選擇備份包本身（.tar.gz）。",
     "bundle_unreadable": "這個檔案讀不到，請確認權限後再試。",
     "dest_required": "這個檔名看不出備份時間，請自行選擇要展開到哪裡。",
-    "source_not_a_bundle": "展開出來的東西不是 Fledge 的備份包。"
+    "source_not_a_bundle": "展開出來的東西不是 Fledge 的備份包。",
+    "invalid_config_dir": "那不是一個合法的資料夾路徑。",
+    "unsafe_config_dir": "家目錄本身（或它的上層）範圍太大了，請選一個專用的資料夾。",
+    "invalid_account_key": "這個名稱不能用來組成路徑，請換一個。",
+    "overlapping_config_dirs": "有兩項的位置疊在一起了（其中一個在另一個裡面）。外層那一項的安裝會把內層整個蓋掉，請把它們分開。",
+    "duplicate_account_key": "同一個帳號出現了兩次。",
+    "duplicate_extra_name": "同一項資產出現了兩次。",
+    "unknown_account_key": "這個帳號不在這份備份包裡。",
+    "unknown_extra_name": "這項資產不在這份備份包裡。",
+    "config_already_initialized": "這台機器上已經有 Fledge 的設定檔了，所以不會再建立一份。要調整位置請到設定頁；要重來請先移除既有設定檔。"
   }
 }
