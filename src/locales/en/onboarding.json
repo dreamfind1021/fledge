@@ -73,7 +73,22 @@
       "reused": "This machine already had a settings file, so it was reused instead of creating another."
     },
     "paths": {
-      "h": "Map project paths"
+      "h": "Map project paths",
+      "sub": "Whether /resume can find a conversation depends on the project's absolute path — if the path changed, it won't match. Set where each project lives on this machine.",
+      "count": "This bundle has {{total}} project folders; {{listed}} of them have a readable original location and can be mapped.",
+      "countNote": "The ones without a readable original location aren't broken: their history still comes over, it just can't be mapped to a new path automatically.",
+      "old": "Was at",
+      "placeholder": "/absolute/path/to/the/project/on/this/machine",
+      "browse": "Choose…",
+      "exists": "Already there",
+      "missing": "Not there yet",
+      "missingNote": "A location that doesn't exist yet is fine — the rewrite follows the path you type, so moving the project there later will line up.",
+      "skipNote": "Projects left empty ({{names}}) keep their history as-is, but /resume won't list them unless you put the project back at its original path.",
+      "none": "There are no mappable projects in this bundle — just continue.",
+      "note": "Nothing is written on this step — the rewrite happens at install time, so you can come back and change it any time before then.",
+      "errors": {
+        "loadFailed": "Couldn't read the project list for this bundle."
+      }
     },
     "install": {
       "h": "Install onto this machine"

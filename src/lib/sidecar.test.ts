@@ -527,3 +527,28 @@ describe("落點建議值與 adopt-config（票 03）", () => {
       .rejects.toMatchObject({ code: "overlapping_config_dirs" });
   });
 });
+
+describe("專案路徑對應（票 04）", () => {
+  it("fetchProjectPaths 以 dest 查詢並回專案清單", async () => {
+    const projects = [{ account: "work", old_path: "/Users/olduser/work/app",
+                        encoded_dir: "-Users-olduser-work-app",
+                        suggested: "/Users/me/work/app", suggested_exists: false }];
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      seen.push(url);
+      return { ok: true, json: async () => ({ projects }) } as unknown as Response;
+    }));
+    const m = await import("./sidecar");
+    expect(await m.fetchProjectPaths(1234, "/tmp/x")).toEqual(projects);
+    expect(seen[0]).toContain(`dest=${encodeURIComponent("/tmp/x")}`);
+  });
+
+  it("判別碼保留在 RestoreError 上供 i18n 映射", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false, status: 400, json: async () => ({ error: "source_not_a_bundle" }),
+    }) as unknown as Response));
+    const m = await import("./sidecar");
+    await expect(m.fetchProjectPaths(1234, "/tmp/x"))
+      .rejects.toMatchObject({ code: "source_not_a_bundle" });
+  });
+});

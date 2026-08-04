@@ -20,6 +20,7 @@ import { CommonConfigCard } from "./CommonConfigCard";
 import { SystemSettingsCard } from "./SystemSettingsCard";
 import { BundleCard, EMPTY_BUNDLE_SELECTION, type BundleSelection } from "./BundleCard";
 import { TargetsCard } from "./TargetsCard";
+import { PathsCard, type ProjectMapping } from "./PathsCard";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -63,6 +64,9 @@ export function Onboarding({ onClose }: OnboardingProps) {
   // （Codex 票 02 R1 F2）。其中包資訊還是**序列本身的輸入**：`paths` 頁在包裡沒有專案歷史
   // 時整頁不出現，而那要展開後才知道。
   const [bundle, setBundle] = useState<BundleSelection>(EMPTY_BUNDLE_SELECTION);
+  // 專案路徑對應（票 04）。**這一頁不寫任何東西**——改寫在 install 時才發生，所以對應
+  // 關係住在這裡、一路帶到安裝頁，按下安裝之前隨時能回去改。
+  const [mapping, setMapping] = useState<ProjectMapping>({});
   const overlayRef = useRef<HTMLDivElement>(null);
 
   const steps = wizardSteps({
@@ -382,7 +386,22 @@ export function Onboarding({ onClose }: OnboardingProps) {
               </div>
             )
           )}
-          {step === "paths" && migShell("paths")}
+          {/* 專案路徑對應（票 04）：純收集，不落檔也不擋——留空即照搬（`/resume` 列不出來，
+              文案講明）。包資訊還是 unknown 就沒有展開位置可用，退回空殼 */}
+          {step === "paths" && (
+            bundle.probe.kind === "unknown" ? migShell("paths") : (
+              <div>
+                <PathsCard
+                  port={port}
+                  dest={bundle.probe.dest}
+                  projectCount={bundle.probe.info.project_count}
+                  mapping={mapping}
+                  onMapping={setMapping}
+                />
+                {migNav()}
+              </div>
+            )
+          )}
           {step === "install" && migShell("install")}
           {step === "repair" && migShell("repair")}
 

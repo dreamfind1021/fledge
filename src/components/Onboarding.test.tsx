@@ -69,6 +69,23 @@ vi.mock("./TargetsCard", async () => {
     ),
   };
 });
+vi.mock("./PathsCard", async () => {
+  const catalog = (await import("../locales/zh-TW/onboarding.json")).default;
+  return {
+    PathsCard: ({ dest, projectCount, mapping, onMapping }: {
+      dest: string; projectCount: number;
+      mapping: Record<string, string>; onMapping: (m: Record<string, string>) => void;
+    }) => (
+      <div>
+        <h2>{catalog.mig.paths.h}</h2>
+        <span data-testid="paths-dest">{dest}</span>
+        <span data-testid="paths-count">{projectCount}</span>
+        <span data-testid="paths-mapping">{JSON.stringify(mapping)}</span>
+        <button onClick={() => onMapping({ "/old/a": "/new/a" })}>map</button>
+      </div>
+    ),
+  };
+});
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   scanPreview: vi.fn(async (_port: number, path: string) => ({ path, count: 3, status: "ok" as const })),
@@ -427,6 +444,40 @@ describe("Onboarding 精靈外殼", () => {
     await waitFor(() =>
       expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
     expect(loads).toBe(2);
+  });
+
+  // 票 04：這一頁不寫任何東西，對應關係住在精靈——走到下一頁再回來必須還在，
+  // 而且它要能一路帶到 install 頁（票 05 用它算預覽）
+  it("專案對應住在精靈：離開這一頁再回來還在，且拿得到這一包的專案數", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+
+    // 展開位置與專案數都來自上一頁確認過的那一包
+    expect(ui.getByTestId("paths-dest").textContent).toBe("/d");
+    expect(ui.getByTestId("paths-count").textContent).toBe("9");
+
+    ui.getByText("map").click();
+    await waitFor(() => expect(ui.getByTestId("paths-mapping").textContent)
+      .toBe(JSON.stringify({ "/old/a": "/new/a" })));
+
+    ui.getByText(zh.common.next).click();                  // 走到安裝頁
+    await waitFor(() => expect(ui.getByText(zh.mig.install.h)).toBeTruthy());
+    ui.getByText(zh.common.prev).click();                  // 再回來
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+    expect(ui.getByTestId("paths-mapping").textContent)
+      .toBe(JSON.stringify({ "/old/a": "/new/a" }));
   });
 
   // Codex 票 03 R4 F1：409 只證明「有一份 config」。後續 install 直接從那份 config 取
