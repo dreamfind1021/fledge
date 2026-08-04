@@ -200,22 +200,43 @@ describe("TargetsCard", () => {
   });
 
   // Codex 票 03 R1 F2：落檔後精靈要先把新 config 讀回來才算完成——後面的頁面（登入卡等）
-  // 讀的是 store 裡的 accounts，不刷新就會拿 in-memory 的預設帳號去顯示
-  it("落檔後的收尾失敗 → 顯示錯誤且不轉唯讀（下一步仍被擋）", async () => {
+  // 讀的是 store 裡的 accounts，不刷新就會拿 in-memory 的預設帳號去顯示。
+  //
+  // R2 F1：但 `adoptConfig` 與收尾**不是同一個原子操作**。落檔已經成功、只是讀回失敗時，
+  // 重按若再 POST 一次就會撞 409（`create_if_absent`），於是永遠走不到收尾——store 不會
+  // 刷新、下一步永遠被擋，使用者在這一頁卡死。
+  it("落檔成功但讀回失敗 → 說明設定已建立，重試只重讀不重複建立", async () => {
+    let reloads = 0;
+    const onSaved = vi.fn(async () => {
+      reloads += 1;
+      if (reloads === 1) throw new Error("RELOAD-SENTINEL");
+    });
     const ui = render(
-      <TargetsCard
-        port={1234}
-        dest="/tmp/staging"
-        info={INFO}
-        saved={false}
-        onSaved={() => Promise.reject(new Error("RELOAD-SENTINEL"))}
-      />,
+      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
+                   onSaved={onSaved} />,
     );
     await loaded(ui);
+
     ui.getByText(zh.mig.targets.save).click();
-    await waitFor(() => expect(ui.getByText(zh.mig.targets.errors.saveFailed)).toBeTruthy());
-    expect(ui.getByText(zh.mig.targets.save)).toBeTruthy();      // 還在，沒有轉唯讀
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.targets.errors.reloadFailed)).toBeTruthy());
+    expect(adoptConfig).toHaveBeenCalledTimes(1);
     expect(ui.container.textContent).not.toContain("RELOAD-SENTINEL");
+
+    ui.getByText(zh.mig.targets.retry).click();       // 重試：只重讀
+    await waitFor(() => expect(reloads).toBe(2));
+    expect(adoptConfig).toHaveBeenCalledTimes(1);     // **沒有再 POST 一次**
+  });
+
+  it("落檔本身失敗 → 重按會重新落檔（那一步還沒成功過）", async () => {
+    adoptConfig.mockRejectedValueOnce(new RestoreError("invalid_config_dir", 400));
+    const ui = setup();
+    await loaded(ui);
+    ui.getByText(zh.mig.targets.save).click();
+    await waitFor(() =>
+      expect(ui.getByText(zhRestore.errors.invalid_config_dir)).toBeTruthy());
+    ui.getByText(zh.mig.targets.save).click();        // 主按鈕仍是「建立」不是「重新讀取」
+    await waitFor(() => expect(adoptConfig).toHaveBeenCalledTimes(2));
   });
 
   it("載入建議值失敗 → 通用訊息，例外原文不進畫面", async () => {

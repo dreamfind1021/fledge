@@ -58,6 +58,9 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
+  // 後端已經落檔了嗎。與父層的 `saved`（store 已刷新）**是兩件事**——中間失敗時，
+  // 重試只能重跑收尾，不能再 POST 一次（見 `save`）。
+  const [adopted, setAdopted] = useState(false);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
 
@@ -121,27 +124,43 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
     }
     setBusy(true);
     setSaveError(null);
+    // **落檔與收尾不是同一個原子操作**（Codex 票 03 R2 F1）：`adopt-config` 走
+    // `create_if_absent`，成功之後再 POST 一次只會拿到 409。所以落檔成功就記下來，
+    // 收尾失敗時的重試**只重跑收尾**——否則使用者會卡在「設定已經建好、卻永遠讀不回來
+    // 也走不下去」的死路。兩段各自 catch，訊息才說得準是哪一步失敗。
     try {
-      await adoptConfig(port, {
-        dest,
-        accounts,
-        extra: spots
-          .filter((s) => s.kind === "extra" && filled(s))
-          .map((s) => ({ name: s.key, path: filled(s) })),
-      });
-      // 收尾（父層刷新 store）也在 try 內：它失敗就等於這一步沒完成，不該轉唯讀
-      await onSaved();
+      if (!adopted) {
+        await adoptConfig(port, {
+          dest,
+          accounts,
+          extra: spots
+            .filter((s) => s.kind === "extra" && filled(s))
+            .map((s) => ({ name: s.key, path: filled(s) })),
+        });
+        if (!mounted.current) return;
+        setAdopted(true);
+      }
     } catch (e) {
       console.error("[TargetsCard] 建立設定檔失敗", e);
       if (!mounted.current) return;
       const code = (e as { code?: string | null }).code ?? null;
       setSaveError((code !== null && CODE_KEY[code] ? t(CODE_KEY[code]) : null)
         ?? t("mig.targets.errors.saveFailed"));
+      setBusy(false);
+      return;
+    }
+    try {
+      await onSaved();
+    } catch (e) {
+      console.error("[TargetsCard] 讀回新設定失敗", e);
+      // 這一步失敗**不是**「建立失敗」——設定檔已經在了，說錯會讓使用者去做危險的事
+      // （刪掉剛建立的設定檔重來）
+      if (mounted.current) setSaveError(t("mig.targets.errors.reloadFailed"));
     } finally {
       if (mounted.current) setBusy(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [port, dest, spots, values, onSaved, t]);
+  }, [port, dest, spots, values, adopted, onSaved, t]);
 
   if (stale) {
     return (
@@ -201,7 +220,8 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
         ? <p className="ob-note">{t("mig.targets.created")}</p>
         : spots !== null && (
           <button onClick={save} disabled={busy} className="ob-btn">
-            {busy ? t("mig.targets.saving") : t("mig.targets.save")}
+            {busy ? t("mig.targets.saving")
+              : adopted ? t("mig.targets.retry") : t("mig.targets.save")}
           </button>
         )}
     </div>

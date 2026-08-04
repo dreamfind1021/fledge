@@ -66,8 +66,10 @@
       "stale": "This bundle's contents no longer match what you saw on the previous step. Go back and confirm the bundle again.",
       "errors": {
         "loadFailed": "Couldn't read landing spot suggestions for this bundle.",
-        "saveFailed": "Couldn't create the settings file."
-      }
+        "saveFailed": "Couldn't create the settings file.",
+        "reloadFailed": "Your settings file was created — it just hasn't been read back yet. Hit “Read again” to retry; nothing gets created twice."
+      },
+      "retry": "Read again"
     },
     "paths": {
       "h": "Map project paths"

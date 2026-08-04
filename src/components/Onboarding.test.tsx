@@ -46,7 +46,9 @@ vi.mock("./TargetsCard", async () => {
       <div>
         <h2>{catalog.mig.targets.h}</h2>
         <span data-testid="targets-dest">{dest}</span>
-        {/* 真卡片會 `await onSaved()`，收尾失敗就不轉唯讀——mock 要保留這個形狀 */}
+        {/* 真卡片的形狀：`adopt-config` 只會成功一次（`create_if_absent`），收尾失敗時
+            重按**只重跑 `onSaved()`**、不再 POST。mock 保留這個形狀，否則父層測試會在
+            一條真實流程走不到的路徑上變綠（Codex 票 03 R2 指出的假綠） */}
         <button onClick={() => void Promise.resolve(onSaved()).catch(() => {})} disabled={saved}>
           adopt
         </button>
@@ -378,6 +380,8 @@ describe("Onboarding 精靈外殼", () => {
 
   // Codex 票 03 R1 F2：落檔只翻旗標不夠——後面的頁面（登入卡等）讀的是 store 裡的
   // accounts，不把剛建立的 config 讀回來，使用者會看到 in-memory 的預設帳號
+  // 這裡測的是**父層的職責**：收尾被呼叫時刷新 store、失敗就不放行。卡片那側「重試不
+  // 重複 POST」的狀態機在 `TargetsCard.test.tsx`（R2 F1）。
   it("落點落檔後把新設定讀回 store，讀不回來就不放行", async () => {
     let loads = 0;
     let failNext = true;
