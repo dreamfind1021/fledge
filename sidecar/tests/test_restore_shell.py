@@ -1041,3 +1041,33 @@ def test_migration_to_a_new_home_still_produces_a_useful_diff(tmp_path: Path):
     assert "only-in-backup.md" in proc.stdout, proc.stdout
     # 新機有、備份裡沒有的也認得出來（頂層 skills 兩邊都有，過濾條件才會放行）
     assert "only-on-new.md" in proc.stdout, proc.stdout
+
+
+def test_malicious_account_key_is_rejected_by_name_not_merely_by_lookup(tmp_path: Path):
+    """**key 也是不可信輸入**：它被拼進 `os.path.join(dest, "accounts", k)`，所以
+    `../../outer` 這種 key 可以讓比對的「備份側」走出展開目錄、把外面的檔名列出來。
+
+    目前它**偶然**被「本機沒有登記這個 key」擋住——但那是查表的副作用，不是針對名字的防線：
+    把兩個判斷的順序調換、或加一個「沒登記就用預設位置」的 fallback，就會破功。sidecar 的
+    `backup/install.py` 對同一件事有 `_SAFE_KEY_RE`（理由正是 key 會被拼進路徑），腳本這邊
+    原本沒有——**一邊有、一邊沒有**同樣是漂移。
+
+    所以斷言的是**它因為名字不合法而被拒**，不是「查不到所以略過」。"""
+    home, _ = _fake_home(tmp_path)
+    outer = tmp_path / "outer"
+    (outer / "secrets").mkdir(parents=True)
+    (outer / "secrets" / f"{SENTINEL}.txt").write_text("x", encoding="utf-8")
+    bundle = _evil_bundle(tmp_path / "evil-key-path", [
+        ("manifest.json", "file", json.dumps({
+            "created": "20260101-1200", "host": "e", "home": "/o",
+            "accounts": {"../../outer": "", "ok-name": ""}})),
+        ("accounts/placeholder", "file", "y"),
+    ])
+    dest = tmp_path / "nest" / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert SENTINEL not in proc.stdout, proc.stdout
+    assert "帳號名稱不合法" in proc.stdout, proc.stdout
+    # 同一份 manifest 裡形狀正常的 key 仍照常處理——不是整份包被拒
+    assert "ok-name" in proc.stdout, proc.stdout

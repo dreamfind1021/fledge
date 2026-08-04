@@ -397,7 +397,7 @@ PY
 echo
 echo "── 差異（備份 vs 現役）─────────────────────────────"
 python3 - "${DEST}" "${MANIFEST}" "${CONFIG_JSON}" "${EXTRA_PATHS_FILE}" <<'PY'
-import json, os, sys
+import json, os, re, sys
 
 dest, manifest_path, config_json, extra_file = sys.argv[1:5]
 m = json.load(open(manifest_path))
@@ -472,12 +472,32 @@ def snapshot(root):
     return out
 
 total = {"only_backup": 0, "only_live": 0, "differ": 0, "same": 0}
+# manifest 的 **key 同樣是不可信輸入**：它會被拼進 `os.path.join(dest, ...)`，`../../x`
+# 這種 key 能讓比對的備份側走出展開目錄、把外面的檔名列出來。查表查不到固然也會略過，
+# 但那是副作用不是防線——調換兩個判斷的順序、或加一個「沒登記就用預設」的 fallback 就
+# 破功。**與 sidecar 的 `backup/install.py::_SAFE_KEY_RE` 同一條信任邊界、同一組字元**
+# （一邊有一邊沒有同樣是漂移）；`extra` 的 name 走同一條規則。
+SAFE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def safe_keys(mapping, label):
+    """回形狀合法的 key；不合法的當場說明並跳過（**不整份拒絕**——一個壞 key 不該讓
+    使用者連其餘正常帳號的差異都看不到）。"""
+    out = []
+    for k in mapping if isinstance(mapping, dict) else {}:
+        if isinstance(k, str) and SAFE_KEY.fullmatch(k):
+            out.append(k)
+        else:
+            print(f"\n[{k!r}] {label}名稱不合法，略過（名稱會被用來組路徑）")
+    return out
+
+
 # **只取 manifest 的 key**，位置一律從本機 config 查（理由見 `local_live_paths`）。
 targets = [(k, LIVE_ACCOUNTS.get(k), os.path.join(dest, "accounts", k))
-           for k in m.get("accounts", {})]
+           for k in safe_keys(m.get("accounts", {}), "帳號")]
 # 帳號目錄外的資產（~/.agents 這類）比照同一套比對
 targets += [(f"帳號外:{k}", LIVE_EXTRA.get(k), os.path.join(dest, "extra", k))
-            for k in m.get("extra", {})]
+            for k in safe_keys(m.get("extra", {}), "資產")]
 
 for key, live, backed in targets:
     if live is None:
