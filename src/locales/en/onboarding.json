@@ -115,7 +115,8 @@
       "runNote": "Installing — please leave this window open. This step writes into your account folders for real.",
       "errors": {
         "loadFailed": "Couldn't work out what this install would do.",
-        "installFailed": "This install didn't finish."
+        "installFailed": "This install never started — nothing was touched.",
+        "installUnknown": "No result came back, so there's no telling how far it got — whatever was already written may well have completed. Pressing install again is safe: files already in place are never overwritten, and they show up as “skipped”."
       }
     },
     "result": {

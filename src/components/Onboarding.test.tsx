@@ -4,7 +4,7 @@ import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
 import { useAppStore } from "../store/useAppStore";
-import { scanPreview, runInstall } from "../lib/sidecar";
+import { scanPreview, runInstall, RestoreError } from "../lib/sidecar";
 import { Onboarding } from "./Onboarding";
 
 vi.mock("../lib/dialog", () => ({ pickDirectory: vi.fn(), pickFile: vi.fn() }));
@@ -905,8 +905,10 @@ describe("Onboarding 精靈外殼", () => {
     expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false);
   });
 
-  it("安裝失敗：通用訊息、例外原文不進畫面，而且可以再試一次", async () => {
-    vi.mocked(runInstall).mockRejectedValueOnce(new Error("INSTALL-SENTINEL-500"));
+  // 後端明確拒絕（帶判別碼）＝請求在動手之前就被擋下：可以斷言什麼都沒發生
+  it("後端明確拒絕：說清楚一個檔案都沒動，例外原文不進畫面，可以再試一次", async () => {
+    vi.mocked(runInstall).mockRejectedValueOnce(
+      new RestoreError("config_not_initialized", 400));
     const ui = render(<Onboarding onClose={onClose} />);
     await reachInstallPage(ui);
 
@@ -914,10 +916,36 @@ describe("Onboarding 精靈外殼", () => {
 
     await waitFor(() =>
       expect(ui.getByText(zh.mig.install.errors.installFailed)).toBeTruthy());
-    expect(ui.container.textContent).not.toContain("INSTALL-SENTINEL-500");
+    expect(ui.container.textContent).not.toContain("config_not_initialized");
     expect(ui.queryByText(zh.mig.result.h)).toBeNull();       // 沒有結果可報
     // 失敗回到可再送出的狀態——不留在鎖死的「安裝中」
     expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(false);
+  });
+
+  // Codex 票 06 R1（high）：拿不到判別碼＝**不知道後端做到哪裡**。sidecar 可能已經完整
+  // 跑完、只是答案沒回來——此時說「安裝沒能完成」是在斷言一件我們不知道的事，使用者會
+  // 以為東西沒搬。這條釘住兩件事：文案不斷言，而且重送之後拿得到真正的結果
+  it("回應遺失（拿不到判別碼）：不謊稱沒動過，重送之後看得到已經在那裡的東西", async () => {
+    vi.mocked(runInstall).mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachInstallPage(ui);
+
+    ui.getByText(zh.mig.install.run).click();
+
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.install.errors.installUnknown)).toBeTruthy());
+    expect(ui.queryByText(zh.mig.install.errors.installFailed)).toBeNull();
+
+    // 重送：後端這次答得出來——第一輪其實寫進去了，所以全是 skipped
+    vi.mocked(runInstall).mockResolvedValueOnce({
+      results: [{ account: "work", rel_path: "CLAUDE.md", outcome: "skipped", error: null }],
+      stale_temps: [],
+    });
+    ui.getByText(zh.mig.install.run).click();
+
+    await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
+    // 「那個位置已經有東西，一律不覆蓋」＝使用者唯一能拿到的「東西確實在那裡」的證據
+    expect(ui.getByText(zh.mig.result.skipped)).toBeTruthy();
   });
 
   // 結果是「對某一包做的」：換一包之後那份報告不屬於新的包，留著會讓使用者以為新包也裝過了

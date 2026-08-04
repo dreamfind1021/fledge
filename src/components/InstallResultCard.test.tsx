@@ -122,6 +122,18 @@ describe("InstallResultCard", () => {
     expect(ui.container.textContent).not.toContain("REVEAL-SENTINEL");
   });
 
+  // 後端會對同一個落點 append 兩筆一模一樣的結果（reparenting 偵測：觸發方先替對方記一筆、
+  // 迴圈走到對方時它自己又記一筆），跨帳號同名的 rel_path 也會撞。**兩列都要在**——
+  // 吃掉一列就是漏報，而數量與明細對不上更讓人以為畫面壞了
+  it("一模一樣的兩筆結果都列出來，不會被吃掉一列", () => {
+    const dup: InstallItemResult = { account: "work", rel_path: "", outcome: "failed",
+                                     error: "overlapping_config_dirs" };
+    const ui = setup([dup, { ...dup }]);
+    const section = ui.getByText(zh.mig.result.failed).closest(".ob-spot")!;
+    expect(section.querySelector(".ob-spot-key")!.textContent).toBe("2");
+    expect(section.querySelectorAll(".ob-spot-oldpath")).toHaveLength(2);
+  });
+
   it("某一類是空的就整段不出現（不顯示 0）", () => {
     const ui = setup(RESULTS.filter((r) => r.outcome === "installed"));
     expect(ui.queryByText(zh.mig.result.failed)).toBeNull();

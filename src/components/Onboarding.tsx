@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { useTranslation, Trans } from "react-i18next";
 import { useAppStore } from "../store/useAppStore";
-import { scanPreview, runInstall, DEFAULT_ACCOUNT_KEY,
+import { scanPreview, runInstall, RestoreError, DEFAULT_ACCOUNT_KEY,
          type InstallItemResult } from "../lib/sidecar";
 import { pickDirectory } from "../lib/dialog";
 import {
@@ -182,7 +182,17 @@ export function Onboarding({ onClose }: OnboardingProps) {
     } catch (e) {
       // 判別碼與例外原文只進 console（CLAUDE.md §4.6.13）——`HTTP 500` 對使用者沒有意義
       console.error("[onboarding] 移機安裝失敗", e);
-      setError(t("mig.install.errors.installFailed"));
+      // **失敗有兩種，文案不能混**（Codex 票 06 R1）：後端明確回了判別碼＝請求在動手
+      // 之前就被擋下（落點還沒落檔、來源不是備份包、journal 開不起來——全在寫入前），
+      // 那時可以斷言什麼都沒發生。**拿不到判別碼**（連線斷、回應遺失、非合約 500）就
+      // **不知道寫到哪裡了**：後端可能已經完整跑完，只是答案沒回來。此時說「安裝沒能
+      // 完成」是在斷言一件我們不知道的事。
+      const refused = e instanceof RestoreError && e.code !== null;
+      setError(t(refused ? "mig.install.errors.installFailed"
+                         : "mig.install.errors.installUnknown"));
+      // 兩種都退回可再送：重跑是安全的（no-clobber 不覆蓋、journal 認得前一輪發布的
+      // node），而不讓重送才是真的死路。**已經寫進去的東西會在重跑的結果裡顯示成
+      // 「跳過」**——那也是使用者唯一能拿到的「東西確實在那裡」的證據
       setInstallRun({ gen, value: { kind: "idle" } });
     }
   };
