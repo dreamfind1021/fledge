@@ -300,7 +300,10 @@ def _scan_spot(content_dir: Path, target: str,
     帳號與 extra 共用同一支——落點的驗證規則不因它不是帳號而放寬（票 05 驗收）。
     目的地存在性與祖先檢查一律以**改名後**的位置判（票 06）：否則帶 mapping 的重跑
     會把已裝的當未裝、預覽數字說謊。skip／blocked 清單記的也是目的地位置。"""
-    if not content_dir.is_dir():
+    # **lstat 語意**（票 14 R1）：`Path.is_dir()` 跟隨 symlink，於是 `accounts/<key>` 或
+    # `extra/<name>` 被做成包外連結時，這裡會把包外的檔案數進 `will_install`——而 install
+    # 的 fd-relative `O_NOFOLLOW` 開不了那個來源，整批 failed。預覽說 2、實際 0。
+    if not is_real_dir(content_dir):
         return 0, [], [], []
     installable, walk_excluded = _walk_account(content_dir)
     n_install = 0
@@ -346,8 +349,9 @@ def _scan_spot(content_dir: Path, target: str,
     return n_install, skip, blocked, walk_excluded
 
 
-def _validate_mapping(root: str, mapping: list[tuple[str, str]],
-                      project_dirs: dict[str, list[str]]) -> dict[str, str]:
+def _validate_mapping(mapping: list[tuple[str, str]],
+                      project_dirs: dict[str, list[str]],
+                      project_roots: dict[str, str]) -> dict[str, str]:
     """驗 mapping（舊專案路徑 → 新專案路徑），回 {舊 encoded 名: 新 encoded 名}。
     **在寫任何東西之前一次驗完**（spec §4.2.4）：old／new 都必須絕對路徑；old 必須
     是備份包內確實存在的專案（mapping 也是不可信輸入）；編碼有損（非英數全變 `-`），
@@ -355,7 +359,16 @@ def _validate_mapping(root: str, mapping: list[tuple[str, str]],
 
     **old 以 cwd 驗身（Codex 票 06 R1 F2）**：encoded 名是有損投影，不同的 old 能
     誤中無關專案、跨帳號同名時一筆 mapping 會動到多個帳號。每個被命中的專案目錄都
-    重讀 cwd 與 old 逐字比對，不一致（含讀不出）→ `mapping_ambiguous` 整批拒。"""
+    重讀 cwd 與 old 逐字比對，不一致（含讀不出）→ `mapping_ambiguous` 整批拒。
+
+    `project_roots` 是**呼叫端已經逐層 `_real_subdir` 驗過的** `projects` 目錄路徑
+    （票 14 R2）：這裡不再從 `root` 重新拼一次 pathname——重拼等於把剛驗過的東西丟掉，
+    中間層是包外連結時 `_peek_cwd` 的 `O_NOFOLLOW`（只擋最後元件）攔不住。
+
+    **這不等於關閉了 TOCTOU**：傳進來的仍是 pathname，`_real_subdir` 到這裡之間被換掉
+    的窗口還在——與 `_real_subdir` 記錄在案的取捨同一級（那支的 docstring 寫明本層是
+    pathname-based，後果是列出來的東西不準、不是寫錯位置）。少的是「同一條路徑被解析
+    兩次」這個多餘的窗口，不是窗口本身。"""
     all_names = {n for names in project_dirs.values() for n in names}
     renames: dict[str, str] = {}
     for old, new in mapping:
@@ -369,7 +382,7 @@ def _validate_mapping(root: str, mapping: list[tuple[str, str]],
             raise ValueError("mapping_collision")   # 同一專案（或編碼相撞的兩個 old）
         for key, names in project_dirs.items():
             if old_enc in names and _peek_cwd(
-                    Path(root, "accounts", key, _PROJECTS_DIR, old_enc)) != old:
+                    Path(project_roots[key], old_enc)) != old:
                 raise ValueError("mapping_ambiguous")
         renames[old_enc] = encode_cc_project_dir(new)
     # 每個帳號的 projects/ 內，改名後的名字集合不得有重複（含未改寫的既有名）——
@@ -440,19 +453,31 @@ def project_paths(source_root: str) -> list[dict]:
     """列出備份包裡每個專案的舊路徑與建議新路徑。純唯讀（票 06）。
 
     建議值規則同落點（spec §4.2.2 決策 9）：舊路徑在舊 home 底下 → 換 home 前綴；
-    其餘留空**不猜**。一律由使用者確認後經 mapping 送回。"""
+    其餘留空**不猜**。一律由使用者確認後經 mapping 送回。
+
+    **三層都走 `_real_subdir`**（票 14，與 `bundle_info` 逐字同一條判準）：`Path.is_dir()`
+    跟隨 symlink，而這支比計數那支嚴重得多——它讀 jsonl 的 `cwd`（絕對路徑）並回給前端，
+    所以一份把 `accounts`／`accounts/<key>`／`projects` 任一層做成包外連結的備份包，就能
+    讓本機任意目錄下的專案路徑列在精靈畫面上。`_peek_cwd` 自己的 `O_NOFOLLOW` 是**單檔
+    層級**的，擋不住目錄那一層被換掉。
+
+    **這是行為變更不是純加固**：`projects/` 是 symlink 的備份包會從「列得出專案」變成
+    「列不出」。那種包只可能是手工或惡意構造的（`backup-claude.sh` 用 `cp -Rc`／`cp -R`
+    產實體目錄），代價可接受。"""
     root = resolve_best_effort(source_root)
     manifest = read_manifest(root)          # 順便驗它確實是我們展開的目錄
     old_home = manifest.get("home", "")
     new_home = str(Path.home().resolve())
     found: list[dict] = []
+    accounts_dir = _real_subdir(root, "accounts")
     for key in sorted(manifest.get("accounts", {})):
         if not _SAFE_KEY_RE.fullmatch(key):
             raise ValueError("invalid_account_key")   # key 拼進路徑，同規則重驗
-        pdir = Path(root, "accounts", key, _PROJECTS_DIR)
-        if not pdir.is_dir():
-            continue
-        for child in sorted(pdir.iterdir()):
+        acct = None if accounts_dir is None else _real_subdir(accounts_dir, key)
+        pdir = None if acct is None else _real_subdir(acct, _PROJECTS_DIR)
+        if pdir is None:
+            continue                        # 從沒用過 /resume 的帳號＝沒有專案，不是錯
+        for child in sorted(Path(pdir).iterdir()):
             if not child.is_dir() or child.is_symlink():
                 continue
             cwd = _peek_cwd(child)
@@ -473,18 +498,31 @@ def project_paths(source_root: str) -> list[dict]:
 def _real_subdir(parent: str, name: str) -> str | None:
     """`parent/name` 是**實體目錄**（lstat 語意）就回路徑，否則 None。
 
-    **每一層都要驗**（Codex 票 02 R1 F3）：`Path.is_dir()` 會跟隨 symlink，一份惡意備份包
-    只要把 `accounts/<key>` 或它底下的 `projects` 做成指向包外的連結，唯讀的計數就會走出
-    展開目錄去遍歷本機任意目錄。與 `plan()` 對 `accounts/` 的 `os.lstat` 判型同一條判準。
+    **唯讀掃描進入展開目錄的共通判準**（票 14 起兩處共用：`bundle_info` 與 `project_paths`）。
+    誰能被走進去這件事只能有一份規則——同一份備份包在兩支函式底下有兩種可及範圍，就是這批
+    票反覆出現的「一邊有一邊沒有」。
 
-    這一層是 pathname-based 而非 fd-relative：本函式只服務**唯讀計數**，TOCTOU 的後果是
-    數字不準，不是寫錯位置（寫入路徑一律走 fd-relative + `O_NOFOLLOW`）。"""
+    **每一層都要驗**（Codex 票 02 R1 F3）：`Path.is_dir()` 會跟隨 symlink，一份惡意備份包
+    只要把 `accounts`、`accounts/<key>` 或它底下的 `projects` 做成指向包外的連結，唯讀掃描
+    就會走出展開目錄去遍歷本機任意目錄。與 `plan()` 對 `accounts/` 的 `os.lstat` 判型同一條
+    判準。**`project_paths` 那一側的後果比計數大**：它讀 jsonl 的 `cwd` 並回給前端。
+
+    這一層是 pathname-based 而非 fd-relative：本函式只服務**唯讀掃描**，TOCTOU 的後果是
+    列出來的東西不準，不是寫錯位置（寫入路徑一律走 fd-relative + `O_NOFOLLOW`）。"""
     path = os.path.join(parent, name)
+    return path if is_real_dir(path) else None
+
+
+def is_real_dir(path: str | Path) -> bool:
+    """這個路徑是**實體目錄**（lstat 語意，symlink 一律不算）。
+
+    `_real_subdir` 的單路徑版本——呼叫端手上已經是完整路徑時用它。**判準只有這一份**：
+    `Path.is_dir()` 跟隨 symlink，散在各處各寫一次的下場就是同一份備份包在不同函式底下
+    有不同的可及範圍（票 02 → 票 14 已經演過兩次）。"""
     try:
-        st = os.lstat(path)
+        return stat_module.S_ISDIR(os.lstat(path).st_mode)
     except OSError:
-        return None
-    return path if stat_module.S_ISDIR(st.st_mode) else None
+        return False
 
 
 def _display_text(value: object) -> str:
@@ -597,13 +635,24 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
 
     # 票 06：mapping 前置驗證＋未對應清單——放在掃描之前，帳號掃描要用改名表以
     # 目的地位置判 skip／blocked。專案目錄以 lstat 語意列（symlink 不算）。
+    #
+    # **三層都走 `_real_subdir`**（票 14 R1，與 `bundle_info`／`project_paths` 逐字同一條）：
+    # `unmapped_projects` 的 `old_path` 走 `_peek_cwd` 讀歷史檔裡的絕對路徑並回給前端——
+    # 與 `project_paths()` 是同一個洩漏面，只是掛在另一支函式上。判過的路徑往下傳，不重新
+    # 用 pathname 拼一次（拼回去等於把剛驗過的東西丟掉）。
+    accounts_dir = _real_subdir(root, "accounts")
     project_dirs: dict[str, list[str]] = {}
+    project_roots: dict[str, str] = {}
     for key in targets:
-        pdir = Path(root, "accounts", key, _PROJECTS_DIR)
+        acct = None if accounts_dir is None else _real_subdir(accounts_dir, key)
+        pdir = None if acct is None else _real_subdir(acct, _PROJECTS_DIR)
+        if pdir is None:
+            project_dirs[key] = []
+            continue
+        project_roots[key] = pdir
         project_dirs[key] = sorted(
-            c.name for c in pdir.iterdir()
-            if c.is_dir() and not c.is_symlink()) if pdir.is_dir() else []
-    project_renames = _validate_mapping(root, list(mapping or []), project_dirs)
+            c.name for c in Path(pdir).iterdir() if c.is_dir() and not c.is_symlink())
+    project_renames = _validate_mapping(list(mapping or []), project_dirs, project_roots)
     unmapped_projects: list[dict] = []
     for key in sorted(project_dirs):
         for name in project_dirs[key]:
@@ -611,8 +660,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
                 unmapped_projects.append({
                     "account": key,
                     "encoded_dir": name,
-                    "old_path": _peek_cwd(
-                        Path(root, "accounts", key, _PROJECTS_DIR, name)),
+                    "old_path": _peek_cwd(Path(project_roots[key], name)),
                 })
 
     # 掃描出來的 excluded 全是**逐檔的**（`EXCLUDED_NAMES` 的頂層項）——整包不搬的 extra
