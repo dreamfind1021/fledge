@@ -1072,6 +1072,29 @@ describe("Onboarding 的移機續作", () => {
     expect(ui.getByTestId("targets-dest").textContent).toBe("/d");
   });
 
+  // Codex 票 07 R2：effect 依賴 port 與 t，sidecar 重啟換 port（或退回歡迎頁切語言）都會
+  // 讓它重跑——那時「進場時的 gen」會重新擷取成當下的值，換過包之後的比對照樣成立
+  it("換包之後 sidecar 重啟：續作探測不得重新套用", async () => {
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+    await waitFor(() => expect(ui.getByTestId("preview-dest")).toBeTruthy());
+
+    for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
+      ui.getByText(zh.common.prev).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+    ui.getByText("probe-present").click();          // 換一包（dest 變 /d）
+    await waitFor(() => expect(ui.getByTestId("picked").textContent)
+      .toBe("/tmp/picked.tar.gz"));
+    vi.mocked(fetchBundleInfo).mockClear();
+
+    useAppStore.setState({ port: 5678 });           // sidecar 重啟換 port
+
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    expect(fetchBundleInfo).not.toHaveBeenCalled(); // 入場動作不該再跑一次
+    expect(ui.getByTestId("targets-dest").textContent).toBe("/d");
+  });
+
   it("包資訊讀不出來：說明白，而且不讓使用者停在一份假的預覽上", async () => {
     vi.mocked(fetchBundleInfo).mockRejectedValueOnce(new Error("INFO-SENTINEL-500"));
     const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
