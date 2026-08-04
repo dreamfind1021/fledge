@@ -1,0 +1,100 @@
+import { useTranslation } from "react-i18next";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import type { InstallItemResult } from "../lib/sidecar";
+import { InstallSection } from "./InstallSection";
+
+/** 後端判別碼 → catalog key。**顯式表**（比照 `TargetsCard`／`TemplateCard`）：動態組
+ *  `mig.result.reason.${code}` 會讓後端新增的碼變成畫面上的 i18n key 原文，未知碼一律退
+ *  通用文案、原碼只留在後端 log（CLAUDE.md §4.6.13）。
+ *
+ *  兩組來源：`safe_fs.error_code()` 的 errno 對照，與 `install()` 自己的語意判別碼。 */
+const REASON_KEY: Record<string, string> = {
+  permission_denied: "mig.result.reason.permission_denied",
+  read_only_filesystem: "mig.result.reason.read_only_filesystem",
+  path_missing: "mig.result.reason.path_missing",
+  target_exists: "mig.result.reason.target_exists",
+  target_not_empty: "mig.result.reason.target_not_empty",
+  no_space: "mig.result.reason.no_space",
+  cross_device: "mig.result.reason.cross_device",
+  too_many_symlinks: "mig.result.reason.too_many_symlinks",
+  not_a_directory: "mig.result.reason.not_a_directory",
+  operation_not_supported: "mig.result.reason.operation_not_supported",
+  io_failed: "mig.result.reason.io_failed",
+  source_moved: "mig.result.reason.source_moved",
+  target_moved: "mig.result.reason.target_moved",
+  overlapping_config_dirs: "mig.result.reason.overlapping_config_dirs",
+  provenance_unavailable: "mig.result.reason.provenance_unavailable",
+  account_not_installed: "mig.result.reason.account_not_installed",
+  node_identity_mismatch: "mig.result.reason.node_identity_mismatch",
+  not_migrated_by_design: "mig.result.reason.not_migrated_by_design",
+  not_a_regular_file: "mig.result.reason.not_a_regular_file",
+  symlink_target_unauthorized: "mig.result.reason.symlink_target_unauthorized",
+};
+
+interface InstallResultCardProps {
+  results: InstallItemResult[];
+  /** 前一輪硬中斷留下的暫存殘骸，**後端給的絕對路徑**（增補 spec §4.2）。 */
+  staleTemps: string[];
+}
+
+/**
+ * 移機精靈的安裝結果頁（票 06）：不可逆的那一步做完之後，逐項報告發生了什麼。
+ *
+ * 兩件刻意為之的事：
+ * - **「已裝好」比預覽多是正常的**（增補 spec §2.5.2）：帳號目錄裡的連結不在預覽的任何
+ *   數字裡，第二階段成功建立就會出現在結果裡。文案要講明，否則使用者會以為出錯
+ * - **暫存殘骸只告知、不代勞刪除**（§4.2）：能拿來授權刪除的只有檔名前綴、檔名裡的
+ *   進程編號已不存在、型別是一般檔——三個都是可偽造的檔名特徵，達不到專案「只刪自己
+ *   建的」這條底線。所以給位置＋Finder 入口，讓看得到完整路徑的人自己決定。
+ *   **刻意不解釋「為什麼 app 不代勞」**：那對使用者是雜訊，而且會讓人懷疑那到底是不是
+ *   我們的東西
+ */
+export function InstallResultCard({ results, staleTemps }: InstallResultCardProps) {
+  const { t } = useTranslation("onboarding");
+
+  /** 一項的顯示文字。`rel_path` 為空＝落點層的失敗（整個帳號沒裝成），只顯示落點 key。 */
+  const itemText = (r: InstallItemResult) => {
+    const path = r.rel_path ? `${r.account}/${r.rel_path}` : r.account;
+    if (!r.error) return t("mig.result.item", { path });
+    const reason = t(REASON_KEY[r.error] ?? "mig.result.reason.unknown");
+    return t("mig.result.itemReason", { path, reason });
+  };
+  const group = (outcome: InstallItemResult["outcome"]) =>
+    results.filter((r) => r.outcome === outcome).map(itemText);
+
+  return (
+    <div>
+      <h2 className="ob-h">{t("mig.result.h")}</h2>
+      <p className="ob-sub">{t("mig.result.sub")}</p>
+
+      <InstallSection title={t("mig.result.installed")} items={group("installed")}
+                      note={t("mig.result.moreNote")} />
+      <InstallSection title={t("mig.result.skipped")} items={group("skipped")} />
+      <InstallSection title={t("mig.result.excluded")} items={group("excluded")} />
+      {/* 唯一需要使用者行動的分類 → 預設展開，且每一項都要看得出原因 */}
+      <InstallSection title={t("mig.result.failed")} items={group("failed")} defaultOpen />
+
+      {staleTemps.length > 0 && (
+        <div className="ob-spot">
+          <div className="ob-spot-head">
+            <span className="ob-spot-kind">
+              {t("mig.result.stale.h", { count: staleTemps.length })}
+            </span>
+          </div>
+          <p className="ob-note">{t("mig.result.stale.note")}</p>
+          {staleTemps.map((p) => (
+            <div key={p} className="ob-row">
+              <span className="ob-row-path">{p}</span>
+              {/* reveal 失敗（Tauri 外殼不在、路徑剛好被刪掉）不該炸掉結果頁——
+                  它是附帶動作，安裝結果本身已經呈現完畢 */}
+              <button
+                onClick={() => { revealItemInDir(p).catch(() => {}); }}
+                className="ob-btn-ghost"
+              >{t("mig.result.stale.reveal")}</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

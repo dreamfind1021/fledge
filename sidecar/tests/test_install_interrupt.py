@@ -10,68 +10,20 @@
 barrier 刻意**不放進 production code**（plan 原本寫的是讀環境變數的 `_barrier()`）：
 子行程腳本是我們自己寫的，在裡面臨時替換 `os.link`／`_publish_links` 就能達到同樣的
 精準停頓，出貨的程式裡不必留只為測試存在的分支。SIGKILL 仍然是真的。
+子行程腳本與 barrier 等待邏輯住在 `conftest`（票 06 起 route 的殘骸端到端也用同一份）。
 
 **全程假 HOME + tmp_path，絕不碰真實的 ~/.claude。**
 """
 import logging
 import os
-import select
 import shutil
-import subprocess
-import sys
-import textwrap
 from pathlib import Path
 
 import pytest
 from conftest import make_staging as _staging
+from conftest import spawn_install_until_barrier as _spawn_until_barrier
 
 from fledge_sidecar.backup import install as inst
-
-_SIDECAR_ROOT = Path(inst.__file__).parents[2]
-
-# 子行程：在指定窗口停住等父行程送 SIGKILL。停頓點靠臨時替換函式達成，production 不動。
-_CHILD = textwrap.dedent('''
-    import os
-    import sys
-    import time
-
-    stage, fifo, src, tgt = sys.argv[1:5]
-
-    from fledge_sidecar.backup import install as inst
-    from fledge_sidecar.setup import safe_fs
-
-    def _reach():
-        """通知父行程「我到窗口了」，然後停住——這個函式永遠不返回。"""
-        with open(fifo, "w", encoding="utf-8") as fh:
-            fh.write(stage)
-        while True:
-            time.sleep(3600)
-
-    if stage in ("after_temp", "after_link"):
-        _real_link = safe_fs.os.link
-
-        def _link(temp_name, name, **kwargs):
-            # 只在指定的那個檔案上停，才有確定性（scandir 順序不保證）
-            if name != "CLAUDE.md":
-                return _real_link(temp_name, name, **kwargs)
-            if stage == "after_temp":
-                _reach()                 # 暫存檔已完整落盤，最終名還沒出現
-            result = _real_link(temp_name, name, **kwargs)
-            _reach()                     # after_link：最終名已在，暫存檔還沒清
-            return result
-
-        safe_fs.os.link = _link
-    elif stage == "before_links":
-        _real_publish = inst._publish_links
-
-        def _publish(*args, **kwargs):
-            _reach()                     # 第一階段全部發布完，第一條 symlink 之前
-            return _real_publish(*args, **kwargs)
-
-        inst._publish_links = _publish
-
-    inst.install(inst.plan(src, {"work": {"config_dir": tgt, "label": ""}}))
-''')
 
 
 @pytest.fixture(autouse=True)
@@ -91,36 +43,6 @@ def _temp_leftovers(root: Path) -> list[str]:
     """落點裡殘留的暫存檔（`.fledge-install-<pid>-<hex>`）。"""
     return sorted(str(p.relative_to(root))
                   for p in root.rglob(".fledge-install-*"))
-
-
-def _spawn_until_barrier(tmp_path: Path, src: Path, tgt: Path,
-                         stage: str) -> subprocess.Popen:
-    """起 install 子行程，等它真的走到 `stage` 才返回。"""
-    fifo = tmp_path / f"barrier-{stage}.fifo"
-    os.mkfifo(fifo)
-    script = tmp_path / f"child-{stage}.py"
-    script.write_text(_CHILD, encoding="utf-8")
-    env = {
-        **os.environ,
-        "PYTHONPATH": str(_SIDECAR_ROOT),
-        "PYTHONDONTWRITEBYTECODE": "1",
-    }
-    proc = subprocess.Popen(
-        [sys.executable, str(script), stage, str(fifo), str(src), str(tgt)],
-        env=env)
-    # 讀端先開起來（O_NONBLOCK 即使還沒有 writer 也立即返回），子行程的寫端才不會卡住。
-    # select 帶超時：子行程若在抵達窗口前就早夭，測試要失敗而不是永久掛住。
-    fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
-    try:
-        ready, _, _ = select.select([fd], [], [], 30)
-        if not ready:
-            proc.kill()
-            proc.wait(timeout=10)
-            raise AssertionError(f"子行程未在時限內抵達窗口 {stage}")
-        assert os.read(fd, 64).decode("utf-8").strip() == stage
-    finally:
-        os.close(fd)
-    return proc
 
 
 def test_source_node_swapped_between_type_check_and_read(tmp_path: Path, monkeypatch):

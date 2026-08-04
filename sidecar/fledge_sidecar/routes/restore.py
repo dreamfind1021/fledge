@@ -294,7 +294,12 @@ def install_route(body: DestBody):
     落點只能來自**使用者確認過的 config.json**，所以走 `load_existing`（單次讀取、
     永不 fallback）而非 exists→load 兩段式閘——後者在等鎖期間 config 被刪時仍會退回
     DEFAULT_CONFIG（default=~/.claude），把備份內容寫進現役 Claude 目錄（Codex 票 03
-    R3／R4）。讀取放在鎖內，與寫入同一臨界區。唯讀預覽不設此限。"""
+    R3／R4）。讀取放在鎖內，與寫入同一臨界區。唯讀預覽不設此限。
+
+    回應多一個 `stale_temps`（票 06）：前一輪硬中斷留在落點裡的暫存殘骸，絕對路徑。
+    **這個參數不是可選的**——模組層只負責「傳了才收集」，忘了傳的話安裝照樣成功、log
+    照樣有、既有斷言照樣綠，而 API 永遠回空清單。守住它的是端到端測試。"""
+    stale: list[str] = []
     try:
         with setup_lock:
             try:
@@ -311,7 +316,7 @@ def install_route(body: DestBody):
                                     content={"error": "config_unreadable"})
             plan = install.plan(body.dest, config.accounts, extra=config.extra,
                                 mapping=[(m.old, m.new) for m in body.mapping])
-            results = install.install(plan)
+            results = install.install(plan, stale_out=stale)
     except ValueError as exc:
         return _module_error(exc)
-    return {"results": [asdict(r) for r in results]}
+    return {"results": [asdict(r) for r in results], "stale_temps": stale}

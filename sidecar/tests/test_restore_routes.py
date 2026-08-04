@@ -10,7 +10,7 @@ import subprocess
 import tarfile
 from pathlib import Path
 
-from conftest import make_staging
+from conftest import make_staging, spawn_install_until_barrier
 from fastapi.testclient import TestClient
 
 from fledge_sidecar.app import create_app
@@ -1134,3 +1134,34 @@ def test_restore_session_does_not_500_when_the_bundle_vanishes_mid_request(
 
     assert resp.status_code == 200, resp.text
     assert captured["command"][2] == str(bundle)
+
+
+def test_install_route_reports_stale_temps_with_absolute_paths(tmp_path: Path, monkeypatch):
+    """票 06（增補 spec §4）：前一輪硬中斷留下的暫存檔要**經 API 回到使用者眼前**。
+
+    這條刻意是端到端的：殘骸清單是經一個**選填**參數帶出來的，route 忘了傳的話，安裝
+    照樣成功、log 照樣有、所有既有回傳斷言照樣綠，而 API 永遠回空清單——功能等於沒做。
+    模組層測試看不到這個形狀。
+
+    殘骸要是**真的**：跑到「暫存檔已落盤、最終名還沒出現」的窗口後 SIGKILL（比照
+    `test_install_interrupt`）——例外走得到 Python 的清理路徑，硬中斷走不到，而後者
+    正是留下殘骸的那個失敗模式。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+
+    proc = spawn_install_until_barrier(tmp_path, staging, live, "after_temp")
+    proc.kill()
+    proc.wait(timeout=10)
+    # 期望值以 resolved 路徑表示：落點在 plan 裡就已 resolve（macOS 的 /var → /private/var）
+    leftovers = sorted(str(p) for p in live.resolve().rglob(".fledge-install-*"))
+    assert leftovers, "前提沒成立：中斷沒有留下暫存檔"
+
+    resp = TestClient(create_app()).post("/api/restore/install",
+                                         json={"dest": str(staging)})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["stale_temps"] == leftovers
+    # 既有回應形狀不變（結果清單仍是那份），殘骸只是多出來的一欄
+    assert any(r["outcome"] == "installed" for r in body["results"])
+    # **只回報不刪**：判準全是可偽造的檔名特徵，達不到「只刪自己建的」這條底線
+    assert all(Path(p).exists() for p in leftovers)

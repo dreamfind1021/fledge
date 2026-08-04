@@ -4,7 +4,7 @@ import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
 import { useAppStore } from "../store/useAppStore";
-import { scanPreview } from "../lib/sidecar";
+import { scanPreview, runInstall } from "../lib/sidecar";
 import { Onboarding } from "./Onboarding";
 
 vi.mock("../lib/dialog", () => ({ pickDirectory: vi.fn(), pickFile: vi.fn() }));
@@ -117,6 +117,12 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   commonConfigPlan: vi.fn(async () => ({ source_dir: "/Users/x/.claude", operations: [] })),
   // 系統設置頁掛 SystemSettingsCard → TemplateCard 後會抓範本清單；外殼測試同樣不碰網路
   fetchTemplates: vi.fn(async () => []),
+  // 移機的安裝（票 06）：**唯一會寫使用者現役目錄的呼叫**，測試絕不讓它真的發出去
+  runInstall: vi.fn(async () => ({ results: [], stale_temps: [] })),
+}));
+// 結果頁的殘骸行會用到 opener（真元件，不 mock 掉——它的顯示契約才是這裡要驗的）
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  revealItemInDir: vi.fn(async () => {}),
 }));
 
 const account = { config_dir: "~/.claude", label: "Work" };
@@ -147,6 +153,7 @@ describe("Onboarding 精靈外殼", () => {
     await i18n.changeLanguage("zh-TW"); // 固定語言，斷言才對得上 catalog
     onboardCalls = 0;
     onClose = vi.fn<() => void>();
+    vi.clearAllMocks();     // 呼叫記錄逐條歸零（實作保留）——安裝那組會數呼叫次數
     useAppStore.setState({
       port: 1234,
       config: baseConfig,
@@ -596,12 +603,14 @@ describe("Onboarding 精靈外殼", () => {
       .toBe(JSON.stringify({ "/old/a": "/new/a" }));
     expect(ui.getByTestId("preview-dest").textContent).toBe("/d");
 
+    // 票 06 起這一頁的主按鈕是「開始安裝」（裝完才變成下一步）——算不出預覽時
+    // 擋住的就是那顆，語意比原本更嚴：連不可逆的動作都按不下去
     ui.getByText("preview-error").click();
     await waitFor(() =>
-      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true));
+      expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(true));
     ui.getByText("preview-loaded").click();
     await waitFor(() =>
-      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(false));
   });
 
   // Codex 票 04 R2：`pathsStatus` 沒跟著 `bundle.gen` 失效的話，換包之後 gating 會先看到
@@ -782,17 +791,158 @@ describe("Onboarding 精靈外殼", () => {
         await waitFor(() =>
           expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
       }
-      // 安裝頁同理：算不出預覽就不該讓使用者往下（票 05）
+      // 安裝頁同理：算不出預覽就按不下安裝（票 05）；而**裝完才有下一步**（票 06）
       if (heading === zh.mig.install.h) {
         ui.getByText("preview-loaded").click();
         await waitFor(() =>
-          expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+          expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(false));
+        ui.getByText(zh.mig.install.run).click();
+        await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
       }
       ui.getByText(zh.common.next).click();
     }
 
     await waitFor(() => expect(ui.getByText(zh.done.h)).toBeTruthy());
     expect(onboardCalls).toBe(0); // 移機的落檔走 adopt-config（票 03），不是 onboard
+  });
+
+  // ── 安裝的執行與結果（票 06） ───────────────────────────────────────────────
+  //
+  // 這是整條移機流程裡唯一會寫使用者現役目錄的一步，所以三件事要在整合層釘住：
+  // 呼叫帶的是這一包的展開位置與這一頁的對應、執行中不可離開也不可重複送出、
+  // 結果（含殘骸告知）真的顯示出來。
+
+  /** 走到安裝頁並讓預覽就緒（gating 解除）。 */
+  async function reachInstallPage(ui: ReturnType<typeof render>) {
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+    ui.getByText("map").click();
+    ui.getByText("paths-loaded").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.install.h)).toBeTruthy());
+    ui.getByText("preview-loaded").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(false));
+  }
+
+  it("按下安裝：帶這一包的展開位置與這一頁的對應去打端點", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachInstallPage(ui);
+
+    ui.getByText(zh.mig.install.run).click();
+
+    await waitFor(() => expect(runInstall)
+      .toHaveBeenCalledWith(1234, "/d", { "/old/a": "/new/a" }));
+  });
+
+  // 預覽算不出來就不該讓使用者按下不可逆的安裝（與票 04／05 同一條理由）
+  it("預覽還沒就緒時按不下安裝", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachInstallPage(ui);
+
+    ui.getByText("preview-error").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(true));
+  });
+
+  // 票面：不可逆操作，安裝中不可離開或重複送出
+  it("安裝中：按鈕與上一步都鎖住，端點只被打一次", async () => {
+    let release: (o: { results: []; stale_temps: [] }) => void = () => {};
+    vi.mocked(runInstall).mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }));
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachInstallPage(ui);
+
+    ui.getByText(zh.mig.install.run).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.install.running)).toBeTruthy());
+
+    // 重複送出：按鈕已 disabled，再點也不會有第二次呼叫
+    ui.getByText(zh.mig.install.running).click();
+    expect(ui.getByText(zh.mig.install.running).closest("button")!.disabled).toBe(true);
+    // 離開：上一步同樣鎖住——寫入進行中換頁會讓使用者以為可以中止
+    expect(ui.getByText(zh.common.prev).closest("button")!.disabled).toBe(true);
+    expect(runInstall).toHaveBeenCalledTimes(1);
+
+    release({ results: [], stale_temps: [] });
+    await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
+  });
+
+  it("裝完顯示逐項結果與殘骸告知，預覽頁收起來", async () => {
+    vi.mocked(runInstall).mockResolvedValueOnce({
+      results: [
+        { account: "work", rel_path: "CLAUDE.md", outcome: "installed", error: null },
+        { account: "work", rel_path: "skills/b.md", outcome: "failed",
+          error: "permission_denied" },
+      ],
+      stale_temps: ["/Users/me/.claude/.fledge-install-1-aaaa"],
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachInstallPage(ui);
+
+    ui.getByText(zh.mig.install.run).click();
+
+    await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
+    expect(ui.queryByTestId("preview-dest")).toBeNull();      // 預覽已由結果取代
+    expect(ui.getByText(zh.mig.result.failed)).toBeTruthy();
+    expect(ui.getByText(
+      zh.mig.result.itemReason
+        .replace("{{path}}", "work/skills/b.md")
+        .replace("{{reason}}", zh.mig.result.reason.permission_denied))).toBeTruthy();
+    expect(ui.getByText(zh.mig.result.stale.h.replace("{{count}}", "1"))).toBeTruthy();
+    // 裝完才放行往下走（在那之前主按鈕是「開始安裝」）
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false);
+  });
+
+  it("安裝失敗：通用訊息、例外原文不進畫面，而且可以再試一次", async () => {
+    vi.mocked(runInstall).mockRejectedValueOnce(new Error("INSTALL-SENTINEL-500"));
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachInstallPage(ui);
+
+    ui.getByText(zh.mig.install.run).click();
+
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.install.errors.installFailed)).toBeTruthy());
+    expect(ui.container.textContent).not.toContain("INSTALL-SENTINEL-500");
+    expect(ui.queryByText(zh.mig.result.h)).toBeNull();       // 沒有結果可報
+    // 失敗回到可再送出的狀態——不留在鎖死的「安裝中」
+    expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(false);
+  });
+
+  // 結果是「對某一包做的」：換一包之後那份報告不屬於新的包，留著會讓使用者以為新包也裝過了
+  it("裝完再換一包 → 結果作廢，回到預覽態", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachInstallPage(ui);
+    ui.getByText(zh.mig.install.run).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
+
+    for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
+      ui.getByText(zh.common.prev).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+    ui.getByText("probe-present").click();                    // 換一包（gen 前進）
+    for (const heading of [zh.mig.targets.h, zh.mig.paths.h, zh.mig.install.h]) {
+      ui.getByText(zh.common.next).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+      if (heading === zh.mig.paths.h) {
+        ui.getByText("paths-loaded").click();
+        await waitFor(() =>
+          expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      }
+    }
+    expect(ui.queryByText(zh.mig.result.h)).toBeNull();
+    expect(ui.getByText(zh.mig.install.run)).toBeTruthy();
   });
 
   it("進度條格數跟著路線：移機九格", async () => {
