@@ -554,7 +554,8 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
             bundle.probe.kind === "unknown" ? migShell("install") : (
               <div>
                 {run.kind === "done" ? (
-                  <InstallResultCard results={run.results} staleTemps={run.staleTemps} />
+                  <InstallResultCard results={run.results} staleTemps={run.staleTemps}
+                                     onRetry={startInstall} />
                 ) : (
                   <InstallPreviewCard
                     port={port}
