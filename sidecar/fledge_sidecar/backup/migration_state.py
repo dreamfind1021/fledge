@@ -39,11 +39,13 @@ def marker_path() -> Path:
 
 def write_marker(transaction_id: str, source_root: str,
                  mapping: list[tuple[str, str]]) -> None:
-    """記下這一輪的續作資訊。**atomic write**：寫暫存 → fsync → rename。
+    """記下這一輪的續作資訊。**atomic write**：寫暫存 → fsync 檔案 → rename → fsync 父目錄。
 
     任何一步失敗都讓 `OSError` 往上拋——呼叫端必須在 `install()` **之前**擋下來（§3.2）。
-    fsync 比 `app_config.save()` 多一道：這份簿記正是為了「硬中斷之後還能接回去」而存在的，
-    rename 出現了但內容還在 page cache 裡，等於沒寫。"""
+    比 `app_config.save()` 多兩道 fsync，因為這份簿記正是為了「硬中斷之後還能接回去」而
+    存在，而硬中斷包含斷電：少了檔案 fsync，rename 出現了但內容還在 page cache＝等於沒寫；
+    少了目錄 fsync，rename 這個**目錄項**本身不保證落盤（Codex 票 07 R1 F3）。目錄 fsync
+    不受支援時降級——那是「這個檔案系統做不到」不是「寫入失敗」。"""
     path = marker_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -59,6 +61,19 @@ def write_marker(transaction_id: str, source_root: str,
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
+        # **目錄項的持久性**（Codex 票 07 R1 F3）：`os.replace` 之後不 fsync 父目錄的話，
+        # 斷電時 rename 本身不保證落盤——marker 可能整個消失（→ 沒有續作資訊）或舊的那份
+        # 存活（→ 指向別輪）。這份簿記的存在理由就是「硬中斷之後接得回去」，而硬中斷包含
+        # 斷電：**宣稱與實際保證等級要逐字對齊**，少了這一步 docstring 就是在承諾做不到的事。
+        # 不受支援時降級（部分網路磁碟／exFAT 的目錄 fsync 回 EINVAL）——那是「這個檔案
+        # 系統做不到」不是「寫入失敗」，比照 `install.py` 對每個目錄 fsync 的同一立場。
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        except OSError:
+            logger.warning("移機續作簿記的目錄 fsync 不受支援，降級", exc_info=True)
+        finally:
+            os.close(dir_fd)
     except BaseException:
         # 失敗時不留半寫的暫存檔——下一次查詢看到形狀不對的東西只會多一次誤判
         try:
@@ -118,9 +133,9 @@ def status() -> dict:
 
     | state | 條件 |
     |---|---|
-    | `unfinished_unknown` | 沒有可用的 marker，但有**任何**未清除的 journal |
+    | `unfinished_unknown` | 沒有可用的 marker、或 marker 指的 journal 不在，但有**任何**未清除的 journal |
     | `none` | 沒有可用的 marker，也沒有任何 journal |
-    | `stale_marker` | marker 可用，但**它指的那個** journal 不存在＝那一輪其實成功了 |
+    | `stale_marker` | marker 可用、它指的 journal 不在，而且**沒有任何**未清除的 journal |
     | `source_missing` | matching journal 在，但 `source_root` 已經不是有效的 bundle |
     | `journal_unreadable` | matching journal 在但解不出（判準同續作時實際會走的路徑） |
     | `resumable` | 三者都成立，附上預填用的 `source_root` 與 `mapping` |
@@ -136,10 +151,17 @@ def status() -> dict:
                 else "none"}
     tid = marker["transaction_id"]
     if not install.journal_path(tid).exists():
-        # journal 是權威：它被清掉代表那一輪完整成功了，殘留的 marker 只是刪除失敗的
-        # 殘骸（§3.2 分兩步刪，崩在中間）。**不在這裡清除它**——唯讀端點就該是唯讀的，
-        # 而它無害：每次查詢都正確判成這個 state，下一次 install 會覆蓋它。
-        return {"state": "stale_marker"}
+        # marker 在、它指的 journal 不在，有**兩種**來源（Codex 票 07 R1 F1）：
+        #   ① 那一輪完整成功了（journal 被清），殘留的 marker 是刪除失敗的殘骸
+        #   ② 它**根本還沒建起來**——`write_marker()` 跑在 `install()` 之前，而 journal 是
+        #      `install()` 內部才開的；安裝正要開始、或 install 在開 journal 前就失敗
+        #      （來源身分在 plan→install 之間變了），都落在這個形狀
+        # 兩者都不該說「可續作」，但**不能一律判成「視同完成」**：②發生在第二輪時，新
+        # marker 已經蓋掉第一輪的，一律不顯示就把第一輪那個沒收尾的 journal 整個遮蔽了。
+        # 所以退一步看「**還有沒有任何**一輪沒收尾」——有就照實說（雖然給不出續作資訊）。
+        # **不在這裡清除 marker**：唯讀端點就該是唯讀的，而它無害，下一次 install 會覆蓋。
+        return {"state": "unfinished_unknown" if install.has_unfinished_journal()
+                else "stale_marker"}
     try:
         install.read_manifest(marker["source_root"])
     except (ValueError, OSError):

@@ -1046,6 +1046,32 @@ describe("Onboarding 的移機續作", () => {
       .toBe(JSON.stringify({ "/old/a": "/new/a" })));
   });
 
+  // Codex 票 07 R1 F2：續作的探測**已經在飛**的時候，使用者可以回上一頁換一包——遲到的
+  // 回應若照樣寫進 state，畫面上是新包、預覽與安裝卻是舊來源。這是票 02／04／05 一路守
+  // 的「遲到回應不得覆蓋」同一族，續作這條路徑當初漏了套
+  it("續作探測還在飛時換了一包 → 遲到的回應不得把來源換回去", async () => {
+    let release: (info: unknown) => void = () => {};
+    vi.mocked(fetchBundleInfo).mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }) as never);
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+
+    // 從安裝頁一路退回備份包頁（包資訊還沒到，中間兩頁是空殼）
+    for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
+      ui.getByText(zh.common.prev).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+    ui.getByText("probe-present").click();          // 換一包（gen 前進、dest 變 /d）
+    await waitFor(() => expect(ui.getByTestId("picked").textContent)
+      .toBe("/tmp/picked.tar.gz"));
+
+    release({ host: "old", created: "x", accounts: ["work"], extra: [], project_count: 2 });
+
+    // 往下走一頁就看得到來源：必須是使用者剛選的那一包，不是續作帶進來的那個
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    expect(ui.getByTestId("targets-dest").textContent).toBe("/d");
+  });
+
   it("包資訊讀不出來：說明白，而且不讓使用者停在一份假的預覽上", async () => {
     vi.mocked(fetchBundleInfo).mockRejectedValueOnce(new Error("INFO-SENTINEL-500"));
     const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);

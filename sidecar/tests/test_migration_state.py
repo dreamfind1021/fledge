@@ -186,12 +186,18 @@ def test_resume_info_never_leaks_into_other_states(tmp_path: Path):
 def test_status_does_not_confuse_another_rounds_journal(tmp_path: Path):
     """**「有 journal」不等於「有這次的 journal」**（§3.3）：marker 指向 A、磁碟上只有
     B 的 journal 時不得說可續作——續作以 A 的 source_root＋mapping 重算出來的還是 A，
-    讀不到 B，symlink 一樣補不回來。"""
+    讀不到 B，symlink 一樣補不回來。
+
+    **也不得說「沒有未完成」**（Codex 票 07 R1 F1）：`write_marker()` 跑在 `install()`
+    **之前**、matching journal 是 `install()` 內部才建的，所以「marker 在、它指的 journal
+    不在」還有第二種來源——**它根本還沒建起來**（安裝正要開始、或 install 在開 journal 前
+    就失敗）。第二輪一旦落在這個形狀，新 marker 就蓋掉了第一輪的：一律判「視同完成」會把
+    第一輪那個沒收尾的 journal 整個遮蔽掉，使用者再也看不到「上次沒完成」。"""
     plan = _plan(tmp_path)
     tid = inst.transaction_id(plan)
-    _journal("some-other-transaction", _good_record())      # 別人的 journal
+    _journal("some-other-transaction", _good_record())      # 別人的、還沒收尾的
     ms.write_marker(tid, plan.source_root, [])
-    assert ms.status() == {"state": "stale_marker"}
+    assert ms.status() == {"state": "unfinished_unknown"}
 
 
 def test_status_never_raises_when_fledge_is_unreadable():
@@ -212,3 +218,44 @@ def test_clear_marker_is_idempotent():
     ms.clear_marker()
     ms.clear_marker()
     assert ms.read_marker() is None
+
+
+def test_stale_marker_still_means_finished_when_nothing_is_left_behind(
+        tmp_path: Path):
+    """反面：**沒有任何** journal 時，marker 殘骸仍然視同完成——那時不論是「成功後刪
+    marker 失敗」還是「根本沒開始」，都沒有任何沒收尾的東西，說「沒有未完成」都是對的。"""
+    ms.write_marker("no-such-journal", "/tmp/staging", [])
+    assert ms.status() == {"state": "stale_marker"}
+
+
+def test_write_marker_fsyncs_the_directory_entry(tmp_path: Path, monkeypatch):
+    """`os.replace` 之後**父目錄也要 fsync**（Codex 票 07 R1 F3）：斷電時 rename 本身不
+    保證落盤——marker 可能整個消失（→ 沒有續作資訊）或舊的那份存活（→ 指向別輪）。
+
+    這份簿記的存在理由就是「硬中斷之後接得回去」，而硬中斷包含斷電：**宣稱與實際保證
+    等級必須逐字對齊**，少了這一步 docstring 就是在承諾做不到的事。"""
+    synced: list[int] = []
+    real_fsync = os.fsync
+    monkeypatch.setattr(os, "fsync", lambda fd: synced.append(fd) or real_fsync(fd))
+
+    ms.write_marker("t", "/tmp/x", [])
+
+    assert len(synced) >= 2, "檔案內容與父目錄各要一次"
+
+
+def test_write_marker_survives_a_filesystem_without_dir_fsync(
+        tmp_path: Path, monkeypatch):
+    """目錄 fsync 不受支援（部分網路磁碟、exFAT）時**降級不擋安裝**——那是「這個檔案
+    系統做不到」，不是「寫入失敗」。與 `install.py` 對每個目錄 fsync 同一立場。"""
+    real_fsync = os.fsync
+
+    def _no_dir_fsync(fd: int):
+        if os.fstat(fd).st_mode & 0o170000 == 0o040000:      # 目錄
+            raise OSError(22, "Invalid argument")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", _no_dir_fsync)
+
+    ms.write_marker("t", "/tmp/x", [])
+    got = ms.read_marker()
+    assert got is not None and got["transaction_id"] == "t"

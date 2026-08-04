@@ -103,6 +103,11 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   // 不屬於新的包——留著會讓使用者以為新的包也已經裝過了
   const [installRun, setInstallRun] = useState<{ gen: number; value: InstallRun }>(
     { gen: -1, value: { kind: "idle" } });
+  // 當下的來源身分（render body 同步寫回）：續作探測的錯誤路徑要靠它判斷「這個訊息還
+  // 屬不屬於現在這一包」——`setBundle` 的 functional update 讀得到最新的 gen，`setError`
+  // 讀不到（比照 `InstallPreviewCard.liveSource`）
+  const liveGen = useRef(bundle.gen);
+  liveGen.current = bundle.gen;
   const mappingGen = useRef(bundle.gen);
   if (mappingGen.current !== bundle.gen) {
     // render body 同步清空：等 effect 會讓 PathsCard 先用舊 mapping seed 一次
@@ -127,21 +132,29 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   useEffect(() => {
     if (resume === undefined || port == null) return;
     let live = true;
+    // **遲到的回應不得覆蓋使用者後來選的包**（Codex 票 07 R1 F2）：這支探測在飛的時候，
+    // 使用者可以回上一頁換一包（BundleCard 會把 `gen` 推進）。沒有這道比對的話，畫面上
+    // 是新包、預覽與安裝卻用續作帶進來的舊來源。與 `InstallPreviewCard`／`PathsCard` 的
+    // `liveSource` 同一個模式——續作這條路徑當初漏了套。
+    const startGen = bundle.gen;
     void (async () => {
       try {
         const info = await fetchBundleInfo(port, resume.sourceRoot);
         if (!live) return;
-        setBundle((cur) => ({
-          ...cur, probe: { kind: "present", info, dest: resume.sourceRoot },
-        }));
+        setBundle((cur) => (cur.gen === startGen
+          ? { ...cur, probe: { kind: "present", info, dest: resume.sourceRoot } }
+          : cur));
       } catch (e) {
         // 判別碼與例外原文只進 console（CLAUDE.md §4.6.13）
         console.error("[onboarding] 續作讀不到包資訊", e);
-        if (live) setError(t("mig.install.errors.resumeFailed"));
+        // 已經換過包就不報這個錯：那份續作來源已經與畫面無關，訊息只會誤導
+        if (live && liveGen.current === startGen) {
+          setError(t("mig.install.errors.resumeFailed"));
+        }
       }
     })();
     return () => { live = false; };
-  }, [resume, port, t]);
+  }, [resume, port, t]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const steps = wizardSteps({
     accountCount: accountKeys.length,
