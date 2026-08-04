@@ -1,0 +1,49 @@
+/* 共通設置的斷鏈檢查與修復。兩處掛載共用（設定頁的還原卡、移機精靈的 repair 頁），
+   所以**只管內容不管容器**——外層的分隔線／內距由呼叫端的版面決定。
+   數值沿用原本長在 RestoreCard.css 的那一組，避免抽元件時順手改了外觀。 */
+
+.rp-msg {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 6px 0 8px;
+  color: var(--dim);
+}
+
+.rp-warn {
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 6px 0 0;
+  color: var(--warning);
+}
+
+/* 按鈕的上緣間距：原本靠 `.rs-links button` 給，抽出後那條選擇器只涵蓋還原卡，
+   精靈那一側就會沒有間距——所以跟著元件走 */
+.rp-actions {
+  margin-top: 8px;
+}
+
+.rp-results {
+  margin-top: 10px;
+}
+
+.rp-result {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.rp-result-name {
+  color: var(--text);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* chip 本體的樣式在 Onboarding.css 的 .b4-chip 家族（與共通設置卡共用），這裡只定位 */
+.rp-result .b4-chip {
+  flex: 0 0 auto;
+}

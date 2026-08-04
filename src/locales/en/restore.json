@@ -37,7 +37,8 @@
     "found": "{{count}} link(s) in your live shared setup point at a path that no longer exists. This checks your current directories, not the backup you just unpacked — it happens once you move an old machine's setup back into place: a backup stores the links themselves, not the files they point at.",
     "repair": "Repoint them to this machine",
     "repairing": "Repointing…",
-    "notApplicable": "Only one account is registered, so there is no shared setup to check."
+    "notApplicable": "Only one account is registered, so there is no shared setup to check.",
+    "unavailable": "Can't reach the background service, so links can't be checked right now. This re-checks automatically once it's back."
   },
   "repair": {
     "result": {

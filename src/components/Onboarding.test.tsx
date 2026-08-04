@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vite
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
+import zhRestore from "../locales/zh-TW/restore.json";
 import { useAppStore } from "../store/useAppStore";
 import { scanPreview, runInstall, fetchBundleInfo, RestoreError } from "../lib/sidecar";
 import { Onboarding } from "./Onboarding";
@@ -910,6 +911,226 @@ describe("Onboarding 精靈外殼", () => {
     await waitFor(() => expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(8));
     expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy();
     expect(ui.queryByText(zh.mig.targets.h)).toBeNull();
+  });
+
+  // ── 票 08：最後三頁接上，走完到 done ─────────────────────────────────────────
+
+  /** 走完移機序列到指定的那一頁。**每一頁的 gating 都真的解除**（落檔、專案清單、預覽、
+   *  安裝），不是硬跳——硬跳過去的頁面拿不到真實的前置狀態，斷言就會驗在假情境上。 */
+  async function reachMigStep(ui: ReturnType<typeof render>, target: string) {
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await walkMigFrom(ui, target);
+  }
+
+  /** 從**當前所在的移機頁**往前走到 target（換包之後要重走一次序列時用）。 */
+  async function walkMigFrom(ui: ReturnType<typeof render>, target: string) {
+    const order = [
+      zh.mig.bundle.h, zh.mig.targets.h, zh.mig.paths.h, zh.mig.install.h,
+      zh.env.h, zh.login.h, zh.mig.repair.h, zh.done.h,
+    ];
+    for (const heading of order) {
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+      if (heading === target) return;
+      if (heading === zh.mig.targets.h) ui.getByText("adopt").click();
+      if (heading === zh.mig.paths.h) ui.getByText("paths-loaded").click();
+      if (heading === zh.mig.install.h) {
+        ui.getByText("preview-loaded").click();
+        await waitFor(() => expect(
+          ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(false));
+        ui.getByText(zh.mig.install.run).click();
+        await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
+      }
+      await waitFor(() =>
+        expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      ui.getByText(zh.common.next).click();
+    }
+    throw new Error(`走完整條序列都沒到 ${target}`);
+  }
+
+  it("換一包重裝，完成頁的數字重新算", async () => {
+    // 累積若不綁 `bundle.gen`，換包之後完成頁會把上一包裝的也算進來——`mapping`／
+    // `pathsStatus`／`previewStatus`／`installRun` 全都綁 gen，新加的累積不能漏套
+    // （票 09 R2 才踩過同一族）
+    const one = (path: string) => ({
+      results: [{ account: "work", rel_path: path,
+                  outcome: "installed" as const, error: null }],
+      stale_temps: [],
+    });
+    vi.mocked(runInstall)
+      .mockResolvedValueOnce({
+        results: ["a", "b", "c"].map((rel_path) => ({
+          account: "work", rel_path, outcome: "installed" as const, error: null })),
+        stale_temps: [],
+      })
+      .mockResolvedValueOnce(one("z"));
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachMigStep(ui, zh.mig.install.h);
+    ui.getByText("preview-loaded").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.mig.install.run).click();     // A 包：裝好 3 項
+    await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
+
+    for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
+      ui.getByText(zh.common.prev).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+    ui.getByText("probe-present").click();        // 換 B 包（gen 推進）
+    await walkMigFrom(ui, zh.done.h);             // B 包：裝好 1 項
+
+    const numbers = [...ui.container.querySelectorAll(".ob-summary strong")]
+      .map((e) => e.textContent);
+    expect(numbers).toEqual(["1", "2"]);          // 不是 4
+  });
+
+  it("修復頁真的在檢查斷鏈，不是只有標題的空殼", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachMigStep(ui, zh.mig.repair.h);
+
+    expect(ui.getByText(zh.mig.repair.sub)).toBeTruthy();
+    // 只重建斷掉的、指到別處但仍有效的不動——上游 spec §9 第 7 條要寫進 UI 而不是只留文件
+    expect(ui.getByText(zh.mig.repair.scope)).toBeTruthy();
+    // 掛的是真的 `RepairCard`：mock 的 commonConfigPlan 回空 operations → 「沒有斷鏈」。
+    // 空殼頁不會有這一句（票 01 的 migShell 只有標題與導覽）
+    await waitFor(() => expect(ui.getByText(zhRestore.links.none)).toBeTruthy());
+  });
+
+  it("移機的登入頁說清楚為什麼不能省，全新設定那條路不出現這段", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachMigStep(ui, zh.login.h);
+    expect(ui.getByText(zh.mig.login.why)).toBeTruthy();
+
+    // **另一條路也要真的走到登入頁才算驗到**：停在 roots 頁斷言「那段說明不在」是
+    // 恆真的（那一頁本來就不會有它），把 mode 判斷整個拿掉也照樣綠。
+    cleanup();
+    const fresh = render(<Onboarding onClose={onClose} />);
+    await reachRootsWithDraft(fresh);
+    fresh.getByText(zh.roots.next).click();
+    await waitFor(() => expect(fresh.getByText(zh.env.h)).toBeTruthy());
+    fresh.getByText(zh.common.next).click();
+    await waitFor(() => expect(fresh.getByText(zh.login.h)).toBeTruthy());
+    // 全新設定的登入頁沒有備份包這回事，那段說明在那條路上是雜訊
+    expect(fresh.queryByText(zh.mig.login.why)).toBeNull();
+  });
+
+  it("完成頁對移機講搬了幾項，不講掃到幾個專案", async () => {
+    // 真機驗收（票 16 第 2 項）：剛裝好 6 項資產，完成頁卻說「0 個專案、0 個根目錄、
+    // 0 個帳號」——那些數字數的是 roots 與掃描結果，移機根本不走那條路
+    vi.mocked(runInstall).mockResolvedValueOnce({
+      results: [
+        { account: "work", rel_path: "a", outcome: "installed", error: null },
+        { account: "work", rel_path: "b", outcome: "installed", error: null },
+        { account: "work", rel_path: "c", outcome: "installed", error: null },
+        { account: "work", rel_path: "d", outcome: "skipped", error: null },
+        { account: "work", rel_path: "e", outcome: "failed", error: "boom" },
+      ],
+      stale_temps: [],
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachMigStep(ui, zh.done.h);
+
+    // **兩格分開驗、順序也釘住**：帳號數（baseConfig 有兩個）與搬回的項數若剛好相同，
+    // 一句 `getByText("3")` 分不出哪個是哪個，把兩個來源接反也會綠。
+    // 數的是 installed——skipped 與 failed 算進去就是說謊。
+    const numbers = [...ui.container.querySelectorAll(".ob-summary strong")]
+      .map((e) => e.textContent);
+    expect(numbers).toEqual(["3", "2"]);
+    expect(ui.getByText(zh.done.migHint)).toBeTruthy();
+    // 上游 spec §9 第 3 條（權限清單與 MCP 要重新累積）進了 UI
+    expect(ui.getByText(zh.done.migCaveats)).toBeTruthy();
+    // 全新設定那套框架不得出現在移機的完成頁
+    expect(ui.queryByText(zh.done.hint)).toBeNull();
+  });
+
+  it("部分成功後重試，完成頁報的是兩輪的聯集不是最後一輪", async () => {
+    // Codex 票 08 R1 F1：第一輪裝好 3 項、2 項失敗，使用者按「再試一次」補完——第二輪
+    // 因 no-clobber 把前 3 項回報成 `skipped`，只看最後一輪就會說「搬回 2 項」。
+    // 這條真實路徑是票 16 第 3 項加的重試鍵開出來的。
+    vi.mocked(runInstall)
+      .mockResolvedValueOnce({
+        results: [
+          { account: "work", rel_path: "a", outcome: "installed", error: null },
+          { account: "work", rel_path: "b", outcome: "installed", error: null },
+          { account: "work", rel_path: "c", outcome: "installed", error: null },
+          { account: "work", rel_path: "d", outcome: "failed", error: "boom" },
+          { account: "work", rel_path: "e", outcome: "failed", error: "boom" },
+        ],
+        stale_temps: [],
+      })
+      .mockResolvedValueOnce({
+        results: [
+          { account: "work", rel_path: "a", outcome: "skipped", error: null },
+          { account: "work", rel_path: "b", outcome: "skipped", error: null },
+          { account: "work", rel_path: "c", outcome: "skipped", error: null },
+          { account: "work", rel_path: "d", outcome: "installed", error: null },
+          { account: "work", rel_path: "e", outcome: "installed", error: null },
+        ],
+        stale_temps: [],
+      });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachMigStep(ui, zh.mig.install.h);
+    ui.getByText("preview-loaded").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.mig.install.run).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
+
+    ui.getByText(zh.mig.result.retry).click();          // 第二輪：補裝失敗的兩項
+    await waitFor(() => expect(runInstall).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    for (const heading of [zh.env.h, zh.login.h, zh.mig.repair.h]) {
+      ui.getByText(zh.common.next).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.done.h)).toBeTruthy());
+
+    // 3（第一輪）＋ 2（第二輪）＝ 5；只看最後一輪會說 2
+    const numbers = [...ui.container.querySelectorAll(".ob-summary strong")]
+      .map((e) => e.textContent);
+    expect(numbers).toEqual(["5", "2"]);
+  });
+
+  it("有一輪結果不明時，完成頁不報一個它不知道的數字", async () => {
+    // Codex 票 08 R2 F3：第一輪其實完整跑完了，只是**回應遺失**（連線斷／非合約 500）
+    // → 前端不知道裝了什麼，退回可再送。重試時 no-clobber 讓每一項都回報 `skipped`，
+    // 累積器加 0 → 完成頁會說「搬回 0 項」，而實際上東西都在。
+    //
+    // **前端沒有辦法知道真相**（那要對 provenance journal 對帳，是後端的能力），所以
+    // 正確處置是**不報那個數字**——比照票 06 的 `installUnknown`：拿不到判別碼時不斷言
+    // 「什麼都沒發生」。報一個確定錯的數字比不報更糟。
+    vi.mocked(runInstall)
+      .mockRejectedValueOnce(new Error("connection lost"))     // 無判別碼＝結果不明
+      .mockResolvedValueOnce({
+        results: [
+          { account: "work", rel_path: "a", outcome: "skipped", error: null },
+          { account: "work", rel_path: "b", outcome: "skipped", error: null },
+        ],
+        stale_temps: [],
+      });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachMigStep(ui, zh.mig.install.h);
+    ui.getByText("preview-loaded").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.mig.install.run).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.install.errors.installUnknown)).toBeTruthy());
+    ui.getByText(zh.mig.install.run).click();                  // 重送
+    await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
+
+    for (const heading of [zh.env.h, zh.login.h, zh.mig.repair.h, zh.done.h]) {
+      await waitFor(() =>
+        expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      ui.getByText(zh.common.next).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+
+    expect(ui.getByText(zh.done.migSummaryUnknown)).toBeTruthy();
+    // 那個會說謊的數字不得出現
+    expect(ui.container.querySelectorAll(".ob-summary strong")).toHaveLength(0);
   });
 
   it("移機分支一路走到完成頁，全程不出現共通設置與範本部署", async () => {

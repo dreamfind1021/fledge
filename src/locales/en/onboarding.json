@@ -174,7 +174,12 @@
       "retry": "Try again"
     },
     "repair": {
-      "h": "Repair links"
+      "h": "Repair links",
+      "sub": "A backup bundle stores the links themselves, not the files they point at — after moving to this machine they still point at the old machine's paths. This step re-points them at the matching locations here.",
+      "scope": "Only links whose target no longer exists get rebuilt. Links that point somewhere else but still work are left alone — you may have set those up on purpose. Anything that would overwrite existing content is skipped; handle those from the “Dev environment” section in Settings, where you can approve them one by one."
+    },
+    "login": {
+      "why": "Credentials are deliberately kept out of backup bundles, so this step can't be skipped — what came back is your settings and data, not your signed-in state."
     }
   },
   "roots": {
@@ -302,7 +307,11 @@
     "h": "You're all set",
     "summary": "Found <strong>{{projects}}</strong> projects<br />across <strong>{{roots}}</strong> root folders and <strong>{{accounts}}</strong> accounts",
     "hint": "Anything you skipped — sign-in, templates — is waiting in the Development environment section of Settings.",
-    "enter": "Open Fledge"
+    "enter": "Open Fledge",
+    "migSummary": "Moved <strong>{{installed}}</strong> items across <br /><strong>{{accounts}}</strong> account(s)",
+    "migHint": "Once you're signed back in you're ready to go. Your conversation history came along with each account directory — run /resume inside a project to find it. Projects you left unmapped are the exception: Claude Code won't list their history (the files are still on disk).",
+    "migCaveats": "Two things rebuild themselves over time: your tool permission list and MCP settings didn't come along (they live in the same file as machine identity and caches, and moving that file wholesale would wipe the state you just signed in to). Normal use fills them back in.",
+    "migSummaryUnknown": "Migration finished. One install round never reported back, so there's no item count here — the install results page on the previous step is the accurate record."
   },
   "st": {
     "devEnv": "Development environment",

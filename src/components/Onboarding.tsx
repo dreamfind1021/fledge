@@ -25,6 +25,7 @@ import { TargetsCard } from "./TargetsCard";
 import { PathsCard, type PathsStatus, type ProjectMapping } from "./PathsCard";
 import { InstallPreviewCard } from "./InstallPreviewCard";
 import { InstallResultCard } from "./InstallResultCard";
+import { RepairCard } from "./RepairCard";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -114,6 +115,16 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   // 不屬於新的包——留著會讓使用者以為新的包也已經裝過了
   const [installRun, setInstallRun] = useState<{ gen: number; value: InstallRun }>(
     { gen: -1, value: { kind: "idle" } });
+  // 本次流程（同一個 `bundle.gen`）累積裝成的 node。與 `installRun` 是兩件事：那個是
+  // 「最後一輪跑出什麼」（結果頁要照實顯示這一輪），這個是「這次移機總共搬回了什麼」
+  // （完成頁要的）。重試會覆寫前者，但不該讓後者忘掉前幾輪。
+  // `unknown`＝有一輪的結果沒能回報（連線斷／非合約 500）。那一輪**可能已經完整跑完**，
+  // 而重試會讓 no-clobber 把那些項目回報成 `skipped`——累積器看不到它們，數字就會少報甚至
+  // 歸零。前端沒有辦法知道真相（那要對 provenance journal 對帳，是後端的能力），所以旗標
+  // 一旦豎起來就**不報數字**，比照票 06 的 `installUnknown`（Codex 票 08 R2 F3）。
+  const [installedTally, setInstalledTally] =
+    useState<{ gen: number; keys: string[]; unknown: boolean }>(
+      { gen: -1, keys: [], unknown: false });
   // 當下的來源身分（render body 同步寫回）：續作探測的錯誤路徑要靠它判斷「這個訊息還
   // 屬不屬於現在這一包」——`setBundle` 的 functional update 讀得到最新的 gen，`setError`
   // 讀不到（比照 `InstallPreviewCard.liveSource`）
@@ -137,6 +148,15 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   const run: InstallRun = installRun.gen === bundle.gen
     ? installRun.value : { kind: "idle" };
   const previewReady = previewStatus.gen === bundle.gen && previewStatus.value === "loaded";
+  // 完成頁的移機總結（票 16 第 2 項）。**累積本次流程裝成的 node，不是最後一輪的結果**
+  // （Codex 票 08 R1 F1）：部分成功後按「再試一次」會覆寫 `run`，而第二輪因 no-clobber
+  // 把前一輪裝好的回報成 `skipped`——只看最後一輪就會少報。存 node 身分而不是計數，
+  // 是為了讓「同一項在兩輪都算成」不會被數兩次（no-clobber 下不該發生，但這是計數的
+  // 正確性前提，不該建立在別處的行為上）。
+  // 同樣綁 `bundle.gen`：換包就重新開始數，上一包裝了什麼與這一包無關。
+  const tally = installedTally.gen === bundle.gen
+    ? installedTally : { gen: bundle.gen, keys: [] as string[], unknown: false };
+  const installedCount = tally.keys.length;
   const adoptedFromBundle = adoptedFrom.gen === bundle.gen && adoptedFrom.value;
   const overlayRef = useRef<HTMLDivElement>(null);
 
@@ -216,10 +236,13 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   );
 
   /**
-   * 移機分支的空殼頁：只有標題與導覽，內容由票 03–08 逐一填實。
-   * 票 01 只負責「兩條路的序列不同、每一頁走得過去」；`bundle` 已由票 02 填實。
+   * 移機分支頁面的**降級外殼**：包資訊還是 `unknown` 時（正常流程走不到，`bundle` 頁的
+   * gating 擋著）沒有展開位置可用，退回只有標題與導覽的空殼，而不是拿 undefined 去打端點。
+   *
+   * 票 01 時它是「還沒填實的頁」的佔位；三頁都填實之後只剩這個降級用途——`repair`
+   * 因此不再在列（票 08：那一頁不依賴備份包的內容）。
    */
-  const migShell = (key: "targets" | "paths" | "install" | "repair") => (
+  const migShell = (key: "targets" | "paths" | "install") => (
     <div>
       <h2 className="ob-h">{t(`mig.${key}.h`)}</h2>
       {migNav()}
@@ -251,6 +274,17 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
         gen,
         value: { kind: "done", results: outcome.results, staleTemps: outcome.stale_temps },
       });
+      // 完成頁要的是「這次移機總共搬回了什麼」，所以**累積**而不是覆寫（Codex 票 08 R1 F1）。
+      // `gen` 不同就從頭數——那是換了一包，上一包裝了什麼與這一包無關。
+      setInstalledTally((cur) => {
+        const same = cur.gen === gen;
+        const keys = new Set(same ? cur.keys : []);
+        for (const r of outcome.results) {
+          if (r.outcome === "installed") keys.add(`${r.account}/${r.rel_path}`);
+        }
+        // 一輪成功**不會**洗掉先前的「結果不明」：那一輪裝了什麼仍然沒人知道
+        return { gen, keys: [...keys], unknown: same && cur.unknown };
+      });
     } catch (e) {
       // 判別碼與例外原文只進 console（CLAUDE.md §4.6.13）——`HTTP 500` 對使用者沒有意義
       console.error("[onboarding] 移機安裝失敗", e);
@@ -266,6 +300,11 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
       // node），而不讓重送才是真的死路。**已經寫進去的東西會在重跑的結果裡顯示成
       // 「跳過」**——那也是使用者唯一能拿到的「東西確實在那裡」的證據
       setInstallRun({ gen, value: { kind: "idle" } });
+      if (!refused) {
+        // 結果不明的那一輪：重試會把它裝過的東西回報成 `skipped`，累積器看不到
+        setInstalledTally((cur) => (cur.gen === gen
+          ? { ...cur, unknown: true } : { gen, keys: [], unknown: true }));
+      }
     }
   };
 
@@ -633,12 +672,30 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
               </div>
             )
           )}
-          {step === "repair" && migShell("repair")}
+          {/* ── 修復連結（票 08）：備份包存的是連結**本身**而不是它指向的東西，搬回新機
+                 之後那些連結還指著舊機器的絕對路徑。與設定頁的還原卡共用 `RepairCard`
+                 ——誰是 source、要送哪些 entry、斷鏈怎麼數，兩處各寫一遍必然漂移。 ── */}
+          {step === "repair" && (
+            <div>
+              <h2 className="ob-h">{t("mig.repair.h")}</h2>
+              <p className="ob-sub">{t("mig.repair.sub")}</p>
+              <RepairCard port={port} accounts={config?.accounts ?? {}} />
+              <p className="ob-note">{t("mig.repair.scope")}</p>
+              {migNav()}
+            </div>
+          )}
 
           {/* ── 環境偵測（票 23）：標題、清單與導覽都在卡片內，重新檢查與下一步同列 ── */}
           {step === "env" && <EnvCard port={port} onPrev={prev} onNext={next} />}
 
           {/* ── 登入（票 25）：每個帳號一張卡 + Codex 一張，導覽在卡片內 ── */}
+          {/* 移機分支多一段說明（票 08，上游 spec §9 第 5 條）：**憑證刻意不在備份包裡**，
+              所以這一步不能省。不寫的話使用者會以為「都搬回來了怎麼還要登入」，進而懷疑
+              前面幾步是不是沒做成。文案放這裡而不是改 `LoginCard`——那張卡兩條路共用，
+              為了一段文案給它一個 mode 開關並不划算。 */}
+          {step === "login" && mode === "restore" && (
+            <p className="ob-note">{t("mig.login.why")}</p>
+          )}
           {step === "login" && (
             <LoginCard
               port={port}
@@ -670,17 +727,36 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
           )}
 
           {/* ── 完成 ── */}
+          {/* 完成頁的總結**依 mode 分流**（票 16 第 2 項）：全新設定的成果是「掃描到 N 個
+              專案」，移機的成果是「搬了 N 項資產」。移機沿用前者會全是 0——那些數字數的是
+              `roots`／掃描結果，而移機的落檔走 `adopt-config`，真機驗收時完成頁對著剛裝好的
+              6 項資產說「0 個專案、0 個根目錄、0 個帳號」。**即使票 09 讓 roots 有了值，
+              「掃描到幾個專案」對移機仍是錯的框架**，所以改的是框架不是數字來源。 */}
           {step === "done" && (
             <div className="ob-step-center">
               <h2 className="ob-h">{t("done.h")}</h2>
               <p className="ob-summary">
-                <Trans
-                  t={t}
-                  i18nKey="done.summary"
-                  values={{ projects: totalProjects, roots: shownRoots.length, accounts: distinctAccounts }}
-                />
+                {mode === "restore" ? (
+                  tally.unknown ? t("done.migSummaryUnknown") : (
+                    <Trans
+                      t={t}
+                      i18nKey="done.migSummary"
+                      values={{ installed: installedCount, accounts: accountKeys.length }}
+                    />
+                  )
+                ) : (
+                  <Trans
+                    t={t}
+                    i18nKey="done.summary"
+                    values={{ projects: totalProjects, roots: shownRoots.length, accounts: distinctAccounts }}
+                  />
+                )}
               </p>
-              <p className="ob-sub">{t("done.hint")}</p>
+              <p className="ob-sub">{mode === "restore" ? t("done.migHint") : t("done.hint")}</p>
+              {/* 上游 spec §9 第 3 條要寫進 UI：`.claude.json` 刻意不搬（它混著真資產、機器
+                  身分與快取），所以舊機的權限清單與 MCP 設定要重新累積。這件事只有移機的人
+                  會遇到，而且不講的話會被當成 bug。 */}
+              {mode === "restore" && <p className="ob-note">{t("done.migCaveats")}</p>}
               <div className="ob-actions-center">
                 <button onClick={prev} className="ob-btn-ghost">{t("common.prev")}</button>
                 <button onClick={onClose} className="ob-btn">{t("done.enter")}</button>
