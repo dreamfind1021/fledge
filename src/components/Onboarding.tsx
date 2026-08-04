@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { useTranslation, Trans } from "react-i18next";
 import { useAppStore } from "../store/useAppStore";
-import { scanPreview, DEFAULT_ACCOUNT_KEY } from "../lib/sidecar";
+import { scanPreview, runInstall, RestoreError, DEFAULT_ACCOUNT_KEY,
+         type InstallItemResult } from "../lib/sidecar";
 import { pickDirectory } from "../lib/dialog";
 import {
   wizardSteps,
@@ -22,6 +23,7 @@ import { BundleCard, EMPTY_BUNDLE_SELECTION, type BundleSelection } from "./Bund
 import { TargetsCard } from "./TargetsCard";
 import { PathsCard, type PathsStatus, type ProjectMapping } from "./PathsCard";
 import { InstallPreviewCard } from "./InstallPreviewCard";
+import { InstallResultCard } from "./InstallResultCard";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -33,6 +35,13 @@ interface DraftRoot {
   account: string;
   count: number;
 }
+
+/** 安裝這一步的狀態（票 06）。`done` 之後**不再提供安裝按鈕**——那是整條流程裡唯一
+ *  不可逆的動作，重複送出沒有意義（no-clobber 下第二次全是 skipped，卻讓人以為裝了兩份）。 */
+type InstallRun =
+  | { kind: "idle" }
+  | { kind: "running" }
+  | { kind: "done"; results: InstallItemResult[]; staleTemps: string[] };
 
 export function Onboarding({ onClose }: OnboardingProps) {
   const { t } = useTranslation("onboarding");
@@ -80,6 +89,10 @@ export function Onboarding({ onClose }: OnboardingProps) {
   // 不可逆的安裝
   const [previewStatus, setPreviewStatus] = useState<{ gen: number; value: PathsStatus }>(
     { gen: -1, value: "loading" });
+  // 安裝的執行與結果（票 06）同款綁著來源：一份結果報告是「對某一包做的」，換包之後它
+  // 不屬於新的包——留著會讓使用者以為新的包也已經裝過了
+  const [installRun, setInstallRun] = useState<{ gen: number; value: InstallRun }>(
+    { gen: -1, value: { kind: "idle" } });
   const mappingGen = useRef(bundle.gen);
   if (mappingGen.current !== bundle.gen) {
     // render body 同步清空：等 effect 會讓 PathsCard 先用舊 mapping seed 一次
@@ -87,7 +100,13 @@ export function Onboarding({ onClose }: OnboardingProps) {
     if (Object.keys(mapping).length > 0) setMapping({});
     if (pathsStatus.gen !== bundle.gen) setPathsStatus({ gen: bundle.gen, value: "loading" });
     if (previewStatus.gen !== bundle.gen) setPreviewStatus({ gen: bundle.gen, value: "loading" });
+    if (installRun.gen !== bundle.gen) {
+      setInstallRun({ gen: bundle.gen, value: { kind: "idle" } });
+    }
   }
+  const run: InstallRun = installRun.gen === bundle.gen
+    ? installRun.value : { kind: "idle" };
+  const previewReady = previewStatus.gen === bundle.gen && previewStatus.value === "loaded";
   const overlayRef = useRef<HTMLDivElement>(null);
 
   const steps = wizardSteps({
@@ -138,6 +157,44 @@ export function Onboarding({ onClose }: OnboardingProps) {
   const browse = async () => {
     const p = await pickDirectory();
     if (p) setNewPath(p);
+  };
+
+  /**
+   * 安裝（票 06）：整條移機流程裡**唯一會寫使用者現役目錄**的動作，不可逆。
+   *
+   * 落點不由這裡送——server 從已落檔的 config.json 讀並重算 plan（ADR-0002）；這一頁
+   * 給的只有展開位置與專案路徑對應。失敗時退回 `idle` 讓使用者能再送一次：留在
+   * 「安裝中」會變成一條沒有出口的死路。
+   */
+  const startInstall = async () => {
+    if (port == null || bundle.probe.kind === "unknown") return;
+    const gen = bundle.gen;
+    const dest = bundle.probe.dest;
+    setInstallRun({ gen, value: { kind: "running" } });
+    setError(null);
+    setNotice(null);
+    try {
+      const outcome = await runInstall(port, dest, mapping);
+      setInstallRun({
+        gen,
+        value: { kind: "done", results: outcome.results, staleTemps: outcome.stale_temps },
+      });
+    } catch (e) {
+      // 判別碼與例外原文只進 console（CLAUDE.md §4.6.13）——`HTTP 500` 對使用者沒有意義
+      console.error("[onboarding] 移機安裝失敗", e);
+      // **失敗有兩種，文案不能混**（Codex 票 06 R1）：後端明確回了判別碼＝請求在動手
+      // 之前就被擋下（落點還沒落檔、來源不是備份包、journal 開不起來——全在寫入前），
+      // 那時可以斷言什麼都沒發生。**拿不到判別碼**（連線斷、回應遺失、非合約 500）就
+      // **不知道寫到哪裡了**：後端可能已經完整跑完，只是答案沒回來。此時說「安裝沒能
+      // 完成」是在斷言一件我們不知道的事。
+      const refused = e instanceof RestoreError && e.code !== null;
+      setError(t(refused ? "mig.install.errors.installFailed"
+                         : "mig.install.errors.installUnknown"));
+      // 兩種都退回可再送：重跑是安全的（no-clobber 不覆蓋、journal 認得前一輪發布的
+      // node），而不讓重送才是真的死路。**已經寫進去的東西會在重跑的結果裡顯示成
+      // 「跳過」**——那也是使用者唯一能拿到的「東西確實在那裡」的證據
+      setInstallRun({ gen, value: { kind: "idle" } });
+    }
   };
 
   const addDraftRoot = async () => {
@@ -430,20 +487,45 @@ export function Onboarding({ onClose }: OnboardingProps) {
               </div>
             )
           )}
-          {/* 安裝預覽（票 05）：不可逆操作前的最後一道人工確認，這一頁不寫任何東西。
-              算不出預覽就擋住——與 paths 頁同一條理由（票 04 R1 F3） */}
+          {/* 安裝預覽（票 05）＋執行與結果（票 06）。預覽是不可逆操作前的最後一道人工
+              確認，這一頁在按下安裝之前不寫任何東西；算不出預覽就按不下去（票 04 R1 F3）。
+              裝完之後預覽由結果報告取代，主按鈕才變成「下一步」——**安裝只做一次**。 */}
           {step === "install" && (
             bundle.probe.kind === "unknown" ? migShell("install") : (
               <div>
-                <InstallPreviewCard
-                  port={port}
-                  dest={bundle.probe.dest}
-                  sourceGen={bundle.gen}
-                  mapping={mapping}
-                  onStatus={(value) => setPreviewStatus({ gen: bundle.gen, value })}
-                />
-                {migNav(!(previewStatus.gen === bundle.gen
-                  && previewStatus.value === "loaded"))}
+                {run.kind === "done" ? (
+                  <InstallResultCard results={run.results} staleTemps={run.staleTemps} />
+                ) : (
+                  <InstallPreviewCard
+                    port={port}
+                    dest={bundle.probe.dest}
+                    sourceGen={bundle.gen}
+                    mapping={mapping}
+                    onStatus={(value) => setPreviewStatus({ gen: bundle.gen, value })}
+                  />
+                )}
+                {run.kind === "running" && (
+                  <p className="ob-note">{t("mig.install.runNote")}</p>
+                )}
+                <div className="ob-actions">
+                  {/* 寫入進行中不可離開：換頁會讓使用者以為安裝可以中止（它不能）。
+                      裝完之後放行回頭——結果綁著這一包留著，回上一頁不會讓它重裝 */}
+                  <button
+                    onClick={prev}
+                    disabled={run.kind === "running"}
+                    className="ob-btn-ghost"
+                  >{t("common.prev")}</button>
+                  {run.kind === "done" ? (
+                    <button onClick={next} className="ob-btn">{t("common.next")}</button>
+                  ) : (
+                    <button
+                      onClick={startInstall}
+                      disabled={run.kind === "running" || !previewReady}
+                      className="ob-btn"
+                    >{run.kind === "running"
+                      ? t("mig.install.running") : t("mig.install.run")}</button>
+                  )}
+                </div>
               </div>
             )
           )}

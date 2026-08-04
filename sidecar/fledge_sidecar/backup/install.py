@@ -1314,8 +1314,33 @@ def _drop_overlapping_spots(prepared: list[_PreparedSpot],
     return kept
 
 
-def install(plan: InstallPlan) -> list[ItemResult]:
+def _absolute_stale(plan: InstallPlan, entries: list[str]) -> list[str]:
+    """`<落點 key>/<rel>` → 絕對路徑（票 06，增補 spec §4.2）。
+
+    內部累積的是相對形式（`work/skills/.fledge-install-123-abc`），**log 維持它**——
+    不必要地印出使用者的絕對路徑沒有好處；而 UI 要「在 Finder 中顯示」需要絕對路徑。
+    key 分住兩張表：帳號在 `targets`，extra 帶 `extra:` 前綴、落點在 `extra_targets`。
+
+    查不到落點就略過而不是 KeyError：這條路徑跑在**安裝已經做完之後**，此時拋例外會把
+    一次成功的安裝變成 500，使用者以為東西沒搬。key 全都來自 plan 自己的落點表，正常
+    情形下查得到。"""
+    out: list[str] = []
+    for entry in entries:
+        key, _, rel = entry.partition("/")
+        target = (plan.extra_targets.get(key.removeprefix("extra:"))
+                  if key.startswith("extra:") else plan.targets.get(key))
+        if target is None:
+            continue
+        out.append(os.path.join(target, rel))
+    return out
+
+
+def install(plan: InstallPlan, *, stale_out: list[str] | None = None) -> list[ItemResult]:
     """依 plan 把資產寫進各落點。逐項盡力——單項失敗不阻斷其餘。
+
+    `stale_out`＝選填的收集清單，收「前一輪硬中斷留下的暫存殘骸」的**絕對路徑**（票 06）。
+    **回傳型別刻意不動**：既有測試有大量斷言直接依賴它，為了一個 UI 便利性需求把成本
+    擴散到整組安全測試上不划算。掃描、gating 與 WARNING log 完全不變，只是多抄一份出去。
 
     來源身分不符即整批停手（不是跳過單項）：那代表我們掃描過的東西已經不是現在要讀的
     東西，繼續下去等於拿沒驗過的內容寫使用者的現役目錄。
@@ -1522,6 +1547,10 @@ def install(plan: InstallPlan) -> list[ItemResult]:
         # （Plan B 的 UI）。列前 20 個就夠診斷，上千個殘骸不需要全灌進 log。
         logger.warning("移機發現前一輪殘留的暫存檔 %d 個（未自動刪除）：%s",
                        len(stale_temps), ", ".join(stale_temps[:20]))
+        if stale_out is not None:
+            # 給呼叫端的是**全部**、且是絕對路徑：log 的前 20 個是診斷用的取樣，UI 要的
+            # 是使用者能逐一開啟的完整位置（票 06）
+            stale_out.extend(_absolute_stale(plan, stale_temps))
     # 完整成功才清 journal：它是「這次移機還沒收尾」的訊號（ADR-0006），留著會讓還原卡
     # 永遠顯示「上次移機未完成」。有 failed 則保留——供修好後重跑，中斷續作靠它認得
     # 前一輪已發布的 node（excluded 是刻意拒絕、不算未完成，不阻止清除）。

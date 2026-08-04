@@ -765,6 +765,42 @@ export async function installPlan(
   return resp.json();
 }
 
+/** 一項安裝結果。`account` 是落點 key（帳號外資產用 `extra:<name>` 命名空間），
+ *  `rel_path` 相對該落點；**落點層的失敗** `rel_path` 是空字串（整個帳號沒裝成）。
+ *  `error` 是穩定判別碼，前端負責映成文案（CLAUDE.md §4.6.13）。 */
+export interface InstallItemResult {
+  account: string;
+  rel_path: string;
+  outcome: "installed" | "skipped" | "excluded" | "failed";
+  error: string | null;
+}
+
+export interface InstallOutcome {
+  results: InstallItemResult[];
+  /** 前一輪硬中斷留在落點裡的暫存殘骸（絕對路徑）。**app 不代勞刪除**——判準全是可偽造
+   *  的檔名特徵，達不到「只刪自己建的」這條底線，只把位置告訴使用者（增補 spec §4）。 */
+  stale_temps: string[];
+}
+
+/** 實際安裝：**整條移機流程裡唯一會寫使用者現役目錄的呼叫**，不可逆。
+ *
+ *  server 以相同輸入重算 plan（ADR-0002），落點只來自已落檔的 config.json——前端送的
+ *  只有展開位置與專案路徑對應。 */
+export async function runInstall(
+  port: number, dest: string, mapping: Record<string, string>,
+): Promise<InstallOutcome> {
+  const resp = await fetch(`${base(port)}/api/restore/install`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({
+      dest,
+      mapping: Object.entries(mapping).map(([old, next]) => ({ old, new: next })),
+    }),
+  });
+  if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
+  return resp.json();
+}
+
 /** 備份包裡的一個專案。`suggested` 空字串＝推不出新位置（舊路徑不在舊 home 底下，
  *  或 manifest／歷史檔的路徑不合格）——**留空即照搬**，不猜。 */
 export interface ProjectPath {

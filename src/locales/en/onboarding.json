@@ -110,8 +110,57 @@
       "detail": "Show details",
       "hide": "Hide",
       "none": "There's nothing to bring over this time.",
+      "run": "Install now",
+      "running": "Installing…",
+      "runNote": "Installing — please leave this window open. This step writes into your account folders for real.",
       "errors": {
-        "loadFailed": "Couldn't work out what this install would do."
+        "loadFailed": "Couldn't work out what this install would do.",
+        "installFailed": "This install never started — nothing was touched.",
+        "installUnknown": "No result came back, so there's no telling how far it got — whatever was already written may well have completed. Pressing install again is safe: files already in place are never overwritten, and they show up as “skipped”."
+      }
+    },
+    "result": {
+      "h": "Install results",
+      "sub": {
+        "ok": "This install finished. Here's what happened, item by item.",
+        "partial": "Some items didn't make it. Here's what happened, item by item — the ones that failed show why.",
+        "allSkipped": "Nothing was written this round: every destination already had a file of the same name, and those are never overwritten. Only the name is compared, never the contents, so there's no guarantee what's there came from this bundle — an earlier round that already finished looks the same.",
+        "none": "Nothing was brought over this time. Here's why each item didn't make it."
+      },
+      "installed": "Brought over",
+      "skipped": "Skipped (something was already there; nothing is overwritten)",
+      "excluded": "Deliberately not handled",
+      "failed": "Didn't make it",
+      "moreNote": "“Brought over” can be higher than the preview on the last step: links inside account folders aren't in that number. A higher count is normal, not an error.",
+      "item": "{{path}}",
+      "itemReason": "{{path}} — {{reason}}",
+      "reason": {
+        "permission_denied": "no permission to write there",
+        "read_only_filesystem": "that location is on a read-only disk",
+        "path_missing": "the path doesn't exist",
+        "target_exists": "that name is already taken",
+        "target_not_empty": "that folder isn't empty",
+        "no_space": "not enough disk space",
+        "cross_device": "source and destination are on different disks",
+        "too_many_symlinks": "too many levels of links",
+        "not_a_directory": "that location isn't a folder",
+        "operation_not_supported": "that disk doesn't support this operation",
+        "io_failed": "read/write failure",
+        "source_moved": "the bundle changed mid-install (moved, deleted, or swapped for another)",
+        "target_moved": "the landing spot was swapped mid-install",
+        "overlapping_config_dirs": "two landing spots point at the same place",
+        "provenance_unavailable": "this migration's record couldn't be read, so it stopped here to be safe",
+        "account_not_installed": "this account itself didn't install, so its links weren't created",
+        "node_identity_mismatch": "what the link points to was swapped before it could be created",
+        "not_migrated_by_design": "deliberately not moved (set this up again on the new machine)",
+        "not_a_regular_file": "not a regular file (pipe, device node, etc.) — not moved",
+        "symlink_target_unauthorized": "this link points outside the bundle, so it wasn't created",
+        "unknown": "something else"
+      },
+      "stale": {
+        "h": "Also found {{count}} temporary files left by an interrupted run",
+        "note": "They're left over from a migration that was interrupted. They don't affect how Claude runs, and you can delete them yourself.",
+        "reveal": "Show in Finder"
       }
     },
     "repair": {

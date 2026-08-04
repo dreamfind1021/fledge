@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { installPlan, type InstallPreview } from "../lib/sidecar";
 import type { PathsStatus } from "./PathsCard";
 import type { ProjectMapping } from "./PathsCard";
+import { InstallSection } from "./InstallSection";
 
 interface InstallPreviewCardProps {
   port: number | null;
@@ -11,32 +12,6 @@ interface InstallPreviewCardProps {
   sourceGen: number;
   mapping: ProjectMapping;
   onStatus: (status: PathsStatus) => void;
-}
-
-/** 一列分類：標題 ＋ 數量 ＋ 可展開的明細。
- *
- *  **需要使用者行動的分類預設展開**（`blocked`、未確認落點的 extra、漏選落點的帳號）：
- *  那些正是他要補救的東西，收起來等於換一種方式漏報。純資訊的分類（跳過、刻意不處理、
- *  會改寫的專案）預設收合，免得整頁被淹沒。 */
-function Section({ title, items, note, defaultOpen = false }: {
-  title: string; items: string[]; note?: string; defaultOpen?: boolean;
-}) {
-  const { t } = useTranslation("onboarding");
-  const [open, setOpen] = useState(defaultOpen);
-  if (items.length === 0) return null;
-  return (
-    <div className="ob-spot">
-      <div className="ob-spot-head">
-        <span className="ob-spot-kind">{title}</span>
-        <span className="ob-spot-key">{items.length}</span>
-        <button onClick={() => setOpen((v) => !v)} className="ob-btn-ghost">
-          {open ? t("mig.install.hide") : t("mig.install.detail")}
-        </button>
-      </div>
-      {open && items.map((i) => <p key={i} className="ob-spot-oldpath">{i}</p>)}
-      {note !== undefined && <p className="ob-note">{note}</p>}
-    </div>
-  );
 }
 
 /**
@@ -140,22 +115,22 @@ export function InstallPreviewCard({
             <p className="ob-note">{t("mig.install.atLeastNote")}</p>
           </div>
 
-          <Section title={t("mig.install.willSkip")} items={preview.will_skip} />
+          <InstallSection title={t("mig.install.willSkip")} items={preview.will_skip} />
           {/* 補救路徑一：去那個位置把占住的東西挪開 */}
-          <Section title={t("mig.install.blocked")} items={preview.blocked}
+          <InstallSection title={t("mig.install.blocked")} items={preview.blocked}
                    note={t("mig.install.blockedNote")}
                    defaultOpen />
-          <Section title={t("mig.install.excludedFiles")} items={excludedFiles} />
+          <InstallSection title={t("mig.install.excludedFiles")} items={excludedFiles} />
           {/* 補救路徑二：回上一步給 extra 一個位置 */}
-          <Section title={t("mig.install.excludedExtra")} items={unconfirmedExtra}
+          <InstallSection title={t("mig.install.excludedExtra")} items={unconfirmedExtra}
                    note={t("mig.install.excludedExtraNote")}
                    defaultOpen />
-          <Section title={t("mig.install.renames")}
+          <InstallSection title={t("mig.install.renames")}
                    items={Object.keys(preview.project_renames)} />
-          <Section title={t("mig.install.unmapped")}
+          <InstallSection title={t("mig.install.unmapped")}
                    items={preview.unmapped_projects.map((u) => u.cwd)} />
           {/* 補救路徑三：回上一步給帳號一個位置。三種分開講，不混成一句 */}
-          <Section title={t("mig.install.missingAccounts")} items={missingAccounts}
+          <InstallSection title={t("mig.install.missingAccounts")} items={missingAccounts}
                    note={t("mig.install.missingAccountsNote")}
                    defaultOpen />
         </>

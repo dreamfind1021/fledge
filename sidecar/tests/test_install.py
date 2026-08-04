@@ -4,7 +4,10 @@
 還原路徑，測試自己更要守住同一條線。
 """
 import json
+import logging
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -2097,3 +2100,121 @@ def test_existing_entry_at_link_name_is_skipped_untouched(
     assert (tgt / "linked").read_text(encoding="utf-8") == "USER"
     assert any(r.rel_path == "linked" and r.outcome == "skipped" for r in results)
     assert not [e for e in os.listdir(tgt) if e.startswith(".fledge-lnk-")]
+
+
+# ── 前一輪硬中斷留下的暫存殘骸：回報給呼叫端（票 06，增補 spec §4.2） ────────────
+#
+# `install()` 本來就會指認殘骸並 WARNING log，但**只進 log，使用者永遠看不到**。
+# Plan B 的結果頁要把位置顯示出來並提供「在 Finder 中顯示」，所以需要一份絕對路徑清單。
+# **app 不代勞刪除**（可用的判準全是可偽造的檔名特徵，達不到「只刪自己建的」）。
+
+
+def _dead_pid() -> int:
+    """一個確定已經不在的進程編號：跑完並回收過的子行程。
+
+    `find_stale_temps` 只指認「產生者已確定不在」的暫存名（ESRCH 是唯一確定的訊號），
+    寫死一個大數字在別的機器上可能剛好命中活著的進程，那時整條測試會靜默地什麼都沒驗到。"""
+    proc = subprocess.Popen([sys.executable, "-c", ""])
+    proc.wait(timeout=30)
+    return proc.pid
+
+
+def _plant_stale(directory: Path, pid: int, tag: str) -> Path:
+    """在 `directory` 放一個「前一輪硬中斷留下的暫存檔」形狀的檔案。"""
+    victim = directory / f".fledge-install-{pid}-{tag}"
+    victim.write_text("HALF", encoding="utf-8")
+    return victim
+
+
+def _mark_unfinished_round(tmp_path: Path) -> None:
+    """讓「有一輪沒收尾」成立——殘骸掃描的 gating（首次安裝一律不掃）。
+
+    刻意用**別的 transaction** 的 journal：本次的 journal 若非空，跨輪 dir_owners
+    起底會去解析它，那是另一條路徑，不該混進這組測試。"""
+    jdir = tmp_path / "home" / ".fledge"
+    jdir.mkdir(parents=True, exist_ok=True)
+    (jdir / "restore-journal-0123456789abcdef.jsonl").write_text("", encoding="utf-8")
+
+
+def test_stale_out_collects_absolute_paths_for_accounts_and_extra(
+        tmp_path: Path, monkeypatch):
+    """殘骸清單要能直接拿去開 Finder → **絕對路徑**（增補 spec §4.2）。
+
+    模組內部累積的是 `<落點 key>/<rel>` 的**相對**形式（log 維持它——不必要地印出
+    使用者的絕對路徑沒有好處），而 key 對應的落點分住兩張表：帳號在 `targets`、extra
+    在 `extra_targets` 且 key 帶 `extra:` 前綴。直接把內部清單 extend 出去，前端拿到的
+    是一份開不了的路徑。"""
+    src = _staging_with_extra(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    agents = tmp_path / "home" / ".agents"
+    agents.mkdir()
+    (tgt / "skills").mkdir()            # 子目錄層的殘骸也要拼對
+    pid = _dead_pid()
+    planted = [
+        _plant_stale(tgt, pid, "aaaaaaaa"),
+        _plant_stale(tgt / "skills", pid, "bbbbbbbb"),
+        _plant_stale(agents, pid, "cccccccc"),
+    ]
+    _mark_unfinished_round(tmp_path)
+
+    stale: list[str] = []
+    inst.install(inst.plan(str(src), _accounts(tgt), extra={"agents": str(agents)}),
+                 stale_out=stale)
+    assert sorted(stale) == sorted(str(p) for p in planted)
+    assert all(os.path.isabs(s) for s in stale)
+
+
+def test_stale_out_stays_empty_when_no_round_was_left_unfinished(
+        tmp_path: Path, monkeypatch):
+    """首次安裝不掃描目的地（成本按目的地既有目錄項計費，不是按殘骸數），所以傳了
+    收集參數也回空清單——殘骸就擺在那裡也一樣。新增的 side-channel 不得把既有的
+    gating 繞過去。"""
+    src = _staging(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    _plant_stale(tgt, _dead_pid(), "aaaaaaaa")
+
+    stale: list[str] = []
+    inst.install(inst.plan(str(src), _accounts(tgt)), stale_out=stale)
+    assert stale == []
+
+
+def test_install_without_stale_out_keeps_reporting_only_to_log(
+        tmp_path: Path, monkeypatch, caplog):
+    """不傳收集參數時行為與既有完全一致：照樣掃、照樣 WARNING log、結果照樣完整。
+
+    收集參數是選填的 side-channel，`install()` 的回傳型別有大量既有斷言依賴——這條是
+    那批斷言的回歸保護。"""
+    src = _staging(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    _plant_stale(tgt, _dead_pid(), "aaaaaaaa")
+    _mark_unfinished_round(tmp_path)
+
+    with caplog.at_level(logging.WARNING, logger="fledge_sidecar.backup.install"):
+        results = inst.install(inst.plan(str(src), _accounts(tgt)))
+    assert "殘留的暫存檔" in caplog.text
+    assert {r.outcome for r in results} == {"installed"}
+
+
+def test_stale_scan_covers_only_what_this_round_walks(tmp_path: Path, monkeypatch):
+    """**記錄在案的界線**（票 08 的成本取捨；Codex 票 06 R2 F2 再次指出）：殘骸掃描的
+    範圍就是本輪會寫入的目錄——遞迴由**來源**樹驅動，所以前一輪留在深層的殘骸，若本輪
+    的來源不再有那個子樹（重展的 bundle 少了它、mapping 改了目的地、來源子目錄開不起來），
+    就掃不到。
+
+    **不改成「獨立遍歷每個落點的目的樹」**：那是票 08 R1 F3 記錄過的成本決策——落點常有
+    上千個使用者既有檔案，那等於每次安裝都全掃一次使用者的現役目錄；而漏報的後果有界，
+    殘骸是無害的隱藏檔，只是少告訴使用者幾個位置。
+
+    這條測試釘的是界線本身，不是「期望的行為」。要改掃描策略的人會先在這裡看到取捨。"""
+    src = _staging(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    # 前一輪在深層留下的殘骸——本輪的來源沒有 `gone/` 這個子樹，走不到那裡
+    (tgt / "gone").mkdir()
+    deep = _plant_stale(tgt / "gone", _dead_pid(), "dddddddd")
+    shallow = _plant_stale(tgt, _dead_pid(), "aaaaaaaa")
+    _mark_unfinished_round(tmp_path)
+
+    stale: list[str] = []
+    inst.install(inst.plan(str(src), _accounts(tgt)), stale_out=stale)
+    assert stale == [str(shallow)], "本輪會寫入的那一層要指認得到"
+    assert deep.exists(), "走不到的深層殘骸原封不動——只是這一輪報不出來"
