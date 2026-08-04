@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, cleanup, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
-import type { BundleInfo, InstallPreview } from "../lib/sidecar";
+import type { InstallPreview } from "../lib/sidecar";
 import { InstallPreviewCard } from "./InstallPreviewCard";
 
 const installPlan = vi.fn<
@@ -15,26 +15,24 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
     installPlan(port, dest, mapping),
 }));
 
-const INFO: BundleInfo = {
-  host: "old-mac", created: "x",
-  accounts: ["work", "personal"], extra: [".agents"], project_count: 2,
-};
-
 const PREVIEW: InstallPreview = {
   targets: { work: "/Users/me/.claude" },     // personal 沒給落點
   extra_targets: {},                           // .agents 也沒給
   will_install: 12,
   will_skip: ["CLAUDE.md"],
   blocked: ["skills/x/a.md", "skills/x/b.md"],
-  excluded: [".claude.json", ".agents"],       // 混合粒度：逐檔的 ＋ 整包的
+  excluded: [".claude.json", ".agents"],       // 既有的混合欄位（install 路徑在用）
+  excluded_files: [".claude.json"],            // 後端拆好的：逐檔的
+  unconfirmed_extra: [".agents"],              // 後端拆好的：整包不搬的
+  missing_accounts: ["personal"],              // 後端在**同一份快照**裡算的
   project_renames: { "-old-a": "-new-a" },
   unmapped_projects: [{ account: "work", encoded_dir: "-old-b", cwd: "/old/b" }],
 };
 
-const setup = (preview: InstallPreview = PREVIEW, info: BundleInfo = INFO) => {
+const setup = (preview: InstallPreview = PREVIEW) => {
   installPlan.mockResolvedValue(preview);
   return render(
-    <InstallPreviewCard port={1234} dest="/tmp/staging" info={info}
+    <InstallPreviewCard port={1234} dest="/tmp/staging"
                         sourceGen={1} mapping={{ "/old/a": "/new/a" }}
                         onStatus={() => {}} />,
   );
@@ -87,6 +85,23 @@ describe("InstallPreviewCard", () => {
     expect(ui.getByText(zh.mig.install.excludedExtraNote)).toBeTruthy();
   });
 
+  // Codex 票 05 R1 F2：`_safe_extra_name` 允許 `.claude.json` 當 extra name（它是合法的
+  // 單一路徑元件）。用名稱從 `excluded` 反推粒度的話，名稱一碰撞就會把帳號裡真正被排除
+  // 的那個檔一起濾掉——所以分類一律用後端拆好的欄位
+  it("extra 名稱與排除檔同名時，兩者各自顯示不互相吃掉", async () => {
+    const ui = setup({
+      ...PREVIEW,
+      excluded: [".claude.json", ".claude.json"],
+      excluded_files: [".claude.json"],          // 帳號裡那個檔
+      unconfirmed_extra: [".claude.json"],       // 同名的 extra
+    });
+    await waitFor(() => expect(ui.getByText(zh.mig.install.excludedExtra)).toBeTruthy());
+    const filesSection = ui.getByText(zh.mig.install.excludedFiles).closest(".ob-spot")!;
+    expect(filesSection.textContent).toContain("1");        // 逐檔的那一行沒被吃掉
+    (filesSection.querySelector("button") as HTMLButtonElement).click();
+    await waitFor(() => expect(filesSection.textContent).toContain(".claude.json"));
+  });
+
   // 增補 spec §2.5.2：使用者在 targets 頁漏選一個帳號的落點，後端的預覽**完全不會提到它**
   // ——只有前端拿 manifest 的帳號清單與 plan.targets 取差集才擋得住「以為都搬了」
   it("漏選落點的帳號要自己比對出來並提醒", async () => {
@@ -107,15 +122,30 @@ describe("InstallPreviewCard", () => {
   it("沒有東西要搬時明說", async () => {
     const ui = setup({
       ...PREVIEW, will_install: 0, will_skip: [], blocked: [], excluded: [],
+      excluded_files: [], unconfirmed_extra: [], missing_accounts: [],
       project_renames: {}, unmapped_projects: [],
-    }, { ...INFO, accounts: ["work"], extra: [] });
+    });
     await waitFor(() => expect(ui.getByText(zh.mig.install.none)).toBeTruthy());
+  });
+
+  // Codex 票 05 R1 F1：`nothing` 只看後端的預覽欄位的話，「選了一個空帳號、另一個含資料
+  // 的帳號沒給落點」會讓所有欄位都是空的 → 畫面說「沒有東西要搬」，而安裝會漏掉一整個
+  // 帳號。**這正是這張票要擋的無聲漏件**
+  it("預覽全空但有帳號沒給落點 → 不得說「沒有東西要搬」", async () => {
+    const ui = setup({
+      ...PREVIEW, will_install: 0, will_skip: [], blocked: [], excluded: [],
+      excluded_files: [], unconfirmed_extra: [], missing_accounts: ["personal"],
+      project_renames: {}, unmapped_projects: [],
+    });
+    await waitFor(() => expect(ui.getByText(zh.mig.install.missingAccounts)).toBeTruthy());
+    expect(ui.getByText("personal")).toBeTruthy();
+    expect(ui.queryByText(zh.mig.install.none)).toBeNull();
   });
 
   it("算不出預覽 → 通用訊息，例外原文不進畫面", async () => {
     installPlan.mockRejectedValueOnce(new Error("PLAN-SENTINEL-500"));
     const ui = render(
-      <InstallPreviewCard port={1234} dest="/tmp/staging" info={INFO}
+      <InstallPreviewCard port={1234} dest="/tmp/staging"
                           sourceGen={1} mapping={{}} onStatus={() => {}} />,
     );
     await waitFor(() => expect(ui.getByText(zh.mig.install.errors.loadFailed)).toBeTruthy());
@@ -126,7 +156,7 @@ describe("InstallPreviewCard", () => {
   it("載入狀態回報給精靈（它據此決定放不放行）", async () => {
     const onStatus = vi.fn<(s: string) => void>();
     installPlan.mockRejectedValueOnce(new Error("boom"));
-    render(<InstallPreviewCard port={1234} dest="/tmp/staging" info={INFO}
+    render(<InstallPreviewCard port={1234} dest="/tmp/staging"
                                sourceGen={1} mapping={{}} onStatus={onStatus} />);
     await waitFor(() => expect(onStatus.mock.calls.map((c) => c[0]))
       .toEqual(["loading", "error"]));
@@ -137,12 +167,12 @@ describe("InstallPreviewCard", () => {
     installPlan.mockImplementationOnce(
       () => new Promise<InstallPreview>((resolve) => { releaseOld = resolve; }));
     const ui = render(
-      <InstallPreviewCard port={1234} dest="/tmp/a" info={INFO}
+      <InstallPreviewCard port={1234} dest="/tmp/a"
                           sourceGen={1} mapping={{}} onStatus={() => {}} />);
 
     installPlan.mockResolvedValue({ ...PREVIEW, will_install: 99 });
     ui.rerender(
-      <InstallPreviewCard port={1234} dest="/tmp/b" info={INFO}
+      <InstallPreviewCard port={1234} dest="/tmp/b"
                           sourceGen={2} mapping={{}} onStatus={() => {}} />);
     await waitFor(() => expect(
       ui.getByText(zh.mig.install.atLeast.replace("{{count}}", "99"))).toBeTruthy());

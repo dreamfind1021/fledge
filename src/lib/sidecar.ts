@@ -735,9 +735,15 @@ export interface InstallPreview {
   /** 目的地祖先被一般檔或連結占住 → 該子樹的葉檔**確定裝不到**。上游 spec 的四分類漏了它，
    *  不獨立顯示的話預覽總數會無聲縮水（增補 spec 缺口 4）。 */
   blocked: string[];
-  /** **混合粒度**：`.claude.json` 這種逐檔的，與未確認落點的 extra name（底下可能是一大包
-   *  東西卻只佔一格）。前端要拆成兩行，不能只顯示一個數字。 */
+  /** **混合粒度**（install 路徑在用的既有欄位）：`.claude.json` 這種逐檔的，與未確認落點
+   *  的 extra name。**顯示一律用下面兩個拆好的欄位**——用名稱從這個陣列反推粒度會在名稱
+   *  碰撞時出錯（`.claude.json` 是合法的 extra name）。 */
   excluded: string[];
+  excluded_files: string[];        // 逐檔的（`EXCLUDED_NAMES` 的頂層項）
+  unconfirmed_extra: string[];     // 沒給落點、整項不搬的 extra name
+  /** manifest 有、但沒給落點的帳號。**預覽的其餘欄位完全不會提到它們**，而這一欄與整份
+   *  預覽出自**同一份快照**——前端拿較早的 `bundle-info` 做差集會誤報也會漏報。 */
+  missing_accounts: string[];
   project_renames: Record<string, string>;
   unmapped_projects: { account: string; encoded_dir: string; cwd: string }[];
 }

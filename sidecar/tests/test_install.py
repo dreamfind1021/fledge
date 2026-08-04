@@ -995,6 +995,34 @@ def test_preview_and_result_agree_per_node_kind(tmp_path: Path, monkeypatch):
     assert installed > p.will_install
 
 
+def test_preview_splits_excluded_and_names_missing_accounts(tmp_path: Path, monkeypatch):
+    """**分類是後端的知識**（Codex 票 05 R1 F2／F3）。前端原本用「名稱差集」反推粒度、
+    又拿 `bundle-info` 的舊快照與當下的 plan 做差集，兩者都會錯：
+
+    - `_safe_extra_name` 允許 `.claude.json` 當 extra name（它是合法的單一路徑元件），
+      名稱一碰撞，前端就會把帳號裡真正被排除的 `.claude.json` 一起從清單裡濾掉
+    - 帳號清單來自較早的 `bundle-info`，而 plan 是**當下**重讀 manifest 與 config 算的；
+      兩份快照之間 staging 被換過，新包多出來的帳號就完全漏報
+
+    所以 `plan()` 在**同一份快照**裡直接回結構化的三欄。"""
+    src = _staging(tmp_path)
+    work = src / "accounts" / "work"
+    (work / ".claude.json").write_text("{}", encoding="utf-8")
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["unpicked"] = "/Users/olduser/.claude-tc"     # 沒給落點
+    manifest["extra"] = {".claude.json": "/Users/olduser/.claude.json"}  # **與排除檔同名**
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (src / "accounts" / "unpicked").mkdir()
+
+    p = inst.plan(str(src), _accounts(_home_target(tmp_path, monkeypatch)))
+
+    assert p.excluded_files == [".claude.json"]        # 帳號裡那個檔
+    assert p.unconfirmed_extra == [".claude.json"]     # 同名的 extra，各自一格
+    assert p.missing_accounts == ["unpicked"]
+    # 既有的混合欄位不變（install 路徑在用）——新欄位是**加上去**的，不是改語意
+    assert sorted(p.excluded) == [".claude.json", ".claude.json"]
+
+
 def test_preview_leaves_are_exhaustive_and_disjoint(tmp_path: Path, monkeypatch):
     """一般檔的 per-spot 守恆（增補 spec §2.5.2 測試 1）：掃到的每個 installable leaf
     恰好落入 `will_install`／`will_skip`／`blocked` **之一**，互斥且窮盡。

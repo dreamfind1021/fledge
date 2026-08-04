@@ -110,6 +110,18 @@ class InstallPlan:
     # 這些葉檔根本到不了，算進 will_install 就是預覽說謊（Codex 票 03 R2）。
     blocked: list[str]
     excluded: list[str]
+    # `excluded` 是**混合粒度**（增補 spec §2.5.1）：逐檔的 `EXCLUDED_NAMES` 頂層項，與
+    # 未確認落點的 extra name（底下可能是一大包東西卻只佔一格）。UI 要拆成兩行顯示，而
+    # **分類是這裡的知識**——前端用「名稱差集」反推會在名稱碰撞時出錯：`_safe_extra_name`
+    # 允許 `.claude.json` 當 extra name，一碰撞就會把帳號裡真正被排除的那個檔一起濾掉
+    # （Codex 票 05 R1 F2）。`excluded` 維持原樣不動，這兩欄是加上去的。
+    excluded_files: list[str]
+    unconfirmed_extra: list[str]
+    # manifest 有、但呼叫端沒給落點的帳號。**後端的預覽完全不會提到它們**（連 targets 都
+    # 不進），而使用者在 targets 頁漏選一個帳號就會發生。前端拿較早的 `bundle-info` 快照
+    # 與當下的 plan 做差集會誤報也會漏報（兩份快照之間 staging 可能被換過），所以在**同一
+    # 份快照**裡直接算出來（Codex 票 05 R1 F3）。
+    missing_accounts: list[str]
 
 
 def _anchor_for(target: str) -> tuple[str, tuple[int, int] | None, list[str]]:
@@ -496,12 +508,15 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
     will_skip: list[str] = []
     blocked: list[str] = []
     excluded: list[str] = []
+    unconfirmed_extra: list[str] = []
+    missing_accounts: list[str] = []
 
     targets: dict[str, str] = {}
     spot_source_identities: dict[str, tuple[int, int] | None] = {}
     for key in manifest.get("accounts", {}):
         entry = accounts.get(key)
         if entry is None:
+            missing_accounts.append(key)    # 預覽的其餘欄位不會提到它——這一欄是唯一線索
             continue                        # 使用者沒為這個帳號指定落點 → 不裝
         if not _SAFE_KEY_RE.fullmatch(key):
             raise ValueError("invalid_account_key")   # 進得了 targets 的 key 才會拼路徑
@@ -519,6 +534,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         # 確認值來自 config.json（使用者可手編）：非字串視同未確認，不讓 .strip() 炸 500
         if not confirmed or not isinstance(confirmed, str):
             excluded.append(name)           # 落點沒被使用者確認就整項不搬（spec §4.2.2）
+            unconfirmed_extra.append(name)  # 同一件事的**帶粒度**版本，供 UI 分行顯示
             continue
         if not _safe_extra_name(name):
             raise ValueError("invalid_account_key")   # extra name 同樣拼進路徑，重驗
@@ -549,19 +565,23 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
                         Path(root, "accounts", key, _PROJECTS_DIR, name)),
                 })
 
+    # 掃描出來的 excluded 全是**逐檔的**（`EXCLUDED_NAMES` 的頂層項）——整包不搬的 extra
+    # 在上面的迴圈就已經記進 `unconfirmed_extra`，兩者在累積點就分開，不靠名稱反推
+    excluded_files: list[str] = []
     for key, target in targets.items():
         n, sk, bl, ex = _scan_spot(Path(root, "accounts", key), target,
                                    renames=project_renames)
         will_install += n
         will_skip.extend(sk)
         blocked.extend(bl)
-        excluded.extend(ex)
+        excluded_files.extend(ex)
     for name, target in extra_targets.items():
         n, sk, bl, ex = _scan_spot(Path(root, "extra", name), target)
         will_install += n
         will_skip.extend(sk)
         blocked.extend(bl)
-        excluded.extend(ex)
+        excluded_files.extend(ex)
+    excluded.extend(excluded_files)
 
     identities = {key: dir_identity(t) for key, t in targets.items()}
     identities.update({f"extra:{name}": dir_identity(t) for name, t in extra_targets.items()})
@@ -581,6 +601,9 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         will_skip=will_skip,
         blocked=blocked,
         excluded=excluded,
+        excluded_files=excluded_files,
+        unconfirmed_extra=unconfirmed_extra,
+        missing_accounts=missing_accounts,
     )
 
 

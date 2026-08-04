@@ -1,15 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { installPlan, type BundleInfo, type InstallPreview } from "../lib/sidecar";
+import { installPlan, type InstallPreview } from "../lib/sidecar";
 import type { PathsStatus } from "./PathsCard";
 import type { ProjectMapping } from "./PathsCard";
 
 interface InstallPreviewCardProps {
   port: number | null;
   dest: string;
-  /** 上一頁確認過的這一包有哪些成員。用來比對「哪些帳號沒被搬」——後端的預覽
-   *  **完全不會提到**未指定落點的帳號（增補 spec §2.5.2）。 */
-  info: BundleInfo;
   /** 來源身分（`BundleSelection.gen`）：換包／換位置／重新展開都要重算，在途的作廢。 */
   sourceGen: number;
   mapping: ProjectMapping;
@@ -52,11 +49,11 @@ function Section({ title, items, note, defaultOpen = false }: {
  * 另外兩件同族的事：
  * - `excluded` 是**混合粒度**（增補 spec §2.5.1）：`.claude.json` 這種逐檔的，與未確認落點的
  *   extra name（底下可能是一大包東西卻只佔一格）。只顯示一個數字會誤導，要拆成兩行
- * - **未指定落點的帳號完全不在預覽裡**（§2.5.2）：只有前端拿這一包的帳號清單與 `plan.targets`
- *   取差集，才擋得住「以為都搬了、其實少一個帳號」
+ * - **未指定落點的帳號完全不在預覽的其餘欄位裡**（§2.5.2）：`missing_accounts` 是唯一線索，
+ *   而它與整份預覽出自同一份快照——前端不做跨端點差集
  */
 export function InstallPreviewCard({
-  port, dest, info, sourceGen, mapping, onStatus,
+  port, dest, sourceGen, mapping, onStatus,
 }: InstallPreviewCardProps) {
   const { t } = useTranslation("onboarding");
   const [preview, setPreview] = useState<InstallPreview | null>(null);
@@ -104,20 +101,23 @@ export function InstallPreviewCard({
     })();
   }, [port, dest, sourceKey, t]);
 
-  // `excluded` 的兩種粒度：包裡有、但沒給落點的 extra 是「整項不搬」，其餘是逐檔的
-  const unconfirmedExtra = preview === null ? []
-    : info.extra.filter((n) => !(n in preview.extra_targets));
-  const excludedFiles = preview === null ? []
-    : preview.excluded.filter((e) => !unconfirmedExtra.includes(e));
-  // 後端的預覽**完全不會提到**未指定落點的帳號——差集是前端的責任
-  const missingAccounts = preview === null ? []
-    : info.accounts.filter((k) => !(k in preview.targets));
+  // **三個分類都直接用後端拆好的欄位**（Codex 票 05 R1 F2／F3）：用名稱從 `excluded`
+  // 反推粒度會在名稱碰撞時出錯（`.claude.json` 是合法的 extra name），拿較早的
+  // `bundle-info` 快照與當下的 plan 做帳號差集則會誤報也會漏報——兩份快照之間 staging
+  // 可能被換過。分類是後端的知識，而且要出自同一份快照。
+  const unconfirmedExtra = preview?.unconfirmed_extra ?? [];
+  const excludedFiles = preview?.excluded_files ?? [];
+  const missingAccounts = preview?.missing_accounts ?? [];
 
+  // 「沒有東西要搬」**必須把前端會顯示的行動項一起算進去**（Codex 票 05 R1 F1）：
+  // 選了一個空帳號、另一個含資料的帳號沒給落點時，後端的欄位可以全是空的——只看它們
+  // 就會顯示「沒有東西要搬」，而安裝會漏掉一整個帳號。那正是這張票要擋的無聲漏件。
   const nothing = preview !== null
     && preview.will_install === 0 && preview.will_skip.length === 0
     && preview.blocked.length === 0 && preview.excluded.length === 0
     && Object.keys(preview.project_renames).length === 0
-    && preview.unmapped_projects.length === 0;
+    && preview.unmapped_projects.length === 0
+    && missingAccounts.length === 0;
 
   return (
     <div>

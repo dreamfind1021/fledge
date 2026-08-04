@@ -438,7 +438,6 @@ export function Onboarding({ onClose }: OnboardingProps) {
                 <InstallPreviewCard
                   port={port}
                   dest={bundle.probe.dest}
-                  info={bundle.probe.info}
                   sourceGen={bundle.gen}
                   mapping={mapping}
                   onStatus={(value) => setPreviewStatus({ gen: bundle.gen, value })}
