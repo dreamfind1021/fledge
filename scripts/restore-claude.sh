@@ -492,15 +492,28 @@ total = {"only_backup": 0, "only_live": 0, "differ": 0, "same": 0}
 # 但那是副作用不是防線——調換兩個判斷的順序、或加一個「沒登記就用預設」的 fallback 就
 # 破功。**與 sidecar 的 `backup/install.py::_SAFE_KEY_RE` 同一條信任邊界、同一組字元**
 # （一邊有一邊沒有同樣是漂移）；`extra` 的 name 走同一條規則。
-SAFE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+SAFE_ACCOUNT_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def safe_keys(mapping, label):
+def _safe_component(k):
+    """`k` 是不是一個安全的**單一路徑元件**：非空、不是 `.`／`..`、不含分隔符與 NUL。
+
+    **extra 的 name 用這條而不是 `SAFE_ACCOUNT_KEY`**：它是 basename 衍生的
+    （`backup-claude.sh` 用 `basename`），真實的 `~/.agents` 產出的 name 就是 **`.agents`**
+    ——帶前導點，過不了帳號那組字元。帳號 key 是使用者在 Fledge 內自己取的，兩者的來源
+    不同，判準本來就該不同。
+    """
+    return isinstance(k, str) and k not in ("", ".", "..") and "/" not in k and "\0" not in k
+
+
+def safe_keys(mapping, label, account_style):
     """回形狀合法的 key；不合法的當場說明並跳過（**不整份拒絕**——一個壞 key 不該讓
     使用者連其餘正常帳號的差異都看不到）。"""
     out = []
     for k in mapping if isinstance(mapping, dict) else {}:
-        if isinstance(k, str) and SAFE_KEY.fullmatch(k):
+        ok = (isinstance(k, str) and SAFE_ACCOUNT_KEY.fullmatch(k)) if account_style \
+            else _safe_component(k)
+        if ok:
             out.append(k)
         else:
             print(f"\n[{k!r}] {label}名稱不合法，略過（名稱會被用來組路徑）")
@@ -509,10 +522,10 @@ def safe_keys(mapping, label):
 
 # **只取 manifest 的 key**，位置一律從本機 config 查（理由見 `local_live_paths`）。
 targets = [(k, LIVE_ACCOUNTS.get(k), os.path.join(dest, "accounts", k))
-           for k in safe_keys(m.get("accounts", {}), "帳號")]
+           for k in safe_keys(m.get("accounts", {}), "帳號", account_style=True)]
 # 帳號目錄外的資產（~/.agents 這類）比照同一套比對
 targets += [(f"帳號外:{k}", LIVE_EXTRA.get(k), os.path.join(dest, "extra", k))
-            for k in safe_keys(m.get("extra", {}), "資產")]
+            for k in safe_keys(m.get("extra", {}), "資產", account_style=False)]
 
 for key, live, backed in targets:
     if live is None:

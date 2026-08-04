@@ -1136,3 +1136,96 @@ def test_a_manifest_without_created_still_reports_instead_of_crashing(tmp_path: 
     assert proc.returncode == 0, proc.stderr
     assert "Traceback" not in proc.stderr, proc.stderr
     assert "only-in-backup.md" in proc.stdout, proc.stdout   # 差異報告照樣有用
+
+
+def test_multi_account_diff_reports_each_account_separately(tmp_path: Path):
+    """多帳號：每個帳號各自查本機 config 的 config_dir 並各自產出差異。
+
+    R2 把定位改成「manifest 的 key → 本機 config 同 key 的路徑」之後，這條路徑上每個 key
+    都要各自查表——**原本沒有端到端測試**（Codex 票 12 R4 指出）。"""
+    home = tmp_path / "home"
+    work = home / ".claude"
+    personal = home / ".claude-personal"
+    for d in (work, personal):
+        (d / "skills").mkdir(parents=True)
+    (work / "skills" / "live-work.md").write_text("w", encoding="utf-8")
+    (personal / "skills" / "live-personal.md").write_text("p", encoding="utf-8")
+    fledge = home / ".fledge"
+    fledge.mkdir()
+    (fledge / "config.json").write_text(json.dumps({
+        "version": 1, "roots": [],
+        "accounts": {"work": {"config_dir": str(work), "label": ""},
+                     "personal": {"config_dir": str(personal), "label": ""}},
+    }), encoding="utf-8")
+
+    bundle = _evil_bundle(tmp_path / "multi", [
+        ("manifest.json", "file", json.dumps({
+            "created": "20260101-1200", "host": "old", "home": "/old",
+            "accounts": {"work": "/old/.claude", "personal": "/old/.claude-personal"}})),
+        ("accounts/work/skills/backup-work.md", "file", "w"),
+        ("accounts/personal/skills/backup-personal.md", "file", "p"),
+    ])
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "略過比對" not in proc.stdout, proc.stdout
+    # 兩個帳號各自比對到自己的現役目錄，互不混淆
+    for backup_only, live_only in (("backup-work.md", "live-work.md"),
+                                   ("backup-personal.md", "live-personal.md")):
+        assert backup_only in proc.stdout, proc.stdout
+        assert live_only in proc.stdout, proc.stdout
+
+
+def test_extra_asset_diff_uses_the_shared_paths_file(tmp_path: Path):
+    """帳號外資產（`~/.agents` 這類）：本機 config 沒有 `extra` 欄位時，位置從共用的
+    `backup-extra-paths.txt` 以 **basename** 補——與 `backup-claude.sh` 產 manifest 時同一條
+    規則。**那段 basename 補法是 R2 新寫的，原本沒有任何測試**（Codex 票 12 R4 指出）。
+
+    **key 帶前導點是真實形狀**：`basename(~/.agents)` 就是 `.agents`。寫這條測試才發現我加的
+    `safe_keys` 用帳號那組字元（`^[A-Za-z0-9_-]+$`）會把它擋掉——extra 的差異報告因此整個
+    失效，是我引入的迴歸。"""
+    home, _ = _fake_home(tmp_path)
+    agents = home / ".agents"
+    (agents / "skills").mkdir(parents=True)
+    (agents / "skills" / "live-agent.md").write_text("live", encoding="utf-8")
+
+    bundle = _evil_bundle(tmp_path / "extra-diff", [
+        ("manifest.json", "file", json.dumps({
+            "created": "20260101-1200", "host": "old", "home": "/old",
+            "accounts": {}, "extra": {".agents": "/old/.agents"}})),
+        ("extra/.agents/skills/backup-agent.md", "file", "b"),
+    ])
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "帳號外:.agents" in proc.stdout, proc.stdout   # 真實 key 帶前導點
+    assert "略過比對" not in proc.stdout, proc.stdout
+    assert "backup-agent.md" in proc.stdout, proc.stdout   # 備份裡有、現役沒有
+    assert "live-agent.md" in proc.stdout, proc.stdout     # 現役有、備份裡沒有
+
+
+def test_path_like_extra_names_are_rejected_too(tmp_path: Path):
+    """extra 的 name 判準比帳號寬（要允許 `.agents` 的前導點），但**仍然是單一路徑元件**：
+    `.`／`..`／含分隔符／空字串一律拒。
+
+    這條與帳號那條分開，是因為兩者用的是不同判準——只測帳號的話，extra 那半邊的排除
+    完全沒有守護（寫 mutation 時才發現）。"""
+    home, _ = _fake_home(tmp_path)
+    bad = ["..", ".", "", "a/b", "/abs"]
+    bundle = _evil_bundle(tmp_path / "bad-extra", [
+        ("manifest.json", "file", json.dumps({
+            "created": "x", "accounts": {},
+            "extra": {k: "" for k in bad} | {".agents": ""}})),
+        ("accounts/placeholder", "file", "y"),
+    ])
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.count("資產名稱不合法") == len(bad), proc.stdout
+    assert "帳號外:.agents" in proc.stdout          # 合法的前導點不受影響
