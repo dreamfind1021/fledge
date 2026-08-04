@@ -300,7 +300,10 @@ def _scan_spot(content_dir: Path, target: str,
     帳號與 extra 共用同一支——落點的驗證規則不因它不是帳號而放寬（票 05 驗收）。
     目的地存在性與祖先檢查一律以**改名後**的位置判（票 06）：否則帶 mapping 的重跑
     會把已裝的當未裝、預覽數字說謊。skip／blocked 清單記的也是目的地位置。"""
-    if not content_dir.is_dir():
+    # **lstat 語意**（票 14 R1）：`Path.is_dir()` 跟隨 symlink，於是 `accounts/<key>` 或
+    # `extra/<name>` 被做成包外連結時，這裡會把包外的檔案數進 `will_install`——而 install
+    # 的 fd-relative `O_NOFOLLOW` 開不了那個來源，整批 failed。預覽說 2、實際 0。
+    if not is_real_dir(content_dir):
         return 0, [], [], []
     installable, walk_excluded = _walk_account(content_dir)
     n_install = 0
@@ -497,11 +500,19 @@ def _real_subdir(parent: str, name: str) -> str | None:
     這一層是 pathname-based 而非 fd-relative：本函式只服務**唯讀掃描**，TOCTOU 的後果是
     列出來的東西不準，不是寫錯位置（寫入路徑一律走 fd-relative + `O_NOFOLLOW`）。"""
     path = os.path.join(parent, name)
+    return path if is_real_dir(path) else None
+
+
+def is_real_dir(path: str | Path) -> bool:
+    """這個路徑是**實體目錄**（lstat 語意，symlink 一律不算）。
+
+    `_real_subdir` 的單路徑版本——呼叫端手上已經是完整路徑時用它。**判準只有這一份**：
+    `Path.is_dir()` 跟隨 symlink，散在各處各寫一次的下場就是同一份備份包在不同函式底下
+    有不同的可及範圍（票 02 → 票 14 已經演過兩次）。"""
     try:
-        st = os.lstat(path)
+        return stat_module.S_ISDIR(os.lstat(path).st_mode)
     except OSError:
-        return None
-    return path if stat_module.S_ISDIR(st.st_mode) else None
+        return False
 
 
 def _display_text(value: object) -> str:
@@ -614,12 +625,23 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
 
     # 票 06：mapping 前置驗證＋未對應清單——放在掃描之前，帳號掃描要用改名表以
     # 目的地位置判 skip／blocked。專案目錄以 lstat 語意列（symlink 不算）。
+    #
+    # **三層都走 `_real_subdir`**（票 14 R1，與 `bundle_info`／`project_paths` 逐字同一條）：
+    # `unmapped_projects` 的 `old_path` 走 `_peek_cwd` 讀歷史檔裡的絕對路徑並回給前端——
+    # 與 `project_paths()` 是同一個洩漏面，只是掛在另一支函式上。判過的路徑往下傳，不重新
+    # 用 pathname 拼一次（拼回去等於把剛驗過的東西丟掉）。
+    accounts_dir = _real_subdir(root, "accounts")
     project_dirs: dict[str, list[str]] = {}
+    project_roots: dict[str, str] = {}
     for key in targets:
-        pdir = Path(root, "accounts", key, _PROJECTS_DIR)
+        acct = None if accounts_dir is None else _real_subdir(accounts_dir, key)
+        pdir = None if acct is None else _real_subdir(acct, _PROJECTS_DIR)
+        if pdir is None:
+            project_dirs[key] = []
+            continue
+        project_roots[key] = pdir
         project_dirs[key] = sorted(
-            c.name for c in pdir.iterdir()
-            if c.is_dir() and not c.is_symlink()) if pdir.is_dir() else []
+            c.name for c in Path(pdir).iterdir() if c.is_dir() and not c.is_symlink())
     project_renames = _validate_mapping(root, list(mapping or []), project_dirs)
     unmapped_projects: list[dict] = []
     for key in sorted(project_dirs):
@@ -628,8 +650,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
                 unmapped_projects.append({
                     "account": key,
                     "encoded_dir": name,
-                    "old_path": _peek_cwd(
-                        Path(root, "accounts", key, _PROJECTS_DIR, name)),
+                    "old_path": _peek_cwd(Path(project_roots[key], name)),
                 })
 
     # 掃描出來的 excluded 全是**逐檔的**（`EXCLUDED_NAMES` 的頂層項）——整包不搬的 extra

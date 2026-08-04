@@ -17,6 +17,8 @@ from conftest import make_staging as _staging
 
 from fledge_sidecar.backup import install as inst
 
+_PROJECTS = "projects"   # install._PROJECTS_DIR 的測試端常數（不從私有匯入）
+
 
 @pytest.fixture(autouse=True)
 def _fake_home(tmp_path: Path, monkeypatch):
@@ -2474,3 +2476,104 @@ def test_project_paths_rejects_path_like_account_key(tmp_path: Path):
         (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         with pytest.raises(ValueError, match="invalid_account_key"):
             inst.project_paths(str(src))
+
+
+# ---------- 票 14（範圍擴張）：plan() 是同族的第四處 ----------
+#
+# Codex R1 點名 `plan()` 的 `unmapped_projects` 仍會跟隨 symlink 讀包外的 cwd；掃同族時
+# 實測又發現 `_scan_spot` 也跟隨——`will_install` 把包外的檔案數進來，而 install 的
+# fd-relative `O_NOFOLLOW` 會把整個帳號判 failed。**預覽說會裝 2 項，實際裝 0 項**。
+#
+# 這張票存在的理由就是「票 02 只修了 `bundle_info`、漏了 `project_paths`」。只修被點名
+# 那一處，就是同一個錯誤再演一次。
+
+
+def _staging_with_symlinked_account(tmp_path: Path) -> tuple[Path, Path, str]:
+    """`accounts/work` 是指向包外的連結，包外有一份專案歷史與一個可安裝的檔案。
+    回 (staging, 落點, 包外的機密路徑)。"""
+    secret = "/Users/victim/secret-project"
+    src = tmp_path / "staging"
+    (src / "accounts").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    proj = outside / _PROJECTS / "-Users-victim-secret"
+    proj.mkdir(parents=True)
+    (proj / "s.jsonl").write_text(json.dumps({"cwd": secret}) + "\n", encoding="utf-8")
+    (outside / "skills").mkdir()
+    (outside / "skills" / "leak.md").write_text("SECRET", encoding="utf-8")
+    (src / "accounts" / "work").symlink_to(outside, target_is_directory=True)
+    (src / "manifest.json").write_text(json.dumps({
+        "format": 1, "home": "/Users/olduser",
+        "accounts": {"work": "/Users/olduser/.claude"}, "extra": {},
+    }), encoding="utf-8")
+    tgt = tmp_path / "home" / ".claude"
+    tgt.mkdir(parents=True)
+    return src, tgt, secret
+
+
+def test_plan_does_not_leak_project_paths_through_symlinked_account(
+        tmp_path: Path, monkeypatch):
+    """`accounts/<key>` 是包外連結 → `unmapped_projects` **一筆都不回**。
+
+    這一欄的 `old_path` 走 `_peek_cwd`，讀的是歷史檔裡的絕對路徑並回給前端——與
+    `project_paths()` 是同一個洩漏面，只是掛在另一支函式上。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src, tgt, secret = _staging_with_symlinked_account(tmp_path)
+    p = inst.plan(str(src), _accounts(tgt))
+    assert p.unmapped_projects == []
+    assert secret not in json.dumps(p.unmapped_projects)
+
+
+def test_plan_does_not_leak_project_paths_through_symlinked_projects_dir(
+        tmp_path: Path, monkeypatch):
+    """`projects` 那一層是包外連結時同樣——三層各驗一次，漏中間那層等於沒擋。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    secret = "/Users/victim/secret-project"
+    src = _staging(tmp_path)
+    outside = _outside_projects(tmp_path, secret)
+    (src / "accounts" / "work" / _PROJECTS).symlink_to(outside, target_is_directory=True)
+    tgt = tmp_path / "home" / ".claude"
+    tgt.mkdir(parents=True)
+
+    p = inst.plan(str(src), _accounts(tgt))
+    assert p.unmapped_projects == []
+    assert secret not in json.dumps(p.unmapped_projects)
+
+
+def test_plan_preview_matches_install_for_a_symlinked_account(
+        tmp_path: Path, monkeypatch):
+    """**預覽不得說謊**（掃同族實測出來的，Codex 沒點名）：`_scan_spot` 原本用
+    `content_dir.is_dir()`（跟隨 symlink），於是把包外的檔案數進 `will_install`；
+    而 install 的 fd-relative `O_NOFOLLOW` 開不了那個帳號，整批 failed。
+
+    預覽說 2、實際 0——這比洩漏更容易被當成 bug 回報，因為它每次都發生。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src, tgt, _ = _staging_with_symlinked_account(tmp_path)
+    p = inst.plan(str(src), _accounts(tgt))
+    assert p.will_install == 0, "包外的內容不算在預覽裡"
+
+    results = inst.install(p)
+    assert not any(r.outcome == "installed" for r in results)
+    assert list(tgt.iterdir()) == [], "零內容落地"
+
+
+def test_plan_preview_matches_install_for_a_symlinked_extra(
+        tmp_path: Path, monkeypatch):
+    """`extra/<name>` 走的是 `_scan_spot` 的**另一個呼叫端**——判準在同一支函式裡，
+    修一邊漏一邊就是把不對稱換個位置放。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    src = _staging(tmp_path)
+    outside = tmp_path / "outside-agents"
+    (outside / "skills").mkdir(parents=True)
+    (outside / "skills" / "leak.md").write_text("SECRET", encoding="utf-8")
+    (src / "extra").mkdir()
+    (src / "extra" / "agents").symlink_to(outside, target_is_directory=True)
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["extra"] = {"agents": "/Users/olduser/.agents"}
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    home = tmp_path / "home"
+    tgt = home / ".claude"
+    tgt.mkdir(parents=True)
+
+    p = inst.plan(str(src), _accounts(tgt), extra={"agents": str(home / ".agents")})
+    installed_from_extra = p.will_install - 2      # staging 本身的 skills/a.md 與 CLAUDE.md
+    assert installed_from_extra == 0, "包外的 extra 內容不算在預覽裡"
