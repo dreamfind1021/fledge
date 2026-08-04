@@ -765,6 +765,31 @@ export async function installPlan(
   return resp.json();
 }
 
+/** 上一輪移機收尾了沒（票 07，增補 spec §3.3.1）。**判定全在後端**——牽涉 journal 定位、
+ *  bundle 形狀驗證與損壞容錯，前端不碰檔案系統。 */
+export type MigrationState =
+  | "none"                  // 沒有未完成的移機 → 卡片不顯示
+  | "unfinished_unknown"    // 有未清除的 journal 但沒有續作資訊 → 說得出「沒完成」，不能續作
+  | "stale_marker"          // 簿記殘骸，那一輪其實成功了 → 視同完成，不顯示
+  | "source_missing"        // 展開的備份包已不在 → 引導重新選包，不能續作
+  | "journal_unreadable"    // 簿記讀不出 → 不聲稱能安全續作
+  | "resumable";            // 三個條件都成立 → 可以一鍵接續
+
+export interface MigrationStatus {
+  state: MigrationState;
+  /** **只在 `resumable` 出現**：其餘狀態帶著它們，前端就可能拿一份不該用的續作資訊預填。 */
+  source_root?: string;
+  mapping?: { old: string; new: string }[];
+}
+
+/** 唯讀狀態查詢。任何 I/O 失敗在後端降級成某個 state，不回 5xx——還原卡每次開啟都會打它。 */
+export async function fetchMigrationStatus(port: number): Promise<MigrationStatus> {
+  const resp = await fetch(`${base(port)}/api/restore/migration-status`,
+                           { headers: authHeaders() });
+  if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
+  return resp.json();
+}
+
 /** 一項安裝結果。`account` 是落點 key（帳號外資產用 `extra:<name>` 命名空間），
  *  `rel_path` 相對該落點；**落點層的失敗** `rel_path` 是空字串（整個帳號沒裝成）。
  *  `error` 是穩定判別碼，前端負責映成文案（CLAUDE.md §4.6.13）。 */

@@ -1,6 +1,14 @@
 {
   "title": "Restore",
   "intro": "Unpacks a backup into a separate new folder and lists what differs from what you have now. Nothing is ever written back over your live Claude directories — you decide what to copy back.",
+  "migration": {
+    "h": "Your last migration didn't finish",
+    "unknown": "The information needed to pick up where it left off isn't there. Expand the bundle again and rerun the setup wizard — nothing already moved over gets overwritten.",
+    "sourceMissing": "The bundle you expanded isn't where it was. Choose and expand a bundle again, then rerun the setup wizard.",
+    "unreadable": "That round's record can't be read, so there's no safe way to pick it up. Expand the bundle again and rerun the setup wizard — nothing already moved over gets overwritten.",
+    "resumable": "You can carry on from where it stopped. The expanded location and your project path mapping are both still there.",
+    "resume": "Resume migration"
+  },
   "chooseBundle": "Which backup",
   "destLabel": "Unpack into",
   "change": "Change",

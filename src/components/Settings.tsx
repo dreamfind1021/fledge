@@ -8,7 +8,7 @@ import { AccountsEditor } from "./AccountsEditor";
 import { BackupCard } from "./BackupCard";
 import { DevEnvSection } from "./DevEnvSection";
 import { LangSwitch } from "./LangSwitch";
-import { RestoreCard } from "./RestoreCard";
+import { RestoreCard, type MigrationResume } from "./RestoreCard";
 import { validateSubscriptions } from "../lib/subscriptionsForm";
 import "./Settings.css";
 
@@ -16,9 +16,11 @@ interface SettingsProps {
   onClose: () => void;
   /** 重開全屏精靈（票 29 的「重跑引導」）。modal 狀態在 App，這裡只往上通知。 */
   onRerunOnboarding: () => void;
+  /** 接續上次沒完成的移機（票 07）：同樣開精靈，但直接落在安裝頁並預填。 */
+  onResumeMigration: (resume: MigrationResume) => void;
 }
 
-export function Settings({ onClose, onRerunOnboarding }: SettingsProps) {
+export function Settings({ onClose, onRerunOnboarding, onResumeMigration }: SettingsProps) {
   const { t } = useTranslation("dashboard");
   const { t: tMem } = useTranslation("memory");
   const config = useAppStore((s) => s.config);
@@ -352,7 +354,8 @@ export function Settings({ onClose, onRerunOnboarding }: SettingsProps) {
 
           {/* 還原（票 09）：接在備份卡下面——選備份包、展開到獨立位置、看差異報告。
               **不寫現役目錄**是這個功能的核心約束（ADR-0004），不是保守的預設值。 */}
-          <RestoreCard port={port} accounts={config?.accounts ?? {}} />
+          <RestoreCard port={port} accounts={config?.accounts ?? {}}
+                       onResumeMigration={onResumeMigration} />
 
         </div>
 

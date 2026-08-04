@@ -116,7 +116,8 @@
       "errors": {
         "loadFailed": "Couldn't work out what this install would do.",
         "installFailed": "This install never started — nothing was touched.",
-        "installUnknown": "No result came back, so there's no telling how far it got — whatever was already written may well have completed. Pressing install again is safe: files already in place are never overwritten, and they show up as “skipped”."
+        "installUnknown": "No result came back, so there's no telling how far it got — whatever was already written may well have completed. Pressing install again is safe: files already in place are never overwritten, and they show up as “skipped”.",
+        "resumeFailed": "Couldn't pick up the last migration — that expanded bundle can't be read right now. Choose and expand a bundle again, then rerun the wizard."
       }
     },
     "result": {

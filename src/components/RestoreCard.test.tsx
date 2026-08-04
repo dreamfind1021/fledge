@@ -9,11 +9,13 @@ import {
   type CommonConfigOpResult,
   type CommonConfigPlan,
   type CreateSessionOptions,
+  type MigrationStatus,
   type RestorePlan,
 } from "../lib/sidecar";
 import { RestoreCard } from "./RestoreCard";
 
 const fetchBackupStatus = vi.fn<(port: number) => Promise<BackupStatus>>();
+const fetchMigrationStatus = vi.fn<(port: number) => Promise<MigrationStatus>>();
 const restorePlan = vi.fn<(port: number, bundle: string, dest?: string) => Promise<RestorePlan>>();
 const commonConfigPlan = vi.fn<(port: number, req: unknown) => Promise<CommonConfigPlan>>();
 const commonConfigRepair = vi.fn<(port: number, req: unknown) => Promise<CommonConfigOpResult[]>>();
@@ -24,6 +26,7 @@ const closeSession = vi.fn<(port: number, id: string) => Promise<void>>();
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   fetchBackupStatus: (port: number) => fetchBackupStatus(port),
+  fetchMigrationStatus: (port: number) => fetchMigrationStatus(port),
   restorePlan: (port: number, bundle: string, dest?: string) => restorePlan(port, bundle, dest),
   commonConfigPlan: (port: number, req: unknown) => commonConfigPlan(port, req),
   commonConfigRepair: (port: number, req: unknown) => commonConfigRepair(port, req),
@@ -99,6 +102,7 @@ beforeEach(async () => {
   commonConfigRepair.mockResolvedValue([]);
   createSession.mockResolvedValue("session-1");
   closeSession.mockResolvedValue(undefined);
+  fetchMigrationStatus.mockResolvedValue({ state: "none" });   // 常態：沒有未完成的移機
 });
 afterEach(cleanup);
 
@@ -256,4 +260,96 @@ describe("RestoreCard", () => {
     expect(commonConfigPlan).not.toHaveBeenCalled();
   });
 
+});
+
+// ── 未完成的移機（票 07，增補 spec §3.3.1 的六個 state） ──────────────────────
+
+describe("RestoreCard 的移機續作提示", () => {
+  const RESUMABLE: MigrationStatus = {
+    state: "resumable",
+    source_root: "/home/me/.claude-restore-20260727-1432",
+    mapping: [{ old: "/old/a", new: "/new/a" }],
+  };
+
+  // 「有沒有繼續按鈕」的分界要能從 state 推導出來——這是這張票的驗收重點
+  it.each([
+    ["none", { state: "none" } as MigrationStatus, false, false],
+    // 簿記殘骸：journal 已被清除＝那一輪其實成功了（journal 是權威），視同完成
+    ["stale_marker", { state: "stale_marker" } as MigrationStatus, false, false],
+    ["unfinished_unknown", { state: "unfinished_unknown" } as MigrationStatus, true, false],
+    ["source_missing", { state: "source_missing" } as MigrationStatus, true, false],
+    ["journal_unreadable", { state: "journal_unreadable" } as MigrationStatus, true, false],
+    ["resumable", RESUMABLE, true, true],
+  ])("%s：提示 %s、繼續按鈕 %s", async (_name, status, shows, resumable) => {
+    mockStatus();
+    fetchMigrationStatus.mockResolvedValue(status);
+    render(<RestoreCard port={1} accounts={TWO_ACCOUNTS} onResumeMigration={() => {}} />);
+    await ready();
+
+    expect(screen.queryByText(zh.migration.h) !== null).toBe(shows);
+    expect(screen.queryByText(zh.migration.resume) !== null).toBe(resumable);
+  });
+
+  it("每個顯示的狀態都有自己的說明，不是共用一句", async () => {
+    for (const [status, msg] of [
+      [{ state: "unfinished_unknown" } as MigrationStatus, zh.migration.unknown],
+      [{ state: "source_missing" } as MigrationStatus, zh.migration.sourceMissing],
+      [{ state: "journal_unreadable" } as MigrationStatus, zh.migration.unreadable],
+      [RESUMABLE, zh.migration.resumable],
+    ] as const) {
+      mockStatus();
+      fetchMigrationStatus.mockResolvedValue(status);
+      render(<RestoreCard port={1} accounts={TWO_ACCOUNTS} />);
+      await screen.findByText(msg);
+      cleanup();
+    }
+  });
+
+  it("按下繼續：把後端給的展開位置與專案對應原封不動交出去", async () => {
+    const onResume = vi.fn();
+    mockStatus();
+    fetchMigrationStatus.mockResolvedValue(RESUMABLE);
+    render(<RestoreCard port={1} accounts={TWO_ACCOUNTS} onResumeMigration={onResume} />);
+    await ready();
+
+    fireEvent.click(screen.getByText(zh.migration.resume));
+
+    expect(onResume).toHaveBeenCalledWith({
+      sourceRoot: "/home/me/.claude-restore-20260727-1432",
+      mapping: [{ old: "/old/a", new: "/new/a" }],
+    });
+  });
+
+  // 後端說可續作卻沒給預填值：缺一半的續作會把使用者丟進一個填不滿的表單
+  it("resumable 但沒有展開位置 → 只提示、不給按鈕", async () => {
+    mockStatus();
+    fetchMigrationStatus.mockResolvedValue({ state: "resumable" });
+    render(<RestoreCard port={1} accounts={TWO_ACCOUNTS} onResumeMigration={() => {}} />);
+    await ready();
+
+    expect(screen.getByText(zh.migration.h)).toBeTruthy();
+    expect(screen.queryByText(zh.migration.resume)).toBeNull();
+  });
+
+  // 續作看的是**展開目錄**，與備份位置設定無關。備份狀態讀不出來時整張卡本來會消失——
+  // 而移機卡在半路的人正好可能有一份讀不出來的 config，那時續作入口跟著消失就是死路
+  it("備份狀態讀不出來時，續作提示照樣在", async () => {
+    fetchBackupStatus.mockRejectedValue(new Error("STATUS-SENTINEL"));
+    fetchMigrationStatus.mockResolvedValue(RESUMABLE);
+    render(<RestoreCard port={1} accounts={TWO_ACCOUNTS} onResumeMigration={() => {}} />);
+
+    await screen.findByText(zh.migration.h);
+    expect(screen.getByText(zh.migration.resume)).toBeTruthy();
+    expect(screen.queryByText(zh.chooseBundle)).toBeNull();   // 卡片其餘部分仍不出現
+  });
+
+  it("狀態查詢失敗 → 當作沒有未完成，卡片其餘部分照常", async () => {
+    mockStatus();
+    fetchMigrationStatus.mockRejectedValue(new Error("MIG-SENTINEL-500"));
+    const ui = render(<RestoreCard port={1} accounts={TWO_ACCOUNTS} />);
+    await ready();
+
+    expect(screen.queryByText(zh.migration.h)).toBeNull();
+    expect(ui.container.textContent).not.toContain("MIG-SENTINEL-500");
+  });
 });

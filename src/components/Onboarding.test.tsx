@@ -4,7 +4,7 @@ import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
 import { useAppStore } from "../store/useAppStore";
-import { scanPreview, runInstall, RestoreError } from "../lib/sidecar";
+import { scanPreview, runInstall, fetchBundleInfo, RestoreError } from "../lib/sidecar";
 import { Onboarding } from "./Onboarding";
 
 vi.mock("../lib/dialog", () => ({ pickDirectory: vi.fn(), pickFile: vi.fn() }));
@@ -119,6 +119,10 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   fetchTemplates: vi.fn(async () => []),
   // 移機的安裝（票 06）：**唯一會寫使用者現役目錄的呼叫**，測試絕不讓它真的發出去
   runInstall: vi.fn(async () => ({ results: [], stale_temps: [] })),
+  // 續作（票 07）：精靈直接進安裝頁之前要先確認那份展開的包還讀得出來
+  fetchBundleInfo: vi.fn(async () => ({
+    host: "old", created: "x", accounts: ["work"], extra: [], project_count: 2,
+  })),
 }));
 // 結果頁的殘骸行會用到 opener（真元件，不 mock 掉——它的顯示契約才是這裡要驗的）
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -989,5 +993,72 @@ describe("Onboarding 精靈外殼", () => {
     ui.getByText(zh.welcome.fresh).click();
     await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
     expect(ui.container.querySelector(".ob-lang")).toBeNull();
+  });
+});
+
+// ── 中斷續作（票 07）：從還原卡按「繼續移機」直接進安裝頁 ────────────────────
+
+describe("Onboarding 的移機續作", () => {
+  const RESUME = {
+    sourceRoot: "/home/me/.claude-restore-20260727-1432",
+    mapping: [{ old: "/old/a", new: "/new/a" }],
+  };
+
+  beforeEach(async () => {
+    await i18n.changeLanguage("zh-TW");
+    vi.clearAllMocks();
+    useAppStore.setState({
+      port: 1234,
+      config: { ...baseConfig, is_first_run: false },   // 續作的前提：設定檔早已落檔
+      completeOnboarding: async () => {},
+      loadConfig: async () => {},
+    });
+  });
+  afterEach(cleanup);
+
+  it("一進來就在安裝頁，不是歡迎頁", async () => {
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+    await waitFor(() => expect(ui.getByTestId("preview-dest")).toBeTruthy());
+    expect(ui.queryByText(zh.welcome.h)).toBeNull();
+  });
+
+  // 這兩樣是續作的全部意義：使用者上次填的東西不必再填一次
+  it("預填上次的展開位置與專案路徑對應", async () => {
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+    await waitFor(() =>
+      expect(ui.getByTestId("preview-dest").textContent).toBe(RESUME.sourceRoot));
+    expect(ui.getByTestId("preview-mapping").textContent)
+      .toBe(JSON.stringify({ "/old/a": "/new/a" }));
+    expect(fetchBundleInfo).toHaveBeenCalledWith(1234, RESUME.sourceRoot);
+  });
+
+  // **預填的對應不能被「換包就清空」的機制洗掉**（票 04 的 gen 綁定）：續作不是換包，
+  // 來源從一開始就是這一個。這條測試守的正是那個交互作用
+  it("讀到包資訊之後，預填的對應仍在", async () => {
+    let release: (info: unknown) => void = () => {};
+    vi.mocked(fetchBundleInfo).mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }) as never);
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+
+    release({ host: "old", created: "x", accounts: ["work"], extra: [], project_count: 2 });
+
+    await waitFor(() => expect(ui.getByTestId("preview-mapping").textContent)
+      .toBe(JSON.stringify({ "/old/a": "/new/a" })));
+  });
+
+  it("包資訊讀不出來：說明白，而且不讓使用者停在一份假的預覽上", async () => {
+    vi.mocked(fetchBundleInfo).mockRejectedValueOnce(new Error("INFO-SENTINEL-500"));
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.install.errors.resumeFailed)).toBeTruthy());
+    expect(ui.queryByTestId("preview-dest")).toBeNull();
+    expect(ui.container.textContent).not.toContain("INFO-SENTINEL-500");
+  });
+
+  it("沒有 resume 就照舊從歡迎頁開始", async () => {
+    const ui = render(<Onboarding onClose={() => {}} />);
+    expect(ui.getByText(zh.welcome.h)).toBeTruthy();
+    expect(fetchBundleInfo).not.toHaveBeenCalled();
   });
 });
