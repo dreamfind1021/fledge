@@ -106,7 +106,9 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   // 當下的來源身分（render body 同步寫回）：續作探測的錯誤路徑要靠它判斷「這個訊息還
   // 屬不屬於現在這一包」——`setBundle` 的 functional update 讀得到最新的 gen，`setError`
   // 讀不到（比照 `InstallPreviewCard.liveSource`）
-  // 續作的入場探測跑過了沒（見下面那支 effect：它是一次性的，不隨 port／語言重跑）
+  // 續作入場探測的兩個獨立條件（見下面那支 effect）：`resumeGen`＝它綁定的來源身分
+  // （使用者一換包就永久失效），`resumeApplied`＝**成功套用之後**才消費掉
+  const resumeGen = useRef<number | null>(null);
   const resumeApplied = useRef(false);
   const liveGen = useRef(bundle.gen);
   liveGen.current = bundle.gen;
@@ -132,12 +134,15 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   // **只換 `probe`、不動 `gen`**：`gen` 是「來源身分」，而續作不是換包——來源從一開始就是
   // 這一個。動它會觸發 render body 的換包清空，把剛預填好的專案對應洗掉（票 04 的機制）。
   useEffect(() => {
-    // **只套用一次**（Codex 票 07 R2）：續作是一次性的**入場**動作。這支 effect 依賴
-    // `port` 與 `t`，sidecar 重啟換 port、或使用者退回歡迎頁切語言都會讓它重跑——那時
-    // `startGen` 會重新擷取「當下」的 gen，於是換過包之後的比對照樣成立，probe 又被換回
-    // 舊的續作來源。跑過就永久失效，重跑一律不再套用。
-    if (resume === undefined || port == null || resumeApplied.current) return;
-    resumeApplied.current = true;
+    // 這支 effect 依賴 `port` 與 `t`，sidecar 重啟換 port、或使用者退回歡迎頁切語言都會
+    // 讓它重跑。**兩件事要分開判**（Codex 票 07 R2／R3）：
+    //   ①「使用者已經換過包」→ 續作**永久失效**：重跑時 `startGen` 會重新擷取當下的 gen，
+    //     於是換包之後的比對照樣成立、probe 又被換回舊來源（R2）
+    //   ②「探測還沒成功」→ 換 port 應該**重試**：把消費點放在請求開始前的話，sidecar 在
+    //     探測途中重啟就永久取消了它——既不重試也不報錯，續作頁停在空殼（R3）
+    if (resume === undefined || port == null) return;
+    if (resumeGen.current === null) resumeGen.current = bundle.gen;   // 進場時綁定
+    if (resumeGen.current !== bundle.gen || resumeApplied.current) return;
     let live = true;
     // **遲到的回應不得覆蓋使用者後來選的包**（Codex 票 07 R1 F2）：這支探測在飛的時候，
     // 使用者可以回上一頁換一包（BundleCard 會把 `gen` 推進）。沒有這道比對的話，畫面上
@@ -151,6 +156,7 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
         setBundle((cur) => (cur.gen === startGen
           ? { ...cur, probe: { kind: "present", info, dest: resume.sourceRoot } }
           : cur));
+        resumeApplied.current = true;     // **成功套用之後**才消費，失敗留給換 port 重試
       } catch (e) {
         // 判別碼與例外原文只進 console（CLAUDE.md §4.6.13）
         console.error("[onboarding] 續作讀不到包資訊", e);

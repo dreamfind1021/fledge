@@ -1095,6 +1095,52 @@ describe("Onboarding 的移機續作", () => {
     expect(ui.getByTestId("targets-dest").textContent).toBe("/d");
   });
 
+  // Codex 票 07 R3：R2 的一次性旗標設在請求**開始前**，sidecar 在探測途中重啟就永久取消
+  // 了它——既不向新 sidecar 重試、也不顯示錯誤，續作頁永遠停在空殼。「已換包」與「還沒
+  // 成功」是兩件事
+  it("探測途中 sidecar 重啟：向新 port 重試，續作預覽照樣出得來", async () => {
+    let release: (info: unknown) => void = () => {};
+    vi.mocked(fetchBundleInfo).mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }) as never);
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+    await waitFor(() => expect(fetchBundleInfo).toHaveBeenCalledWith(1234, RESUME.sourceRoot));
+
+    useAppStore.setState({ port: 5678 });        // sidecar 重啟換 port
+    release({ host: "old", created: "x", accounts: ["work"], extra: [], project_count: 2 });
+
+    await waitFor(() => expect(fetchBundleInfo)
+      .toHaveBeenCalledWith(5678, RESUME.sourceRoot));
+    await waitFor(() => expect(ui.getByTestId("preview-dest").textContent)
+      .toBe(RESUME.sourceRoot));
+  });
+
+  // 兩個條件真正分工的那一格：**探測還沒成功**（一次性旗標還沒消費）時使用者換了包，
+  // 之後 sidecar 又重啟——只看旗標的話 effect 會重跑並把舊來源套上去，因為「進場時的
+  // gen」在重跑時已重新擷取成新包的 gen。mutation 抓出前面幾條的換包都發生在探測**成功
+  // 之後**，被旗標擋住了，gen 比對從沒被驗到
+  it("探測還沒成功就換了包，之後 sidecar 重啟也不得套用舊來源", async () => {
+    vi.mocked(fetchBundleInfo).mockImplementationOnce(
+      () => new Promise(() => {}) as never);        // 永遠不回來
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+    await waitFor(() => expect(fetchBundleInfo).toHaveBeenCalledTimes(1));
+
+    for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
+      ui.getByText(zh.common.prev).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+    ui.getByText("probe-present").click();          // 換一包（探測仍未成功）
+    await waitFor(() => expect(ui.getByTestId("picked").textContent)
+      .toBe("/tmp/picked.tar.gz"));
+    vi.mocked(fetchBundleInfo).mockClear();
+
+    useAppStore.setState({ port: 5678 });           // sidecar 重啟
+
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    expect(fetchBundleInfo).not.toHaveBeenCalled();  // 續作已因換包永久失效
+    expect(ui.getByTestId("targets-dest").textContent).toBe("/d");
+  });
+
   it("包資訊讀不出來：說明白，而且不讓使用者停在一份假的預覽上", async () => {
     vi.mocked(fetchBundleInfo).mockRejectedValueOnce(new Error("INFO-SENTINEL-500"));
     const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
