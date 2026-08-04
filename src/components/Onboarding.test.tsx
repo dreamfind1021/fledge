@@ -32,7 +32,7 @@ const baseConfig = {
 
 /** 走到根目錄頁並加一個 draft root（onboard 的前置條件：至少一個根目錄） */
 async function reachRootsWithDraft(ui: ReturnType<typeof render>) {
-  ui.getByText(zh.welcome.cta).click();
+  ui.getByText(zh.welcome.fresh).click();
   await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
   fireEvent.change(ui.getByPlaceholderText(zh.roots.placeholder), { target: { value: "/tmp/work" } });
   ui.getByText(zh.roots.add).click();
@@ -65,7 +65,7 @@ describe("Onboarding 精靈外殼", () => {
     vi.mocked(scanPreview).mockRejectedValueOnce(new Error("SCAN-SENTINEL-500"));
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.cta).click();
+    ui.getByText(zh.welcome.fresh).click();
     await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
     fireEvent.change(ui.getByPlaceholderText(zh.roots.placeholder), { target: { value: "/tmp/work" } });
     ui.getByText(zh.roots.add).click();
@@ -231,7 +231,7 @@ describe("Onboarding 精靈外殼", () => {
       ],
     });
     const ui = render(<Onboarding onClose={onClose} />);
-    ui.getByText(zh.welcome.cta).click();
+    ui.getByText(zh.welcome.fresh).click();
     await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
 
     expect(ui.getByText(zh.roots.created)).toBeTruthy();
@@ -256,11 +256,61 @@ describe("Onboarding 精靈外殼", () => {
     expect(single.container.querySelectorAll(".ob-step-bar")).toHaveLength(6);
   });
 
+  it("歡迎頁是二選一：全新設定或我有備份", () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+    expect(ui.getByText(zh.welcome.fresh)).toBeTruthy();
+    expect(ui.getByText(zh.welcome.restore)).toBeTruthy();
+  });
+
+  // 移機分支的第二頁是選備份包，不是「設定工作根目錄」——兩條路從歡迎頁之後就分岔
+  it("選「我有備份」後進到備份包頁，不是全新設定的根目錄頁", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    expect(ui.queryByText(zh.roots.h)).toBeNull();
+  });
+
+  // 骨架的驗收條件：九頁一頁一頁走得過去，且移機分支不經共通設置與範本部署——那兩頁是給
+  // 新使用者鋪底的，東西都跟著備份搬回來的人不需要（上游 spec §5.1）
+  it("移機分支一路走到完成頁，全程不出現共通設置與範本部署", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    for (const heading of [
+      zh.mig.bundle.h,
+      zh.mig.targets.h,
+      zh.mig.paths.h,
+      zh.mig.install.h,
+      zh.env.h,
+      zh.login.h,
+      zh.mig.repair.h,
+    ]) {
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+      expect(ui.queryByText(zh.cc.h)).toBeNull();
+      expect(ui.queryByText(zh.sys.h)).toBeNull();
+      ui.getByText(zh.common.next).click();
+    }
+
+    await waitFor(() => expect(ui.getByText(zh.done.h)).toBeTruthy());
+    expect(onboardCalls).toBe(0); // 移機的落檔走 adopt-config（票 03），不是 onboard
+  });
+
+  it("進度條格數跟著路線：移機九格", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(9);
+  });
+
   it("語言切換掛在歡迎頁，離開歡迎頁後不再出現", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
     expect(ui.container.querySelector(".ob-lang")).toBeTruthy();
 
-    ui.getByText(zh.welcome.cta).click();
+    ui.getByText(zh.welcome.fresh).click();
     await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
     expect(ui.container.querySelector(".ob-lang")).toBeNull();
   });

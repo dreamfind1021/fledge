@@ -12,7 +12,15 @@
   "welcome": {
     "h": "Welcome to Fledge",
     "sub": "Fledge gives your Claude Code a graphical workbench: manage several projects, keep work and personal accounts apart, and run multiple sessions side by side.<br />Next we'll walk through your development environment and settings. Every step is optional — you can rerun any of them later from Settings.",
-    "cta": "Get started"
+    "fresh": "Set up from scratch",
+    "restore": "I have a backup"
+  },
+  "mig": {
+    "bundle": { "h": "Choose your backup bundle" },
+    "targets": { "h": "Confirm landing spots" },
+    "paths": { "h": "Map project paths" },
+    "install": { "h": "Install onto this machine" },
+    "repair": { "h": "Repair links" }
   },
   "roots": {
     "h": "Choose your root folders",
