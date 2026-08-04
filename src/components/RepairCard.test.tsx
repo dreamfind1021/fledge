@@ -171,7 +171,10 @@ describe("RepairCard", () => {
     // 舊回應被處理**之前**就成立，waitFor 立刻返回——測試名稱說的事沒真的驗（把作廢
     // 邏輯整個拿掉也照樣綠）。改成「畫面必須仍停在檢查中」，被覆寫就會紅。
     await flush(() => first.resolve(planWith(["broken_link"])));
-    expect(screen.getByText(zh.links.scanning)).toBeTruthy();
+    // port 斷了之後畫面說的是「連不上服務」（R3）——舊回應若覆寫進來，這一句就會被
+    // 換成斷鏈警示與修復按鈕
+    expect(screen.getByText(zh.links.unavailable)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: zh.links.repair })).toBeNull();
   });
 
   it("修復在飛時帳號換了 → 舊結果不得寫進畫面", async () => {
@@ -211,17 +214,28 @@ describe("RepairCard", () => {
     expect(screen.queryByText(zh.repair.result.relinked)).toBeNull();
   });
 
-  it("port 斷了 → 不停在「有斷鏈、可以修」的過期畫面", async () => {
-    // `scanLinks` 在 port 為 null 時直接返回，畫面就會停在上一個狀態——上面還掛著一顆
-    // 按下去只會被擋掉的修復鍵。那是在說一件當下不成立的事
+  it("port 斷了 → 說連不上服務，不停在過期畫面也不謊稱檢查中", async () => {
+    // 兩件事要分開：①不能停在上一個狀態（上面還掛著一顆按下去只會被擋掉的修復鍵）；
+    // ②不能說「檢查中」——沒有請求在飛，sidecar 不恢復就永遠不會有，說成進行中的工作
+    // 會讓使用者分不出正常延遲與服務故障（Codex 票 08 R2 F4 → R3）
     commonConfigPlan.mockResolvedValue(planWith(["broken_link"]));
     const ui = render(<RepairCard port={1234} accounts={ACCOUNTS} />);
     await screen.findByRole("button", { name: zh.links.repair });
 
     ui.rerender(<RepairCard port={null} accounts={ACCOUNTS} />);
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: zh.links.repair })).toBeNull());
-    expect(screen.getByText(zh.links.scanning)).toBeTruthy();
+    await screen.findByText(zh.links.unavailable);
+    expect(screen.queryByRole("button", { name: zh.links.repair })).toBeNull();
+    expect(screen.queryByText(zh.links.scanning)).toBeNull();
+  });
+
+  it("port 恢復就自動重新檢查——不必使用者做任何事", async () => {
+    // 文案承諾「等它恢復之後會自動重新檢查」，那個承諾要有東西守著
+    commonConfigPlan.mockResolvedValue(planWith(["broken_link"]));
+    const ui = render(<RepairCard port={null} accounts={ACCOUNTS} />);
+    await screen.findByText(zh.links.unavailable);
+
+    ui.rerender(<RepairCard port={1234} accounts={ACCOUNTS} />);
+    await screen.findByRole("button", { name: zh.links.repair });
   });
 
   it("rescanToken 一變就重測並清掉上一輪結果", async () => {

@@ -19,6 +19,10 @@ type LinkScan =
   | { phase: "scanning" }
   | { phase: "done"; broken: number }
   | { phase: "not_applicable" }
+  /** 連不上背景服務——**與「檢查中」是兩件事**（Codex 票 08 R3）：那個是進行中的工作，
+   *  這個是根本沒開始，而且 sidecar 不恢復就永遠不會開始。說成前者會讓使用者以為只要
+   *  再等一下，分不出正常延遲與服務故障。 */
+  | { phase: "unavailable" }
   | { phase: "error" };
 
 interface RepairCardProps {
@@ -85,10 +89,12 @@ export function RepairCard({ port, accounts, rescanToken }: RepairCardProps) {
     // （port 為 null、只剩一個帳號）若不作廢在飛的那一輪，舊回應抵達時序號仍然相等，
     // 就把畫面覆寫回舊帳號組合的結果——連修復按鈕都會重新出現。
     const myId = ++scanReq.current;
-    // port 還沒好＝還沒開始檢查。**不能直接 return**：那會讓畫面停在上一個狀態，上面
-    // 還掛著一顆按下去只會被擋掉的修復鍵——那是在說一件當下不成立的事（R2 F4）。
+    // **不能直接 return**：那會讓畫面停在上一個狀態，上面還掛著一顆按下去只會被擋掉的
+    // 修復鍵——那是在說一件當下不成立的事（R2 F4）。也**不能說「檢查中」**：沒有請求
+    // 在飛，sidecar 不恢復就永遠不會有（R3）。`scanLinks` 的 deps 含 `port`，恢復時
+    // 自己會重跑，所以文案可以承諾「會自動重新檢查」。
     if (port == null) {
-      setScan({ phase: "scanning" });
+      setScan({ phase: "unavailable" });
       return;
     }
     const scope = repairScope(Object.keys(accounts));
@@ -160,6 +166,7 @@ export function RepairCard({ port, accounts, rescanToken }: RepairCardProps) {
       {scan?.phase === "scanning" && <p className="rp-msg">{t("links.scanning")}</p>}
       {/* 「掃不出來」與「沒有斷鏈」是兩件事：說成後者會讓使用者以為不必修 */}
       {scan?.phase === "error" && <p className="rp-warn">{t("errors.scanFailed")}</p>}
+      {scan?.phase === "unavailable" && <p className="rp-warn">{t("links.unavailable")}</p>}
       {scan?.phase === "not_applicable" && (
         <p className="rp-msg">{t("links.notApplicable")}</p>
       )}
