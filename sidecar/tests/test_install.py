@@ -1023,6 +1023,23 @@ def test_preview_splits_excluded_and_names_missing_accounts(tmp_path: Path, monk
     assert sorted(p.excluded) == [".claude.json", ".claude.json"]
 
 
+def test_plan_validates_every_manifest_account_key_even_without_a_target(
+        tmp_path: Path, monkeypatch):
+    """**manifest 的每個 account key 都要驗，不看 config 有沒有對應項**（Codex 票 05 R2）。
+
+    `missing_accounts` 那條路徑原本排在 `_SAFE_KEY_RE` 之前，於是同一個非法 key 只因為
+    使用者「碰巧沒給它落點」就會繞過信任邊界，被原樣放進 API response 與畫面上。
+    `bundle_info()` 與 `landing_suggestions()` 都是一律先驗——這裡漏掉就又是一次
+    「一邊有一邊沒有」。"""
+    src = _staging(tmp_path)
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["../outside"] = "/Users/olduser/.claude-tc"   # 沒給落點的非法 key
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid_account_key"):
+        inst.plan(str(src), _accounts(_home_target(tmp_path, monkeypatch)))
+
+
 def test_preview_leaves_are_exhaustive_and_disjoint(tmp_path: Path, monkeypatch):
     """一般檔的 per-spot 守恆（增補 spec §2.5.2 測試 1）：掃到的每個 installable leaf
     恰好落入 `will_install`／`will_skip`／`blocked` **之一**，互斥且窮盡。

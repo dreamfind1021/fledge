@@ -514,12 +514,16 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
     targets: dict[str, str] = {}
     spot_source_identities: dict[str, tuple[int, int] | None] = {}
     for key in manifest.get("accounts", {}):
+        # **先驗再看有沒有落點**（Codex 票 05 R2）：manifest 是不可信輸入，每個 key 都要
+        # 過同一條信任邊界。排在 `missing_accounts` 之後的話，同一個非法 key 只因為使用者
+        # 碰巧沒給它落點就繞過驗證、被原樣放進 API response 與畫面上——而 `bundle_info()`
+        # 與 `landing_suggestions()` 都是一律先驗，漏掉這裡就又是一次「一邊有一邊沒有」。
+        if not _SAFE_KEY_RE.fullmatch(key):
+            raise ValueError("invalid_account_key")   # key 會被拼進路徑，也會被顯示
         entry = accounts.get(key)
         if entry is None:
             missing_accounts.append(key)    # 預覽的其餘欄位不會提到它——這一欄是唯一線索
             continue                        # 使用者沒為這個帳號指定落點 → 不裝
-        if not _SAFE_KEY_RE.fullmatch(key):
-            raise ValueError("invalid_account_key")   # 進得了 targets 的 key 才會拼路徑
         # config.json 是使用者可手編的：帳號項不是物件、或 config_dir 不是字串，
         # 直接 `.get()`／往下傳會變成 AttributeError／TypeError 裸穿成非合約 500。
         # 票 07 對 extra 已做同款形狀檢查（非字串視同未確認），帳號側比照。
