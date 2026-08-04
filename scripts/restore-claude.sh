@@ -153,9 +153,24 @@ try:
 finally:
     os.close(fd)
 try:
-    json.loads(raw)
+    data = json.loads(raw)
 except ValueError:
     print(f"{BAD}（manifest.json 不是合法的 JSON）。", file=sys.stderr)
+    raise SystemExit(1)
+
+# **形狀也要驗，不只語法**——與 sidecar 的 `backup/install.py::read_manifest` 同一組判準
+# （一邊有一邊沒有同樣是漂移）。少了這道，`accounts` 是 list 的包會一路走到差異報告才
+# 以 AttributeError traceback 中止，而那時 DEST **已經發布**：使用者看到一個「看起來完成」
+# 的展開目錄配一段 traceback、沒有差異報告。在發布前驗，壞包就根本不會留下東西。
+if not isinstance(data, dict):
+    print(f"{BAD}（manifest.json 的內容不是一個物件）。", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(data.get("accounts"), dict):
+    print(f"{BAD}（manifest.json 的 accounts 欄位形狀不對）。", file=sys.stderr)
+    raise SystemExit(1)
+extra = data.get("extra", {})
+if not isinstance(extra, dict) or any(not isinstance(v, str) for v in extra.values()):
+    print(f"{BAD}（manifest.json 的 extra 欄位形狀不對）。", file=sys.stderr)
     raise SystemExit(1)
 PYEOF
 }

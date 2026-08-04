@@ -1071,3 +1071,46 @@ def test_malicious_account_key_is_rejected_by_name_not_merely_by_lookup(tmp_path
     assert "帳號名稱不合法" in proc.stdout, proc.stdout
     # 同一份 manifest 裡形狀正常的 key 仍照常處理——不是整份包被拒
     assert "ok-name" in proc.stdout, proc.stdout
+
+
+def test_malformed_manifest_shape_is_refused_before_publishing(tmp_path: Path):
+    """**形狀也要驗，不只語法**：`accounts` 是 list 的包原本會一路走到差異報告才以
+    `AttributeError` traceback 中止——而那時 DEST **已經發布**，使用者看到一個「看起來完成」
+    的展開目錄配一段 traceback、沒有差異報告（Codex 票 12 R3，已實測）。
+
+    sidecar 的 `backup/install.py::read_manifest` 對同一件事有明確驗證，腳本原本沒有。"""
+    home, _ = _fake_home(tmp_path)
+    for label, manifest in (
+        ("accounts 是 list", {"created": "x", "accounts": ["not", "a", "mapping"]}),
+        ("頂層是 list", ["not", "an", "object"]),
+        ("extra 的 value 不是字串", {"created": "x", "accounts": {}, "extra": {"a": 1}}),
+    ):
+        bundle = _evil_bundle(tmp_path / f"bad-{abs(hash(label))}", [
+            ("manifest.json", "file", json.dumps(manifest)),
+            ("accounts/placeholder", "file", "y"),
+        ])
+        dest = tmp_path / f"dest-{abs(hash(label))}"
+
+        proc = _run([str(bundle), "-o", str(dest)], home)
+
+        assert proc.returncode != 0, f"{label}: {proc.stdout}"
+        assert "Traceback" not in proc.stderr, f"{label}: {proc.stderr}"
+        assert not dest.exists(), f"{label}: DEST 不該被發布"
+
+
+def test_every_path_like_account_key_is_rejected_by_name(tmp_path: Path):
+    """把 Codex 列的整組形狀都釘住，不是只測 `../../outer` 一種。"""
+    home, _ = _fake_home(tmp_path)
+    bad_keys = ["/abs", "../outside", "a/b", ".", "..", "", "x\\ny"]
+    bundle = _evil_bundle(tmp_path / "bad-keys", [
+        ("manifest.json", "file", json.dumps({
+            "created": "x", "accounts": {k: "" for k in bad_keys} | {"ok-name": ""}})),
+        ("accounts/placeholder", "file", "y"),
+    ])
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.count("帳號名稱不合法") == len(bad_keys), proc.stdout
+    assert "ok-name" in proc.stdout          # 正常的 key 不受影響
