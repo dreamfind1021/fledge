@@ -42,12 +42,25 @@ vi.mock("./TargetsCard", async () => {
   return {
     TargetsCard: ({ dest, saved, onSaved }: {
       dest: string; saved: boolean;
-      onSaved: (c: { dest: string; accounts: { key: string; config_dir: string }[] })
-        => void | Promise<void>;
+      onSaved: (c: { dest: string; accounts: { key: string; config_dir: string }[] },
+                reused: boolean) => void | Promise<void>;
     }) => (
       <div>
         <h2>{catalog.mig.targets.h}</h2>
         <span data-testid="targets-dest">{dest}</span>
+        {/* 409：這台機器本來就有設定檔，沿用它、沒有建立新的（真卡片的 `reused`）。
+            父層據此決定能不能說「這些是從備份包帶回來的」（票 09 R1 F2） */}
+        <button
+          onClick={() => void Promise.resolve(onSaved({
+            dest,
+            accounts: [
+              { key: "work", config_dir: "~/.claude" },
+              { key: "personal", config_dir: "~/.claude" },
+            ],
+          }, true)).catch(() => {})}
+        >
+          adopt-reused
+        </button>
         {/* 真卡片的形狀：`adopt-config` 只會成功一次（`create_if_absent`），收尾失敗時
             重按**只重跑 `onSaved()`**、不再 POST。mock 保留這個形狀，否則父層測試會在
             一條真實流程走不到的路徑上變綠（Codex 票 03 R2 指出的假綠） */}
@@ -60,7 +73,7 @@ vi.mock("./TargetsCard", async () => {
               { key: "work", config_dir: "~/.claude" },
               { key: "personal", config_dir: "~/.claude" },
             ],
-          })).catch(() => {})}
+          }, false)).catch(() => {})}
           disabled={saved}
         >
           adopt
@@ -477,6 +490,140 @@ describe("Onboarding 精靈外殼", () => {
     await waitFor(() =>
       expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
     expect(loads).toBe(2);
+  });
+
+  // 票 09：`adopt-config` 會從備份包帶回 Fledge 自己的設定（訂閱／工作根目錄／知識庫
+  // 根目錄）。**帶回哪些是後端決定的**（舊機的路徑在新機不存在就不帶回），這一頁的職責
+  // 只是把落檔後的結果照實說出來——使用者以前完全看不到這件事發生過。
+  async function reachTargetsAndAdopt(ui: ReturnType<typeof render>) {
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    // 落檔**之前**不該報任何帶回結果：那時 config 還是 in-memory 的預設值
+    expect(ui.queryByText(zh.mig.targets.adopted.kms)).toBeNull();
+    ui.getByText("adopt").click();
+  }
+
+  it("落檔後照實說出從備份包帶回了哪些 Fledge 設定", async () => {
+    useAppStore.setState({
+      config: { ...baseConfig, is_first_run: true },
+      loadConfig: async () => {
+        useAppStore.setState({
+          config: {
+            ...baseConfig,
+            is_first_run: false,
+            roots: [{ path: "/w/a", default_account: "work" },
+                    { path: "/w/b", default_account: "work" }],
+            subscriptions: [{ name: "Codex", monthly_cost: 20 }],
+            kms_root: "/Users/me/kms",
+          },
+        });
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachTargetsAndAdopt(ui);
+
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.adopted.kms)).toBeTruthy());
+    expect(ui.getByText("/Users/me/kms")).toBeTruthy();
+    // 兩列的數字各自對得上——共用同一個值格式，串錯欄位會在這裡被抓到
+    const rows = [...ui.container.querySelectorAll(".ob-sum dt")].map(
+      (dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
+    expect(rows).toContainEqual([zh.mig.targets.adopted.subscriptions, "1 筆"]);
+    expect(rows).toContainEqual([zh.mig.targets.adopted.roots, "2 筆"]);
+  });
+
+  // Codex 票 09 R1 F2：`configCreated` 的初值是 `config?.is_first_run !== true`——
+  // 它對「這台機器本來就有設定檔」也是 true，對 `config === null` 更是 true。摘要若掛在
+  // 它上面，重跑引導時會把使用者**原本就有的** subscriptions／roots／kms_root 冒充成
+  // 「從這個備份包帶回來的」。**宣稱了沒驗證過的事**，正是這一族的形狀。
+  it("重跑引導沿用既有設定檔時，不把原有設定冒充成這次帶回的", async () => {
+    useAppStore.setState({
+      // 這台機器已經有設定檔，而且裡面本來就有訂閱與知識庫根目錄
+      config: {
+        ...baseConfig,
+        is_first_run: false,
+        roots: [{ path: "/old", default_account: "work" }],
+        subscriptions: [{ name: "既有的", monthly_cost: 99 }],
+        kms_root: "/Users/me/existing-kms",
+      },
+      loadConfig: async () => {},
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+
+    // 既有設定檔 → 卡片一進來就是 saved（票 03 的既有行為，不動它）
+    expect(ui.queryByText(zh.mig.targets.adopted.kms)).toBeNull();
+    expect(ui.queryByText("/Users/me/existing-kms")).toBeNull();
+
+    ui.getByText("adopt-reused").click();     // 409：沿用既有設定檔，沒有建立新的
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    expect(ui.queryByText(zh.mig.targets.adopted.kms)).toBeNull();
+    expect(ui.queryByText("/Users/me/existing-kms")).toBeNull();
+  });
+
+  // Codex 票 09 R2 F4：`mapping`／`pathsStatus`／`previewStatus`／`installRun` 全都綁
+  // `bundle.gen`，唯獨這個新 state 漏了套——**新增的東西要主動比對既有的同族防線**
+  // （票 07 的教訓）。A 包落檔後換 B 包，設定檔已經在了（`configCreated` 仍是 true、
+  // 卡片是 saved、不會再跑 onSaved），摘要就會把 A 包帶回的內容說成 B 包的結果。
+  it("換一包之後，不把上一包帶回的設定說成這一包的", async () => {
+    useAppStore.setState({
+      config: { ...baseConfig, is_first_run: true },
+      loadConfig: async () => {
+        useAppStore.setState({
+          config: { ...baseConfig, is_first_run: false, kms_root: "/from/bundle-a" },
+        });
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();                    // A 包
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() => expect(ui.getByText("/from/bundle-a")).toBeTruthy());
+
+    ui.getByText(zh.common.prev).click();                     // 回上一頁
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();                    // 換 B 包（gen 推進）
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+
+    expect(ui.queryByText("/from/bundle-a")).toBeNull();
+    expect(ui.queryByText(zh.mig.targets.adopted.kms)).toBeNull();
+  });
+
+  it("知識庫根目錄沒帶回來時說清楚，並指路到設定頁", async () => {
+    useAppStore.setState({
+      config: { ...baseConfig, is_first_run: true },
+      // 後端把新機不存在的舊路徑濾掉了 → 三欄都空。**這是常態不是失敗**
+      loadConfig: async () => {
+        useAppStore.setState({ config: { ...baseConfig, is_first_run: false } });
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachTargetsAndAdopt(ui);
+
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.targets.adopted.kmsNone)).toBeTruthy());
+    expect(ui.getByText(zh.mig.targets.adopted.note)).toBeTruthy();
+    // 仍然放行：Fledge 自己的設定沒帶回來不是移機失敗（票 09：移機不失敗）
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false);
   });
 
   // 票 04：這一頁不寫任何東西，對應關係住在精靈——走到下一頁再回來必須還在，

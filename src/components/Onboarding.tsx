@@ -78,6 +78,17 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   // 會讓該欄變 undefined（Codex F-7 已警告不可當 render gate），只拿它當初值：唯有明確為 true
   // 才是「尚未落檔」，重跑引導時（設定檔早已存在）一進來就算已落檔。
   const [configCreated, setConfigCreated] = useState(config?.is_first_run !== true);
+  // **這一輪真的從備份包帶回了設定嗎**。與 `configCreated` 是兩件事：那個對「機器上
+  // 本來就有設定檔」也是 true（重跑引導、`config` 還沒載入），拿它當「帶回了什麼」的
+  // 依據就會宣稱沒發生過的事（Codex 票 09 R1 F2）。只有 `adopt-config` 真的建立了新
+  // 設定檔、而且父層把它讀回 store 之後才成立。
+  //
+  // **綁 `bundle.gen`**（Codex 票 09 R2 F4）：換包之後設定檔已經在了，`configCreated`
+  // 仍是 true、卡片是 saved、`onSaved` 不會再跑——旗標若不綁來源，A 包帶回的內容就會
+  // 掛在 B 包的流程上被說成「這一包帶回來的」。`mapping`／`pathsStatus`／`previewStatus`
+  // ／`installRun` 全都綁 gen，這是同一族防線，新 state 不能漏套。
+  const [adoptedFrom, setAdoptedFrom] = useState<{ gen: number; value: boolean }>(
+    { gen: -1, value: false });
   // 備份包的選擇（票 02）：選了哪一包、解到哪裡、裡面有什麼。**整組住在這裡而不是卡片裡**
   // ——卡片會隨換頁卸載，只把包資訊留在上層會讓「還沒選任何包的卡片」顯示上一包的摘要
   // （Codex 票 02 R1 F2）。其中包資訊還是**序列本身的輸入**：`paths` 頁在包裡沒有專案歷史
@@ -126,6 +137,7 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   const run: InstallRun = installRun.gen === bundle.gen
     ? installRun.value : { kind: "idle" };
   const previewReady = previewStatus.gen === bundle.gen && previewStatus.value === "loaded";
+  const adoptedFromBundle = adoptedFrom.gen === bundle.gen && adoptedFrom.value;
   const overlayRef = useRef<HTMLDivElement>(null);
 
   // 續作（票 07）：安裝頁的每一項都從那份展開的包算出來，所以進去之前要先確認它還讀得出來
@@ -501,7 +513,7 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
                   // 頁面（登入卡等）讀的是 store 的 accounts，只翻旗標會讓使用者看到
                   // in-memory 的預設帳號。讀不回來就 throw 回卡片——它會顯示錯誤且不轉
                   // 唯讀，下一步也就仍然被擋著。
-                  onSaved={async (confirmed) => {
+                  onSaved={async (confirmed, reused) => {
                     await loadConfig();
                     // **對帳**（Codex 票 03 R4 F1）：後端回 409 時只證明「有一份 config」，
                     // 不證明它是這次建立的。後續 install-plan／install 直接從這份 config 取
@@ -518,8 +530,39 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
                                           { code: "config_mismatch" });
                     }
                     setConfigCreated(true);
+                    // 沿用既有設定檔（409）時 config 裡的東西是使用者原本就有的，
+                    // **不是**這個備份包帶回來的（Codex 票 09 R1 F2）
+                    setAdoptedFrom({ gen: bundle.gen, value: !reused });
                   }}
                 />
+                {/* 從備份包帶回的 Fledge 自身設定（票 09／增補 spec 缺口 5）。這三個值
+                    一直都在包裡（`backup-claude.sh` 打包整份 `~/.fledge/config.json`），
+                    只是移機路徑以前不讀它，於是新機的訂閱、工作根目錄、知識庫根目錄
+                    全是空的而且**沒有任何一頁讓使用者發現**。
+
+                    **不能綁 `configCreated`**（Codex 票 09 R1 F2）：它的初值是
+                    `config?.is_first_run !== true`，對「這台機器本來就有設定檔」與
+                    `config === null` 都是 true——摘要掛上去就會把使用者**原本就有的**
+                    設定冒充成這個備份包帶回來的。要綁的是「這一輪真的建立了新設定檔
+                    且已讀回」，那個事實只有 `TargetsCard` 知道（409＝沿用既有的）。
+
+                    帶回哪些由後端在 `adopt-config` 裡決定（舊機的路徑在新機不存在就
+                    不帶回），前端只讀落檔後的 config——自己從包裡推會變成第二份判準。 */}
+                {adoptedFromBundle && (
+                  <>
+                    <dl className="ob-sum">
+                      <dt>{t("mig.targets.adopted.subscriptions")}</dt>
+                      <dd>{t("mig.targets.adopted.count",
+                             { count: config?.subscriptions?.length ?? 0 })}</dd>
+                      <dt>{t("mig.targets.adopted.roots")}</dt>
+                      <dd>{t("mig.targets.adopted.count",
+                             { count: config?.roots?.length ?? 0 })}</dd>
+                      <dt>{t("mig.targets.adopted.kms")}</dt>
+                      <dd>{config?.kms_root || t("mig.targets.adopted.kmsNone")}</dd>
+                    </dl>
+                    <p className="ob-note">{t("mig.targets.adopted.note")}</p>
+                  </>
+                )}
                 {migNav(!configCreated)}
               </div>
             )

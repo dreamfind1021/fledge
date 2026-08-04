@@ -2370,3 +2370,30 @@ def test_read_manifest_refuses_json_over_the_size_limit(tmp_path: Path):
     _write_manifest_of_size(inst._BUNDLE_JSON_MAX_BYTES + 1)
     with pytest.raises(ValueError, match="source_not_a_bundle"):
         inst.read_manifest(str(src))
+
+
+def test_install_never_writes_the_bundles_fledge_config_into_the_live_dir(
+        tmp_path: Path, monkeypatch):
+    """**明令不做的事，用測試釘住**（票 09）：`install()` 不得把包裡的 `fledge/config.json`
+    裝進 `~/.fledge/config.json`。
+
+    那會覆蓋掉使用者剛在 targets 頁逐項確認的落點，把舊機的絕對路徑寫回設定檔——等於讓
+    「使用者確認過的落點才是授權」（spec §4.2.2）整條防線失效。包裡那三個欄位的正確入口
+    是 `adopt-config`（授權入口，它只挑 subscriptions／kms_root／roots 三欄）。
+
+    順帶釘住 `fledge/` 整個目錄都不進安裝範圍：install 只走 `accounts/` 與 `extra/`。"""
+    src = _staging(tmp_path)
+    _plant_fledge_config(src, {"kms_root": "/Users/olduser/kms",
+                               "accounts": {"work": {"config_dir": "/Users/olduser/.claude"}}})
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    (home / ".fledge").mkdir(exist_ok=True)
+    live = home / ".fledge" / "config.json"
+    live.write_text('{"kms_root": "/new/machine/kms"}', encoding="utf-8")
+    before = live.read_bytes()
+
+    results = inst.install(inst.plan(str(src), _accounts(tgt)))
+    assert {r.outcome for r in results} == {"installed"}     # 該搬的照樣搬了
+    assert live.read_bytes() == before, "包裡的 config.json 蓋掉了現役的那一份"
+    assert not (tgt / "config.json").exists()
+    assert not (tgt / "fledge").exists(), "fledge/ 整個目錄都不該進安裝範圍"
