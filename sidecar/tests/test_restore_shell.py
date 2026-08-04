@@ -980,8 +980,64 @@ def test_manifest_cannot_point_the_diff_at_an_arbitrary_local_directory(tmp_path
     assert SENTINEL not in proc.stdout, proc.stdout
     assert SENTINEL not in proc.stderr
     # 而且是被這道邊界擋下的，不是碰巧（例如流程更早就失敗）。
-    assert "不在本機登記的範圍內" in proc.stdout, proc.stdout
+    assert "本機沒有登記這一項" in proc.stdout, proc.stdout
 
     # 刻意**不**斷言「那個路徑字串完全不出現」：「備份包資訊」那一段會照實顯示 manifest
     # 宣稱的舊機路徑，那是「這包來自哪裡」的合法資訊，而且那個字串本來就是攻擊者自己寫的
     # ——他不會從中得知任何新東西。要防的是掃描本機目錄並洩漏**其內容**。
+
+
+def test_a_matching_account_key_still_does_not_grant_the_manifest_a_path(tmp_path: Path):
+    """把 key 換成本機真的有的那一個（`default`）——攻擊仍不成立，因為現役側的位置**只從
+    本機 config 查**，manifest 的 path value 從頭到尾沒被當成位置用過。
+
+    這條與上一條的差別：上一條擋在「key 對不上」，這條擋在「path 根本不參與」。只有前者
+    的話，攻擊者猜到 key 就能繞過。"""
+    home, config_dir = _fake_home(tmp_path)
+    victim = tmp_path / "victim"
+    (victim / "skills").mkdir(parents=True)
+    (victim / "skills" / f"{SENTINEL}.txt").write_text("x", encoding="utf-8")
+    bundle = _evil_bundle(tmp_path / "evil-key", [
+        ("manifest.json", "file", json.dumps({
+            "created": "20260101-1200", "host": "evil", "home": "/old",
+            "accounts": {"default": str(victim)}})),      # key 對得上，path 是受害者的
+        ("accounts/default/skills/decoy", "file", "y"),
+    ])
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert SENTINEL not in proc.stdout, proc.stdout
+    assert SENTINEL not in proc.stderr
+    assert str(config_dir) in proc.stdout, proc.stdout   # 比對的是本機登記的那個目錄
+
+
+def test_migration_to_a_new_home_still_produces_a_useful_diff(tmp_path: Path):
+    """**移機是這批票的主題，差異報告不能在那裡失效。**
+
+    manifest 記的是**舊機**的絕對 config_dir（`backup-claude.sh` 的真實行為）。拿它跟本機
+    登記路徑做字串比對的話，換了使用者名或落點之後必然不相等 → 每個帳號都「略過比對」→
+    使用者看到一份**假的空報告**，以為沒東西要搬（R1 修法的方向錯誤，Codex R2 抓到）。
+
+    正確的對應是 **manifest 的 key → 本機 config 同 key 的路徑**：key 是穩定的，path 不是。"""
+    old_home = tmp_path / "oldhome"
+    (old_home / ".claude" / "skills").mkdir(parents=True)
+    new_home, new_config_dir = _fake_home(tmp_path, "newhome")
+    (new_config_dir / "skills" / "only-on-new.md").write_text("new", encoding="utf-8")
+
+    bundle = _evil_bundle(tmp_path / "mig", [
+        ("manifest.json", "file", json.dumps({
+            "created": "20260101-1200", "host": "oldmac", "home": str(old_home),
+            "accounts": {"default": str(old_home / ".claude")}})),   # 舊機路徑
+        ("accounts/default/skills/only-in-backup.md", "file", "old"),
+    ])
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], new_home)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "略過比對" not in proc.stdout, proc.stdout
+    # 備份裡有、新機沒有的（＝使用者要搬回去的那些）確實被列出來
+    assert "only-in-backup.md" in proc.stdout, proc.stdout
+    # 新機有、備份裡沒有的也認得出來（頂層 skills 兩邊都有，過濾條件才會放行）
+    assert "only-on-new.md" in proc.stdout, proc.stdout

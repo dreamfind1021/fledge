@@ -403,42 +403,52 @@ dest, manifest_path, config_json, extra_file = sys.argv[1:5]
 m = json.load(open(manifest_path))
 
 
-def registered_live_paths():
-    """本機**登記過**的現役資產位置。差異報告只允許比對這些路徑。
+def local_live_paths():
+    """現役側的位置：**由 manifest 的 key 對應到本機 config 的路徑**，回 (帳號, 帳號外) 兩張表。
 
-    **為什麼需要這道**：manifest 的 `accounts`／`extra` value 是備份包提供的，也就是
-    不可信輸入。原本直接拿它當現役側 `expanduser` + 遞迴 `snapshot`，於是一份惡意包可以
-    指定掃描本機任意目錄（指向 `/` 就是整個檔案系統）並把檔名印在差異報告裡——已實測
-    可利用（票 12 的 Codex 審查）。
+    **兩個理由都不能只顧一個**：
 
-    `verify_manifest` 擋不住這個：它驗的是 inode、大小與 JSON 語法，**不是語意**。
+    1. **不可用 manifest 的 path value**（票 12 R1）：那是備份包提供的不可信輸入，直接拿去
+       `expanduser` + 遞迴 `snapshot`，一份惡意包就能指定掃描本機任意目錄（指向 `/` 就是整個
+       檔案系統）並把檔名印進差異報告——已實測可利用。`verify_manifest` 擋不住它：那支驗的
+       是 inode、大小與 JSON 語法，**不是語意**。
+    2. **也不可拿 manifest 的 path 去跟本機路徑比字串**（票 12 R2）：manifest 記的是**舊機**的
+       絕對路徑，移機換了使用者名或落點之後必然不相等，於是每個帳號都被略過、報告變成一份
+       **假的空報告**，使用者以為沒東西要搬。而移機正是這批票的主題。
+
+    **key 是穩定的、path 不是**——所以用 key 對應。manifest 的 path 只拿來顯示「這包來自哪裡」。
     """
-    out = set()
     try:
         with open(config_json, encoding="utf-8") as fh:
             cfg = json.load(fh)
     except (OSError, ValueError):
-        cfg = {}
-    for acct in (cfg.get("accounts") or {}).values():
+        # 讀不出 config：只認預設帳號那一個對應（移機到新機還沒設定 Fledge 是最常見的還原
+        # 情境）。**不是**放行任意路徑，也不從 manifest 取任何位置。
+        return {"default": os.path.normpath(os.path.expanduser("~/.claude"))}, {}
+
+    by_account = {}
+    for key, acct in (cfg.get("accounts") or {}).items():
         if isinstance(acct, dict) and isinstance(acct.get("config_dir"), str):
-            out.add(os.path.normpath(os.path.expanduser(acct["config_dir"])))
-    for path in (cfg.get("extra") or {}).values():          # 票 07 起 config 有 extra
+            by_account[key] = os.path.normpath(os.path.expanduser(acct["config_dir"]))
+    by_extra = {}
+    for name, path in (cfg.get("extra") or {}).items():      # 票 07 起 config 有 extra
         if isinstance(path, str):
-            out.add(os.path.normpath(os.path.expanduser(path)))
+            by_extra[name] = os.path.normpath(os.path.expanduser(path))
+    # `backup-extra-paths.txt` 的項目以 basename 當 name——與 `backup-claude.sh` 產 manifest
+    # 時同一條規則，兩邊各寫一份必然漂移。config 已有的不覆蓋（那是使用者確認過的落點）。
     try:
         with open(extra_file, encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if line and not line.startswith("#"):
-                    out.add(os.path.normpath(os.path.expanduser(line)))
+                    expanded = os.path.normpath(os.path.expanduser(line))
+                    by_extra.setdefault(os.path.basename(expanded), expanded)
     except OSError:
         pass
-    # 讀不出任何登記位置時只允許預設帳號目錄——與 containment 段落同一個理由：移機到新機
-    # 還沒設定 Fledge 是最常見的還原情境。**不是**放行任意路徑。
-    return out or {os.path.normpath(os.path.expanduser("~/.claude"))}
+    return by_account, by_extra
 
 
-ALLOWED_LIVE = registered_live_paths()
+LIVE_ACCOUNTS, LIVE_EXTRA = local_live_paths()
 
 def snapshot(root):
     out = {}
@@ -462,21 +472,23 @@ def snapshot(root):
     return out
 
 total = {"only_backup": 0, "only_live": 0, "differ": 0, "same": 0}
-targets = [(k, v, os.path.join(dest, "accounts", k)) for k, v in m.get("accounts", {}).items()]
+# **只取 manifest 的 key**，位置一律從本機 config 查（理由見 `local_live_paths`）。
+targets = [(k, LIVE_ACCOUNTS.get(k), os.path.join(dest, "accounts", k))
+           for k in m.get("accounts", {})]
 # 帳號目錄外的資產（~/.agents 這類）比照同一套比對
-targets += [(f"帳號外:{k}", v, os.path.join(dest, "extra", k)) for k, v in m.get("extra", {}).items()]
+targets += [(f"帳號外:{k}", LIVE_EXTRA.get(k), os.path.join(dest, "extra", k))
+            for k in m.get("extra", {})]
 
-for key, raw, backed in targets:
-    live = os.path.normpath(os.path.expanduser(raw))
-    if live not in ALLOWED_LIVE:
-        # 備份包宣稱的舊路徑不是本機登記過的資產位置——不掃描、也不把它當現役側印出來。
-        print(f"\n[{key}] 這個帳號的舊位置不在本機登記的範圍內，略過比對")
+for key, live, backed in targets:
+    if live is None:
+        # 本機沒有登記這個帳號／資產——沒有可信的現役側可比對。**不退回 manifest 的路徑**。
+        print(f"\n[{key}] 本機沒有登記這一項，略過比對")
         continue
     if not os.path.isdir(backed):
         print(f"\n[{key}] 備份包裡沒有這個帳號")
         continue
     if not os.path.isdir(live):
-        print(f"\n[{key}] 現役目錄不存在（{raw}）——備份包裡的全部都是「只在備份裡有」")
+        print(f"\n[{key}] 現役目錄不存在（{live}）——備份包裡的全部都是「只在備份裡有」")
         continue
 
     b, l = snapshot(backed), snapshot(live)
@@ -486,7 +498,7 @@ for key, raw, backed in targets:
                     if k.split(os.sep)[0] in {x.split(os.sep)[0] for x in b})
     differ = sorted(k for k in set(b) & set(l) if b[k] != l[k])
 
-    print(f"\n[{key}] {raw}")
+    print(f"\n[{key}] {live}")     # 印**本機**的位置（被比對的那一個），不是 manifest 的舊路徑
     for label, items, hint in (
         ("只在備份裡有（現役已不見）", only_b, "← 這些是你可能想搬回去的"),
         ("只在現役有（備份後新增）", only_l, ""),
