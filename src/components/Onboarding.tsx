@@ -71,12 +71,16 @@ export function Onboarding({ onClose }: OnboardingProps) {
   // 失效——舊 key 不屬於新包，送進 plan 是 `mapping_unknown_project`；兩包剛好有同一條
   // 舊路徑時更糟，上一包的人工選擇會靜靜套到新包上。
   const [mapping, setMapping] = useState<ProjectMapping>({});
-  const [pathsStatus, setPathsStatus] = useState<PathsStatus>("loading");
+  // **狀態綁著它是哪一包讀出來的**（Codex 票 04 R2）：只存 status 的話，換包之後 gating
+  // 會先看到上一包的 `loaded`——在新包的清單根本還沒讀之前就放行。
+  const [pathsStatus, setPathsStatus] = useState<{ gen: number; value: PathsStatus }>(
+    { gen: -1, value: "loading" });
   const mappingGen = useRef(bundle.gen);
   if (mappingGen.current !== bundle.gen) {
     // render body 同步清空：等 effect 會讓 PathsCard 先用舊 mapping seed 一次
     mappingGen.current = bundle.gen;
     if (Object.keys(mapping).length > 0) setMapping({});
+    if (pathsStatus.gen !== bundle.gen) setPathsStatus({ gen: bundle.gen, value: "loading" });
   }
   const overlayRef = useRef<HTMLDivElement>(null);
 
@@ -409,13 +413,14 @@ export function Onboarding({ onClose }: OnboardingProps) {
                   sourceGen={bundle.gen}
                   mapping={mapping}
                   onMapping={setMapping}
-                  onStatus={setPathsStatus}
+                  onStatus={(value) => setPathsStatus({ gen: bundle.gen, value })}
                 />
                 {/* 清單讀不出來就擋住（Codex 票 04 R1 F3）：使用者在看不到任何專案、
                     也沒有任何對應的情況下往下走，install 會把所有歷史原樣搬過去、
                     `/resume` 全部列不出來——那**不是**他選的「留空即照搬」。
                     包裡本來就沒有專案時不擋（`project_count` 為 0 沒有東西要對應）。 */}
-                {migNav(bundle.probe.info.project_count > 0 && pathsStatus !== "loaded")}
+                {migNav(bundle.probe.info.project_count > 0
+                  && !(pathsStatus.gen === bundle.gen && pathsStatus.value === "loaded"))}
               </div>
             )
           )}

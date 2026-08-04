@@ -182,6 +182,16 @@ describe("PathsCard 的來源切換與載入狀態", () => {
     expect(onStatus.mock.calls.map((c) => c[0])).toEqual(["loading", "error"]);
   });
 
+  // Codex 票 04 R2：`port == null`（sidecar 還沒起來／掛掉）時原本直接 return，連 loading
+  // 都不回報——精靈那側的 status 會停在上一次的 `loaded`，於是在「根本讀不到清單」的
+  // 狀態下放行
+  it("sidecar 還沒起來 → 回報 loading 而不是沉默", async () => {
+    const onStatus = vi.fn<(s: string) => void>();
+    render(<Harness port={null as unknown as number} onStatus={onStatus} />);
+    await waitFor(() => expect(onStatus).toHaveBeenLastCalledWith("loading"));
+    expect(fetchProjectPaths).not.toHaveBeenCalled();
+  });
+
   it("成功載入回報 loaded", async () => {
     const onStatus = vi.fn<(s: string) => void>();
     const ui = render(<Harness onStatus={onStatus} />);

@@ -550,6 +550,44 @@ describe("Onboarding 精靈外殼", () => {
       expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
   });
 
+  // Codex 票 04 R2：`pathsStatus` 沒跟著 `bundle.gen` 失效的話，換包之後 gating 會先看到
+  // 上一包的 `loaded`——在新包的清單根本還沒讀之前就放行
+  it("換一包之後，上一包的「清單已讀到」不算數", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+    ui.getByText("paths-loaded").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+
+    // 回備份包頁換一包（mock 每次 probe 都遞增 gen）
+    ui.getByText(zh.common.prev).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText(zh.common.prev).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+
+    // 新包的清單還沒讀到 → 擋住
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true);
+  });
+
   // Codex 票 03 R4 F1：409 只證明「有一份 config」。後續 install 直接從那份 config 取
   // 目的地，沿用一份無關的設定＝把備份內容寫進使用者沒確認過的現役目錄。
   it("讀回來的設定與剛確認的落點對不上 → 不放行", async () => {

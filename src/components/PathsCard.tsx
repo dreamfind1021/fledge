@@ -104,7 +104,12 @@ export function PathsCard({
   }, []);
 
   useEffect(() => {
-    if (port == null) return;
+    if (port == null) {
+      // sidecar 還沒起來／掛掉：**明確回報「還沒讀到」**（Codex 票 04 R2）。沉默的話
+      // 精靈那側的狀態會停在上一次的 `loaded`，於是在根本讀不到清單的狀態下放行。
+      onStatusRef.current("loading");
+      return;
+    }
     const mySource = sourceKey;
     setProjects(null);        // 換來源先清空：舊清單不得停在畫面上冒充新的一包
     setLoadError(null);
