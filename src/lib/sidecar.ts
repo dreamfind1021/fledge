@@ -149,9 +149,12 @@ export interface CreateSessionOptions {
   installId?: string;                   // kind=install 必填；後端據此查 TOOL_SPECS 取命令
   loginTarget?: "claude" | "codex";     // kind=login 用
   backupMode?: "list" | "run";          // kind=backup 必填；後端據此決定跑不跑 --list
-  /** kind=restore 必填。**是備份包名不是路徑**——後端拿它過 `list_bundles` 的 allowlist
-   *  才變成路徑（沿用 install 只送 `install_id` 的不變式）。 */
+  /** kind=restore 的來源之一。**是備份包名不是路徑**——後端拿它過 `list_bundles` 的
+   *  allowlist 才變成路徑（沿用 install 只送 `install_id` 的不變式）。 */
   restoreBundle?: string;
+  /** kind=restore 的另一個來源：使用者用系統檔案選擇器挑的**絕對路徑**（移機，增補
+   *  spec §2.7）。與 `restoreBundle` **二擇一**，兩者都給後端回 400。 */
+  restoreBundlePath?: string;
   restoreDest?: string;                 // kind=restore 選填；未給＝後端算的預設展開位置
 }
 
@@ -178,7 +181,7 @@ async function readErrorCode(resp: Response): Promise<string | null> {
 
 export async function createSession(port: number, opts: CreateSessionOptions): Promise<string> {
   const { path, account, kind = "claude", installId, loginTarget, backupMode,
-          restoreBundle, restoreDest } = opts;
+          restoreBundle, restoreBundlePath, restoreDest } = opts;
   // 安全不變式（spec §5）：body 只放 allowlist key（install_id），永遠不含命令字串。
   // 未給的欄位一律不放進 body——後端 extra="forbid" 只擋未知欄位，但少送等於用後端預設，
   // 也讓「安裝不帶 account」這件事在 wire 上看得出來。
@@ -188,6 +191,7 @@ export async function createSession(port: number, opts: CreateSessionOptions): P
   if (loginTarget !== undefined) body.login_target = loginTarget;
   if (backupMode !== undefined) body.backup_mode = backupMode;
   if (restoreBundle !== undefined) body.restore_bundle = restoreBundle;
+  if (restoreBundlePath !== undefined) body.restore_bundle_path = restoreBundlePath;
   if (restoreDest !== undefined) body.restore_dest = restoreDest;
 
   const resp = await fetch(`${base(port)}/api/sessions`, {
@@ -617,9 +621,21 @@ export type RestoreDestStatus =
   | "ok" | "is_root" | "is_home" | "inside_source" | "not_empty" | "not_dir" | "denied";
 
 export interface RestorePlan {
+  // 送什麼回什麼：名字模式回名字、路徑模式回絕對路徑。前端拿它比對「換了包之後舊 plan
+  // 還在 state 裡」（還原卡的既有不變式）。
   bundle: string;
   dest: string;                  // 絕對路徑（未指定時是後端算的預設位置）
   dest_status: RestoreDestStatus;
+}
+
+/** 備份包摘要。`project_count` 只數 `projects/` 的目錄數，**會比 `paths` 頁列出的筆數多**
+ *  ——後者跳過讀不出 `cwd` 的專案（無從對應）。兩者語意不同，文案要講清楚。 */
+export interface BundleInfo {
+  host: string;
+  created: string;
+  accounts: string[];
+  extra: string[];
+  project_count: number;
 }
 
 /** 還原端點的判別碼錯誤。理由同 `BackupError`：`code` 只放欄位、不進 message。 */
@@ -630,19 +646,42 @@ export class RestoreError extends Error {
   }
 }
 
-/** 唯讀預覽：這份備份包會解到哪裡、那個位置能不能用。不動檔案系統。 */
-export async function restorePlan(
+async function postRestorePlan(
   port: number,
-  bundle: string,
+  source: Record<string, string>,
   dest?: string,
 ): Promise<RestorePlan> {
-  const body: Record<string, unknown> = { bundle };
+  const body: Record<string, unknown> = { ...source };
   if (dest !== undefined) body.dest = dest;
   const resp = await fetch(`${base(port)}/api/restore/plan`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify(body),
   });
+  if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
+  return resp.json();
+}
+
+/** 唯讀預覽：這份備份包會解到哪裡、那個位置能不能用。不動檔案系統。
+ *  名字模式——後端拿它過 `list_bundles` 的 allowlist（還原卡走這條）。 */
+export const restorePlan = (port: number, bundle: string, dest?: string) =>
+  postRestorePlan(port, { bundle }, dest);
+
+/** 同上，但來源是**使用者用系統檔案選擇器挑的絕對路徑**（移機，增補 spec §2.7）：
+ *  新機器的備份包不可能在 `backup_dir` 裡，名字模式一律 `unknown_bundle`。
+ *
+ *  後端的兩個欄位是**二擇一**（都給或都不給皆 400）。這裡用兩支函式而不是一個帶
+ *  `bundle?`／`bundlePath?` 的 options 物件——後者讓「同時給兩個」在型別上合法、
+ *  只能等後端 400，前者在編譯期就不可能組出那個請求。 */
+export const restorePlanForPath = (port: number, bundlePath: string, dest?: string) =>
+  postRestorePlan(port, { bundle_path: bundlePath }, dest);
+
+/** 備份包摘要（增補 spec 缺口 1）：展開之後讓使用者確認「這是不是我要的那一包」。唯讀。 */
+export async function fetchBundleInfo(port: number, dest: string): Promise<BundleInfo> {
+  const resp = await fetch(
+    `${base(port)}/api/restore/bundle-info?dest=${encodeURIComponent(dest)}`,
+    { headers: authHeaders() },
+  );
   if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
   return resp.json();
 }

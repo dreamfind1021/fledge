@@ -619,6 +619,37 @@ def _add_history(src: Path) -> None:
         json.dumps({"cwd": "/Users/olduser/work/app"}) + "\n", encoding="utf-8")
 
 
+def test_bundle_info_route_summarizes_bundle(tmp_path: Path, monkeypatch):
+    """唯讀端點（票 02，增補 spec 缺口 1）：`bundle` 頁靠它確認「這是不是我要的那一包」。
+    非 bundle 的目錄 → 400 `source_not_a_bundle`（沿用 `_INSTALL_CLIENT_ERRORS` 分流）。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    _add_history(src)
+    client = TestClient(create_app())
+    resp = client.get("/api/restore/bundle-info", params={"dest": str(src)})
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "host": "old-mac",
+        "created": "20260731-1200",
+        "accounts": ["work"],
+        "extra": ["agents"],
+        "project_count": 1,
+    }
+    resp = client.get("/api/restore/bundle-info", params={"dest": str(tmp_path)})
+    assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
+
+
+def test_bundle_info_route_needs_no_config(tmp_path: Path, monkeypatch):
+    """移機的常態是**設定檔還沒落檔**（`adopt-config` 要到下一頁才跑）——摘要端點不得
+    因為讀不到 config 就失敗，否則 `bundle` 頁在真正的移機情境下永遠看不到摘要。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(tmp_path / "nonexistent.json"))
+    src = make_staging(tmp_path)
+    resp = TestClient(create_app()).get("/api/restore/bundle-info",
+                                        params={"dest": str(src)})
+    assert resp.status_code == 200
+    assert resp.json()["accounts"] == ["work"]
+
+
 def test_project_paths_route_reads_bundle(tmp_path: Path, monkeypatch):
     """唯讀端點（票 06）：列備份包裡的專案、舊路徑（讀歷史檔 cwd）、建議新路徑；
     非 bundle 400。"""

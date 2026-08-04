@@ -922,6 +922,98 @@ def test_extra_name_must_be_a_single_path_component(tmp_path: Path, monkeypatch)
             inst.plan(str(src), _accounts(tgt), extra={bad: str(spot)})
 
 
+# ---------- 票 02：bundle-info（唯讀摘要，增補 spec 缺口 1） ----------
+
+
+def test_bundle_info_summarizes_the_bundle(tmp_path: Path):
+    """`bundle` 頁要讓使用者確認「這是不是我要的那一包」：來源機器、備份時間、帳號與
+    extra 清單、專案數。全部來自 manifest 與目錄計數，唯讀。"""
+    src = _staging(tmp_path)
+    (src / "accounts" / "work" / "projects" / "-Users-olduser-a").mkdir(parents=True)
+    (src / "accounts" / "work" / "projects" / "-Users-olduser-b").mkdir()
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["personal"] = "/Users/olduser/.claude-tc"
+    manifest["extra"] = {".agents": "/Users/olduser/.agents"}
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (src / "accounts" / "personal" / "projects" / "-Users-olduser-c").mkdir(parents=True)
+
+    info = inst.bundle_info(str(src))
+
+    assert info == {
+        "host": "old-mac",
+        "created": "20260731-1200",
+        "accounts": ["personal", "work"],
+        "extra": [".agents"],
+        "project_count": 3,
+    }
+
+
+def test_bundle_info_counts_only_real_project_dirs(tmp_path: Path):
+    """專案數的判準與 `project_paths()` 一致：`is_dir()` 且**非 symlink**（lstat 語意）。
+    兩邊不一致的話 `bundle` 頁與 `paths` 頁的數字對不上，使用者會以為少了東西。"""
+    src = _staging(tmp_path)
+    projects = src / "accounts" / "work" / "projects"
+    (projects / "-Users-olduser-a").mkdir(parents=True)
+    (projects / "loose.jsonl").write_text("{}", encoding="utf-8")       # 檔案不算
+    (projects / "linked").symlink_to(projects / "-Users-olduser-a")     # symlink 不算
+    assert inst.bundle_info(str(src))["project_count"] == 1
+
+
+def test_bundle_info_counts_zero_when_account_has_no_projects(tmp_path: Path):
+    """帳號沒有 `projects/` 目錄（從沒用過 /resume 的帳號）→ 0，不是報錯。"""
+    assert inst.bundle_info(str(_staging(tmp_path)))["project_count"] == 0
+
+
+def test_bundle_info_does_not_follow_symlinked_dirs_out_of_the_bundle(tmp_path: Path):
+    """**每一層都不得跟隨 symlink**（Codex 票 02 R1 F3）：`accounts/<key>` 或它底下的
+    `projects` 是指向包外的連結時，`is_dir()` 會跟過去，於是這支唯讀端點就替一份惡意
+    備份包遍歷本機任意目錄——回的 count 也不再描述這一包。
+
+    只測 `projects` 的子項是 symlink 不夠：被穿越的是**目錄那一層**。"""
+    outside = tmp_path / "outside"
+    (outside / "a").mkdir(parents=True)
+    (outside / "b").mkdir()
+
+    src = _staging(tmp_path)
+    (src / "accounts" / "work" / "projects").symlink_to(outside)
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["linked"] = "/Users/olduser/.claude-tc"
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (src / "accounts" / "linked").symlink_to(tmp_path / "elsewhere")
+    (tmp_path / "elsewhere" / "projects" / "c").mkdir(parents=True)
+
+    assert inst.bundle_info(str(src))["project_count"] == 0
+
+
+def test_bundle_info_rejects_path_like_account_key(tmp_path: Path):
+    """key 會被拼進 `accounts/<key>/projects` 去數目錄——manifest 是不可信輸入，
+    與 `project_paths()` 同一條信任邊界、同規則重驗。"""
+    src = _staging(tmp_path)
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"] = {"../outside": "/Users/olduser/.claude"}
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid_account_key"):
+        inst.bundle_info(str(src))
+
+
+def test_bundle_info_refuses_a_directory_that_is_not_a_bundle(tmp_path: Path):
+    """讀不到 manifest → `source_not_a_bundle`（沿用 `read_manifest` 的判準）。"""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(ValueError, match="source_not_a_bundle"):
+        inst.bundle_info(str(plain))
+
+
+def test_bundle_info_tolerates_manifest_without_host_or_created(tmp_path: Path):
+    """`host`／`created` 只影響顯示、不參與任何路徑或安全決策——缺了就回空字串，
+    不為一個顯示欄位讓整包看不到摘要（與 `restore-claude.sh::verify_manifest` 刻意
+    不驗 `created` 同一個取捨）。"""
+    src = _staging(tmp_path)
+    (src / "manifest.json").write_text(json.dumps({"accounts": {}}), encoding="utf-8")
+    info = inst.bundle_info(str(src))
+    assert (info["host"], info["created"], info["accounts"]) == ("", "", [])
+
+
 # ---------- 票 13：extra name 的判準與帳號 key 分開 ----------
 
 

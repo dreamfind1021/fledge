@@ -18,6 +18,7 @@ import { EnvCard } from "./EnvCard";
 import { LoginCard } from "./LoginCard";
 import { CommonConfigCard } from "./CommonConfigCard";
 import { SystemSettingsCard } from "./SystemSettingsCard";
+import { BundleCard, EMPTY_BUNDLE_SELECTION, type BundleSelection } from "./BundleCard";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -56,9 +57,20 @@ export function Onboarding({ onClose }: OnboardingProps) {
   // 會讓該欄變 undefined（Codex F-7 已警告不可當 render gate），只拿它當初值：唯有明確為 true
   // 才是「尚未落檔」，重跑引導時（設定檔早已存在）一進來就算已落檔。
   const [configCreated, setConfigCreated] = useState(config?.is_first_run !== true);
+  // 備份包的選擇（票 02）：選了哪一包、解到哪裡、裡面有什麼。**整組住在這裡而不是卡片裡**
+  // ——卡片會隨換頁卸載，只把包資訊留在上層會讓「還沒選任何包的卡片」顯示上一包的摘要
+  // （Codex 票 02 R1 F2）。其中包資訊還是**序列本身的輸入**：`paths` 頁在包裡沒有專案歷史
+  // 時整頁不出現，而那要展開後才知道。
+  const [bundle, setBundle] = useState<BundleSelection>(EMPTY_BUNDLE_SELECTION);
   const overlayRef = useRef<HTMLDivElement>(null);
 
-  const steps = wizardSteps({ accountCount: accountKeys.length, mode });
+  const steps = wizardSteps({
+    accountCount: accountKeys.length,
+    mode,
+    // `unknown` 要傳 undefined 而不是 false：那是「還不知道」，此時先留著 `paths` 頁
+    hasProjectHistory:
+      bundle.probe.kind === "unknown" ? undefined : bundle.probe.kind === "present",
+  });
   const index = stepIndex(current, steps, mode);
   const step = steps[index];
 
@@ -78,17 +90,22 @@ export function Onboarding({ onClose }: OnboardingProps) {
     goTo(picked === "restore" ? "bundle" : "roots");
   };
 
+  /** 移機各頁共用的導覽列。`blocked` 是「這一頁還沒有往下走的依據」（票 02 的包資訊）。 */
+  const migNav = (blocked = false) => (
+    <div className="ob-actions">
+      <button onClick={prev} className="ob-btn-ghost">{t("common.prev")}</button>
+      <button onClick={next} className="ob-btn" disabled={blocked}>{t("common.next")}</button>
+    </div>
+  );
+
   /**
-   * 移機分支的空殼頁：只有標題與導覽，內容由票 02–08 逐一填實。
-   * 這張票（票 01）只負責「兩條路的序列不同、每一頁走得過去」。
+   * 移機分支的空殼頁：只有標題與導覽，內容由票 03–08 逐一填實。
+   * 票 01 只負責「兩條路的序列不同、每一頁走得過去」；`bundle` 已由票 02 填實。
    */
-  const migShell = (key: "bundle" | "targets" | "paths" | "install" | "repair") => (
+  const migShell = (key: "targets" | "paths" | "install" | "repair") => (
     <div>
       <h2 className="ob-h">{t(`mig.${key}.h`)}</h2>
-      <div className="ob-actions">
-        <button onClick={prev} className="ob-btn-ghost">{t("common.prev")}</button>
-        <button onClick={next} className="ob-btn">{t("common.next")}</button>
-      </div>
+      {migNav()}
     </div>
   );
 
@@ -315,7 +332,17 @@ export function Onboarding({ onClose }: OnboardingProps) {
           )}
 
           {/* ── 移機分支的四頁（票 12 Plan B）：目前是空殼，票 02–08 逐一填實 ── */}
-          {step === "bundle" && migShell("bundle")}
+          {/* 備份包頁（票 02）：包資訊還是 `unknown` 就走不出去——後面每一頁要列什麼、
+              `paths` 頁在不在，全都來自這一包 */}
+          {step === "bundle" && (
+            <div>
+              <BundleCard port={port} selection={bundle} onSelection={setBundle} />
+              {bundle.probe.kind === "unknown" && (
+                <p className="ob-note">{t("mig.bundle.needInfo")}</p>
+              )}
+              {migNav(bundle.probe.kind === "unknown")}
+            </div>
+          )}
           {step === "targets" && migShell("targets")}
           {step === "paths" && migShell("paths")}
           {step === "install" && migShell("install")}

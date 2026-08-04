@@ -16,7 +16,33 @@
     "restore": "I have a backup"
   },
   "mig": {
-    "bundle": { "h": "Choose your backup bundle" },
+    "bundle": {
+      "h": "Choose your backup bundle",
+      "sub": "Pick a backup bundle. Fledge expands it into a brand-new folder so you can see what's inside before deciding what to bring back — nothing you already have is touched in this step.",
+      "pick": "Choose bundle…",
+      "filter": "Backup bundle",
+      "dest": "Expand into",
+      "changeDest": "Change location…",
+      "expand": "Expand this bundle",
+      "expanding": "Expanding…",
+      "reexpand": "Expand again",
+      "needInfo": "Expand the bundle before continuing.",
+      "sum": {
+        "h": "Inside this bundle",
+        "host": "From machine",
+        "created": "Backed up",
+        "accounts": "Accounts",
+        "extra": "Assets outside accounts",
+        "projects": "Projects",
+        "projects_v": "{{count}}",
+        "none": "None",
+        "note": "This counts the project folders inside the bundle. On the next step, projects whose original path can't be read won't be listed, so that count may be lower."
+      },
+      "errors": {
+        "expandFailed": "Couldn't start expanding this bundle.",
+        "infoFailed": "The bundle was expanded, but its contents couldn't be read."
+      }
+    },
     "targets": { "h": "Confirm landing spots" },
     "paths": { "h": "Map project paths" },
     "install": { "h": "Install onto this machine" },

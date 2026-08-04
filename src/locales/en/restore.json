@@ -56,6 +56,7 @@
     "bundle_not_found": "That file isn't there — it may have been moved or renamed.",
     "bundle_not_a_file": "That isn't a file. Pick the backup bundle itself (.tar.gz).",
     "bundle_unreadable": "That file can't be read. Check its permissions and try again.",
-    "dest_required": "This filename doesn't say when the backup was taken, so pick where to unpack it yourself."
+    "dest_required": "This filename doesn't say when the backup was taken, so pick where to unpack it yourself.",
+    "source_not_a_bundle": "What was expanded isn't a Fledge backup bundle."
   }
 }

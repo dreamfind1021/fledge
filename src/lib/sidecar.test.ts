@@ -419,3 +419,62 @@ describe("fetchConfig shape guard", () => {
     await expect(fetchConfig(1234)).resolves.toMatchObject({ version: 1 });
   });
 });
+
+// --- 還原：路徑模式與備份包摘要（票 02／票 11 的前端接線）---
+
+describe("restore 路徑模式與 bundle-info", () => {
+  const captureBody = (json: unknown) => {
+    const seen: Array<{ url: string; body: Record<string, unknown> | null }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      seen.push({ url, body: init?.body ? JSON.parse(init.body as string) : null });
+      return { ok: true, json: async () => json } as unknown as Response;
+    }));
+    return seen;
+  };
+
+  // 移機選到的包不在 backup_dir 裡，名字模式一律 unknown_bundle（增補 spec §2.7）。
+  // 二擇一：送路徑就不能送名字，否則後端 400（歧義不讓後蓋前）。
+  // 二擇一由**兩支函式**表達而不是一個 options 物件：後者允許呼叫端同時給兩個欄位
+  // （後端 400），前者在編譯期就不可能。既有的還原卡因此一個字都不用改。
+  it("restorePlanForPath 只送 bundle_path", async () => {
+    const seen = captureBody({ bundle: "/tmp/b.tar.gz", dest: "/tmp/x", dest_status: "ok" });
+    const m = await import("./sidecar");
+    await m.restorePlanForPath(1234, "/tmp/b.tar.gz");
+    expect(seen[0].body).toEqual({ bundle_path: "/tmp/b.tar.gz" });
+  });
+
+  it("restorePlan 只送 bundle（還原卡的既有路徑不變）", async () => {
+    const seen = captureBody({ bundle: "b.tar.gz", dest: "/tmp/x", dest_status: "ok" });
+    const m = await import("./sidecar");
+    await m.restorePlan(1234, "b.tar.gz", "/tmp/x");
+    expect(seen[0].body).toEqual({ bundle: "b.tar.gz", dest: "/tmp/x" });
+  });
+
+  it("createSession kind=restore 送 restore_bundle_path", async () => {
+    const seen = captureBody({ session_id: "s" });
+    const m = await import("./sidecar");
+    await m.createSession(1234, {
+      path: "", kind: "restore", restoreBundlePath: "/tmp/b.tar.gz", restoreDest: "/tmp/x",
+    });
+    expect(seen[0].body).toEqual({
+      path: "", kind: "restore", restore_bundle_path: "/tmp/b.tar.gz", restore_dest: "/tmp/x",
+    });
+  });
+
+  it("fetchBundleInfo 以 dest 查詢並回摘要", async () => {
+    const info = { host: "old-mac", created: "20260731-1200", accounts: ["work"], extra: [], project_count: 9 };
+    const seen = captureBody(info);
+    const m = await import("./sidecar");
+    expect(await m.fetchBundleInfo(1234, "/tmp/x")).toEqual(info);
+    expect(seen[0].url).toContain(`dest=${encodeURIComponent("/tmp/x")}`);
+  });
+
+  it("bundle-info 的 400 判別碼保留在 RestoreError 上供 i18n 映射", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false, status: 400, json: async () => ({ error: "source_not_a_bundle" }),
+    }) as unknown as Response));
+    const m = await import("./sidecar");
+    await expect(m.fetchBundleInfo(1234, "/tmp/x"))
+      .rejects.toMatchObject({ code: "source_not_a_bundle" });
+  });
+});
