@@ -4,7 +4,10 @@
 展開任何東西**（成功路徑攔截 create_session，只驗後端組出來的 argv）。
 """
 import json
+import os
 import shutil
+import subprocess
+import tarfile
 from pathlib import Path
 
 from conftest import make_staging
@@ -15,6 +18,7 @@ from fledge_sidecar.backup import install
 from fledge_sidecar.backup import restore as restore_mod
 
 BUNDLE = "claude-backup-20260101-1200.tar.gz"
+REPO = Path(__file__).resolve().parents[2]
 
 
 def _config(
@@ -506,6 +510,61 @@ def test_adopt_config_writes_confirmed_spots_not_manifest_suggestions(
     assert data["extra"] == {"agents": str(home / ".agents")}
     assert [r["default_account"] for r in data["roots"]] == ["work"]
     assert "/Users/olduser" not in cfg.read_text(encoding="utf-8")
+
+
+def test_adopt_config_accepts_extra_name_from_the_real_backup_script(
+        tmp_path: Path, monkeypatch):
+    """端到端（票 13）：**真的跑 `backup-claude.sh`** 產一份含 `~/.agents` 的包，manifest
+    的 extra name 就是 `basename` 出來的 `.agents`——sidecar 這側必須收得下自己備份腳本的
+    產出，一路走到 extra 資產落地。
+
+    本檔其餘 fixture 一律把 name 寫成不帶點的 `agents`，與真實產出不一致，這條判準漂移
+    因此藏到票 12 R4 才被撞見。**手工造的 manifest 複製不出這個形狀**，只有跑真的產生端
+    才鎖得住兩邊的相容性。"""
+    old_home = tmp_path / "old"
+    (old_home / ".claude" / "skills").mkdir(parents=True)
+    (old_home / ".claude" / "skills" / "a.md").write_text("A", encoding="utf-8")
+    (old_home / ".agents" / "skills" / "s").mkdir(parents=True)
+    (old_home / ".agents" / "skills" / "s" / "SKILL.md").write_text("X", encoding="utf-8")
+    (old_home / ".fledge").mkdir()
+    (old_home / ".fledge" / "config.json").write_text(json.dumps({
+        "version": 1, "roots": [],
+        "accounts": {"work": {"config_dir": str(old_home / ".claude"), "label": ""}},
+    }), encoding="utf-8")
+    out = tmp_path / "bundles"
+    env = {**os.environ, "HOME": str(old_home)}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    proc = subprocess.run(
+        ["/bin/bash", str(REPO / "scripts" / "backup-claude.sh"), "-o", str(out)],
+        capture_output=True, text=True, env=env, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    src = tmp_path / "unpacked"
+    # 展開等同 `restore-claude.sh` 的 `tar -xzf`；那支腳本的展開契約有自己的測試檔，
+    # 這裡要鎖的是「備份腳本產的 manifest 形狀」×「sidecar 的判準」。
+    with tarfile.open(bundle) as tf:
+        tf.extractall(src, filter="tar")
+    assert json.loads((src / "manifest.json").read_text(encoding="utf-8"))["extra"] == {
+        ".agents": str(old_home / ".agents")}          # 真實形狀：帶前導點
+
+    new_home = tmp_path / "new"
+    new_home.mkdir()
+    monkeypatch.setenv("HOME", str(new_home))
+    cfg = tmp_path / "fledge-config.json"
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    client = TestClient(create_app())
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(new_home / ".claude")}],
+        "extra": [{"name": ".agents", "path": str(new_home / ".agents")}]})
+    assert resp.status_code == 200, resp.json()
+    assert json.loads(cfg.read_text(encoding="utf-8"))["extra"] == {
+        ".agents": str(new_home / ".agents")}
+    resp = client.post("/api/restore/install", json={"dest": str(src)})
+    assert resp.status_code == 200, resp.json()
+    assert (new_home / ".agents" / "skills" / "s" / "SKILL.md").read_text(
+        encoding="utf-8") == "X"
+    assert (new_home / ".claude" / "skills" / "a.md").read_text(encoding="utf-8") == "A"
 
 
 def test_install_endpoints_use_config_extra(tmp_path: Path, monkeypatch):

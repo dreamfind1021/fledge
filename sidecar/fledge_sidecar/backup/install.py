@@ -55,6 +55,20 @@ _PROJECTS_DIR = "projects"
 _SAFE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
+def _safe_extra_name(name: str) -> bool:
+    """extra 的 name 是不是一個安全的**單一路徑元件**：非空、不是 `.`／`..`、不含分隔符
+    與 NUL。它與 account key 一樣會被拼進路徑，擋的東西相同，只是**允許的字元不同**。
+
+    **不套 `_SAFE_KEY_RE`**：extra name 是 basename 衍生的（`backup-claude.sh` 產 manifest
+    時用 `basename "${p}"`），真實的 `~/.agents` 產出的就是 `.agents`——帶前導點，過不了
+    帳號那組字元。帳號 key 是使用者在 Fledge 內自己取的，兩者來源不同、判準本來就該不同
+    （票 13：套同一條會讓專案自己的備份包搬不回 extra 資產）。
+    `scripts/restore-claude.sh::_safe_component` 是同一條分界的另一份實作。
+    """
+    return (isinstance(name, str) and name not in ("", ".", "..")
+            and "/" not in name and "\0" not in name)
+
+
 @dataclass(frozen=True)
 class ItemResult:
     account: str        # target account key；extra 項用 "extra:<name>" 命名空間
@@ -131,14 +145,16 @@ def validate_landing_spots(spots: dict[str, str]) -> dict[str, str]:
     """驗使用者確認的落點（adopt-config 專用，票 07）。回 {key: resolved 路徑}；任一
     不合法即整批 ValueError（判別碼由 route 轉 400）。
 
-    key 用落點命名空間（account key／`extra:<name>`），文法驗冒號後的裸名——與
-    `_SAFE_KEY_RE` 同一條信任邊界。這是**授權發生的那一刻**，驗得比 plan 嚴：除了
-    路徑正規化＋ADR-0001 底線防呆，落點之間（含帳號×extra 交叉）不得互為祖先——
-    外層落點的安裝會把內層目錄整個蓋掉（沿用 build_account_graph 的重疊規則）。"""
+    key 用落點命名空間（account key／`extra:<name>`），文法驗冒號後的裸名——帳號走
+    `_SAFE_KEY_RE`、extra 走 `_safe_extra_name`（兩者來源不同，見該函式）。這是
+    **授權發生的那一刻**，驗得比 plan 嚴：除了路徑正規化＋ADR-0001 底線防呆，落點
+    之間（含帳號×extra 交叉）不得互為祖先——外層落點的安裝會把內層目錄整個蓋掉
+    （沿用 build_account_graph 的重疊規則）。"""
     resolved: dict[str, str] = {}
     for key, raw in spots.items():
-        bare = key.split(":", 1)[1] if key.startswith("extra:") else key
-        if not _SAFE_KEY_RE.fullmatch(bare):
+        ok = (_safe_extra_name(key.split(":", 1)[1]) if key.startswith("extra:")
+              else bool(_SAFE_KEY_RE.fullmatch(key)))
+        if not ok:
             raise ValueError("invalid_account_key")
         resolved[key] = _resolved_config_dir(raw)
     _ensure_no_overlap(list(resolved.values()))
@@ -445,8 +461,8 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         if not confirmed or not isinstance(confirmed, str):
             excluded.append(name)           # 落點沒被使用者確認就整項不搬（spec §4.2.2）
             continue
-        if not _SAFE_KEY_RE.fullmatch(name):
-            raise ValueError("invalid_account_key")   # extra name 同樣拼進路徑，同規則重驗
+        if not _safe_extra_name(name):
+            raise ValueError("invalid_account_key")   # extra name 同樣拼進路徑，重驗
         extra_targets[name] = _resolved_config_dir(confirmed)
         spot_source_identities[f"extra:{name}"] = \
             dir_identity(str(Path(root, "extra", name)))
