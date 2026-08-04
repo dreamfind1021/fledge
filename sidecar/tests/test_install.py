@@ -9,6 +9,7 @@ import os
 import shutil
 import signal
 import subprocess
+import tarfile
 import sys
 from pathlib import Path
 
@@ -16,6 +17,8 @@ import pytest
 from conftest import make_staging as _staging
 
 from fledge_sidecar.backup import install as inst
+
+REPO = Path(__file__).resolve().parents[2]
 
 _PROJECTS = "projects"   # install._PROJECTS_DIR 的測試端常數（不從私有匯入）
 
@@ -2577,3 +2580,61 @@ def test_plan_preview_matches_install_for_a_symlinked_extra(
     p = inst.plan(str(src), _accounts(tgt), extra={"agents": str(home / ".agents")})
     installed_from_extra = p.will_install - 2      # staging 本身的 skills/a.md 與 CLAUDE.md
     assert installed_from_extra == 0, "包外的 extra 內容不算在預覽裡"
+
+
+def test_plan_and_install_agree_on_a_symlinked_extra_from_the_real_backup_script(
+        tmp_path: Path, monkeypatch):
+    """端到端（Codex 票 14 R2 F3）：**真的跑 `backup-claude.sh`**，而舊機的 `~/.agents`
+    本身是 symlink（skill 真身放第三個位置的常見設置）。
+
+    腳本用 `cp -R`（不跟隨），所以產出的 `extra/.agents` 是一條指向**舊機絕對路徑**的
+    symlink——這是腳本的合法產出，不是惡意構造，而手工 fixture 複製不出這個形狀（票 13
+    的教訓）。
+
+    **這種包一直都裝不回去**：install 的 fd-relative `O_NOFOLLOW` 開不了 symlink 來源，
+    整項 `failed`。票 14 改的是預覽——修法前 `_scan_spot` 的 `Path.is_dir()` 跟隨連結，
+    在舊路徑還在的機器上會把包外的內容數進 `will_install`，於是預覽說會裝、結果一項沒裝。
+    **修法沒有讓任何原本裝得成的東西變成裝不成**，它讓預覽與結果一致。
+
+    備份腳本產出一個必然裝不回去的包，是**腳本那一側的產品缺口**，記在票 14 的收尾。"""
+    old_home = tmp_path / "oldhome"
+    (old_home / ".claude" / "skills").mkdir(parents=True)
+    (old_home / ".claude" / "skills" / "a.md").write_text("A", encoding="utf-8")
+    real_agents = tmp_path / "real-agents" / "skills"
+    real_agents.mkdir(parents=True)
+    (real_agents / "s.md").write_text("X", encoding="utf-8")
+    (old_home / ".agents").symlink_to(tmp_path / "real-agents", target_is_directory=True)
+    (old_home / ".fledge").mkdir()
+    (old_home / ".fledge" / "config.json").write_text(json.dumps({
+        "version": 1, "roots": [],
+        "accounts": {"work": {"config_dir": str(old_home / ".claude"), "label": ""}},
+    }), encoding="utf-8")
+    out = tmp_path / "bundles"
+    env = {**os.environ, "HOME": str(old_home)}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    proc = subprocess.run(
+        ["/bin/bash", str(REPO / "scripts" / "backup-claude.sh"), "-o", str(out)],
+        capture_output=True, text=True, env=env, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    src = tmp_path / "unpacked"
+    with tarfile.open(next(out.glob("claude-backup-*.tar.gz"))) as tf:
+        tf.extractall(src, filter="tar")
+    assert (src / "extra" / ".agents").is_symlink(), "腳本產出的形狀變了，這條測試要重寫"
+
+    # **舊路徑還在的機器**（同機展開）＝最有利於「被數進去」的情境
+    new_home = tmp_path / "newhome"
+    new_home.mkdir()
+    monkeypatch.setenv("HOME", str(new_home))
+    tgt = new_home / ".claude"
+    tgt.mkdir()
+    spot = new_home / ".agents"
+    accounts = {"work": {"config_dir": str(tgt), "label": ""}}
+    # 比對「有沒有確認 extra 落點」兩次預覽的差：extra 不該貢獻任何一項
+    without = inst.plan(str(src), accounts).will_install
+    p = inst.plan(str(src), accounts, extra={".agents": str(spot)})
+    assert p.will_install == without, "symlink 的 extra 不得算進預覽"
+
+    results = inst.install(p)
+    assert [(r.outcome, r.error) for r in results if r.account == "extra:.agents"] == \
+        [("failed", "not_a_directory")]
+    assert not spot.exists(), "零內容落地"

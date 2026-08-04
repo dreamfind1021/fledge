@@ -349,8 +349,9 @@ def _scan_spot(content_dir: Path, target: str,
     return n_install, skip, blocked, walk_excluded
 
 
-def _validate_mapping(root: str, mapping: list[tuple[str, str]],
-                      project_dirs: dict[str, list[str]]) -> dict[str, str]:
+def _validate_mapping(mapping: list[tuple[str, str]],
+                      project_dirs: dict[str, list[str]],
+                      project_roots: dict[str, str]) -> dict[str, str]:
     """驗 mapping（舊專案路徑 → 新專案路徑），回 {舊 encoded 名: 新 encoded 名}。
     **在寫任何東西之前一次驗完**（spec §4.2.4）：old／new 都必須絕對路徑；old 必須
     是備份包內確實存在的專案（mapping 也是不可信輸入）；編碼有損（非英數全變 `-`），
@@ -358,7 +359,16 @@ def _validate_mapping(root: str, mapping: list[tuple[str, str]],
 
     **old 以 cwd 驗身（Codex 票 06 R1 F2）**：encoded 名是有損投影，不同的 old 能
     誤中無關專案、跨帳號同名時一筆 mapping 會動到多個帳號。每個被命中的專案目錄都
-    重讀 cwd 與 old 逐字比對，不一致（含讀不出）→ `mapping_ambiguous` 整批拒。"""
+    重讀 cwd 與 old 逐字比對，不一致（含讀不出）→ `mapping_ambiguous` 整批拒。
+
+    `project_roots` 是**呼叫端已經逐層 `_real_subdir` 驗過的** `projects` 目錄路徑
+    （票 14 R2）：這裡不再從 `root` 重新拼一次 pathname——重拼等於把剛驗過的東西丟掉，
+    中間層是包外連結時 `_peek_cwd` 的 `O_NOFOLLOW`（只擋最後元件）攔不住。
+
+    **這不等於關閉了 TOCTOU**：傳進來的仍是 pathname，`_real_subdir` 到這裡之間被換掉
+    的窗口還在——與 `_real_subdir` 記錄在案的取捨同一級（那支的 docstring 寫明本層是
+    pathname-based，後果是列出來的東西不準、不是寫錯位置）。少的是「同一條路徑被解析
+    兩次」這個多餘的窗口，不是窗口本身。"""
     all_names = {n for names in project_dirs.values() for n in names}
     renames: dict[str, str] = {}
     for old, new in mapping:
@@ -372,7 +382,7 @@ def _validate_mapping(root: str, mapping: list[tuple[str, str]],
             raise ValueError("mapping_collision")   # 同一專案（或編碼相撞的兩個 old）
         for key, names in project_dirs.items():
             if old_enc in names and _peek_cwd(
-                    Path(root, "accounts", key, _PROJECTS_DIR, old_enc)) != old:
+                    Path(project_roots[key], old_enc)) != old:
                 raise ValueError("mapping_ambiguous")
         renames[old_enc] = encode_cc_project_dir(new)
     # 每個帳號的 projects/ 內，改名後的名字集合不得有重複（含未改寫的既有名）——
@@ -642,7 +652,7 @@ def plan(source_root: str, accounts: dict[str, dict[str, str]],
         project_roots[key] = pdir
         project_dirs[key] = sorted(
             c.name for c in Path(pdir).iterdir() if c.is_dir() and not c.is_symlink())
-    project_renames = _validate_mapping(root, list(mapping or []), project_dirs)
+    project_renames = _validate_mapping(list(mapping or []), project_dirs, project_roots)
     unmapped_projects: list[dict] = []
     for key in sorted(project_dirs):
         for name in project_dirs[key]:
