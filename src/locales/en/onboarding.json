@@ -88,7 +88,8 @@
       "note": "Nothing is written on this step — the rewrite happens at install time, so you can come back and change it any time before then.",
       "errors": {
         "loadFailed": "Couldn't read the project list for this bundle."
-      }
+      },
+      "shared": "This path exists in each of these accounts; the rewrite applies to all of them:"
     },
     "install": {
       "h": "Install onto this machine"

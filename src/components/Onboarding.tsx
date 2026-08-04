@@ -20,7 +20,7 @@ import { CommonConfigCard } from "./CommonConfigCard";
 import { SystemSettingsCard } from "./SystemSettingsCard";
 import { BundleCard, EMPTY_BUNDLE_SELECTION, type BundleSelection } from "./BundleCard";
 import { TargetsCard } from "./TargetsCard";
-import { PathsCard, type ProjectMapping } from "./PathsCard";
+import { PathsCard, type PathsStatus, type ProjectMapping } from "./PathsCard";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -66,7 +66,18 @@ export function Onboarding({ onClose }: OnboardingProps) {
   const [bundle, setBundle] = useState<BundleSelection>(EMPTY_BUNDLE_SELECTION);
   // 專案路徑對應（票 04）。**這一頁不寫任何東西**——改寫在 install 時才發生，所以對應
   // 關係住在這裡、一路帶到安裝頁，按下安裝之前隨時能回去改。
+  //
+  // **綁在 `bundle.gen` 上**（Codex 票 04 R1 F1）：換包、換展開位置、重新展開都會讓它
+  // 失效——舊 key 不屬於新包，送進 plan 是 `mapping_unknown_project`；兩包剛好有同一條
+  // 舊路徑時更糟，上一包的人工選擇會靜靜套到新包上。
   const [mapping, setMapping] = useState<ProjectMapping>({});
+  const [pathsStatus, setPathsStatus] = useState<PathsStatus>("loading");
+  const mappingGen = useRef(bundle.gen);
+  if (mappingGen.current !== bundle.gen) {
+    // render body 同步清空：等 effect 會讓 PathsCard 先用舊 mapping seed 一次
+    mappingGen.current = bundle.gen;
+    if (Object.keys(mapping).length > 0) setMapping({});
+  }
   const overlayRef = useRef<HTMLDivElement>(null);
 
   const steps = wizardSteps({
@@ -395,10 +406,16 @@ export function Onboarding({ onClose }: OnboardingProps) {
                   port={port}
                   dest={bundle.probe.dest}
                   projectCount={bundle.probe.info.project_count}
+                  sourceGen={bundle.gen}
                   mapping={mapping}
                   onMapping={setMapping}
+                  onStatus={setPathsStatus}
                 />
-                {migNav()}
+                {/* 清單讀不出來就擋住（Codex 票 04 R1 F3）：使用者在看不到任何專案、
+                    也沒有任何對應的情況下往下走，install 會把所有歷史原樣搬過去、
+                    `/resume` 全部列不出來——那**不是**他選的「留空即照搬」。
+                    包裡本來就沒有專案時不擋（`project_count` 為 0 沒有東西要對應）。 */}
+                {migNav(bundle.probe.info.project_count > 0 && pathsStatus !== "loaded")}
               </div>
             )
           )}

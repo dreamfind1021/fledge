@@ -25,17 +25,21 @@ const PROJECTS: ProjectPath[] = [
 
 /** 對應關係住在精靈（離開這頁再回來要還在），測試得把它回寫成 props——否則連建議值
  *  都不會出現在畫面上（那是父層的職責）。 */
-function Harness({ total = 3, spy, initial = {} }: {
+function Harness({ total = 3, spy, initial = {}, port = 1234, dest = "/tmp/staging",
+                  sourceGen = 1, onStatus }: {
   total?: number; spy?: (m: ProjectMapping) => void; initial?: ProjectMapping;
+  port?: number; dest?: string; sourceGen?: number;
+  onStatus?: (s: string) => void;
 }) {
   const [mapping, setMapping] = useState<ProjectMapping>(initial);
   return (
-    <PathsCard port={1234} dest="/tmp/staging" projectCount={total}
+    <PathsCard port={port} dest={dest} projectCount={total} sourceGen={sourceGen}
                mapping={mapping}
                onMapping={(m) => {
                  setMapping(m);
                  spy?.(m);
-               }} />
+               }}
+               onStatus={onStatus ?? (() => {})} />
   );
 }
 
@@ -123,5 +127,84 @@ describe("PathsCard", () => {
     const ui = setup();
     await waitFor(() => expect(ui.getByText(zh.mig.paths.errors.loadFailed)).toBeTruthy());
     expect(ui.container.textContent).not.toContain("PATHS-SENTINEL-500");
+  });
+});
+
+describe("PathsCard 的來源切換與載入狀態", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("zh-TW");
+    vi.clearAllMocks();
+    fetchProjectPaths.mockResolvedValue(PROJECTS);
+  });
+  afterEach(cleanup);
+
+  // Codex 票 04 R1 F2：`seeded` 原本是元件生命週期的全域布林，換了一包之後不會重設，
+  // 新來源的建議值因此永遠填不進去
+  it("換了一包（sourceGen 變）→ 重新填新包的建議值", async () => {
+    const ui = render(<Harness sourceGen={1} />);
+    await waitFor(() => expect(ui.getByDisplayValue("/Users/me/work/app")).toBeTruthy());
+
+    fetchProjectPaths.mockResolvedValue([{
+      account: "work", old_path: "/Users/olduser/other", encoded_dir: "-Users-olduser-other",
+      suggested: "/Users/me/other", suggested_exists: false,
+    }]);
+    ui.rerender(<Harness sourceGen={2} dest="/tmp/staging-2" />);
+
+    await waitFor(() => expect(ui.getByDisplayValue("/Users/me/other")).toBeTruthy());
+  });
+
+  // Codex 票 04 R1 F2：沒有 request generation 的話，舊 port 的慢回應會蓋掉新的結果
+  it("舊來源的慢回應晚於新來源抵達 → 不得覆蓋", async () => {
+    let releaseOld: (p: ProjectPath[]) => void = () => {};
+    fetchProjectPaths.mockImplementationOnce(
+      () => new Promise<ProjectPath[]>((resolve) => { releaseOld = resolve; }));
+    const ui = render(<Harness sourceGen={1} />);
+
+    fetchProjectPaths.mockResolvedValue([{
+      account: "work", old_path: "/new/only", encoded_dir: "-new-only",
+      suggested: "/Users/me/new", suggested_exists: false,
+    }]);
+    ui.rerender(<Harness sourceGen={2} dest="/tmp/staging-2" />);
+    await waitFor(() => expect(ui.getByText("/new/only")).toBeTruthy());
+
+    releaseOld(PROJECTS);                       // 舊來源的回應現在才到
+    await waitFor(() => expect(ui.getByText("/new/only")).toBeTruthy());
+    expect(ui.queryByText("/Users/olduser/work/app")).toBeNull();
+  });
+
+  // Codex 票 04 R1 F3：讀取失敗還放行 → 使用者在看不到任何專案、也沒有任何對應的情況下
+  // 繼續，install 就把所有歷史原樣搬過去，`/resume` 全部列不出來。那**不是**他選的「照搬」
+  it("載入中與失敗都要回報給精靈（它據此決定放不放行）", async () => {
+    const onStatus = vi.fn<(s: string) => void>();
+    fetchProjectPaths.mockRejectedValueOnce(new Error("boom"));
+    const ui = render(<Harness onStatus={onStatus} />);
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.errors.loadFailed)).toBeTruthy());
+    expect(onStatus.mock.calls.map((c) => c[0])).toEqual(["loading", "error"]);
+  });
+
+  it("成功載入回報 loaded", async () => {
+    const onStatus = vi.fn<(s: string) => void>();
+    const ui = render(<Harness onStatus={onStatus} />);
+    await waitFor(() => expect(ui.getByDisplayValue("/Users/me/work/app")).toBeTruthy());
+    expect(onStatus).toHaveBeenLastCalledWith("loaded");
+  });
+
+  // Codex 票 04 R1 F4：後端逐 account 掃描，兩個帳號可以合法含同一個專案目錄。
+  // mapping 的 key 是舊絕對路徑（與後端 `_validate_mapping` 的契約一致，它以 cwd 驗身），
+  // 所以同一條舊路徑**本來就會同時套用到兩個帳號**——UI 要合併成一列並說清楚，
+  // 而不是畫兩個看起來各自獨立、實際連動的輸入框
+  it("兩個帳號有同一條舊路徑 → 合併成一列並說明會同時套用", async () => {
+    fetchProjectPaths.mockResolvedValue([
+      { account: "work", old_path: "/shared/proj", encoded_dir: "-shared-proj",
+        suggested: "/Users/me/proj", suggested_exists: false },
+      { account: "personal", old_path: "/shared/proj", encoded_dir: "-shared-proj",
+        suggested: "/Users/me/proj", suggested_exists: false },
+    ]);
+    const ui = render(<Harness total={2} />);
+    await waitFor(() => expect(ui.getByDisplayValue("/Users/me/proj")).toBeTruthy());
+
+    expect(ui.getAllByDisplayValue("/Users/me/proj")).toHaveLength(1);   // 一列不是兩列
+    expect(ui.getByText(zh.mig.paths.shared)).toBeTruthy();
+    expect(ui.getByText("personal, work")).toBeTruthy();                 // 兩個帳號都列出來
   });
 });
