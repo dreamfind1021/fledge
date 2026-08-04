@@ -102,16 +102,31 @@ describe("InstallResultCard", () => {
     expect(ui.getByText(zh.mig.result.sub.ok)).toBeTruthy();
   });
 
-  // 只有 skipped＝東西已經在那裡（重送一次的使用者就是看到這個），不算「什麼都沒搬」；
-  // 而 excluded 是刻意不處理，那才是真的沒有東西進來
-  it("只有跳過算東西在那裡，只有刻意不處理則不算", () => {
-    const onlySkipped = setup([{ account: "work", rel_path: "CLAUDE.md",
-                                 outcome: "skipped", error: null }]);
-    expect(onlySkipped.getByText(zh.mig.result.sub.ok)).toBeTruthy();
-    cleanup();
-    const onlyExcluded = setup([{ account: "work", rel_path: ".claude.json",
-                                  outcome: "excluded", error: "not_migrated_by_design" }]);
-    expect(onlyExcluded.getByText(zh.mig.result.sub.none)).toBeTruthy();
+  // 「東西在那裡」與「這一輪寫進去了」是兩件事：全部 skipped 代表每個目的地都已經有同名項、
+  // 我們一個位元組都沒寫。把它說成「內容已經寫進這台機器」，就是拿「不覆蓋」的結果去宣稱
+  // 搬過來了——使用者第一次裝進一個他自己已經有內容的落點時就會看到這個
+  it("全部跳過時說清楚這一輪沒有寫入，而不是說內容已經寫進來", () => {
+    const ui = setup([{ account: "work", rel_path: "CLAUDE.md",
+                        outcome: "skipped", error: null }]);
+    expect(ui.getByText(zh.mig.result.sub.allSkipped)).toBeTruthy();
+    expect(ui.queryByText(zh.mig.result.sub.ok)).toBeNull();
+    expect(ui.queryByText(zh.mig.result.sub.none)).toBeNull();
+  });
+
+  // 而 excluded 是刻意不處理，那才是真的什麼都沒有進來
+  it("只有刻意不處理的項目時說什麼都沒搬進來", () => {
+    const ui = setup([{ account: "work", rel_path: ".claude.json",
+                        outcome: "excluded", error: "not_migrated_by_design" }]);
+    expect(ui.getByText(zh.mig.result.sub.none)).toBeTruthy();
+  });
+
+  // 有東西在那裡、但也有失敗＝部分完成（不能因為 installed 是 0 就說什麼都沒搬）
+  it("跳過與失敗混合時說部分沒成功", () => {
+    const ui = setup([
+      { account: "work", rel_path: "CLAUDE.md", outcome: "skipped", error: null },
+      { account: "work", rel_path: "x.md", outcome: "failed", error: "no_space" },
+    ]);
+    expect(ui.getByText(zh.mig.result.sub.partial)).toBeTruthy();
   });
 
   // 增補 spec §2.5.2：連結不在預覽的任何數字裡，結果的 installed 大於預覽是**正常的**。

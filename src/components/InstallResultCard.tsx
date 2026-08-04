@@ -34,11 +34,16 @@ const REASON_KEY: Record<string, string> = {
 /** 摘要語氣 → catalog key。**不能無條件說「內容已經寫進這台機器」**（Codex 票 06 R2 F1）：
  *  逐項與落點層的失敗都是 HTTP 200 的 results，所有落點都 `target_moved`／`permission_denied`
  *  時一項都沒成功，畫面卻照樣宣告搬完了——那是 R1 修掉的「斷言我們不知道的事」在成功路徑上
- *  的同一個形狀。判準用 `installed + skipped`：**skipped 也算東西在那裡**（目的地已有同名項、
- *  一律不覆蓋），那正是重送一次的使用者唯一能拿到的證據。 */
+ *  的同一個形狀。
+ *
+ *  **`allSkipped` 要與 `ok` 分開**（R2 修法的自查殘留）：「東西在那裡」與「這一輪寫進去了」
+ *  是兩件事。全部 skipped 代表每個目的地都已經有同名項、我們一個位元組都沒寫——可能是上一輪
+ *  裝好的（R1 那條重送路徑），也可能是使用者自己本來就有的。把它併進 `ok` 就是拿「不覆蓋」
+ *  的結果去宣稱「搬過來了」。 */
 const SUB_KEY = {
   ok: "mig.result.sub.ok",
   partial: "mig.result.sub.partial",
+  allSkipped: "mig.result.sub.allSkipped",
   none: "mig.result.sub.none",
 } as const;
 
@@ -78,8 +83,11 @@ export function InstallResultCard({ results, staleTemps }: InstallResultCardProp
   // **不擋下一步**（Codex 票 06 R2 F1 留給我們決定的那一半）：失敗未必排除得掉（唯讀磁碟、
   // 落點被占住），擋住等於把使用者鎖在精靈裡，而後面的環境／登入／修復頁與安裝成敗無關且
   // 有價值。改為讓失敗在摘要與預設展開的明細裡顯眼——與 Plan A「逐項盡力、不阻斷」一致。
-  const tone = installed.length + skipped.length === 0 ? "none"
-    : failed.length > 0 ? "partial" : "ok";
+  const tone =
+    installed.length === 0 && skipped.length === 0 ? "none"
+    : failed.length > 0 ? "partial"
+    : installed.length === 0 ? "allSkipped"
+    : "ok";
 
   return (
     <div>

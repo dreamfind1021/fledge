@@ -122,8 +122,9 @@
     "result": {
       "h": "Install results",
       "sub": {
-        "ok": "The bundle's contents are now on this machine. Here's what happened, item by item.",
+        "ok": "This install finished. Here's what happened, item by item.",
         "partial": "Some items didn't make it. Here's what happened, item by item — the ones that failed show why.",
+        "allSkipped": "Nothing was written this round: every destination already had a file of the same name, and those are never overwritten. Only the name is compared, never the contents, so there's no guarantee what's there came from this bundle — an earlier round that already finished looks the same.",
         "none": "Nothing was brought over this time. Here's why each item didn't make it."
       },
       "installed": "Brought over",
@@ -145,7 +146,7 @@
         "not_a_directory": "that location isn't a folder",
         "operation_not_supported": "that disk doesn't support this operation",
         "io_failed": "read/write failure",
-        "source_moved": "the bundle was moved or deleted mid-install",
+        "source_moved": "the bundle changed mid-install (moved, deleted, or swapped for another)",
         "target_moved": "the landing spot was swapped mid-install",
         "overlapping_config_dirs": "two landing spots point at the same place",
         "provenance_unavailable": "this migration's record couldn't be read, so it stopped here to be safe",
