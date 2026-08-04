@@ -155,14 +155,15 @@
         "node_identity_mismatch": "what the link points to was swapped before it could be created",
         "not_migrated_by_design": "deliberately not moved (set this up again on the new machine)",
         "not_a_regular_file": "not a regular file (pipe, device node, etc.) — not moved",
-        "symlink_target_unauthorized": "this link points outside the bundle, so it wasn't created",
+        "symlink_target_unauthorized": "nothing it could point at came over in this round, so it wasn't recreated (a link already in place is untouched)",
         "unknown": "something else"
       },
       "stale": {
         "h": "Also found {{count}} temporary files left by an interrupted run",
         "note": "They're left over from a migration that was interrupted. They don't affect how Claude runs, and you can delete them yourself.",
         "reveal": "Show in Finder"
-      }
+      },
+      "retry": "Try again"
     },
     "repair": {
       "h": "Repair links"

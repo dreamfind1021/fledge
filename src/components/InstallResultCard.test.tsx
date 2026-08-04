@@ -21,10 +21,12 @@ const RESULTS: InstallItemResult[] = [
   { account: "work", rel_path: "skills/b.md", outcome: "failed", error: "permission_denied" },
 ];
 
+const onRetry = vi.fn<() => void>();
+
 const setup = (results = RESULTS, staleTemps: string[] = []) =>
   render(
     <StrictMode>
-      <InstallResultCard results={results} staleTemps={staleTemps} />
+      <InstallResultCard results={results} staleTemps={staleTemps} onRetry={onRetry} />
     </StrictMode>,
   );
 
@@ -184,6 +186,21 @@ describe("InstallResultCard", () => {
     const section = ui.getByText(zh.mig.result.failed).closest(".ob-spot")!;
     expect(section.querySelector(".ob-spot-key")!.textContent).toBe("2");
     expect(section.querySelectorAll(".ob-spot-oldpath")).toHaveLength(2);
+  });
+
+  // 票 16 第 4 項：精靈**刻意不給中途關閉**，所以安裝失敗的人原本唯一的出路是走完環境／
+  // 登入／修復三頁再繞回設定頁的還原卡。這顆按鈕就是把同一個請求再送一次（marker 與
+  // journal 都還在，no-clobber 保證安全），不是第二份續作實作
+  it("有失敗時給「再試一次」，按下去把重試交回上層", () => {
+    const ui = setup();
+    ui.getByText(zh.mig.result.retry).click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  // 沒有失敗還給重試，等於鼓勵重複執行不可逆操作
+  it("全部順利時不給「再試一次」", () => {
+    const ui = setup(RESULTS.filter((r) => r.outcome === "installed"));
+    expect(ui.queryByText(zh.mig.result.retry)).toBeNull();
   });
 
   it("某一類是空的就整段不出現（不顯示 0）", () => {

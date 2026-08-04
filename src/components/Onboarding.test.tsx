@@ -926,6 +926,30 @@ describe("Onboarding 精靈外殼", () => {
     expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(false);
   });
 
+  // 票 16 第 4 項：精靈刻意不給中途關閉，所以失敗的人原本得走完環境／登入／修復三頁
+  // 才繞得回設定頁的還原卡。結果頁的「再試一次」把同一個請求再送一次
+  it("裝到一半失敗：結果頁按「再試一次」直接重送，不必走完整個精靈", async () => {
+    vi.mocked(runInstall).mockResolvedValueOnce({
+      results: [{ account: "work", rel_path: "CLAUDE.md", outcome: "failed",
+                  error: "permission_denied" }],
+      stale_temps: [],
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachInstallPage(ui);
+    ui.getByText(zh.mig.install.run).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.result.retry)).toBeTruthy());
+
+    vi.mocked(runInstall).mockResolvedValueOnce({
+      results: [{ account: "work", rel_path: "CLAUDE.md", outcome: "installed", error: null }],
+      stale_temps: [],
+    });
+    ui.getByText(zh.mig.result.retry).click();
+
+    await waitFor(() => expect(ui.getByText(zh.mig.result.sub.ok)).toBeTruthy());
+    expect(runInstall).toHaveBeenCalledTimes(2);
+    expect(ui.queryByText(zh.mig.result.retry)).toBeNull();   // 成功後不再提供
+  });
+
   // Codex 票 06 R1（high）：拿不到判別碼＝**不知道後端做到哪裡**。sidecar 可能已經完整
   // 跑完、只是答案沒回來——此時說「安裝沒能完成」是在斷言一件我們不知道的事，使用者會
   // 以為東西沒搬。這條釘住兩件事：文案不斷言，而且重送之後拿得到真正的結果

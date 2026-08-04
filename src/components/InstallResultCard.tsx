@@ -51,6 +51,8 @@ interface InstallResultCardProps {
   results: InstallItemResult[];
   /** 前一輪硬中斷留下的暫存殘骸，**後端給的絕對路徑**（增補 spec §4.2）。 */
   staleTemps: string[];
+  /** 重送同一個安裝請求（票 16 第 4 項）。**只在有 failed 時才會被用到**。 */
+  onRetry?: () => void;
 }
 
 /**
@@ -65,7 +67,7 @@ interface InstallResultCardProps {
  *   **刻意不解釋「為什麼 app 不代勞」**：那對使用者是雜訊，而且會讓人懷疑那到底是不是
  *   我們的東西
  */
-export function InstallResultCard({ results, staleTemps }: InstallResultCardProps) {
+export function InstallResultCard({ results, staleTemps, onRetry }: InstallResultCardProps) {
   const { t } = useTranslation("onboarding");
 
   /** 一項的顯示文字。`rel_path` 為空＝落點層的失敗（整個帳號沒裝成），只顯示落點 key。 */
@@ -100,6 +102,14 @@ export function InstallResultCard({ results, staleTemps }: InstallResultCardProp
       <InstallSection title={t("mig.result.excluded")} items={group("excluded")} />
       {/* 唯一需要使用者行動的分類 → 預設展開，且每一項都要看得出原因 */}
       <InstallSection title={t("mig.result.failed")} items={failed} defaultOpen />
+
+      {/* 有失敗才給重試（票 16 第 4 項）：精靈**刻意不給中途關閉**，沒有這顆按鈕，安裝
+          失敗的人唯一的出路是走完環境／登入／修復三頁再繞回設定頁的還原卡——那三頁對他
+          毫無意義。它就是把同一個請求再送一次（marker 與 journal 都還在，no-clobber 保證
+          安全），不是第二份續作實作。**沒有失敗時不給**——那會變成鼓勵重複執行不可逆操作。 */}
+      {failed.length > 0 && onRetry !== undefined && (
+        <button onClick={onRetry} className="ob-btn">{t("mig.result.retry")}</button>
+      )}
 
       {staleTemps.length > 0 && (
         <div className="ob-spot">

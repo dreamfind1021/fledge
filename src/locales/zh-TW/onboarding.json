@@ -155,14 +155,15 @@
         "node_identity_mismatch": "連結要指的東西在建立之前被換掉了",
         "not_migrated_by_design": "刻意不搬的項目（新機器要自己重新設定）",
         "not_a_regular_file": "不是一般檔案（管道、裝置檔之類），不搬",
-        "symlink_target_unauthorized": "這條連結指向備份包以外的位置，沒有建立",
+        "symlink_target_unauthorized": "這一輪沒有搬進任何它可以指到的東西，所以沒有重建（本來就在那裡的連結不受影響）",
         "unknown": "其他問題"
       },
       "stale": {
         "h": "另外發現 {{count}} 個上次中斷留下的暫存檔",
         "note": "它們是上一次移機被中斷時留下的，不影響 Claude 運作，可以自行刪除。",
         "reveal": "在 Finder 中顯示"
-      }
+      },
+      "retry": "再試一次"
     },
     "repair": {
       "h": "修復連結"
