@@ -69,6 +69,27 @@ vi.mock("./TargetsCard", async () => {
     ),
   };
 });
+vi.mock("./PathsCard", async () => {
+  const catalog = (await import("../locales/zh-TW/onboarding.json")).default;
+  return {
+    PathsCard: ({ dest, projectCount, sourceGen, mapping, onMapping, onStatus }: {
+      dest: string; projectCount: number; sourceGen: number;
+      mapping: Record<string, string>; onMapping: (m: Record<string, string>) => void;
+      onStatus: (s: string) => void;
+    }) => (
+      <div>
+        <h2>{catalog.mig.paths.h}</h2>
+        <span data-testid="paths-dest">{dest}</span>
+        <span data-testid="paths-count">{projectCount}</span>
+        <span data-testid="paths-gen">{sourceGen}</span>
+        <span data-testid="paths-mapping">{JSON.stringify(mapping)}</span>
+        <button onClick={() => onMapping({ "/old/a": "/new/a" })}>map</button>
+        <button onClick={() => onStatus("loaded")}>paths-loaded</button>
+        <button onClick={() => onStatus("error")}>paths-error</button>
+      </div>
+    ),
+  };
+});
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   scanPreview: vi.fn(async (_port: number, path: string) => ({ path, count: 3, status: "ok" as const })),
@@ -429,6 +450,144 @@ describe("Onboarding 精靈外殼", () => {
     expect(loads).toBe(2);
   });
 
+  // 票 04：這一頁不寫任何東西，對應關係住在精靈——走到下一頁再回來必須還在，
+  // 而且它要能一路帶到 install 頁（票 05 用它算預覽）
+  it("專案對應住在精靈：離開這一頁再回來還在，且拿得到這一包的專案數", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+
+    // 展開位置與專案數都來自上一頁確認過的那一包
+    expect(ui.getByTestId("paths-dest").textContent).toBe("/d");
+    expect(ui.getByTestId("paths-count").textContent).toBe("9");
+
+    ui.getByText("map").click();
+    await waitFor(() => expect(ui.getByTestId("paths-mapping").textContent)
+      .toBe(JSON.stringify({ "/old/a": "/new/a" })));
+
+    ui.getByText("paths-loaded").click();                  // 清單讀到了才放行
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();                  // 走到安裝頁
+    await waitFor(() => expect(ui.getByText(zh.mig.install.h)).toBeTruthy());
+    ui.getByText(zh.common.prev).click();                  // 再回來
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+    expect(ui.getByTestId("paths-mapping").textContent)
+      .toBe(JSON.stringify({ "/old/a": "/new/a" }));
+  });
+
+  // Codex 票 04 R1 F1：mapping 只初始化一次，換包後舊的對應會被當成新包的 seed——
+  // 舊 key 不屬於新包，送進 plan 是 `mapping_unknown_project`；兩包剛好有同一條舊路徑
+  // 時更糟：上一包的人工選擇會靜靜套到新包上
+  it("換一包 → 專案對應清空重來", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+    ui.getByText("map").click();
+    await waitFor(() => expect(ui.getByTestId("paths-mapping").textContent).toContain("/old/a"));
+
+    // 回備份包頁換一包（mock 的 probe 每次都遞增 gen）
+    ui.getByText(zh.common.prev).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText(zh.common.prev).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+
+    expect(ui.getByTestId("paths-mapping").textContent).toBe("{}");
+  });
+
+  // Codex 票 04 R1 F3：讀取失敗還放行 → 使用者在看不到任何專案、也沒有對應的情況下繼續，
+  // install 把所有歷史原樣搬過去、`/resume` 全部列不出來。那不是他選的「留空即照搬」
+  it("專案清單讀不出來時擋住下一步（包裡確實有專案）", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+
+    ui.getByText("paths-error").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true));
+    ui.getByText("paths-loaded").click();          // 重試成功後才放行
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+  });
+
+  // Codex 票 04 R2：`pathsStatus` 沒跟著 `bundle.gen` 失效的話，換包之後 gating 會先看到
+  // 上一包的 `loaded`——在新包的清單根本還沒讀之前就放行
+  it("換一包之後，上一包的「清單已讀到」不算數", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+    ui.getByText("paths-loaded").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+
+    // 回備份包頁換一包（mock 每次 probe 都遞增 gen）
+    ui.getByText(zh.common.prev).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText(zh.common.prev).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+
+    // 新包的清單還沒讀到 → 擋住
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true);
+  });
+
   // Codex 票 03 R4 F1：409 只證明「有一份 config」。後續 install 直接從那份 config 取
   // 目的地，沿用一份無關的設定＝把備份內容寫進使用者沒確認過的現役目錄。
   it("讀回來的設定與剛確認的落點對不上 → 不放行", async () => {
@@ -522,6 +681,11 @@ describe("Onboarding 精靈外殼", () => {
         await waitFor(() =>
           expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
       }
+      if (heading === zh.mig.paths.h) {
+        ui.getByText("paths-loaded").click();
+        await waitFor(() =>
+          expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      }
     }
     for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
       ui.getByText(zh.common.prev).click();
@@ -555,6 +719,12 @@ describe("Onboarding 精靈外殼", () => {
       // 落點頁的落檔是往下走的前提（票 03）：不落檔就過不去，這一步不是裝飾
       if (heading === zh.mig.targets.h) {
         ui.getByText("adopt").click();
+        await waitFor(() =>
+          expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      }
+      // 專案清單讀到了才放行（票 04 R1 F3），同樣不是裝飾
+      if (heading === zh.mig.paths.h) {
+        ui.getByText("paths-loaded").click();
         await waitFor(() =>
           expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
       }

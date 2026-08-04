@@ -724,6 +724,29 @@ export async function adoptConfig(port: number, body: AdoptConfigBody): Promise<
   if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
 }
 
+/** 備份包裡的一個專案。`suggested` 空字串＝推不出新位置（舊路徑不在舊 home 底下，
+ *  或 manifest／歷史檔的路徑不合格）——**留空即照搬**，不猜。 */
+export interface ProjectPath {
+  account: string;
+  old_path: string;
+  encoded_dir: string;
+  suggested: string;
+  suggested_exists: boolean;
+}
+
+/** 備份包裡每個專案的舊路徑與建議新路徑（票 06 的端點、票 04 的呼叫端）。唯讀。
+ *
+ *  **筆數會比 `BundleInfo.project_count` 少**：後者只數 `projects/` 的目錄，這裡會跳過
+ *  讀不出 `cwd` 的專案（無從對應）。兩個數字不同是預期的，文案要講清楚。 */
+export async function fetchProjectPaths(port: number, dest: string): Promise<ProjectPath[]> {
+  const resp = await fetch(
+    `${base(port)}/api/restore/project-paths?dest=${encodeURIComponent(dest)}`,
+    { headers: authHeaders() },
+  );
+  if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
+  return (await resp.json()).projects;
+}
+
 /** 備份包摘要（增補 spec 缺口 1）：展開之後讓使用者確認「這是不是我要的那一包」。唯讀。 */
 export async function fetchBundleInfo(port: number, dest: string): Promise<BundleInfo> {
   const resp = await fetch(
