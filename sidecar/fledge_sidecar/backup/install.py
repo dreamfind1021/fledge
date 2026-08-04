@@ -183,17 +183,63 @@ def _ensure_no_overlap(resolved: list[str]) -> None:
                 raise ValueError("overlapping_config_dirs")
 
 
+# 展開目錄裡的 JSON 讀取上限。這條路徑只讀兩份檔：`manifest.json`（帳號與 extra 的清單）
+# 與 `fledge/config.json`（Fledge 自己的設定，票 09），實測產出都在數 KB 量級。1 MiB 給到
+# 三個數量級的餘裕，同時讓惡意包塞的巨大檔在讀進記憶體前就被拒。**不截斷**：截斷後的
+# JSON 多半 parse 失敗，但那是碰運氣不是拒絕。
+_BUNDLE_JSON_MAX_BYTES = 1 << 20
+
+
+def read_bundle_json(source_root: str, *parts: str) -> dict:
+    """讀展開目錄裡的 JSON 物件。任何失敗一律 `ValueError("source_not_a_bundle")`。
+
+    展開目錄的內容**全部來自不可信的 tar**（spec §4.2.2），所以從 `source_root` 起逐層
+    `O_NOFOLLOW` 走下去：中間任一層或最後那個檔是 symlink 都拒絕。跟過去就會讀到展開
+    目錄外的檔案，而 manifest 的內容會經 `adopt-config` 的回應回顯給前端＝資訊洩漏。
+
+    **先 open 再 fstat**（順序與 `_require_source_identity` 一致，理由見該函式）：先以
+    pathname 判型再 open，中間有窗口讓它被換掉。`O_NONBLOCK` 是這條順序成立的前提——
+    沒有它，FIFO 上的 `O_RDONLY` open 本身就會等到有 writer 為止，根本執行不到 fstat
+    （POSIX；macOS 實測）；確認是一般檔之後它對讀取沒有語意，不必再清掉。
+
+    `source_root` 本身**不是**不可信輸入（那是使用者選的路徑，且呼叫端一律先
+    `resolve_best_effort`），但仍照 `_require_source_identity` 的慣例 `O_NOFOLLOW` 開
+    ——同一個目錄在同一個模組裡兩套開法才是問題。
+
+    只負責拋。「當作沒有、移機不失敗」這類處置由呼叫端決定（票 09）。"""
+    *dirs, name = parts             # 至少要一個元件；呼叫端全是模組內常數
+    try:
+        fd = _open_dir_pinned(source_root)
+    except OSError as exc:
+        raise ValueError("source_not_a_bundle") from exc
+    try:
+        for part in dirs:
+            nxt = _open_dir_pinned(part, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+        raw = _read_file_pinned(name, fd, max_bytes=_BUNDLE_JSON_MAX_BYTES)
+    except OSError as exc:
+        raise ValueError("source_not_a_bundle") from exc
+    finally:
+        os.close(fd)
+    try:
+        # 明確 utf-8 解碼而不是把 bytes 丟給 json.loads：後者會依 BOM 接受 UTF-16／32，
+        # 那是把既有合約放寬。UnicodeDecodeError 是 ValueError 的子類，同一個 except 收。
+        data = json.loads(raw.decode("utf-8"))
+    except ValueError as exc:
+        raise ValueError("source_not_a_bundle") from exc
+    if not isinstance(data, dict):
+        raise ValueError("source_not_a_bundle")
+    return data
+
+
 def read_manifest(source_root: str) -> dict:
     """讀展開目錄的 manifest。讀不到或不是物件 → source_not_a_bundle。
 
     **來源的解讀權留在模組內**：不讓 caller 傳進 manifest 內容，否則「不可信輸入」的
-    邊界就跑到模組外面了。"""
-    try:
-        data = json.loads(Path(source_root, MANIFEST_NAME).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ValueError("source_not_a_bundle") from exc
-    if not isinstance(data, dict):
-        raise ValueError("source_not_a_bundle")
+    邊界就跑到模組外面了。讀取本身走 `read_bundle_json`——與票 09 的 `fledge/config.json`
+    是同一份不可信輸入的兩個讀取點，**同一套標準**。"""
+    data = read_bundle_json(source_root, MANIFEST_NAME)
     # accounts 是後續所有迭代與拼路徑的基礎——不是 mapping（null／list／string）的話，
     # 會在 plan 內變成未捕捉的 TypeError 穿出去成裸 500，違反 error-code 合約。
     if not isinstance(data.get("accounts"), dict):
@@ -830,24 +876,32 @@ def _require_source_identity(plan: InstallPlan) -> int:
     return fd
 
 
-def _read_file_pinned(name: str, dir_fd: int) -> bytes:
+def _read_file_pinned(name: str, dir_fd: int, *, max_bytes: int | None = None) -> bytes:
     """以 dir_fd 開檔後 fstat 確認型別才讀——不用 pathname 重新解析。
 
     判型與讀取之間若還經過一次名稱解析，那一刻被換成 symlink 就會讀到 staging 外的檔案。
 
     `O_NONBLOCK`：scandir 判型之後、open 之前被換成 FIFO 的話，O_RDONLY 會阻塞到有
-    writer 為止——加了它 open 立即返回，fstat 照樣把非一般檔擋下（對一般檔是 no-op）。"""
+    writer 為止——加了它 open 立即返回，fstat 照樣把非一般檔擋下（對一般檔是 no-op）。
+
+    `max_bytes`：超過即 OSError(EFBIG)，**不截斷**。判定在每個 chunk 之後做，所以實際
+    讀進來的量最多超出上限一個 chunk——不改用 fstat 的 st_size 先擋，那對「open 之後才
+    長大的檔」不成立，而這條界線的目的是記憶體有界，多一個 chunk 仍然有界。"""
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
     try:
         st = os.fstat(fd)
         if not stat_module.S_ISREG(st.st_mode):
             raise OSError(errno.EINVAL, "not a regular file")
         chunks: list[bytes] = []
+        total = 0
         while True:
             chunk = os.read(fd, 1 << 20)
             if not chunk:
                 break
             chunks.append(chunk)
+            total += len(chunk)
+            if max_bytes is not None and total > max_bytes:
+                raise OSError(errno.EFBIG, "file exceeds size limit")
         return b"".join(chunks)
     finally:
         os.close(fd)

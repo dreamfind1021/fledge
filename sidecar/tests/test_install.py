@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -2218,3 +2219,154 @@ def test_stale_scan_covers_only_what_this_round_walks(tmp_path: Path, monkeypatc
     inst.install(inst.plan(str(src), _accounts(tgt)), stale_out=stale)
     assert stale == [str(shallow)], "本輪會寫入的那一層要指認得到"
     assert deep.exists(), "走不到的深層殘骸原封不動——只是這一輪報不出來"
+
+
+# ---------- 票 10：安全讀取展開目錄裡的 JSON ----------
+#
+# 展開目錄的內容全部來自不可信的 tar（spec §4.2.2）。`manifest.json` 與票 09 要讀的
+# `fledge/config.json` 是同一份不可信輸入的兩個讀取點，共用 `read_bundle_json`。
+
+
+def _plant_fledge_config(src: Path, payload: dict) -> None:
+    """比照 `backup-claude.sh:267` 的產出佈局：`<bundle>/fledge/config.json`。"""
+    (src / "fledge").mkdir(exist_ok=True)
+    (src / "fledge" / "config.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_read_bundle_json_reads_a_nested_object(tmp_path: Path):
+    """票 09 會讀的就是這一份：中間隔一層目錄也要讀得到，否則這支原語對它沒用。"""
+    src = _staging(tmp_path)
+    payload = {"kms_root": "/Users/olduser/kms", "subscriptions": []}
+    _plant_fledge_config(src, payload)
+    assert inst.read_bundle_json(str(src), "fledge", "config.json") == payload
+
+
+def test_read_bundle_json_refuses_a_missing_file(tmp_path: Path):
+    """包裡沒有這一份是**正常情況**（舊版備份腳本產的包就沒有）——原語只負責拋，
+    「當作沒有、移機不失敗」的處置由呼叫端決定（票 09）。"""
+    src = _staging(tmp_path)
+    with pytest.raises(ValueError, match="source_not_a_bundle"):
+        inst.read_bundle_json(str(src), "fledge", "config.json")
+
+
+def test_read_bundle_json_refuses_a_non_object_top_level(tmp_path: Path):
+    """頂層不是物件就不是我們要的東西——`read_manifest` 原本自己驗這一條，搬進原語
+    之後票 09 那一側也一體適用（`config.json` 是 list 時 `.get` 會裸 AttributeError）。"""
+    src = _staging(tmp_path)
+    (src / "fledge").mkdir()
+    (src / "fledge" / "config.json").write_text("[1, 2]", encoding="utf-8")
+    with pytest.raises(ValueError, match="source_not_a_bundle"):
+        inst.read_bundle_json(str(src), "fledge", "config.json")
+
+
+def test_read_manifest_refuses_a_manifest_symlinked_inside_the_bundle(tmp_path: Path):
+    """`manifest.json` 是 symlink → source_not_a_bundle，**指到包內也一樣**。
+
+    判準是「它是不是 symlink」，不是「它指到哪裡」：要判後者就得在解析後重新比對
+    路徑，那正是 TOCTOU 的形狀（比照 `_require_source_identity` 的順序理由）。
+
+    decoy 是一份**完全合格**的 manifest——跟過去會成功回傳，所以少了 `O_NOFOLLOW`
+    這條就變紅。目標若是壞掉的 JSON，形狀驗證那關照樣會擋下，測試就什麼都沒驗到。"""
+    src = _staging(tmp_path)
+    manifest = (src / "manifest.json").read_text(encoding="utf-8")
+    (src / "decoy.json").write_text(manifest, encoding="utf-8")
+    (src / "manifest.json").unlink()
+    (src / "manifest.json").symlink_to("decoy.json")
+    with pytest.raises(ValueError, match="source_not_a_bundle"):
+        inst.read_manifest(str(src))
+
+
+def test_read_manifest_refuses_a_manifest_symlinked_outside_the_bundle(tmp_path: Path):
+    """包外那一格是**資訊洩漏**：manifest 的內容會經 `adopt-config` 的回應回顯給前端
+    （`routes/restore.py` 拿它驗 account key／extra name），跟過去就是把展開目錄外的
+    JSON 內容送出去。目標同樣是合格的 manifest，跟過去會成功。"""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "someone-elses.json"
+    secret.write_text(json.dumps({
+        "accounts": {"leaked": "/Users/olduser/.claude"}, "extra": {},
+    }), encoding="utf-8")
+    base = tmp_path / "case"
+    base.mkdir()
+    src = _staging(base)
+    (src / "manifest.json").unlink()
+    (src / "manifest.json").symlink_to(secret)
+    with pytest.raises(ValueError, match="source_not_a_bundle"):
+        inst.read_manifest(str(src))
+
+
+def test_read_bundle_json_refuses_a_symlinked_intermediate_directory(tmp_path: Path):
+    """中間層目錄是 symlink 也要擋：只擋最後一個元件的話，包裡一條 `fledge -> /`
+    的目錄連結就能把讀取帶出展開目錄。
+
+    `manifest.json` 沒有中間層，這條只有票 09 的路徑走得到——但原語現在就要正確。
+    目標是一份合格 JSON，跟過去會成功回傳，所以中間層漏掉 `O_NOFOLLOW` 就變紅。"""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "config.json").write_text(
+        json.dumps({"kms_root": "/leaked"}), encoding="utf-8")
+    base = tmp_path / "case"
+    base.mkdir()
+    src = _staging(base)
+    (src / "fledge").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="source_not_a_bundle"):
+        inst.read_bundle_json(str(src), "fledge", "config.json")
+
+
+class _StillBlocked(BaseException):
+    """FIFO 逾時哨兵。**故意繼承 `BaseException`**：`read_manifest` 把 OSError 正規化成
+    `source_not_a_bundle`，而 `TimeoutError` 正是 OSError 的子類——第一版用它當哨兵，
+    結果阻塞滿五秒之後被吞成判別碼、測試照樣綠（測試名稱說的事沒真的驗）。"""
+
+
+def test_read_manifest_refuses_a_fifo_without_blocking(tmp_path: Path):
+    """`manifest.json` 是 FIFO → source_not_a_bundle，**而且不會卡住**。
+
+    這是兩件事，要分開驗：POSIX 上唯讀開 FIFO 會等到有 writer 為止，少了 `O_NONBLOCK`
+    的實作會讓這條測試永遠跑不完——**卡死的測試不是紅燈**。所以自帶 alarm，逾時就丟
+    `_StillBlocked`，它穿得過 `pytest.raises` 與實作的 except 兩層。"""
+    src = _staging(tmp_path)
+    (src / "manifest.json").unlink()
+    os.mkfifo(src / "manifest.json")
+
+    def _blocked(signum, frame):
+        raise _StillBlocked("read_manifest 在 FIFO 上阻塞了")
+
+    previous = signal.signal(signal.SIGALRM, _blocked)
+    signal.alarm(2)
+    try:
+        with pytest.raises(ValueError, match="source_not_a_bundle"):
+            inst.read_manifest(str(src))
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def test_read_manifest_refuses_a_manifest_that_is_a_directory(tmp_path: Path):
+    """**回歸保護，不是行為驗證**（誠實標註）：目錄這一格在裸 `read_text`（IsADirectoryError）
+    與新原語（`fstat` 判非一般檔）底下都是 source_not_a_bundle，拿掉哪一道防線它都不會
+    變紅。它釘的是判別碼不變，不是某一行實作。"""
+    src = _staging(tmp_path)
+    (src / "manifest.json").unlink()
+    (src / "manifest.json").mkdir()
+    with pytest.raises(ValueError, match="source_not_a_bundle"):
+        inst.read_manifest(str(src))
+
+
+def test_read_manifest_refuses_json_over_the_size_limit(tmp_path: Path):
+    """大小上限的**兩側各一格**：只測超出的那一格，把上限寫成 0 也會綠。"""
+    src = _staging(tmp_path)
+    base = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+
+    def _write_manifest_of_size(total: int) -> None:
+        # pad 只放 ASCII 'x'，JSON 不跳脫，補幾個字元總長就多幾個
+        empty = json.dumps({**base, "pad": ""})
+        (src / "manifest.json").write_text(
+            json.dumps({**base, "pad": "x" * (total - len(empty))}), encoding="utf-8")
+
+    _write_manifest_of_size(inst._BUNDLE_JSON_MAX_BYTES)
+    assert inst.read_manifest(str(src))["accounts"] == base["accounts"]
+
+    _write_manifest_of_size(inst._BUNDLE_JSON_MAX_BYTES + 1)
+    with pytest.raises(ValueError, match="source_not_a_bundle"):
+        inst.read_manifest(str(src))
