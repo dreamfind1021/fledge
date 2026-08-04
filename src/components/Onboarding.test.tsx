@@ -4,7 +4,7 @@ import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
 import { useAppStore } from "../store/useAppStore";
-import { scanPreview, runInstall, RestoreError } from "../lib/sidecar";
+import { scanPreview, runInstall, fetchBundleInfo, RestoreError } from "../lib/sidecar";
 import { Onboarding } from "./Onboarding";
 
 vi.mock("../lib/dialog", () => ({ pickDirectory: vi.fn(), pickFile: vi.fn() }));
@@ -119,6 +119,10 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   fetchTemplates: vi.fn(async () => []),
   // 移機的安裝（票 06）：**唯一會寫使用者現役目錄的呼叫**，測試絕不讓它真的發出去
   runInstall: vi.fn(async () => ({ results: [], stale_temps: [] })),
+  // 續作（票 07）：精靈直接進安裝頁之前要先確認那份展開的包還讀得出來
+  fetchBundleInfo: vi.fn(async () => ({
+    host: "old", created: "x", accounts: ["work"], extra: [], project_count: 2,
+  })),
 }));
 // 結果頁的殘骸行會用到 opener（真元件，不 mock 掉——它的顯示契約才是這裡要驗的）
 vi.mock("@tauri-apps/plugin-opener", () => ({
@@ -989,5 +993,167 @@ describe("Onboarding 精靈外殼", () => {
     ui.getByText(zh.welcome.fresh).click();
     await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
     expect(ui.container.querySelector(".ob-lang")).toBeNull();
+  });
+});
+
+// ── 中斷續作（票 07）：從還原卡按「繼續移機」直接進安裝頁 ────────────────────
+
+describe("Onboarding 的移機續作", () => {
+  const RESUME = {
+    sourceRoot: "/home/me/.claude-restore-20260727-1432",
+    mapping: [{ old: "/old/a", new: "/new/a" }],
+  };
+
+  beforeEach(async () => {
+    await i18n.changeLanguage("zh-TW");
+    vi.clearAllMocks();
+    useAppStore.setState({
+      port: 1234,
+      config: { ...baseConfig, is_first_run: false },   // 續作的前提：設定檔早已落檔
+      completeOnboarding: async () => {},
+      loadConfig: async () => {},
+    });
+  });
+  afterEach(cleanup);
+
+  it("一進來就在安裝頁，不是歡迎頁", async () => {
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+    await waitFor(() => expect(ui.getByTestId("preview-dest")).toBeTruthy());
+    expect(ui.queryByText(zh.welcome.h)).toBeNull();
+  });
+
+  // 這兩樣是續作的全部意義：使用者上次填的東西不必再填一次
+  it("預填上次的展開位置與專案路徑對應", async () => {
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+    await waitFor(() =>
+      expect(ui.getByTestId("preview-dest").textContent).toBe(RESUME.sourceRoot));
+    expect(ui.getByTestId("preview-mapping").textContent)
+      .toBe(JSON.stringify({ "/old/a": "/new/a" }));
+    expect(fetchBundleInfo).toHaveBeenCalledWith(1234, RESUME.sourceRoot);
+  });
+
+  // **預填的對應不能被「換包就清空」的機制洗掉**（票 04 的 gen 綁定）：續作不是換包，
+  // 來源從一開始就是這一個。這條測試守的正是那個交互作用
+  it("讀到包資訊之後，預填的對應仍在", async () => {
+    let release: (info: unknown) => void = () => {};
+    vi.mocked(fetchBundleInfo).mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }) as never);
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+
+    release({ host: "old", created: "x", accounts: ["work"], extra: [], project_count: 2 });
+
+    await waitFor(() => expect(ui.getByTestId("preview-mapping").textContent)
+      .toBe(JSON.stringify({ "/old/a": "/new/a" })));
+  });
+
+  // Codex 票 07 R1 F2：續作的探測**已經在飛**的時候，使用者可以回上一頁換一包——遲到的
+  // 回應若照樣寫進 state，畫面上是新包、預覽與安裝卻是舊來源。這是票 02／04／05 一路守
+  // 的「遲到回應不得覆蓋」同一族，續作這條路徑當初漏了套
+  it("續作探測還在飛時換了一包 → 遲到的回應不得把來源換回去", async () => {
+    let release: (info: unknown) => void = () => {};
+    vi.mocked(fetchBundleInfo).mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }) as never);
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+
+    // 從安裝頁一路退回備份包頁（包資訊還沒到，中間兩頁是空殼）
+    for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
+      ui.getByText(zh.common.prev).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+    ui.getByText("probe-present").click();          // 換一包（gen 前進、dest 變 /d）
+    await waitFor(() => expect(ui.getByTestId("picked").textContent)
+      .toBe("/tmp/picked.tar.gz"));
+
+    release({ host: "old", created: "x", accounts: ["work"], extra: [], project_count: 2 });
+
+    // 往下走一頁就看得到來源：必須是使用者剛選的那一包，不是續作帶進來的那個
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    expect(ui.getByTestId("targets-dest").textContent).toBe("/d");
+  });
+
+  // Codex 票 07 R2：effect 依賴 port 與 t，sidecar 重啟換 port（或退回歡迎頁切語言）都會
+  // 讓它重跑——那時「進場時的 gen」會重新擷取成當下的值，換過包之後的比對照樣成立
+  it("換包之後 sidecar 重啟：續作探測不得重新套用", async () => {
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+    await waitFor(() => expect(ui.getByTestId("preview-dest")).toBeTruthy());
+
+    for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
+      ui.getByText(zh.common.prev).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+    ui.getByText("probe-present").click();          // 換一包（dest 變 /d）
+    await waitFor(() => expect(ui.getByTestId("picked").textContent)
+      .toBe("/tmp/picked.tar.gz"));
+    vi.mocked(fetchBundleInfo).mockClear();
+
+    useAppStore.setState({ port: 5678 });           // sidecar 重啟換 port
+
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    expect(fetchBundleInfo).not.toHaveBeenCalled(); // 入場動作不該再跑一次
+    expect(ui.getByTestId("targets-dest").textContent).toBe("/d");
+  });
+
+  // Codex 票 07 R3：R2 的一次性旗標設在請求**開始前**，sidecar 在探測途中重啟就永久取消
+  // 了它——既不向新 sidecar 重試、也不顯示錯誤，續作頁永遠停在空殼。「已換包」與「還沒
+  // 成功」是兩件事
+  it("探測途中 sidecar 重啟：向新 port 重試，續作預覽照樣出得來", async () => {
+    let release: (info: unknown) => void = () => {};
+    vi.mocked(fetchBundleInfo).mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }) as never);
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+    await waitFor(() => expect(fetchBundleInfo).toHaveBeenCalledWith(1234, RESUME.sourceRoot));
+
+    useAppStore.setState({ port: 5678 });        // sidecar 重啟換 port
+    release({ host: "old", created: "x", accounts: ["work"], extra: [], project_count: 2 });
+
+    await waitFor(() => expect(fetchBundleInfo)
+      .toHaveBeenCalledWith(5678, RESUME.sourceRoot));
+    await waitFor(() => expect(ui.getByTestId("preview-dest").textContent)
+      .toBe(RESUME.sourceRoot));
+  });
+
+  // 兩個條件真正分工的那一格：**探測還沒成功**（一次性旗標還沒消費）時使用者換了包，
+  // 之後 sidecar 又重啟——只看旗標的話 effect 會重跑並把舊來源套上去，因為「進場時的
+  // gen」在重跑時已重新擷取成新包的 gen。mutation 抓出前面幾條的換包都發生在探測**成功
+  // 之後**，被旗標擋住了，gen 比對從沒被驗到
+  it("探測還沒成功就換了包，之後 sidecar 重啟也不得套用舊來源", async () => {
+    vi.mocked(fetchBundleInfo).mockImplementationOnce(
+      () => new Promise(() => {}) as never);        // 永遠不回來
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+    await waitFor(() => expect(fetchBundleInfo).toHaveBeenCalledTimes(1));
+
+    for (const heading of [zh.mig.paths.h, zh.mig.targets.h, zh.mig.bundle.h]) {
+      ui.getByText(zh.common.prev).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+    ui.getByText("probe-present").click();          // 換一包（探測仍未成功）
+    await waitFor(() => expect(ui.getByTestId("picked").textContent)
+      .toBe("/tmp/picked.tar.gz"));
+    vi.mocked(fetchBundleInfo).mockClear();
+
+    useAppStore.setState({ port: 5678 });           // sidecar 重啟
+
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    expect(fetchBundleInfo).not.toHaveBeenCalled();  // 續作已因換包永久失效
+    expect(ui.getByTestId("targets-dest").textContent).toBe("/d");
+  });
+
+  it("包資訊讀不出來：說明白，而且不讓使用者停在一份假的預覽上", async () => {
+    vi.mocked(fetchBundleInfo).mockRejectedValueOnce(new Error("INFO-SENTINEL-500"));
+    const ui = render(<Onboarding onClose={() => {}} resume={RESUME} />);
+
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.install.errors.resumeFailed)).toBeTruthy());
+    expect(ui.queryByTestId("preview-dest")).toBeNull();
+    expect(ui.container.textContent).not.toContain("INFO-SENTINEL-500");
+  });
+
+  it("沒有 resume 就照舊從歡迎頁開始", async () => {
+    const ui = render(<Onboarding onClose={() => {}} />);
+    expect(ui.getByText(zh.welcome.h)).toBeTruthy();
+    expect(fetchBundleInfo).not.toHaveBeenCalled();
   });
 });

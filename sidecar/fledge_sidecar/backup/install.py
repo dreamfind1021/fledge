@@ -644,7 +644,7 @@ def journal_path(transaction_id: str) -> Path:
     return _journal_dir() / f"{_JOURNAL_PREFIX}{transaction_id}.jsonl"
 
 
-def _has_unfinished_journal() -> bool:
+def has_unfinished_journal() -> bool:
     """還有沒有**任何**一輪移機沒收尾（只用來決定要不要掃暫存殘骸）。
 
     **不能只看本次 transaction 的 journal**（Codex 票 08 R2）：`transaction_id` 綁
@@ -660,6 +660,24 @@ def _has_unfinished_journal() -> bool:
         return any(_journal_dir().glob(f"{_JOURNAL_PREFIX}*.jsonl"))
     except OSError:
         return False
+
+
+def journal_readable(transaction_id: str) -> bool:
+    """這個 transaction 的 journal 能不能被**續作時實際會走的那條路徑**讀出來（票 07）。
+
+    判準刻意等同 install 第二階段的跨輪起底（`_parse_journal_records_strict`）：那條路徑
+    對「讀得到但內容損壞」是全體 fail-closed，狀態查詢若用寬鬆版說「可以續作」，使用者
+    按下繼續之後只會拿到一整批 `provenance_unavailable`——**同一條規則寫兩份必然漂移**，
+    所以由這裡公開，不讓呼叫端自己再解析一次。
+
+    檔案不存在也回 False（呼叫端在此之前就該分辨「不存在」與「讀不出」，見 §3.3.1 的
+    `stale_marker` 與 `journal_unreadable` 兩個 state）。"""
+    try:
+        _parse_journal_records_strict(
+            journal_path(transaction_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return False
+    return True
 
 
 def installed_nodes(transaction_id: str) -> set[str]:
@@ -1373,7 +1391,7 @@ def install(plan: InstallPlan, *, stale_out: list[str] | None = None) -> list[It
     # 都要全掃。判準是「有沒有任何一輪沒收尾」而不是「本次 transaction 的 journal 在不
     # 在」（Codex 票 08 R2：後者會讓「中斷後改 mapping／重展 bundle 再跑」永久漏清）。
     # 這不是安全判斷、也不授權任何刪除（找到的只寫進 log，票 08 R3），所以 pathname 探測就夠。
-    stale_temps: list[str] | None = [] if _has_unfinished_journal() else None
+    stale_temps: list[str] | None = [] if has_unfinished_journal() else None
     try:
         journal_fd = _open_journal_fd(journal)
     except OSError as exc:

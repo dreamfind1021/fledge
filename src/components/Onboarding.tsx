@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import { Check } from "lucide-react";
 import { useTranslation, Trans } from "react-i18next";
 import { useAppStore } from "../store/useAppStore";
-import { scanPreview, runInstall, RestoreError, DEFAULT_ACCOUNT_KEY,
+import { useEffect } from "react";
+import { scanPreview, runInstall, fetchBundleInfo, RestoreError, DEFAULT_ACCOUNT_KEY,
          type InstallItemResult } from "../lib/sidecar";
 import { pickDirectory } from "../lib/dialog";
 import {
@@ -28,6 +29,14 @@ import "./Onboarding.css";
 
 interface OnboardingProps {
   onClose: () => void;
+  /**
+   * 中斷續作（票 07）：從還原卡的「繼續移機」進來時，直接落在移機分支的安裝頁，並把上次
+   * 填的展開位置與專案路徑對應預填回去。
+   *
+   * **只是預填值不是授權**（增補 spec §3.4）：使用者仍要看預覽、按下安裝，真正的驗證全在
+   * `install.plan()`（bundle 形狀、身分綁定、mapping 三態驗證、落點重疊、containment）。
+   */
+  resume?: { sourceRoot: string; mapping: { old: string; new: string }[] };
 }
 
 interface DraftRoot {
@@ -43,7 +52,7 @@ type InstallRun =
   | { kind: "running" }
   | { kind: "done"; results: InstallItemResult[]; staleTemps: string[] };
 
-export function Onboarding({ onClose }: OnboardingProps) {
+export function Onboarding({ onClose, resume }: OnboardingProps) {
   const { t } = useTranslation("onboarding");
   const port = useAppStore((s) => s.port);
   const config = useAppStore((s) => s.config);
@@ -54,10 +63,10 @@ export function Onboarding({ onClose }: OnboardingProps) {
   const accountKeys = config ? Object.keys(config.accounts) : [DEFAULT_ACCOUNT_KEY];
 
   // 歡迎頁的二選一。移機分支（票 12 Plan B）的頁面序列與全新設定從第二頁起就完全分岔。
-  const [mode, setMode] = useState<WizardMode>("fresh");
+  const [mode, setMode] = useState<WizardMode>(resume ? "restore" : "fresh");
   // 導覽 state 存「哪一頁」而不是「第幾頁」：移機序列的 `paths` 會因備份包內容而增刪，且那是
   // 非同步得知的，存索引會讓同一個數字在序列變動後指到別頁（Codex F1，見 onboardingSteps）
-  const [current, setCurrent] = useState<WizardStep>("welcome");
+  const [current, setCurrent] = useState<WizardStep>(resume ? "install" : "welcome");
   const [draftRoots, setDraftRoots] = useState<DraftRoot[]>([]);
   const [newPath, setNewPath] = useState("");
   const [newAccount, setNewAccount] = useState(accountKeys[0] ?? DEFAULT_ACCOUNT_KEY);
@@ -80,7 +89,8 @@ export function Onboarding({ onClose }: OnboardingProps) {
   // **綁在 `bundle.gen` 上**（Codex 票 04 R1 F1）：換包、換展開位置、重新展開都會讓它
   // 失效——舊 key 不屬於新包，送進 plan 是 `mapping_unknown_project`；兩包剛好有同一條
   // 舊路徑時更糟，上一包的人工選擇會靜靜套到新包上。
-  const [mapping, setMapping] = useState<ProjectMapping>({});
+  const [mapping, setMapping] = useState<ProjectMapping>(
+    () => Object.fromEntries((resume?.mapping ?? []).map((m) => [m.old, m.new])));
   // **狀態綁著它是哪一包讀出來的**（Codex 票 04 R2）：只存 status 的話，換包之後 gating
   // 會先看到上一包的 `loaded`——在新包的清單根本還沒讀之前就放行。
   const [pathsStatus, setPathsStatus] = useState<{ gen: number; value: PathsStatus }>(
@@ -93,6 +103,15 @@ export function Onboarding({ onClose }: OnboardingProps) {
   // 不屬於新的包——留著會讓使用者以為新的包也已經裝過了
   const [installRun, setInstallRun] = useState<{ gen: number; value: InstallRun }>(
     { gen: -1, value: { kind: "idle" } });
+  // 當下的來源身分（render body 同步寫回）：續作探測的錯誤路徑要靠它判斷「這個訊息還
+  // 屬不屬於現在這一包」——`setBundle` 的 functional update 讀得到最新的 gen，`setError`
+  // 讀不到（比照 `InstallPreviewCard.liveSource`）
+  // 續作入場探測的兩個獨立條件（見下面那支 effect）：`resumeGen`＝它綁定的來源身分
+  // （使用者一換包就永久失效），`resumeApplied`＝**成功套用之後**才消費掉
+  const resumeGen = useRef<number | null>(null);
+  const resumeApplied = useRef(false);
+  const liveGen = useRef(bundle.gen);
+  liveGen.current = bundle.gen;
   const mappingGen = useRef(bundle.gen);
   if (mappingGen.current !== bundle.gen) {
     // render body 同步清空：等 effect 會讓 PathsCard 先用舊 mapping seed 一次
@@ -108,6 +127,47 @@ export function Onboarding({ onClose }: OnboardingProps) {
     ? installRun.value : { kind: "idle" };
   const previewReady = previewStatus.gen === bundle.gen && previewStatus.value === "loaded";
   const overlayRef = useRef<HTMLDivElement>(null);
+
+  // 續作（票 07）：安裝頁的每一項都從那份展開的包算出來，所以進去之前要先確認它還讀得出來
+  // （狀態端點驗過一次，但那是在使用者按下繼續之前）。
+  //
+  // **只換 `probe`、不動 `gen`**：`gen` 是「來源身分」，而續作不是換包——來源從一開始就是
+  // 這一個。動它會觸發 render body 的換包清空，把剛預填好的專案對應洗掉（票 04 的機制）。
+  useEffect(() => {
+    // 這支 effect 依賴 `port` 與 `t`，sidecar 重啟換 port、或使用者退回歡迎頁切語言都會
+    // 讓它重跑。**兩件事要分開判**（Codex 票 07 R2／R3）：
+    //   ①「使用者已經換過包」→ 續作**永久失效**：重跑時 `startGen` 會重新擷取當下的 gen，
+    //     於是換包之後的比對照樣成立、probe 又被換回舊來源（R2）
+    //   ②「探測還沒成功」→ 換 port 應該**重試**：把消費點放在請求開始前的話，sidecar 在
+    //     探測途中重啟就永久取消了它——既不重試也不報錯，續作頁停在空殼（R3）
+    if (resume === undefined || port == null) return;
+    if (resumeGen.current === null) resumeGen.current = bundle.gen;   // 進場時綁定
+    if (resumeGen.current !== bundle.gen || resumeApplied.current) return;
+    let live = true;
+    // **遲到的回應不得覆蓋使用者後來選的包**（Codex 票 07 R1 F2）：這支探測在飛的時候，
+    // 使用者可以回上一頁換一包（BundleCard 會把 `gen` 推進）。沒有這道比對的話，畫面上
+    // 是新包、預覽與安裝卻用續作帶進來的舊來源。與 `InstallPreviewCard`／`PathsCard` 的
+    // `liveSource` 同一個模式——續作這條路徑當初漏了套。
+    const startGen = bundle.gen;
+    void (async () => {
+      try {
+        const info = await fetchBundleInfo(port, resume.sourceRoot);
+        if (!live) return;
+        setBundle((cur) => (cur.gen === startGen
+          ? { ...cur, probe: { kind: "present", info, dest: resume.sourceRoot } }
+          : cur));
+        resumeApplied.current = true;     // **成功套用之後**才消費，失敗留給換 port 重試
+      } catch (e) {
+        // 判別碼與例外原文只進 console（CLAUDE.md §4.6.13）
+        console.error("[onboarding] 續作讀不到包資訊", e);
+        // 已經換過包就不報這個錯：那份續作來源已經與畫面無關，訊息只會誤導
+        if (live && liveGen.current === startGen) {
+          setError(t("mig.install.errors.resumeFailed"));
+        }
+      }
+    })();
+    return () => { live = false; };
+  }, [resume, port, t]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const steps = wizardSteps({
     accountCount: accountKeys.length,

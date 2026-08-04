@@ -11,8 +11,11 @@ import {
   commonConfigPlan,
   commonConfigRepair,
   fetchBackupStatus,
+  fetchMigrationStatus,
   restorePlan,
   type BackupStatus,
+  type MigrationState,
+  type MigrationStatus,
   type CommonConfigOpResult,
   type RestorePlan,
 } from "../lib/sidecar";
@@ -39,6 +42,23 @@ const CODE_KEY: Record<string, string> = {
   dest_denied: "dest.denied",
 };
 
+/** 未完成的移機 → catalog key。**顯式表涵蓋整個 union**：後端加狀態時這裡會編譯失敗，
+ *  而不是把 i18n key 原文印在畫面上。`none`／`stale_marker` 不在表內——那兩個**不顯示**
+ *  （前者沒有未完成，後者是簿記殘骸、那一輪其實成功了，journal 是權威）。 */
+const MIGRATION_MSG: Record<Exclude<MigrationState, "none" | "stale_marker">, string> = {
+  unfinished_unknown: "migration.unknown",
+  source_missing: "migration.sourceMissing",
+  journal_unreadable: "migration.unreadable",
+  resumable: "migration.resumable",
+};
+
+/** 續作要帶回精靈的兩樣東西（票 07）。**只是預填值不是授權**（增補 spec §3.4）：使用者
+ *  仍要看預覽、按下安裝，而真正的驗證全在 `install.plan()`。 */
+export interface MigrationResume {
+  sourceRoot: string;
+  mapping: { old: string; new: string }[];
+}
+
 /** 與 `CommonConfigCard`／`DevEnvSection`／`LoginCard` 同一份形狀。維持各卡自宣告的既有
  *  慣例（抽成共用型別要動三個已驗收的元件，與這張票的範圍不相稱），但欄位必須一致：
  *  `label` 在 `AppConfigData.accounts` 裡是必填，宣告成選填等於自己引入一個新慣例。 */
@@ -61,9 +81,12 @@ type LinkScan =
 export function RestoreCard({
   port,
   accounts,
+  onResumeMigration,
 }: {
   port: number | null;
   accounts: Record<string, AccountInfo>;
+  /** 按下「繼續移機」時往上通知（modal 狀態在 App）。未提供＝不顯示按鈕。 */
+  onResumeMigration?: (resume: MigrationResume) => void;
 }) {
   const { t } = useTranslation("restore");
   const [status, setStatus] = useState<BackupStatus | null>(null);
@@ -77,12 +100,16 @@ export function RestoreCard({
   const [repairing, setRepairing] = useState(false);
   const [repairResults, setRepairResults] = useState<CommonConfigOpResult[] | null>(null);
   const [repairError, setRepairError] = useState<string | null>(null);
+  // 上一輪移機收尾了沒（票 07）。**判定全在後端**——牽涉 journal 定位、bundle 形狀驗證
+  // 與損壞容錯；前端不碰檔案系統（增補 spec §3.3.2）
+  const [migration, setMigration] = useState<MigrationStatus | null>(null);
 
   // latest-request-wins：sidecar 重啟換 port 會讓新舊請求重疊，晚到的舊回應若照樣寫進
   // state，畫面會退回上一輪的結果（比照 BackupCard／EnvCard 的 reqId）
   const statusReq = useRef(0);
   const planReq = useRef(0);
   const scanReq = useRef(0);
+  const migrationReq = useRef(0);
   const mounted = useRef(true);
 
   const {
@@ -118,6 +145,24 @@ export function RestoreCard({
         // 例外原文只進 console：判別碼與 `String(e)` 都不得出現在畫面上（CLAUDE.md §4.6.13）
         console.error("[RestoreCard] 讀取備份狀態失敗", e);
         if (mounted.current && myId === statusReq.current) setStatus(null);
+      }
+    })();
+  }, [port]);
+
+  // 上一輪移機的狀態（票 07）。與備份狀態分開抓：它與備份目錄設定無關（續作看的是**展開
+  // 目錄**），所以 `blocked` 擋住整張卡的時候這一段照樣要顯示——沒設定備份位置的人也可能
+  // 有一輪移機卡在半路。查詢失敗一律當作沒有：它是唯讀查詢，不該讓還原卡壞掉。
+  useEffect(() => {
+    if (port == null) return;
+    const myId = ++migrationReq.current;
+    void (async () => {
+      try {
+        const next = await fetchMigrationStatus(port);
+        if (!mounted.current || myId !== migrationReq.current) return;
+        setMigration(next);
+      } catch (e) {
+        console.error("[RestoreCard] 讀取移機狀態失敗", e);
+        if (mounted.current && myId === migrationReq.current) setMigration(null);
       }
     })();
   }, [port]);
@@ -229,8 +274,37 @@ export function RestoreCard({
     }
   }, [port, accountsSig, scanLinks, t]);   // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 讀不到狀態時整張卡不出現：這裡沒有使用者能採取的行動，留一個空殼只是噪音
-  if (status === null) return null;
+  // 續作資訊只在 `resumable` 出現，而且**後端說 resumable 卻沒給 source_root 就不給按鈕**：
+  // 預填值缺一半的續作會把使用者丟進一個填不滿的表單，不如讓他走「重新展開」那條路。
+  const resumeInfo: MigrationResume | null =
+    migration?.state === "resumable" && typeof migration.source_root === "string"
+      ? { sourceRoot: migration.source_root, mapping: migration.mapping ?? [] }
+      : null;
+  // 未完成的移機（票 07）。`none`／`stale_marker` 整段不出現——後者是簿記殘骸，journal
+  // 已被清除＝那一輪其實成功了（journal 是權威）。
+  const migrationBanner =
+    migration === null || migration.state === "none" || migration.state === "stale_marker"
+      ? null
+      : (
+        <div className="rs-migration">
+          <p className="rs-migration-h">{t("migration.h")}</p>
+          <p className="rs-migration-msg">{t(MIGRATION_MSG[migration.state])}</p>
+          {resumeInfo !== null && onResumeMigration !== undefined && (
+            <button
+              onClick={() => onResumeMigration(resumeInfo)}
+              className="settings-btn-primary rs-migration-btn"
+            >{t("migration.resume")}</button>
+          )}
+        </div>
+      );
+
+  // 讀不到備份狀態時整張卡不出現：這裡沒有使用者能採取的行動，留一個空殼只是噪音。
+  // **但續作提示要留著**（票 07）：它與備份位置設定無關（續作看的是展開目錄），而移機
+  // 卡在半路的人正好可能有一份讀不出來的 config——那時整張卡消失就等於續作入口也消失。
+  if (status === null) {
+    return migrationBanner === null ? null
+      : <div className="b4-card rs-card">{migrationBanner}</div>;
+  }
 
   const blocked = restoreBlocking(status);
   const busy = starting || (running !== null && !finished);
@@ -249,6 +323,9 @@ export function RestoreCard({
           <p className="b4-card-desc">{t("intro")}</p>
         </div>
       </div>
+
+      {/* 未完成的移機：**排在 `blocked` 之前且不受它影響**——續作看的是展開目錄 */}
+      {migrationBanner}
 
       {blocked !== null ? (
         <p className="rs-blocked-msg">{t(`blocked.${blocked}`)}</p>

@@ -13,6 +13,7 @@ import { Workspace } from "./components/Workspace";
 import { Settings } from "./components/Settings";
 import { ProjectPicker } from "./components/ProjectPicker";
 import { Onboarding } from "./components/Onboarding";
+import type { MigrationResume } from "./components/RestoreCard";
 import { Splash } from "./components/Splash";
 import "./App.css";
 
@@ -97,6 +98,8 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  // 續作（票 07）：非 null＝這次開精靈是要接續上次沒完成的移機，直接落在安裝頁並預填
+  const [resumeMigration, setResumeMigration] = useState<MigrationResume | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
   const backendStatus = useAppStore((s) => s.backendStatus);
@@ -338,13 +341,28 @@ function App() {
       {!splashDone && (
         <Splash onDone={() => setSplashDone(true)} onRetry={() => void runStartup({ restart: true })} />
       )}
-      {showOnboarding && <Onboarding onClose={() => setShowOnboarding(false)} />}
+      {showOnboarding && (
+        <Onboarding
+          onClose={() => {
+            setShowOnboarding(false);
+            setResumeMigration(null);   // 續作是一次性的入口，關掉就不再套用
+          }}
+          resume={resumeMigration ?? undefined}
+        />
+      )}
       {showSettings && (
         <Settings
           onClose={() => setShowSettings(false)}
           // 重跑引導：關掉設定頁再開精靈，兩個 modal 不疊在一起
           onRerunOnboarding={() => {
             setShowSettings(false);
+            setResumeMigration(null);   // 重跑引導是從頭走，不是續作
+            setShowOnboarding(true);
+          }}
+          // 接續上次沒完成的移機（票 07）：同樣關掉設定頁再開精靈，兩個 modal 不疊在一起
+          onResumeMigration={(resume) => {
+            setShowSettings(false);
+            setResumeMigration(resume);
             setShowOnboarding(true);
           }}
         />
