@@ -573,6 +573,41 @@ describe("Onboarding 精靈外殼", () => {
     expect(ui.queryByText("/Users/me/existing-kms")).toBeNull();
   });
 
+  // Codex 票 09 R2 F4：`mapping`／`pathsStatus`／`previewStatus`／`installRun` 全都綁
+  // `bundle.gen`，唯獨這個新 state 漏了套——**新增的東西要主動比對既有的同族防線**
+  // （票 07 的教訓）。A 包落檔後換 B 包，設定檔已經在了（`configCreated` 仍是 true、
+  // 卡片是 saved、不會再跑 onSaved），摘要就會把 A 包帶回的內容說成 B 包的結果。
+  it("換一包之後，不把上一包帶回的設定說成這一包的", async () => {
+    useAppStore.setState({
+      config: { ...baseConfig, is_first_run: true },
+      loadConfig: async () => {
+        useAppStore.setState({
+          config: { ...baseConfig, is_first_run: false, kms_root: "/from/bundle-a" },
+        });
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();                    // A 包
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() => expect(ui.getByText("/from/bundle-a")).toBeTruthy());
+
+    ui.getByText(zh.common.prev).click();                     // 回上一頁
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();                    // 換 B 包（gen 推進）
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+
+    expect(ui.queryByText("/from/bundle-a")).toBeNull();
+    expect(ui.queryByText(zh.mig.targets.adopted.kms)).toBeNull();
+  });
+
   it("知識庫根目錄沒帶回來時說清楚，並指路到設定頁", async () => {
     useAppStore.setState({
       config: { ...baseConfig, is_first_run: true },

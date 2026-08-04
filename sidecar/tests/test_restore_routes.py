@@ -1578,3 +1578,31 @@ def test_adopt_config_rejects_a_user_sent_root_that_blows_up_expanduser(
                       roots=[{"path": bad, "default_account": "work"}])
         assert (resp.status_code, resp.json()["error"]) == (400, "invalid_root"), bad
     assert not cfg.exists()
+
+
+def test_adopt_config_survives_lone_surrogate_paths(tmp_path: Path, monkeypatch):
+    """孤立代理字元（`"\\ud800"`，JSON 解得出來、仍是 `str`）→ 200，不是 500。
+
+    **釘住一個容易誤判的繼承關係**（Codex 票 09 R2 F3 的前提就錯在這裡）：`probe_dir`
+    的 `os.stat` 對它拋 `UnicodeEncodeError`，而 `UnicodeError` **是 `ValueError` 的子類**
+    （MRO：UnicodeError → ValueError → Exception），所以 `_usable_dir` 現有的例外集合
+    已經接住了，不必再加一個 `UnicodeError`。
+
+    這條測試存在的理由是那個誤解會再犯：把 `ValueError` 從 `_usable_dir` 拿掉才會紅。
+
+    **只測包裡那一側**：`body.roots` 走同一支 `_usable_dir`，但孤立代理字元從 HTTP
+    body 傳不進來——request body 必須是有效 UTF-8，客戶端（實測 httpx）就編不出去，
+    手工送無效位元組則在 JSON 解析階段變 422，到不了路由函式。不測不可達的路徑。"""
+    lone = json.loads(r'{"p": "/tmp/\ud800"}')["p"]
+    for i, payload in enumerate([
+        {"kms_root": lone},
+        {"roots": [{"path": lone, "default_account": "work"}]},
+    ]):
+        base = tmp_path / f"surrogate{i}"
+        base.mkdir()
+        cfg, src, home = _adopt_env(base, monkeypatch)
+        _plant_bundle_config(src, payload)
+        resp = _adopt(TestClient(create_app()), src, home)
+        assert resp.status_code == 200, f"{payload!r} → {resp.status_code}"
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+        assert (data["kms_root"], data["roots"]) == ("", [])

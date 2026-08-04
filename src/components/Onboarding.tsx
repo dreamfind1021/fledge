@@ -82,7 +82,13 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   // 本來就有設定檔」也是 true（重跑引導、`config` 還沒載入），拿它當「帶回了什麼」的
   // 依據就會宣稱沒發生過的事（Codex 票 09 R1 F2）。只有 `adopt-config` 真的建立了新
   // 設定檔、而且父層把它讀回 store 之後才成立。
-  const [adoptedFromBundle, setAdoptedFromBundle] = useState(false);
+  //
+  // **綁 `bundle.gen`**（Codex 票 09 R2 F4）：換包之後設定檔已經在了，`configCreated`
+  // 仍是 true、卡片是 saved、`onSaved` 不會再跑——旗標若不綁來源，A 包帶回的內容就會
+  // 掛在 B 包的流程上被說成「這一包帶回來的」。`mapping`／`pathsStatus`／`previewStatus`
+  // ／`installRun` 全都綁 gen，這是同一族防線，新 state 不能漏套。
+  const [adoptedFrom, setAdoptedFrom] = useState<{ gen: number; value: boolean }>(
+    { gen: -1, value: false });
   // 備份包的選擇（票 02）：選了哪一包、解到哪裡、裡面有什麼。**整組住在這裡而不是卡片裡**
   // ——卡片會隨換頁卸載，只把包資訊留在上層會讓「還沒選任何包的卡片」顯示上一包的摘要
   // （Codex 票 02 R1 F2）。其中包資訊還是**序列本身的輸入**：`paths` 頁在包裡沒有專案歷史
@@ -131,6 +137,7 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   const run: InstallRun = installRun.gen === bundle.gen
     ? installRun.value : { kind: "idle" };
   const previewReady = previewStatus.gen === bundle.gen && previewStatus.value === "loaded";
+  const adoptedFromBundle = adoptedFrom.gen === bundle.gen && adoptedFrom.value;
   const overlayRef = useRef<HTMLDivElement>(null);
 
   // 續作（票 07）：安裝頁的每一項都從那份展開的包算出來，所以進去之前要先確認它還讀得出來
@@ -525,7 +532,7 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
                     setConfigCreated(true);
                     // 沿用既有設定檔（409）時 config 裡的東西是使用者原本就有的，
                     // **不是**這個備份包帶回來的（Codex 票 09 R1 F2）
-                    setAdoptedFromBundle(!reused);
+                    setAdoptedFrom({ gen: bundle.gen, value: !reused });
                   }}
                 />
                 {/* 從備份包帶回的 Fledge 自身設定（票 09／增補 spec 缺口 5）。這三個值
