@@ -2193,3 +2193,28 @@ def test_install_without_stale_out_keeps_reporting_only_to_log(
         results = inst.install(inst.plan(str(src), _accounts(tgt)))
     assert "殘留的暫存檔" in caplog.text
     assert {r.outcome for r in results} == {"installed"}
+
+
+def test_stale_scan_covers_only_what_this_round_walks(tmp_path: Path, monkeypatch):
+    """**記錄在案的界線**（票 08 的成本取捨；Codex 票 06 R2 F2 再次指出）：殘骸掃描的
+    範圍就是本輪會寫入的目錄——遞迴由**來源**樹驅動，所以前一輪留在深層的殘骸，若本輪
+    的來源不再有那個子樹（重展的 bundle 少了它、mapping 改了目的地、來源子目錄開不起來），
+    就掃不到。
+
+    **不改成「獨立遍歷每個落點的目的樹」**：那是票 08 R1 F3 記錄過的成本決策——落點常有
+    上千個使用者既有檔案，那等於每次安裝都全掃一次使用者的現役目錄；而漏報的後果有界，
+    殘骸是無害的隱藏檔，只是少告訴使用者幾個位置。
+
+    這條測試釘的是界線本身，不是「期望的行為」。要改掃描策略的人會先在這裡看到取捨。"""
+    src = _staging(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    # 前一輪在深層留下的殘骸——本輪的來源沒有 `gone/` 這個子樹，走不到那裡
+    (tgt / "gone").mkdir()
+    deep = _plant_stale(tgt / "gone", _dead_pid(), "dddddddd")
+    shallow = _plant_stale(tgt, _dead_pid(), "aaaaaaaa")
+    _mark_unfinished_round(tmp_path)
+
+    stale: list[str] = []
+    inst.install(inst.plan(str(src), _accounts(tgt)), stale_out=stale)
+    assert stale == [str(shallow)], "本輪會寫入的那一層要指認得到"
+    assert deep.exists(), "走不到的深層殘骸原封不動——只是這一輪報不出來"

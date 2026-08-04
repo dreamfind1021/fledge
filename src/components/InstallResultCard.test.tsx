@@ -77,6 +77,43 @@ describe("InstallResultCard", () => {
     expect(ui.container.textContent).not.toContain("brand_new_code_from_backend");
   });
 
+  // Codex 票 06 R2 F1：逐項與落點層的失敗都是 HTTP 200 的 results——所有落點都 target_moved
+  // 時一項都沒成功，畫面若照樣宣告「內容已經寫進這台機器」，就是 R1 修掉的「斷言我們不知道
+  // 的事」在成功路徑上的同一個形狀
+  it("一項都沒成功時不得宣告已經寫進這台機器", () => {
+    const ui = setup([
+      { account: "work", rel_path: "", outcome: "failed", error: "target_moved" },
+      { account: "personal", rel_path: "", outcome: "failed", error: "target_moved" },
+    ]);
+    expect(ui.getByText(zh.mig.result.sub.none)).toBeTruthy();
+    expect(ui.queryByText(zh.mig.result.sub.ok)).toBeNull();
+    expect(ui.queryByText(zh.mig.result.sub.partial)).toBeNull();
+  });
+
+  it("部分失敗說「有些沒裝成功」，不說全部搬完也不說什麼都沒搬", () => {
+    const ui = setup(RESULTS);        // 2 installed + 1 skipped + 1 failed
+    expect(ui.getByText(zh.mig.result.sub.partial)).toBeTruthy();
+    expect(ui.queryByText(zh.mig.result.sub.ok)).toBeNull();
+    expect(ui.queryByText(zh.mig.result.sub.none)).toBeNull();
+  });
+
+  it("全部順利才說內容已經寫進這台機器", () => {
+    const ui = setup(RESULTS.filter((r) => r.outcome === "installed"));
+    expect(ui.getByText(zh.mig.result.sub.ok)).toBeTruthy();
+  });
+
+  // 只有 skipped＝東西已經在那裡（重送一次的使用者就是看到這個），不算「什麼都沒搬」；
+  // 而 excluded 是刻意不處理，那才是真的沒有東西進來
+  it("只有跳過算東西在那裡，只有刻意不處理則不算", () => {
+    const onlySkipped = setup([{ account: "work", rel_path: "CLAUDE.md",
+                                 outcome: "skipped", error: null }]);
+    expect(onlySkipped.getByText(zh.mig.result.sub.ok)).toBeTruthy();
+    cleanup();
+    const onlyExcluded = setup([{ account: "work", rel_path: ".claude.json",
+                                  outcome: "excluded", error: "not_migrated_by_design" }]);
+    expect(onlyExcluded.getByText(zh.mig.result.sub.none)).toBeTruthy();
+  });
+
   // 增補 spec §2.5.2：連結不在預覽的任何數字裡，結果的 installed 大於預覽是**正常的**。
   // 文案不講清楚，使用者會以為東西被多搬了或哪裡出錯
   it("說明「已裝好」可能比預覽多是正常的", () => {

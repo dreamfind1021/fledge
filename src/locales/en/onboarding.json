@@ -121,7 +121,11 @@
     },
     "result": {
       "h": "Install results",
-      "sub": "The bundle's contents are now on this machine. Here's what happened, item by item.",
+      "sub": {
+        "ok": "The bundle's contents are now on this machine. Here's what happened, item by item.",
+        "partial": "Some items didn't make it. Here's what happened, item by item — the ones that failed show why.",
+        "none": "Nothing was brought over this time. Here's why each item didn't make it."
+      },
       "installed": "Brought over",
       "skipped": "Skipped (something was already there; nothing is overwritten)",
       "excluded": "Deliberately not handled",
