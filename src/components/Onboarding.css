@@ -841,23 +841,27 @@
   margin-bottom: 8px;
 }
 
-/* 區塊標題列：標題 ／ 數量 ／ 展開鈕。
-   **gap 是這裡的重點**——沒有它，「已裝好」與數字會黏成「已裝好6」。 */
+/* 區塊標題列。裝的東西依卡片而異：
+     InstallSection  [分類名] [數量] …………………… [展開鈕]
+     TargetsCard     [帳號／帳號外資產] [key] ＋ 換行後的「舊機位置 <長路徑>」
+   **必須 wrap**：舊路徑動輒上百字元，不換行就會把同一列的標題壓扁——中文被壓到
+   一個字一行直排（票 16 第一版把 `.ob-spot-old` 設成 nowrap，就是這個下場）。 */
 .ob-spot-head {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
 }
 
+/* 分類名／落點類型：**不縮**（短標題，縮了就直排）*/
 .ob-spot-kind {
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 0 0 auto;
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
 }
 
-/* 數量：靠右、次要色——它是標題的附註不是主角 */
+/* 緊跟在標題後的次要資訊：InstallSection 是數量、TargetsCard 是 key 名稱 */
 .ob-spot-key {
   flex: 0 0 auto;
   color: var(--dim);
@@ -865,21 +869,34 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 「舊機位置」這類次級標籤 */
-.ob-spot-old {
-  color: var(--faint);
-  font-size: 12px;
-  white-space: nowrap;
+/* 標題列裡的按鈕（展開／收合）一律推到最右，且不被壓縮 */
+.ob-spot-head > button {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
-/* 明細行與舊路徑：縮排一格，讓它們看得出屬於上面那個標題 */
+/* 「舊機位置 <長路徑>」：**獨佔一行**（`flex: 1 1 100%` 讓它 wrap 到下一列），
+   裡面的路徑可斷行——它是這一列最長的東西，不讓它換行就會撐出卡片外 */
+.ob-spot-old {
+  flex: 1 1 100%;
+  min-width: 0;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* 路徑文字。**兩種用途共用**：TargetsCard／PathsCard 是內嵌在上面那一行的 span，
+   InstallSection 是自成一行的明細（`<p>`）——所以基本樣式不帶 margin，間距只給後者 */
 .ob-spot-oldpath {
-  margin: 6px 0 0 2px;
   color: var(--dim);
   font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 1.5;
   word-break: break-all;
+}
+
+p.ob-spot-oldpath {
+  margin: 6px 0 0;
+  line-height: 1.5;
 }
 
 /* 「已存在」／「還不存在」 */
@@ -888,6 +905,11 @@
   color: var(--faint);
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* `.ob-row` 裡的按鈕（「選擇…」「換個位置…」）不被壓縮——同樣的直排問題 */
+.ob-row > button {
+  flex: 0 0 auto;
 }
 
 /* 需要注意但不是錯誤（黃色，與紅色的 .ob-error 分開）*/
