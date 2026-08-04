@@ -203,3 +203,133 @@ def test_resolve_dest_never_suffixes_a_user_choice(tmp_path: Path, monkeypatch):
 
     assert restore.resolve_dest(str(used), BUNDLE_NAME) == str(used)
     assert restore.check_dest(str(used), []) == "not_empty"
+
+
+# ── 路徑模式：使用者用系統檔案選擇器挑的包（票 11）────────────────────────────
+#
+# **這條路沒有 allowlist**：移機情境下備份包不可能已經在「備份輸出目錄」裡（那個目錄是拿來
+# 寫備份的，新機器還沒備份過任何東西）。放行的能力基準線是 `kind=terminal`（見票 11／增補
+# spec §2.7.1），不是「使用者選的所以可信」——後端仍把它當不可信路徑驗。
+
+
+def test_bundle_from_path_accepts_a_regular_file(tmp_path: Path):
+    f = tmp_path / "somewhere" / "my-backup.tar.gz"
+    f.parent.mkdir()
+    f.write_bytes(b"x")
+    assert restore.bundle_from_path(str(f)) == str(f)
+
+
+def test_bundle_from_path_rejects_a_relative_path(tmp_path: Path):
+    with pytest.raises(ValueError, match="bundle_path_invalid"):
+        restore.bundle_from_path("relative/bundle.tar.gz")
+
+
+def test_bundle_from_path_rejects_a_missing_file(tmp_path: Path):
+    with pytest.raises(ValueError, match="bundle_not_found"):
+        restore.bundle_from_path(str(tmp_path / "nope.tar.gz"))
+
+
+def test_bundle_from_path_rejects_a_directory(tmp_path: Path):
+    d = tmp_path / "adir"
+    d.mkdir()
+    with pytest.raises(ValueError, match="bundle_not_a_file"):
+        restore.bundle_from_path(str(d))
+
+
+def test_bundle_from_path_rejects_a_fifo(tmp_path: Path):
+    """FIFO 要**開得起來才判得出型別**：唯讀 open 一個沒有 writer 的 FIFO 會阻塞，
+    所以實作必須帶 `O_NONBLOCK`。
+
+    **自帶 alarm 是必要的，不是保險**：實測拿掉 `O_NONBLOCK` 之後這條測試不會變紅，它會
+    **永遠跑不完**——CI 會 hang 而不是 fail，而卡死的測試不是紅燈（票 10 的教訓）。
+    專案沒裝 `pytest-timeout`，所以用 `signal.alarm` 自己來。"""
+    import signal
+
+    fifo = tmp_path / "afifo"
+    os.mkfifo(fifo)
+
+    def _bail(*_):
+        raise AssertionError("bundle_from_path 在 FIFO 上阻塞了——實作漏了 O_NONBLOCK")
+
+    previous = signal.signal(signal.SIGALRM, _bail)
+    signal.alarm(5)
+    try:
+        with pytest.raises(ValueError, match="bundle_not_a_file"):
+            restore.bundle_from_path(str(fifo))
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+def test_bundle_from_path_rejects_a_socket(tmp_path: Path, monkeypatch):
+    """socket 走的是**另一條分支**：它的 `os.open` 直接 ENOTSUP（實測），fstat 根本執行不到，
+    型別只能回頭用 `stat` 判。少了那條分支，這裡會變成 `bundle_unreadable`。
+
+    （bind 用相對路徑：AF_UNIX 的位址有 104 字元上限，而 pytest 的 `tmp_path` 比它長。）"""
+    import socket as _socket
+
+    monkeypatch.chdir(tmp_path)
+    s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    try:
+        s.bind("asock")
+        with pytest.raises(ValueError, match="bundle_not_a_file"):
+            restore.bundle_from_path(str(tmp_path / "asock"))
+    finally:
+        s.close()
+
+
+def test_bundle_from_path_rejects_a_device(tmp_path: Path):
+    """character device 走 fstat 那條分支（open 成功、S_ISREG 為假）。
+
+    用 `/dev/null` 是因為造一個 device node 需要 root。它**只被唯讀開啟並 fstat**，不寫、
+    也不是任何帳號目錄——沒有其他方式覆蓋這個型別。"""
+    with pytest.raises(ValueError, match="bundle_not_a_file"):
+        restore.bundle_from_path("/dev/null")
+
+
+def test_bundle_from_path_rejects_a_dangling_symlink(tmp_path: Path):
+    link = tmp_path / "dangling.tar.gz"
+    link.symlink_to(tmp_path / "gone.tar.gz")
+    with pytest.raises(ValueError, match="bundle_not_found"):
+        restore.bundle_from_path(str(link))
+
+
+def test_bundle_from_path_follows_a_symlink_to_a_regular_file(tmp_path: Path):
+    """**symlink 不拒**：既然已經接受任意路徑，前端大可直接送 symlink 的目標——拒絕不減少
+    攻擊面，只會擋掉合理用法（家目錄放一個指向隨身碟的連結）。"""
+    real = tmp_path / "real.tar.gz"
+    real.write_bytes(b"x")
+    link = tmp_path / "link.tar.gz"
+    link.symlink_to(real)
+    assert restore.bundle_from_path(str(link)) == str(link)
+
+
+def test_dest_for_bundle_path_derives_from_a_conforming_filename(tmp_path: Path, monkeypatch):
+    """檔名符合備份包命名規則時，路徑模式與名字模式推出同一個預設位置。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    bundle = tmp_path / BUNDLE_NAME
+    bundle.write_bytes(b"x")
+    assert restore.dest_for_bundle_path(None, str(bundle)) == str(
+        Path(tmp_path / "home") / ".claude-restore-20260101-1200"
+    )
+
+
+def test_dest_for_bundle_path_refuses_to_guess_from_an_odd_filename(tmp_path: Path, monkeypatch):
+    """**檔名不符命名規則就不猜**（比照 `project_paths` 的建議值：推不出來就留空）。
+
+    basename 會變成展開目錄名的一部分，而路徑模式的檔名是任意的。猜一個就得去 sanitize
+    它，那條路只會長出更多邊界情況——不如要使用者明確指定位置。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    bundle = tmp_path / "我的備份 (2).tgz"
+    bundle.write_bytes(b"x")
+    with pytest.raises(ValueError, match="dest_required"):
+        restore.dest_for_bundle_path(None, str(bundle))
+
+
+def test_dest_for_bundle_path_takes_the_user_choice_whatever_the_filename(tmp_path: Path, monkeypatch):
+    """使用者指定了位置就用它——檔名符不符合命名規則都不再有意義。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    bundle = tmp_path / "odd-name.tgz"
+    bundle.write_bytes(b"x")
+    chosen = tmp_path / "unpack-here"
+    assert restore.dest_for_bundle_path(str(chosen), str(bundle)) == str(chosen)

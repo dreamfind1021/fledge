@@ -55,7 +55,10 @@ _CONFIG_UNREADABLE = (ValueError, TypeError, AttributeError, OSError)
 
 class RestorePlanBody(BaseModel):
     model_config = ConfigDict(extra="forbid")  # 未知欄位（如注入 "command"）→ 422
-    bundle: str
+    # 二擇一（`restore.resolve_source_and_dest`）：名字走 `list_bundles` 的 allowlist；
+    # 路徑是使用者用系統檔案選擇器挑的，移機情境下備份包不可能在備份輸出目錄裡（票 11）。
+    bundle: str | None = None
+    bundle_path: str | None = None
     dest: str | None = None                    # 未給＝用後端算的預設位置
 
 
@@ -71,13 +74,15 @@ def restore_plan(body: RestorePlanBody):
         logger.error("還原預覽讀不出 config", exc_info=True)
         return JSONResponse(status_code=500, content={"error": "config_unreadable"})
     try:
-        backup_dir = restore.resolve_backup_dir(config)
-        restore.bundle_path(backup_dir, body.bundle)   # allowlist，只驗不取值
-        dest_abs = restore.resolve_dest(body.dest, body.bundle)
+        _, dest_abs = restore.resolve_source_and_dest(
+            config, name=body.bundle, path=body.bundle_path, dest_raw=body.dest)
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
     return {
-        "bundle": body.bundle,
+        # 使用者送什麼就回什麼——這是「這份 plan 是為哪一個來源算的」的識別，前端拿它比對
+        # 「換了包之後舊 plan 還在 state 裡」（RestoreCard 的既有不變式）。名字模式回名字
+        # （既有行為不變），路徑模式回絕對路徑。
+        "bundle": body.bundle or body.bundle_path,
         "dest": dest_abs,
         "dest_status": restore.check_dest(dest_abs, source_roots(config, scripts_root())),
     }
