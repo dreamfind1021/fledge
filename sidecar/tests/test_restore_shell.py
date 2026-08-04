@@ -1114,3 +1114,25 @@ def test_every_path_like_account_key_is_rejected_by_name(tmp_path: Path):
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.count("帳號名稱不合法") == len(bad_keys), proc.stdout
     assert "ok-name" in proc.stdout          # 正常的 key 不受影響
+
+
+def test_a_manifest_without_created_still_reports_instead_of_crashing(tmp_path: Path):
+    """缺 `created` 的 manifest 原本會在**已發布之後**以 KeyError traceback 中止（同一行的
+    其他欄位都用 `.get(..., '?')`，只有它是硬取——既有疏漏，`main` 上就是這樣）。
+
+    **刻意不把它加進發布前的形狀閘**：`created` 只影響顯示，不參與任何路徑或安全決策，
+    為一個顯示欄位拒絕整個包是過度；而 sidecar 的 `read_manifest` 也沒驗它，兩份實作的
+    判準要一致。缺了就顯示 `?`，差異報告照跑。"""
+    home, config_dir = _fake_home(tmp_path)
+    (config_dir / "skills" / "only-on-live.md").write_text("x", encoding="utf-8")
+    bundle = _evil_bundle(tmp_path / "no-created", [
+        ("manifest.json", "file", json.dumps({"accounts": {"default": "/old/.claude"}})),
+        ("accounts/default/skills/only-in-backup.md", "file", "y"),
+    ])
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr
+    assert "only-in-backup.md" in proc.stdout, proc.stdout   # 差異報告照樣有用

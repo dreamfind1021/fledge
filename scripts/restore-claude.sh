@@ -400,7 +400,7 @@ verify_manifest "${MANIFEST}" || exit 1
 python3 - "${MANIFEST}" <<'PY'
 import json, sys
 m = json.load(open(sys.argv[1]))
-print(f"\n備份包資訊：建立於 {m['created']}．來自主機 {m.get('host','?')}．home={m.get('home','?')}")
+print(f"\n備份包資訊：建立於 {m.get('created','?')}．來自主機 {m.get('host','?')}．home={m.get('home','?')}")
 print(f"  帳號：{', '.join(f'{k}={v}' for k, v in m.get('accounts', {}).items())}")
 if m.get("excludes_credentials"):
     print("  不含憑證——還原後 claude 與 codex 都要重新登入。")
