@@ -92,7 +92,27 @@
       "shared": "This path exists in each of these accounts; the rewrite applies to all of them:"
     },
     "install": {
-      "h": "Install onto this machine"
+      "h": "Install onto this machine",
+      "sub": "Before you install, see exactly what will happen. Nothing is written on this step.",
+      "willInstall": "Will be brought over",
+      "atLeast": "at least {{count}} items",
+      "atLeastNote": "Links inside account folders aren't in this number, so the final count can be higher than shown — that's normal, not an error.",
+      "willSkip": "Skipped (something is already there; nothing is overwritten)",
+      "blocked": "Definitely can't be installed",
+      "blockedNote": "These locations are occupied by a regular file or a link, so nothing can go underneath them. Clear what's in the way and run this again — they'll move to “will be brought over”.",
+      "excludedFiles": "Deliberately not handled",
+      "excludedExtra": "No location given — skipped entirely",
+      "excludedExtraNote": "Each of these may be a large bundle of files. To bring them over, go back a step and give them a location.",
+      "renames": "Projects whose paths will be rewritten",
+      "unmapped": "Projects with no mapping — moved as-is",
+      "missingAccounts": "Accounts in this bundle that you gave no location",
+      "missingAccountsNote": "Not one byte of these accounts will be moved. To bring them over, go back a step and give them a location — the preview won't mention them again.",
+      "detail": "Show details",
+      "hide": "Hide",
+      "none": "There's nothing to bring over this time.",
+      "errors": {
+        "loadFailed": "Couldn't work out what this install would do."
+      }
     },
     "repair": {
       "h": "Repair links"

@@ -724,6 +724,41 @@ export async function adoptConfig(port: number, body: AdoptConfigBody): Promise<
   if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
 }
 
+/** `install-plan` 的預覽。**不是備份包內容的完整分類**（增補 spec §2.5.1）：symlink、
+ *  特殊檔、未指定落點的帳號**完全不在這裡面**，所以數字不能說成「總共會搬 N 項」。
+ *  後端還回了 install 用的身分欄位，前端只宣告顯示要用的。 */
+export interface InstallPreview {
+  targets: Record<string, string>;          // 已確認落點的帳號
+  extra_targets: Record<string, string>;    // 已確認落點的 extra
+  will_install: number;
+  will_skip: string[];
+  /** 目的地祖先被一般檔或連結占住 → 該子樹的葉檔**確定裝不到**。上游 spec 的四分類漏了它，
+   *  不獨立顯示的話預覽總數會無聲縮水（增補 spec 缺口 4）。 */
+  blocked: string[];
+  /** **混合粒度**：`.claude.json` 這種逐檔的，與未確認落點的 extra name（底下可能是一大包
+   *  東西卻只佔一格）。前端要拆成兩行，不能只顯示一個數字。 */
+  excluded: string[];
+  project_renames: Record<string, string>;
+  unmapped_projects: { account: string; encoded_dir: string; cwd: string }[];
+}
+
+/** 唯讀預覽：這次安裝會裝什麼、跳過什麼、哪些確定裝不到。不動檔案系統。
+ *  落點從**已落檔的 config.json** 讀，不由前端送（spec §4.2.2）。 */
+export async function installPlan(
+  port: number, dest: string, mapping: Record<string, string>,
+): Promise<InstallPreview> {
+  const resp = await fetch(`${base(port)}/api/restore/install-plan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({
+      dest,
+      mapping: Object.entries(mapping).map(([old, next]) => ({ old, new: next })),
+    }),
+  });
+  if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
+  return resp.json();
+}
+
 /** 備份包裡的一個專案。`suggested` 空字串＝推不出新位置（舊路徑不在舊 home 底下，
  *  或 manifest／歷史檔的路徑不合格）——**留空即照搬**，不猜。 */
 export interface ProjectPath {

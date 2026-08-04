@@ -922,6 +922,97 @@ def test_extra_name_must_be_a_single_path_component(tmp_path: Path, monkeypatch)
             inst.plan(str(src), _accounts(tgt), extra={bad: str(spot)})
 
 
+# ---------- 票 05：預覽的節點類型對帳（增補 spec §2.5.2 測試 2） ----------
+
+
+def _staging_every_node_kind(tmp_path: Path) -> Path:
+    """一份同時含**每一種節點類型**的備份包：一般檔／`.claude.json`／FIFO／授權 symlink／
+    未授權 symlink／未確認落點的 extra／未指定落點的 account。
+
+    `InstallPlan` **不是備份包內容的完整分類**（增補 spec §2.5.1），所以驗收的形式是
+    「逐節點類型釘住去向」而不是單一守恆等式——後者在現行 `plan()` 的語意下不成立。"""
+    src = _staging(tmp_path)                       # 已有 skills/a.md 與 CLAUDE.md
+    work = src / "accounts" / "work"
+    (work / ".claude.json").write_text("{}", encoding="utf-8")          # EXCLUDED_NAMES
+    os.mkfifo(work / "pipe")                                            # 特殊檔
+    (work / "commands").mkdir()
+    (work / "commands" / "c.md").write_text("CMD", encoding="utf-8")
+    # 授權 symlink：指向本次會裝的 node（舊 home 前綴改寫後對得上）
+    (work / "linked").symlink_to("/Users/olduser/.claude/commands")
+    # 未授權 symlink：指向這次不會裝的東西
+    (work / "stray").symlink_to("/Users/olduser/.claude/never-installed")
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["accounts"]["unpicked"] = "/Users/olduser/.claude-tc"      # 使用者沒給落點
+    manifest["extra"] = {".agents": "/Users/olduser/.agents"}           # 未確認落點
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (src / "accounts" / "unpicked").mkdir()
+    (src / "accounts" / "unpicked" / "X.md").write_text("X", encoding="utf-8")
+    (src / "extra" / ".agents").mkdir(parents=True)
+    (src / "extra" / ".agents" / "S.md").write_text("S", encoding="utf-8")
+    return src
+
+
+def test_preview_and_result_agree_per_node_kind(tmp_path: Path, monkeypatch):
+    """**每一種節點類型都要有明確答案**，包括「預覽裡沒有、結果裡有」的 symlink。
+
+    這條取代原本那個「四類相加＝可安裝項目數」的等式（增補 spec §2.5.1 指出它不成立）。
+    UI 據此顯示：預覽的數字不能說成「總共會搬 N 項」，因為連結不在任何預覽數字裡。"""
+    src = _staging_every_node_kind(tmp_path)
+    tgt = _home_target(tmp_path, monkeypatch)
+    p = inst.plan(str(src), _accounts(tgt))         # 只給 work 落點；unpicked 與 extra 都沒給
+
+    # 預覽：一般檔進 will_install；.claude.json 與未確認 extra 進 excluded（**混合粒度**）
+    assert p.will_install == 3                      # skills/a.md、CLAUDE.md、commands/c.md
+    assert p.will_skip == []
+    assert p.blocked == []
+    assert sorted(p.excluded) == [".agents", ".claude.json"]
+    # 完全不現身的三種：FIFO（執行時才成為 excluded result）、兩條 symlink、沒給落點的 account
+    assert "pipe" not in p.excluded
+    assert "unpicked" not in p.targets
+
+    results = inst.install(p)
+    by_rel = {(r.account, r.rel_path): r for r in results}
+
+    # 一般檔：預覽說會裝、結果就是 installed
+    assert by_rel[("work", "skills/a.md")].outcome == "installed"
+    assert by_rel[("work", "commands/c.md")].outcome == "installed"
+    # `.claude.json`：預覽與結果都是 excluded
+    assert by_rel[("work", ".claude.json")].outcome == "excluded"
+    # FIFO：**預覽裡沒有**，執行時才成為 excluded result
+    assert by_rel[("work", "pipe")].outcome == "excluded"
+    # 授權 symlink：**預覽裡沒有**，結果是 installed——這就是「結果比預覽多」的來源
+    assert by_rel[("work", "linked")].outcome == "installed"
+    assert (tgt / "linked").is_symlink()
+    # 未授權 symlink：預覽裡沒有，結果是 excluded（不建）
+    assert by_rel[("work", "stray")].outcome == "excluded"
+    assert not (tgt / "stray").exists()
+    # 沒給落點的 account 與未確認的 extra：一個位元組都沒落地
+    assert not any(r.account == "unpicked" for r in results)
+    assert not (tmp_path / "home" / ".agents").exists()
+
+    # **結果的 installed 數大於預覽的 will_install**——正常，不是出錯（增補 spec §2.5.2）
+    installed = sum(1 for r in results if r.outcome == "installed")
+    assert installed > p.will_install
+
+
+def test_preview_leaves_are_exhaustive_and_disjoint(tmp_path: Path, monkeypatch):
+    """一般檔的 per-spot 守恆（增補 spec §2.5.2 測試 1）：掃到的每個 installable leaf
+    恰好落入 `will_install`／`will_skip`／`blocked` **之一**，互斥且窮盡。
+
+    這是預覽唯一成立的守恆律——把它擴大到「所有節點」就會變成那條不成立的等式。"""
+    src = _staging(tmp_path)                        # skills/a.md、CLAUDE.md
+    (src / "accounts" / "work" / "buried").mkdir()
+    (src / "accounts" / "work" / "buried" / "deep.md").write_text("D", encoding="utf-8")
+    tgt = _home_target(tmp_path, monkeypatch)
+    (tgt / "CLAUDE.md").write_text("MINE", encoding="utf-8")            # → will_skip
+    (tgt / "buried").write_text("occupied", encoding="utf-8")           # 祖先是檔案 → blocked
+
+    p = inst.plan(str(src), _accounts(tgt))
+
+    assert (p.will_install, p.will_skip, p.blocked) == (1, ["CLAUDE.md"], ["buried/deep.md"])
+    assert p.will_install + len(p.will_skip) + len(p.blocked) == 3      # 三個一般檔，不多不少
+
+
 # ---------- 票 02：bundle-info（唯讀摘要，增補 spec 缺口 1） ----------
 
 
