@@ -41,12 +41,15 @@ vi.mock("./TargetsCard", async () => {
   const catalog = (await import("../locales/zh-TW/onboarding.json")).default;
   return {
     TargetsCard: ({ dest, saved, onSaved }: {
-      dest: string; saved: boolean; onSaved: () => void;
+      dest: string; saved: boolean; onSaved: () => void | Promise<void>;
     }) => (
       <div>
         <h2>{catalog.mig.targets.h}</h2>
         <span data-testid="targets-dest">{dest}</span>
-        <button onClick={onSaved} disabled={saved}>adopt</button>
+        {/* 真卡片會 `await onSaved()`，收尾失敗就不轉唯讀——mock 要保留這個形狀 */}
+        <button onClick={() => void Promise.resolve(onSaved()).catch(() => {})} disabled={saved}>
+          adopt
+        </button>
       </div>
     ),
   };
@@ -371,6 +374,42 @@ describe("Onboarding 精靈外殼", () => {
     ui.getByText("adopt").click();
     await waitFor(() =>
       expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+  });
+
+  // Codex 票 03 R1 F2：落檔只翻旗標不夠——後面的頁面（登入卡等）讀的是 store 裡的
+  // accounts，不把剛建立的 config 讀回來，使用者會看到 in-memory 的預設帳號
+  it("落點落檔後把新設定讀回 store，讀不回來就不放行", async () => {
+    let loads = 0;
+    let failNext = true;
+    useAppStore.setState({
+      config: { ...baseConfig, is_first_run: true },
+      loadConfig: async () => {
+        loads += 1;
+        if (failNext) {
+          failNext = false;
+          throw new Error("RELOAD-SENTINEL");
+        }
+        useAppStore.setState({ config: { ...baseConfig, is_first_run: false } });
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+
+    ui.getByText("adopt").click();          // 第一次：刷新失敗
+    await waitFor(() => expect(loads).toBe(1));
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true);
+
+    ui.getByText("adopt").click();          // 第二次：刷新成功才放行
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    expect(loads).toBe(2);
   });
 
   // Codex 票 02 R1 F2：包資訊與「選了哪一包」原本分居兩處（前者在精靈、後者在卡片），

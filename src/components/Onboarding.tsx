@@ -355,7 +355,14 @@ export function Onboarding({ onClose }: OnboardingProps) {
                   dest={bundle.probe.dest}
                   info={bundle.probe.info}
                   saved={configCreated}
-                  onSaved={() => setConfigCreated(true)}
+                  // **先把剛建立的設定讀回 store 才算完成**（Codex 票 03 R1 F2）：後面的
+                  // 頁面（登入卡等）讀的是 store 的 accounts，只翻旗標會讓使用者看到
+                  // in-memory 的預設帳號。讀不回來就 throw 回卡片——它會顯示錯誤且不轉
+                  // 唯讀，下一步也就仍然被擋著。
+                  onSaved={async () => {
+                    await loadConfig();
+                    setConfigCreated(true);
+                  }}
                 />
                 {migNav(!configCreated)}
               </div>

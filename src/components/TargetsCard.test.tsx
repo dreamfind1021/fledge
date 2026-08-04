@@ -157,6 +157,67 @@ describe("TargetsCard", () => {
     expect(ui.queryByText(zh.mig.targets.save)).toBeNull();
   });
 
+  // Codex 票 03 R1 F1：對帳與 state 都用裸 key 的話，帳號與 extra 的命名空間就沒了。
+  // 後端一直用 `extra:<name>` 區分（`validate_landing_spots`），前端不能把它丟掉。
+  it("帳號與 extra 同名時各自獨立，不會被判成內容對不上", async () => {
+    const info: BundleInfo = { ...INFO, accounts: ["agents"], extra: ["agents"] };
+    fetchLandingSuggestions.mockResolvedValue({
+      home: "/Users/olduser",
+      spots: [
+        { key: "agents", kind: "account", old_path: "/Users/olduser/.agents-acct",
+          suggested: "/Users/me/.agents-acct", suggested_exists: false },
+        { key: "agents", kind: "extra", old_path: "/Users/olduser/.agents",
+          suggested: "/Users/me/.agents", suggested_exists: false },
+      ],
+    });
+    const ui = setup({ info });
+
+    await waitFor(() => expect(ui.getByDisplayValue("/Users/me/.agents-acct")).toBeTruthy());
+    expect(ui.queryByText(zh.mig.targets.stale)).toBeNull();
+    // 兩個欄位互不干擾——共用一格 state 的話改一個會連動另一個
+    fireEvent.change(ui.getByDisplayValue("/Users/me/.agents-acct"),
+                     { target: { value: "/Users/me/A" } });
+    expect(ui.getByDisplayValue("/Users/me/.agents")).toBeTruthy();
+    ui.getByText(zh.mig.targets.save).click();
+    await waitFor(() => expect(adoptConfig).toHaveBeenCalledWith(1234, {
+      dest: "/tmp/staging",
+      accounts: [{ key: "agents", config_dir: "/Users/me/A" }],
+      extra: [{ name: "agents", path: "/Users/me/.agents" }],
+    }));
+  });
+
+  it("成員的型別被對調（account↔extra）→ 判定內容對不上", async () => {
+    const info: BundleInfo = { ...INFO, accounts: ["a"], extra: ["b"] };
+    fetchLandingSuggestions.mockResolvedValue({
+      home: "/Users/olduser",
+      spots: [   // key 集合一模一樣，但 a 與 b 的身分對調了
+        { key: "b", kind: "account", old_path: "/x", suggested: "", suggested_exists: false },
+        { key: "a", kind: "extra", old_path: "/y", suggested: "", suggested_exists: false },
+      ],
+    });
+    const ui = setup({ info });
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.stale)).toBeTruthy());
+  });
+
+  // Codex 票 03 R1 F2：落檔後精靈要先把新 config 讀回來才算完成——後面的頁面（登入卡等）
+  // 讀的是 store 裡的 accounts，不刷新就會拿 in-memory 的預設帳號去顯示
+  it("落檔後的收尾失敗 → 顯示錯誤且不轉唯讀（下一步仍被擋）", async () => {
+    const ui = render(
+      <TargetsCard
+        port={1234}
+        dest="/tmp/staging"
+        info={INFO}
+        saved={false}
+        onSaved={() => Promise.reject(new Error("RELOAD-SENTINEL"))}
+      />,
+    );
+    await loaded(ui);
+    ui.getByText(zh.mig.targets.save).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.errors.saveFailed)).toBeTruthy());
+    expect(ui.getByText(zh.mig.targets.save)).toBeTruthy();      // 還在，沒有轉唯讀
+    expect(ui.container.textContent).not.toContain("RELOAD-SENTINEL");
+  });
+
   it("載入建議值失敗 → 通用訊息，例外原文不進畫面", async () => {
     fetchLandingSuggestions.mockRejectedValueOnce(new Error("LOAD-SENTINEL-500"));
     const ui = setup();

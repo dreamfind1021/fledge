@@ -24,13 +24,20 @@ const CODE_KEY: Record<string, string> = {
   config_already_initialized: "restore:errors.config_already_initialized",
 };
 
+/** 落點的穩定識別。**帳號與 extra 是兩個命名空間**——後端一直用 `extra:<name>` 區分
+ *  （`validate_landing_spots`），兩邊都可能出現同一個名字（帳號 key 與 basename 衍生的
+ *  extra name 判準不同但都合法）。用裸 key 當 state 索引會讓同名的兩項共用一格。 */
+const spotId = (s: LandingSpot) => `${s.kind}:${s.key}`;
+
 interface TargetsCardProps {
   port: number | null;
   dest: string;
   /** 上一頁確認過的這一包有哪些成員。用來與建議值的成員對帳（增補 spec §2.8.4）。 */
   info: BundleInfo;
   saved: boolean;
-  onSaved: () => void;
+  /** 落檔成功後的收尾。**允許非同步且允許失敗**——父層要先把新 config 讀回 store 才算
+   *  完成（後面的頁面讀的是 store 的 accounts），失敗就不該轉唯讀、也不該放行下一步。 */
+  onSaved: () => void | Promise<void>;
 }
 
 /**
@@ -69,17 +76,22 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
         if (!mounted.current) return;
         // 成員對帳（增補 spec §2.8.4）：三支端點各自讀 manifest，成員清單對不上就代表
         // staging 在頁面之間被換過——使用者在上一頁確認的不是這一份，擋住並要求回去重看
-        // 比**集合**而不是 join 出來的字串：extra 的 name 是 basename 衍生的（票 13），
-        // 可以含任何非 `/` 字元，任何分隔符都可能出現在 name 裡造成假的相等
-        const seen = new Set([...info.accounts, ...info.extra]);
+        // 比的是 **(kind, key)** 而不是裸 key（Codex 票 03 R1 F1）：只比 key 的話，
+        // 一份把 account 與 extra 對調的 staging 會通過對帳——集合一模一樣，授權的成員
+        // 卻換了身分。用集合而不是 join 字串則是因為 extra 的 name 是 basename 衍生的
+        // （票 13），可以含任何非 `/` 字元，任何分隔符都可能造成假的相等。
+        const seen = new Set([
+          ...info.accounts.map((k) => `account:${k}`),
+          ...info.extra.map((k) => `extra:${k}`),
+        ]);
         const same = next.spots.length === seen.size
-          && next.spots.every((s) => seen.has(s.key));
+          && next.spots.every((s) => seen.has(spotId(s)));
         if (!same) {
           setStale(true);
           return;
         }
         setSpots(next.spots);
-        setValues(Object.fromEntries(next.spots.map((s) => [s.key, s.suggested])));
+        setValues(Object.fromEntries(next.spots.map((s) => [spotId(s), s.suggested])));
       } catch (e) {
         // 例外原文只進 console：判別碼與 `String(e)` 都不得出現在畫面上（CLAUDE.md §4.6.13）
         console.error("[TargetsCard] 讀取落點建議值失敗", e);
@@ -88,19 +100,19 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
     })();
   }, [port, dest, info, t]);
 
-  const browse = useCallback(async (key: string) => {
+  const browse = useCallback(async (id: string) => {
     const dir = await pickDirectory();
-    if (dir !== null) setValues((v) => ({ ...v, [key]: dir }));
+    if (dir !== null) setValues((v) => ({ ...v, [id]: dir }));
   }, []);
 
-  const filled = (key: string) => (values[key] ?? "").trim();
-  const skipped = (spots ?? []).filter((s) => !filled(s.key));
+  const filled = (s: LandingSpot) => (values[spotId(s)] ?? "").trim();
+  const skipped = (spots ?? []).filter((s) => !filled(s));
 
   const save = useCallback(async () => {
     if (port == null || spots === null) return;
     const accounts = spots
-      .filter((s) => s.kind === "account" && filled(s.key))
-      .map((s) => ({ key: s.key, config_dir: filled(s.key) }));
+      .filter((s) => s.kind === "account" && filled(s))
+      .map((s) => ({ key: s.key, config_dir: filled(s) }));
     // 後端的 accounts 是 min_length=1：先在這裡擋，才不會用一個必然 422 的請求換一段
     // 使用者看不懂的訊息
     if (accounts.length === 0) {
@@ -114,10 +126,11 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
         dest,
         accounts,
         extra: spots
-          .filter((s) => s.kind === "extra" && filled(s.key))
-          .map((s) => ({ name: s.key, path: filled(s.key) })),
+          .filter((s) => s.kind === "extra" && filled(s))
+          .map((s) => ({ name: s.key, path: filled(s) })),
       });
-      if (mounted.current) onSaved();
+      // 收尾（父層刷新 store）也在 try 內：它失敗就等於這一步沒完成，不該轉唯讀
+      await onSaved();
     } catch (e) {
       console.error("[TargetsCard] 建立設定檔失敗", e);
       if (!mounted.current) return;
@@ -145,7 +158,7 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
       <p className="ob-sub">{t("mig.targets.sub")}</p>
 
       {(spots ?? []).map((s) => (
-        <div key={s.key} className="ob-spot">
+        <div key={spotId(s)} className="ob-spot">
           <div className="ob-spot-head">
             <span className="ob-spot-kind">{t(`mig.targets.kind.${s.kind}`)}</span>
             <span className="ob-spot-key">{s.key}</span>
@@ -156,13 +169,13 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
           </div>
           <div className="ob-row">
             <input
-              value={values[s.key] ?? ""}
-              onChange={(e) => setValues((v) => ({ ...v, [s.key]: e.target.value }))}
+              value={values[spotId(s)] ?? ""}
+              onChange={(e) => setValues((v) => ({ ...v, [spotId(s)]: e.target.value }))}
               placeholder={t("mig.targets.placeholder")}
               disabled={saved || busy}
               className="ob-input"
             />
-            <button onClick={() => browse(s.key)} disabled={saved || busy}
+            <button onClick={() => browse(spotId(s))} disabled={saved || busy}
                     className="ob-btn-ghost">
               {t("mig.targets.browse")}
             </button>
