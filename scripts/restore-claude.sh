@@ -43,6 +43,138 @@ fi
 
 DEST="${DEST:-${HOME}/.claude-restore-$(basename "${BUNDLE}" .tar.gz | sed 's/^claude-backup-//')}"
 
+# ── 展開量的防呆（票 12）──────────────────────────────────────────────────────
+# tar bomb：壓縮後幾 KB、展開後爆量。判準用**壓縮比**而不是絕對大小——後者會誤擋「真的
+# 有很多資產」的誠實大包，而壓縮比正是 tar bomb 的特徵。
+#
+# **宣稱等級**：這不是「防止磁碟耗盡」，也不是「防止 inode 耗盡」。解壓當下的空間與 inode
+# 都已經被佔掉了（磁碟真的滿的話是 tar 自己失敗，由既有的 cleanup 處理），這一層擋的是
+# **不讓一個離譜的展開目錄留在磁碟上**——大得離譜或項目多得離譜都算。
+# 它擋得住「宣告小、實際大」（量的是實際落地的東西，不看 header 宣告值），擋不住「解壓
+# 過程中就把磁碟塞爆」（那需要 streaming 計量）。
+EXPANSION_MIN_BYTES=8388608   # 8 MiB 以下不看比例：小包的 gzip 固定開銷會讓比例失真
+EXPANSION_MAX_RATIO=200       # 真實備份包多是文字（jsonl／md），實測比例個位數到十幾倍
+# **大小配額擋不住「多」**：symlink、目錄與零大小檔案的 st_size 全是 0，幾十萬個這種成員
+# 可以讓總量停在 0 而完全繞過比例判準，留下的正是一個離譜的展開目錄（inode 耗用、清理極慢）。
+# 上限依實測定：本機真實 `~/.claude` 是 1.5 萬個項目，留 13 倍餘裕。
+# `FLEDGE_MAX_ENTRIES` 只是**測試接縫**（比照 FLEDGE_BACKUP_SCRIPTS_DIR）——造 20 萬個成員的
+# 測試會慢到不可接受。能設環境變數的人本來就能執行任意命令，它不是安全邊界。
+MAX_ENTRIES="${FLEDGE_MAX_ENTRIES:-200000}"
+
+check_expansion() {
+  python3 - "$1" "$2" "${EXPANSION_MIN_BYTES}" "${EXPANSION_MAX_RATIO}" "${MAX_ENTRIES}" <<'PYEOF'
+import os, stat, sys
+
+staging, bundle = sys.argv[1], sys.argv[2]
+floor, max_ratio, max_entries = int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
+
+# 只加總**一般檔**的大小：目錄項本身的 st_size 在 APFS 有幾百 bytes，算進去會讓「很多
+# 空目錄」的包被誤判。symlink 不跟隨（lstat），它的 size 是目標字串長度。
+total = 0
+entries = 0
+seen = set()
+for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
+    entries += len(dirnames) + len(filenames)
+    for name in filenames:
+        try:
+            st = os.lstat(os.path.join(dirpath, name))
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        # hardlink：同一個 inode 的每個名字 lstat 都回相同的 st_size，逐名加總會把一份
+        # 內容算 N 次。誤擋方向雖然安全，但仍然是誤擋。
+        key = (st.st_dev, st.st_ino)
+        if key in seen:
+            continue
+        seen.add(key)
+        total += st.st_size
+
+# **項目數的上限與大小無關**：零大小的成員不貢獻 total，只有這一道擋得住「多」。
+if entries > max_entries:
+    print(
+        f"拒絕發布：這份備份包展開後有 {entries} 個項目，遠超過正常備份包的規模。",
+        file=sys.stderr,
+    )
+    print("正常的備份包不會有這種數量，多半是一份惡意或損壞的包。", file=sys.stderr)
+    raise SystemExit(1)
+
+if total <= floor:
+    raise SystemExit(0)
+try:
+    packed = os.stat(bundle).st_size
+except OSError:
+    raise SystemExit(0)          # 量不到來源就不做這個判斷，不擋合法的還原
+# 不用整數截斷比較——`total // packed > 200` 會讓實際 200.9 倍的包通過。
+if packed > 0 and total > packed * max_ratio:
+    print(
+        f"拒絕發布：這份備份包展開後是它本身的 {total // packed} 倍"
+        f"（{total // (1 << 20)} MiB ← {packed // 1024} KiB）。",
+        file=sys.stderr,
+    )
+    print("正常的備份包不會有這種比例，多半是一份惡意或損壞的包。", file=sys.stderr)
+    raise SystemExit(1)
+PYEOF
+}
+
+# ── manifest 的安全讀取（票 12）───────────────────────────────────────────────
+# 備份包的內容是**不可信輸入**（使用者可能從網路下載到一份假的）。原本用 `[ -f ]` 判存在、
+# 再 `json.load(open(...))` 讀——兩者都跟隨 symlink，所以一份把 `manifest.json` 做成 symlink
+# 的包，會讓腳本解析包外的檔案並把欄位印在畫面上。
+#
+# **與 sidecar 的 `backup/install.py::read_manifest` 是同一組判準的兩份實作**：腳本要能獨立
+# 執行（不能 import sidecar），所以無法共用程式碼。**改一邊務必改另一邊**（票 10／票 12）。
+#
+# 錯誤訊息刻意**不含檔案內容**——擋下來卻仍把內容印出去，等於沒擋。
+MANIFEST_MAX_BYTES=1048576   # 1 MiB。manifest 只有帳號清單與幾個欄位，實測不到 1 KB。
+
+verify_manifest() {
+  python3 - "$1" "${MANIFEST_MAX_BYTES}" <<'PYEOF'
+import json, os, stat, sys
+
+path, limit = sys.argv[1], int(sys.argv[2])
+BAD = "這不是一份可用的備份包"
+try:
+    # O_NOFOLLOW：manifest.json 自己是 symlink 就直接失敗，不跟著讀出包外的檔案。
+    # O_NONBLOCK：它若是 FIFO，唯讀 open 會阻塞而根本走不到下面的型別判定。
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+except OSError:
+    print(f"{BAD}（manifest.json 讀不到，或它是連結而不是檔案）。", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode):
+        print(f"{BAD}（manifest.json 不是一般檔案）。", file=sys.stderr)
+        raise SystemExit(1)
+    if st.st_size > limit:
+        print(f"{BAD}（manifest.json 大得不合理）。", file=sys.stderr)
+        raise SystemExit(1)
+    raw = os.read(fd, limit)
+finally:
+    os.close(fd)
+try:
+    data = json.loads(raw)
+except ValueError:
+    print(f"{BAD}（manifest.json 不是合法的 JSON）。", file=sys.stderr)
+    raise SystemExit(1)
+
+# **形狀也要驗，不只語法**——與 sidecar 的 `backup/install.py::read_manifest` 同一組判準
+# （一邊有一邊沒有同樣是漂移）。少了這道，`accounts` 是 list 的包會一路走到差異報告才
+# 以 AttributeError traceback 中止，而那時 DEST **已經發布**：使用者看到一個「看起來完成」
+# 的展開目錄配一段 traceback、沒有差異報告。在發布前驗，壞包就根本不會留下東西。
+if not isinstance(data, dict):
+    print(f"{BAD}（manifest.json 的內容不是一個物件）。", file=sys.stderr)
+    raise SystemExit(1)
+if not isinstance(data.get("accounts"), dict):
+    print(f"{BAD}（manifest.json 的 accounts 欄位形狀不對）。", file=sys.stderr)
+    raise SystemExit(1)
+extra = data.get("extra", {})
+if not isinstance(extra, dict) or any(not isinstance(v, str) for v in extra.values()):
+    print(f"{BAD}（manifest.json 的 extra 欄位形狀不對）。", file=sys.stderr)
+    raise SystemExit(1)
+PYEOF
+}
+
 expand_home() { case "$1" in "~/"*) echo "${HOME}/${1#\~/}" ;; "~") echo "${HOME}" ;; *) echo "$1" ;; esac; }
 
 # ── 展開位置的 containment 防呆 ─────────────────────────────────────────────
@@ -237,10 +369,13 @@ if [ "${DIFF_ONLY}" = false ]; then
     exit 1
   fi
 
-  # 備份包必須自帶 manifest.json：它是差異報告的唯一依據，缺了它比對無從進行。
-  # 在**發布前**檢查，不完整的包因此不會留下任何半套目錄。
-  [ -f "${staging}/manifest.json" ] || {
-    echo "這不是一份完整的備份包（缺 manifest.json）：${BUNDLE}" >&2; exit 1; }
+  # 備份包必須自帶一份**讀得出來的** manifest.json：它是差異報告的唯一依據。
+  # 在**發布前**檢查，不完整的包因此不會留下任何半套目錄；而且 symlink manifest 必須在
+  # 這裡就被擋掉——`rename` 整棵樹時 symlink 會跟著過去，發布後才驗等於沒驗。
+  verify_manifest "${staging}/manifest.json" || exit 1
+
+  # 展開量的防呆同樣在**發布前**：拒絕時 staging 由 EXIT trap 清掉，磁碟上不留東西。
+  check_expansion "${staging}" "${BUNDLE}" || exit 1
 
   # **發布走 os.rename 而不是 mv**：`mv A B` 在 B 是既有目錄時會把 A 移**進去**變成
   # B/<staging名>，於是兩個同時還原到同一個 DEST 的程序，第二個會把自己整棵樹藏進第一份
@@ -259,12 +394,13 @@ except OSError as exc:
 fi
 
 MANIFEST="${DEST}/manifest.json"
-[ -f "${MANIFEST}" ] || { echo "展開目錄裡沒有 manifest.json：${DEST}" >&2; exit 1; }
+# `--diff-only` 跳過解壓直接走到這裡，所以這一道不能省——那條路上的展開目錄不是本次驗過的。
+verify_manifest "${MANIFEST}" || exit 1
 
 python3 - "${MANIFEST}" <<'PY'
 import json, sys
 m = json.load(open(sys.argv[1]))
-print(f"\n備份包資訊：建立於 {m['created']}．來自主機 {m.get('host','?')}．home={m.get('home','?')}")
+print(f"\n備份包資訊：建立於 {m.get('created','?')}．來自主機 {m.get('host','?')}．home={m.get('home','?')}")
 print(f"  帳號：{', '.join(f'{k}={v}' for k, v in m.get('accounts', {}).items())}")
 if m.get("excludes_credentials"):
     print("  不含憑證——還原後 claude 與 codex 都要重新登入。")
@@ -275,11 +411,59 @@ PY
 # 已足以決定要搬什麼。要逐位元請對個別檔案自行 cmp。
 echo
 echo "── 差異（備份 vs 現役）─────────────────────────────"
-python3 - "${DEST}" "${MANIFEST}" <<'PY'
-import json, os, sys
+python3 - "${DEST}" "${MANIFEST}" "${CONFIG_JSON}" "${EXTRA_PATHS_FILE}" <<'PY'
+import json, os, re, sys
 
-dest, manifest_path = sys.argv[1], sys.argv[2]
+dest, manifest_path, config_json, extra_file = sys.argv[1:5]
 m = json.load(open(manifest_path))
+
+
+def local_live_paths():
+    """現役側的位置：**由 manifest 的 key 對應到本機 config 的路徑**，回 (帳號, 帳號外) 兩張表。
+
+    **兩個理由都不能只顧一個**：
+
+    1. **不可用 manifest 的 path value**（票 12 R1）：那是備份包提供的不可信輸入，直接拿去
+       `expanduser` + 遞迴 `snapshot`，一份惡意包就能指定掃描本機任意目錄（指向 `/` 就是整個
+       檔案系統）並把檔名印進差異報告——已實測可利用。`verify_manifest` 擋不住它：那支驗的
+       是 inode、大小與 JSON 語法，**不是語意**。
+    2. **也不可拿 manifest 的 path 去跟本機路徑比字串**（票 12 R2）：manifest 記的是**舊機**的
+       絕對路徑，移機換了使用者名或落點之後必然不相等，於是每個帳號都被略過、報告變成一份
+       **假的空報告**，使用者以為沒東西要搬。而移機正是這批票的主題。
+
+    **key 是穩定的、path 不是**——所以用 key 對應。manifest 的 path 只拿來顯示「這包來自哪裡」。
+    """
+    try:
+        with open(config_json, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError):
+        # 讀不出 config：只認預設帳號那一個對應（移機到新機還沒設定 Fledge 是最常見的還原
+        # 情境）。**不是**放行任意路徑，也不從 manifest 取任何位置。
+        return {"default": os.path.normpath(os.path.expanduser("~/.claude"))}, {}
+
+    by_account = {}
+    for key, acct in (cfg.get("accounts") or {}).items():
+        if isinstance(acct, dict) and isinstance(acct.get("config_dir"), str):
+            by_account[key] = os.path.normpath(os.path.expanduser(acct["config_dir"]))
+    by_extra = {}
+    for name, path in (cfg.get("extra") or {}).items():      # 票 07 起 config 有 extra
+        if isinstance(path, str):
+            by_extra[name] = os.path.normpath(os.path.expanduser(path))
+    # `backup-extra-paths.txt` 的項目以 basename 當 name——與 `backup-claude.sh` 產 manifest
+    # 時同一條規則，兩邊各寫一份必然漂移。config 已有的不覆蓋（那是使用者確認過的落點）。
+    try:
+        with open(extra_file, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    expanded = os.path.normpath(os.path.expanduser(line))
+                    by_extra.setdefault(os.path.basename(expanded), expanded)
+    except OSError:
+        pass
+    return by_account, by_extra
+
+
+LIVE_ACCOUNTS, LIVE_EXTRA = local_live_paths()
 
 def snapshot(root):
     out = {}
@@ -303,17 +487,56 @@ def snapshot(root):
     return out
 
 total = {"only_backup": 0, "only_live": 0, "differ": 0, "same": 0}
-targets = [(k, v, os.path.join(dest, "accounts", k)) for k, v in m.get("accounts", {}).items()]
-# 帳號目錄外的資產（~/.agents 這類）比照同一套比對
-targets += [(f"帳號外:{k}", v, os.path.join(dest, "extra", k)) for k, v in m.get("extra", {}).items()]
+# manifest 的 **key 同樣是不可信輸入**：它會被拼進 `os.path.join(dest, ...)`，`../../x`
+# 這種 key 能讓比對的備份側走出展開目錄、把外面的檔名列出來。查表查不到固然也會略過，
+# 但那是副作用不是防線——調換兩個判斷的順序、或加一個「沒登記就用預設」的 fallback 就
+# 破功。**與 sidecar 的 `backup/install.py::_SAFE_KEY_RE` 同一條信任邊界、同一組字元**
+# （一邊有一邊沒有同樣是漂移）；`extra` 的 name 走同一條規則。
+SAFE_ACCOUNT_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 
-for key, raw, backed in targets:
-    live = os.path.expanduser(raw)
+
+def _safe_component(k):
+    """`k` 是不是一個安全的**單一路徑元件**：非空、不是 `.`／`..`、不含分隔符與 NUL。
+
+    **extra 的 name 用這條而不是 `SAFE_ACCOUNT_KEY`**：它是 basename 衍生的
+    （`backup-claude.sh` 用 `basename`），真實的 `~/.agents` 產出的 name 就是 **`.agents`**
+    ——帶前導點，過不了帳號那組字元。帳號 key 是使用者在 Fledge 內自己取的，兩者的來源
+    不同，判準本來就該不同。
+    """
+    return isinstance(k, str) and k not in ("", ".", "..") and "/" not in k and "\0" not in k
+
+
+def safe_keys(mapping, label, account_style):
+    """回形狀合法的 key；不合法的當場說明並跳過（**不整份拒絕**——一個壞 key 不該讓
+    使用者連其餘正常帳號的差異都看不到）。"""
+    out = []
+    for k in mapping if isinstance(mapping, dict) else {}:
+        ok = (isinstance(k, str) and SAFE_ACCOUNT_KEY.fullmatch(k)) if account_style \
+            else _safe_component(k)
+        if ok:
+            out.append(k)
+        else:
+            print(f"\n[{k!r}] {label}名稱不合法，略過（名稱會被用來組路徑）")
+    return out
+
+
+# **只取 manifest 的 key**，位置一律從本機 config 查（理由見 `local_live_paths`）。
+targets = [(k, LIVE_ACCOUNTS.get(k), os.path.join(dest, "accounts", k))
+           for k in safe_keys(m.get("accounts", {}), "帳號", account_style=True)]
+# 帳號目錄外的資產（~/.agents 這類）比照同一套比對
+targets += [(f"帳號外:{k}", LIVE_EXTRA.get(k), os.path.join(dest, "extra", k))
+            for k in safe_keys(m.get("extra", {}), "資產", account_style=False)]
+
+for key, live, backed in targets:
+    if live is None:
+        # 本機沒有登記這個帳號／資產——沒有可信的現役側可比對。**不退回 manifest 的路徑**。
+        print(f"\n[{key}] 本機沒有登記這一項，略過比對")
+        continue
     if not os.path.isdir(backed):
         print(f"\n[{key}] 備份包裡沒有這個帳號")
         continue
     if not os.path.isdir(live):
-        print(f"\n[{key}] 現役目錄不存在（{raw}）——備份包裡的全部都是「只在備份裡有」")
+        print(f"\n[{key}] 現役目錄不存在（{live}）——備份包裡的全部都是「只在備份裡有」")
         continue
 
     b, l = snapshot(backed), snapshot(live)
@@ -323,7 +546,7 @@ for key, raw, backed in targets:
                     if k.split(os.sep)[0] in {x.split(os.sep)[0] for x in b})
     differ = sorted(k for k in set(b) & set(l) if b[k] != l[k])
 
-    print(f"\n[{key}] {raw}")
+    print(f"\n[{key}] {live}")     # 印**本機**的位置（被比對的那一個），不是 manifest 的舊路徑
     for label, items, hint in (
         ("只在備份裡有（現役已不見）", only_b, "← 這些是你可能想搬回去的"),
         ("只在現役有（備份後新增）", only_l, ""),
