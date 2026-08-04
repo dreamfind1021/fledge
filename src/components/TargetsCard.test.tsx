@@ -135,13 +135,28 @@ describe("TargetsCard", () => {
       expect(ui.getByText(zhRestore.errors.overlapping_config_dirs)).toBeTruthy());
   });
 
-  it("設定檔已經存在 → 明確訊息而不是死路（重跑引導走到這頁）", async () => {
+  // 409 有兩個來源，前端分不出也**不需要**分（Codex 票 03 R3）：重跑引導（設定檔本來就在），
+  // 或這次 POST 其實成功了而前端不知道——請求途中使用者按了上一步讓卡片卸載、或回應在
+  // 傳輸中遺失。把 409 當失敗會讓後兩者卡死：`adopted` 只活在元件 state，重進來又是 false，
+  // 於是每一次重試都再撞一次 409。**設定檔已經在了就是「這一步完成了」**，往下走收尾。
+  it("設定檔已經存在 → 不是死路：轉入收尾並說明設定不是這次建立的", async () => {
     adoptConfig.mockRejectedValueOnce(new RestoreError("config_already_initialized", 409));
-    const ui = setup();
+    const onSaved = vi.fn(async () => {});
+    const ui = render(
+      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
+                   onSaved={onSaved} />,
+    );
     await loaded(ui);
     ui.getByText(zh.mig.targets.save).click();
+
     await waitFor(() =>
       expect(ui.getByText(zhRestore.errors.config_already_initialized)).toBeTruthy());
+    expect(onSaved).toHaveBeenCalledTimes(1);          // 收尾照跑（父層把實際的 config 讀回來）
+    // 主按鈕轉成「重新讀取」——再按不會重複 POST（那只會再撞一次 409）
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.retry)).toBeTruthy());
+    ui.getByText(zh.mig.targets.retry).click();
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(2));
+    expect(adoptConfig).toHaveBeenCalledTimes(1);
   });
 
   // 增補 spec §2.8.4（Codex 階段 4 F2 的輕量緩解）：三支端點各自讀 manifest，成員清單

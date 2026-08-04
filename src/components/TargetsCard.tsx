@@ -144,10 +144,21 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
       console.error("[TargetsCard] 建立設定檔失敗", e);
       if (!mounted.current) return;
       const code = (e as { code?: string | null }).code ?? null;
-      setSaveError((code !== null && CODE_KEY[code] ? t(CODE_KEY[code]) : null)
-        ?? t("mig.targets.errors.saveFailed"));
-      setBusy(false);
-      return;
+      // **`config_already_initialized` 不是失敗，是「這一步已經完成了」**（Codex 票 03 R3）。
+      // 409 有兩個來源，前端分不出也不需要分：重跑引導（設定檔本來就在），或這次 POST
+      // 其實成功了而前端不知道——請求途中使用者按了上一步讓卡片卸載（`mounted` 轉 false，
+      // 上面那個 return 讓 `adopted` 沒被記下）、或成功回應在傳輸中遺失。把它當失敗會讓
+      // 後兩者卡死：`adopted` 只活在元件 state，重進來又是 false，每次重試都再撞一次 409。
+      // 沿用 roots 頁對 onboard 的同一個取向：**落檔與否只有後端說了算**，前端的快照推斷
+      // 不出來，所以往下走收尾讓父層把實際的 config 讀回來。
+      if (code !== "config_already_initialized") {
+        setSaveError((code !== null && CODE_KEY[code] ? t(CODE_KEY[code]) : null)
+          ?? t("mig.targets.errors.saveFailed"));
+        setBusy(false);
+        return;
+      }
+      setAdopted(true);
+      setSaveError(t(CODE_KEY[code]));   // 說清楚：設定檔已經在了，不是這次新建的
     }
     try {
       await onSaved();
