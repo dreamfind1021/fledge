@@ -902,19 +902,55 @@ def test_extra_without_confirmed_landing_spot_is_excluded(tmp_path: Path, monkey
     assert not (tmp_path / "home" / ".agents").exists()   # 整項未落地
 
 
-def test_plan_rejects_path_like_extra_names(tmp_path: Path, monkeypatch):
-    """extra name 會被拼進 Path(root, 'extra', name) 與 fd-relative open——與 account
-    key 同一條信任邊界、同規則重驗（manifest 是不可信輸入）。"""
+def test_extra_name_must_be_a_single_path_component(tmp_path: Path, monkeypatch):
+    """extra 的判準比帳號寬（要收 `.agents` 的前導點），但**仍然是單一路徑元件**：
+    空字串／`.`／`..`／含分隔符／含 NUL 一律拒——name 會被拼進 Path(root, 'extra', name)
+    與 fd-relative open，manifest 是不可信輸入。
+
+    兩個入口各驗一次：漏掉任一邊，另一邊的放行就等於沒擋（票 13 的修法同時動了兩處）。"""
     src = _staging(tmp_path)
     tgt = tmp_path / "live"
     tgt.mkdir()
     spot = tmp_path / "spot"
-    for bad in ("/etc", "../outside", "a/b", ".", ".."):
+    for bad in ("", ".", "..", "a/b", "/etc", "../outside", "a\0b"):
+        with pytest.raises(ValueError, match="invalid_account_key"):
+            inst.validate_landing_spots({f"extra:{bad}": str(spot)})
         manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
         manifest["extra"] = {bad: "/Users/olduser/.agents"}
         (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         with pytest.raises(ValueError, match="invalid_account_key"):
             inst.plan(str(src), _accounts(tgt), extra={bad: str(spot)})
+
+
+# ---------- 票 13：extra name 的判準與帳號 key 分開 ----------
+
+
+def _staging_with_dotted_extra(tmp_path: Path) -> Path:
+    """extra name 帶前導點——`backup-claude.sh` 的 manifest key 是 `basename(路徑)`，
+    真實的 `~/.agents` 產出的就是 `.agents`。既有 fixture 一律寫成不帶點的 `agents`，
+    正是這條判準漂移藏了這麼久的原因（票 13）。"""
+    src = _staging(tmp_path)
+    (src / "extra" / ".agents" / "skills" / "s").mkdir(parents=True)
+    (src / "extra" / ".agents" / "skills" / "s" / "SKILL.md").write_text("X", encoding="utf-8")
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["extra"] = {".agents": "/Users/olduser/.agents"}
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return src
+
+
+def test_landing_spots_and_plan_accept_dotted_extra_name(tmp_path: Path, monkeypatch):
+    """`.agents` 是**專案自己的備份腳本**產出的合法 name，兩個入口都得收：`adopt-config`
+    的授權時刻（`validate_landing_spots`）與 install 前的重驗（`plan`）。只放行其中一個，
+    擋死的位置只是往後挪一站——使用者的 `~/.agents`（skill 真身常放在那裡）照樣搬不回去。"""
+    tgt = _home_target(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    src = _staging_with_dotted_extra(tmp_path)
+    assert inst.validate_landing_spots({"extra:.agents": str(home / ".agents")}) == \
+        {"extra:.agents": str(home / ".agents")}
+    p = inst.plan(str(src), _accounts(tgt), extra={".agents": str(home / ".agents")})
+    assert p.extra_targets == {".agents": str(home / ".agents")}
+    inst.install(p)
+    assert (home / ".agents" / "skills" / "s" / "SKILL.md").read_text(encoding="utf-8") == "X"
 
 
 def test_plan_refuses_extra_spot_at_home_or_above(tmp_path: Path, monkeypatch):

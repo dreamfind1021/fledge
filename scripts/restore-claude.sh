@@ -491,7 +491,7 @@ total = {"only_backup": 0, "only_live": 0, "differ": 0, "same": 0}
 # 這種 key 能讓比對的備份側走出展開目錄、把外面的檔名列出來。查表查不到固然也會略過，
 # 但那是副作用不是防線——調換兩個判斷的順序、或加一個「沒登記就用預設」的 fallback 就
 # 破功。**與 sidecar 的 `backup/install.py::_SAFE_KEY_RE` 同一條信任邊界、同一組字元**
-# （一邊有一邊沒有同樣是漂移）；`extra` 的 name 走同一條規則。
+# （一邊有一邊沒有同樣是漂移）；`extra` 的 name **不走這條**，見下方 `_safe_component`。
 SAFE_ACCOUNT_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -502,6 +502,9 @@ def _safe_component(k):
     （`backup-claude.sh` 用 `basename`），真實的 `~/.agents` 產出的 name 就是 **`.agents`**
     ——帶前導點，過不了帳號那組字元。帳號 key 是使用者在 Fledge 內自己取的，兩者的來源
     不同，判準本來就該不同。
+
+    **sidecar 的對應實作是 `backup/install.py::_safe_extra_name`**（票 13）——同一條分界
+    的兩份實作，改一邊要改另一邊。
     """
     return isinstance(k, str) and k not in ("", ".", "..") and "/" not in k and "\0" not in k
 
