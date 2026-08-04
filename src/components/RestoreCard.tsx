@@ -1,22 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { formatBundleTime, formatSize } from "../lib/backupFormat";
-import { destMessageKey, repairScope, restoreBlocking } from "../lib/restoreFormat";
+import { destMessageKey, restoreBlocking } from "../lib/restoreFormat";
 import { pickDirectory } from "../lib/dialog";
 import { useCardSession } from "../lib/useCardSession";
 import { CardTerminal } from "./CardTerminal";
-import { OUTCOME_TONE } from "./CommonConfigCard";
+import { RepairCard } from "./RepairCard";
 import {
-  RESTORE_REPAIR_ENTRIES,
-  commonConfigPlan,
-  commonConfigRepair,
   fetchBackupStatus,
   fetchMigrationStatus,
   restorePlan,
   type BackupStatus,
   type MigrationState,
   type MigrationStatus,
-  type CommonConfigOpResult,
   type RestorePlan,
 } from "../lib/sidecar";
 import "./RestoreCard.css";
@@ -67,12 +63,6 @@ interface AccountInfo {
   label: string;
 }
 
-type LinkScan =
-  | { phase: "scanning" }
-  | { phase: "done"; broken: number }
-  | { phase: "not_applicable" }
-  | { phase: "error" };
-
 /** 設定頁的還原卡。
  *
  * 核心約束不是預設值而是結構：**這張卡沒有任何寫入現役目錄的路徑**。備份包展開到一個獨立
@@ -96,10 +86,9 @@ export function RestoreCard({
   // 跑完之後終端機**刻意留在原地**（差異報告正是使用者要看的東西），所以不能用「還有沒有
   // session」判斷忙碌與否——那會讓按鈕在跑完後永遠鎖著。用 PTY EOF 當結束訊號。
   const [finished, setFinished] = useState(false);
-  const [scan, setScan] = useState<LinkScan | null>(null);
-  const [repairing, setRepairing] = useState(false);
-  const [repairResults, setRepairResults] = useState<CommonConfigOpResult[] | null>(null);
-  const [repairError, setRepairError] = useState<string | null>(null);
+  // 斷鏈檢查與修復整段在 `RepairCard`（票 08 抽出，精靈的 repair 頁共用同一份判準）。
+  // 這裡只留「什麼時候該重測」：展開開始與結束時現役目錄可能被動過。
+  const [rescanToken, setRescanToken] = useState(0);
   // 上一輪移機收尾了沒（票 07）。**判定全在後端**——牽涉 journal 定位、bundle 形狀驗證
   // 與損壞容錯；前端不碰檔案系統（增補 spec §3.3.2）
   const [migration, setMigration] = useState<MigrationStatus | null>(null);
@@ -108,17 +97,12 @@ export function RestoreCard({
   // state，畫面會退回上一輪的結果（比照 BackupCard／EnvCard 的 reqId）
   const statusReq = useRef(0);
   const planReq = useRef(0);
-  const scanReq = useRef(0);
   const migrationReq = useRef(0);
   const mounted = useRef(true);
 
   const {
     running, starting, error: sessionError, setError: setSessionError, start,
   } = useCardSession<{ bundle: string }>(port);
-
-  // effect dep 用簽章而非 accounts 物件：父層每次 render 都給新引用。只看 key——
-  // 誰是 source 由 key 的順序決定，config_dir 的內容由後端自己讀。
-  const accountsSig = JSON.stringify(Object.keys(accounts));
 
   useEffect(() => {
     mounted.current = true;   // StrictMode 會 mount→cleanup→再 mount，這裡要重設回來
@@ -193,41 +177,10 @@ export function RestoreCard({
     if (selected !== null) void loadPlan(selected);
   }, [selected, loadPlan]);
 
-  const scanLinks = useCallback(async () => {
-    if (port == null) return;
-    const scope = repairScope(Object.keys(accounts));
-    if (scope === null) {
-      setScan({ phase: "not_applicable" });
-      return;
-    }
-    const myId = ++scanReq.current;
-    setScan({ phase: "scanning" });
-    try {
-      // 偵測用既有的 common-config/plan：它已經回逐項 state，不需要另做一個端點
-      const result = await commonConfigPlan(port, { ...scope, entries: RESTORE_REPAIR_ENTRIES });
-      if (!mounted.current || myId !== scanReq.current) return;
-      setScan({
-        phase: "done",
-        broken: result.operations.filter((o) => o.state === "broken_link").length,
-      });
-    } catch (e) {
-      console.error("[RestoreCard] 檢查共通設置連結失敗", e);
-      if (mounted.current && myId === scanReq.current) setScan({ phase: "error" });
-    }
-  }, [port, accountsSig]);   // eslint-disable-line react-hooks/exhaustive-deps
-
-  // **掛載就掃，不是等展開完成**（Codex 對抗式審查 finding 2）：還原只把備份包解到獨立的
-  // DEST，展開這個動作本身不可能讓現役目錄冒出斷鏈——斷鏈真正出現的時刻是使用者把設定
-  // 手動搬回現役目錄之後，而那一刻通常不在這張卡裡。綁在展開後只會讓它幾乎永遠說「沒有
-  // 斷鏈」。順帶化解另一件事：它不再依賴「這次展開成功了嗎」，而 PTY EOF 本來就不帶結束碼。
-  useEffect(() => {
-    void scanLinks();
-  }, [scanLinks]);
-
   const onSessionEnded = useCallback(() => {
     setFinished(true);
-    void scanLinks();   // 跑完重測一次：使用者可能在展開途中動過現役目錄
-  }, [scanLinks]);
+    setRescanToken((n) => n + 1);   // 跑完重測一次：使用者可能在展開途中動過現役目錄
+  }, []);
 
   const onChooseDest = useCallback(async () => {
     if (selected === null) return;
@@ -242,8 +195,11 @@ export function RestoreCard({
     // 的後果是內容被解進錯誤命名的目錄（使用者事後分不出那是哪一份備份）。
     if (selected === null || plan === null || plan.bundle !== selected) return;
     setFinished(false);
-    setRepairResults(null);
-    setRepairError(null);
+    // **開始展開時不清上一輪的修復結果**（抽 `RepairCard` 時的行為調整）：展開只把備份包
+    // 解到獨立位置，不動現役目錄（ADR-0004，這張卡的核心約束），所以那份結果仍然描述現況。
+    // 舊寫法在這裡清掉它，等於假設展開會讓現況失效——那個假設與卡片的約束互相矛盾。
+    // 真正可能讓它失效的是「展開跑完之後使用者自己動了現役目錄」，那由 `onSessionEnded`
+    // 推進 `rescanToken` 涵蓋。
     // 前端只送備份包**名字**與展開位置，永不送命令字串（沿用 kind=install 的 allowlist
     // 不變式）。path 傳空字串是因為還原不屬於任何專案，後端固定跑在 home。
     await start({
@@ -254,25 +210,6 @@ export function RestoreCard({
       fallbackError: () => t("errors.runFailed"),
     });
   }, [selected, plan, start, t]);
-
-  const onRepair = useCallback(async () => {
-    if (port == null) return;
-    const scope = repairScope(Object.keys(accounts));
-    if (scope === null) return;
-    setRepairing(true);
-    setRepairError(null);
-    try {
-      const results = await commonConfigRepair(port, { ...scope, entries: RESTORE_REPAIR_ENTRIES });
-      if (!mounted.current) return;
-      setRepairResults(results);
-      await scanLinks();   // 修完重測：畫面顯示的必須是修復後的現況，不是按下去前的
-    } catch (e) {
-      console.error("[RestoreCard] 修復共通設置連結失敗", e);
-      if (mounted.current) setRepairError(t("errors.repairFailed"));
-    } finally {
-      if (mounted.current) setRepairing(false);
-    }
-  }, [port, accountsSig, scanLinks, t]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // 續作資訊只在 `resumable` 出現，而且**後端說 resumable 卻沒給 source_root 就不給按鈕**：
   // 預填值缺一半的續作會把使用者丟進一個填不滿的表單，不如讓他走「重新展開」那條路。
@@ -380,8 +317,8 @@ export function RestoreCard({
         </>
       )}
 
-      {(planError ?? sessionError ?? repairError) && (
-        <p className="rs-error">{planError ?? sessionError ?? repairError}</p>
+      {(planError ?? sessionError) && (
+        <p className="rs-error">{planError ?? sessionError}</p>
       )}
 
       {running !== null && port != null && (
@@ -394,50 +331,13 @@ export function RestoreCard({
         />
       )}
 
-      {/* 斷鏈修復：展開完成後才出現，且**不自動執行**——它會改寫 symlink，是破壞性操作 */}
-      {scan !== null && (
-        <div className="rs-links">
-          <div className="rs-label">{t("links.title")}</div>
-          {scan.phase === "scanning" && <p className="rs-links-msg">{t("links.scanning")}</p>}
-          {scan.phase === "error" && <p className="rs-warn">{t("errors.scanFailed")}</p>}
-          {scan.phase === "not_applicable" && (
-            <p className="rs-links-msg">{t("links.notApplicable")}</p>
-          )}
-          {scan.phase === "done" && scan.broken === 0 && (
-            <p className="rs-links-msg">{t("links.none")}</p>
-          )}
-          {scan.phase === "done" && scan.broken > 0 && (
-            <>
-              <p className="rs-warn">{t("links.found", { count: scan.broken })}</p>
-              <button
-                type="button"
-                className="settings-btn-ghost"
-                onClick={() => void onRepair()}
-                disabled={repairing}
-              >
-                {repairing ? t("links.repairing") : t("links.repair")}
-              </button>
-            </>
-          )}
-          {repairResults !== null && (
-            <div className="rs-results">
-              {repairResults
-                // 一次修復會回每個 (帳號, 項目) 一筆，其中絕大多數是「沒事做」。
-                // 全列會把卡片撐長，也讓真正動到的那幾筆淹沒在裡面。
-                .filter((r) => r.outcome !== "skipped")
-                .map((r) => (
-                  <div key={`${r.account}/${r.entry}`} className="rs-result">
-                    <span className="rs-result-name">{r.account} / {r.entry}</span>
-                    {/* chip 與色調沿用共通設置卡的同一份表：同一個 outcome 在兩張卡是同一件事 */}
-                    <span className={`b4-chip ${OUTCOME_TONE[r.outcome]}`}>
-                      {t(`repair.result.${r.outcome}`)}
-                    </span>
-                  </div>
-                ))}
-            </div>
-          )}
-        </div>
-      )}
+      {/* 斷鏈檢查與修復（票 08 抽成 `RepairCard`，與移機精靈的 repair 頁共用同一份判準）。
+          **不自動執行**——它會改寫 symlink，是破壞性操作。
+          `rescanToken` 在展開開始與結束時推進：那兩個時刻現役目錄可能被動過。 */}
+      <div className="rs-links">
+        <div className="rs-label">{t("links.title")}</div>
+        <RepairCard port={port} accounts={accounts} rescanToken={rescanToken} />
+      </div>
     </div>
   );
 }
