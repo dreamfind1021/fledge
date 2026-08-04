@@ -21,6 +21,7 @@ import { SystemSettingsCard } from "./SystemSettingsCard";
 import { BundleCard, EMPTY_BUNDLE_SELECTION, type BundleSelection } from "./BundleCard";
 import { TargetsCard } from "./TargetsCard";
 import { PathsCard, type PathsStatus, type ProjectMapping } from "./PathsCard";
+import { InstallPreviewCard } from "./InstallPreviewCard";
 import "./Onboarding.css";
 
 interface OnboardingProps {
@@ -75,12 +76,17 @@ export function Onboarding({ onClose }: OnboardingProps) {
   // 會先看到上一包的 `loaded`——在新包的清單根本還沒讀之前就放行。
   const [pathsStatus, setPathsStatus] = useState<{ gen: number; value: PathsStatus }>(
     { gen: -1, value: "loading" });
+  // 預覽的載入狀態同款綁著來源（票 05）：算不出這次會發生什麼，就不該讓使用者按下
+  // 不可逆的安裝
+  const [previewStatus, setPreviewStatus] = useState<{ gen: number; value: PathsStatus }>(
+    { gen: -1, value: "loading" });
   const mappingGen = useRef(bundle.gen);
   if (mappingGen.current !== bundle.gen) {
     // render body 同步清空：等 effect 會讓 PathsCard 先用舊 mapping seed 一次
     mappingGen.current = bundle.gen;
     if (Object.keys(mapping).length > 0) setMapping({});
     if (pathsStatus.gen !== bundle.gen) setPathsStatus({ gen: bundle.gen, value: "loading" });
+    if (previewStatus.gen !== bundle.gen) setPreviewStatus({ gen: bundle.gen, value: "loading" });
   }
   const overlayRef = useRef<HTMLDivElement>(null);
 
@@ -424,7 +430,23 @@ export function Onboarding({ onClose }: OnboardingProps) {
               </div>
             )
           )}
-          {step === "install" && migShell("install")}
+          {/* 安裝預覽（票 05）：不可逆操作前的最後一道人工確認，這一頁不寫任何東西。
+              算不出預覽就擋住——與 paths 頁同一條理由（票 04 R1 F3） */}
+          {step === "install" && (
+            bundle.probe.kind === "unknown" ? migShell("install") : (
+              <div>
+                <InstallPreviewCard
+                  port={port}
+                  dest={bundle.probe.dest}
+                  sourceGen={bundle.gen}
+                  mapping={mapping}
+                  onStatus={(value) => setPreviewStatus({ gen: bundle.gen, value })}
+                />
+                {migNav(!(previewStatus.gen === bundle.gen
+                  && previewStatus.value === "loaded"))}
+              </div>
+            )
+          )}
           {step === "repair" && migShell("repair")}
 
           {/* ── 環境偵測（票 23）：標題、清單與導覽都在卡片內，重新檢查與下一步同列 ── */}

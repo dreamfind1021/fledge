@@ -90,6 +90,24 @@ vi.mock("./PathsCard", async () => {
     ),
   };
 });
+vi.mock("./InstallPreviewCard", async () => {
+  const catalog = (await import("../locales/zh-TW/onboarding.json")).default;
+  return {
+    InstallPreviewCard: ({ dest, sourceGen, mapping, onStatus }: {
+      dest: string; sourceGen: number; mapping: Record<string, string>;
+      onStatus: (s: string) => void;
+    }) => (
+      <div>
+        <h2>{catalog.mig.install.h}</h2>
+        <span data-testid="preview-dest">{dest}</span>
+        <span data-testid="preview-gen">{sourceGen}</span>
+        <span data-testid="preview-mapping">{JSON.stringify(mapping)}</span>
+        <button onClick={() => onStatus("loaded")}>preview-loaded</button>
+        <button onClick={() => onStatus("error")}>preview-error</button>
+      </div>
+    ),
+  };
+});
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   scanPreview: vi.fn(async (_port: number, path: string) => ({ path, count: 3, status: "ok" as const })),
@@ -550,6 +568,42 @@ describe("Onboarding 精靈外殼", () => {
       expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
   });
 
+  // 票 05：預覽是不可逆操作前的最後一道人工確認——算不出來就不該讓使用者往下走
+  it("預覽算不出來時擋住下一步，而且拿得到這一頁帶來的對應", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    ui.getByText("adopt").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.paths.h)).toBeTruthy());
+    ui.getByText("map").click();
+    ui.getByText("paths-loaded").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.install.h)).toBeTruthy());
+
+    // 預覽拿到的是上一頁填的對應與這一包的展開位置
+    expect(ui.getByTestId("preview-mapping").textContent)
+      .toBe(JSON.stringify({ "/old/a": "/new/a" }));
+    expect(ui.getByTestId("preview-dest").textContent).toBe("/d");
+
+    ui.getByText("preview-error").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true));
+    ui.getByText("preview-loaded").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+  });
+
   // Codex 票 04 R2：`pathsStatus` 沒跟著 `bundle.gen` 失效的話，換包之後 gating 會先看到
   // 上一包的 `loaded`——在新包的清單根本還沒讀之前就放行
   it("換一包之後，上一包的「清單已讀到」不算數", async () => {
@@ -725,6 +779,12 @@ describe("Onboarding 精靈外殼", () => {
       // 專案清單讀到了才放行（票 04 R1 F3），同樣不是裝飾
       if (heading === zh.mig.paths.h) {
         ui.getByText("paths-loaded").click();
+        await waitFor(() =>
+          expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      }
+      // 安裝頁同理：算不出預覽就不該讓使用者往下（票 05）
+      if (heading === zh.mig.install.h) {
+        ui.getByText("preview-loaded").click();
         await waitFor(() =>
           expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
       }
