@@ -759,8 +759,12 @@ def test_install_reports_journal_unavailable_as_itself(tmp_path: Path, monkeypat
     誤報成 `config_unreadable` 會讓使用者去修一個沒壞的檔案。"""
     live = _install_config(tmp_path, monkeypatch)
     staging = make_staging(tmp_path)
-    # ~/.fledge 佔成一般檔 → fd-relative 開啟必失敗
-    (tmp_path / "home" / ".fledge").write_text("not a dir", encoding="utf-8")
+    # **這一輪的 journal 檔**被佔成目錄 → fd-relative 開啟必失敗。
+    # 不能再用「~/.fledge 整個佔成一般檔」：票 07 起續作簿記寫在同一個目錄、而且排在
+    # `install()` **之前**，那個環境會先撞 `migration_marker_unavailable`（另有專測）。
+    # 要驗 journal 這條路徑，故障點就得精準落在 journal 自己身上。
+    plan = install.plan(str(staging), {"work": {"config_dir": str(live), "label": ""}})
+    install.journal_path(install.transaction_id(plan)).mkdir(parents=True)
 
     resp = TestClient(create_app()).post("/api/restore/install",
                                          json={"dest": str(staging)})
@@ -1165,3 +1169,166 @@ def test_install_route_reports_stale_temps_with_absolute_paths(tmp_path: Path, m
     assert any(r["outcome"] == "installed" for r in body["results"])
     # **只回報不刪**：判準全是可偽造的檔名特徵，達不到「只刪自己建的」這條底線
     assert all(Path(p).exists() for p in leftovers)
+
+
+# ── 中斷續作的簿記（票 07，增補 spec §3） ────────────────────────────────────
+
+
+def _marker(tmp_path: Path) -> Path:
+    return tmp_path / "home" / ".fledge" / "migration-in-progress.json"
+
+
+def _journals(tmp_path: Path) -> list[Path]:
+    fledge = tmp_path / "home" / ".fledge"
+    return sorted(fledge.glob("restore-journal-*.jsonl")) if fledge.is_dir() else []
+
+
+def test_migration_status_is_none_on_a_clean_machine(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir(exist_ok=True)
+    resp = TestClient(create_app()).get("/api/restore/migration-status")
+    assert resp.status_code == 200
+    assert resp.json() == {"state": "none"}
+
+
+def test_install_clears_both_bookkeeping_files_on_full_success(
+        tmp_path: Path, monkeypatch):
+    """完整成功：journal（安全簿記）與 marker（續作資訊）**一起**消失——留下任何一個
+    都會讓還原卡永遠顯示「上次的移機還沒完成」。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    client = TestClient(create_app())
+
+    resp = client.post("/api/restore/install", json={"dest": str(staging)})
+
+    assert resp.status_code == 200
+    assert {r["outcome"] for r in resp.json()["results"]} == {"installed"}
+    assert not _marker(tmp_path).exists()
+    assert _journals(tmp_path) == []
+    assert client.get("/api/restore/migration-status").json() == {"state": "none"}
+
+
+def test_install_keeps_bookkeeping_when_anything_failed(tmp_path: Path, monkeypatch):
+    """有 failed：兩個檔都保留——修好之後要能接著跑，而續作靠 marker 找回展開位置。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    client = TestClient(create_app())
+    # 落點唯讀 → 寫入拿到 EACCES → failed。**同名檔案不行**：那是 no-clobber 的 skipped，
+    # 一整輪照樣「無 failed」，簿記會被清掉而這條測試什麼都沒驗到
+    live.chmod(0o500)
+    try:
+        resp = client.post("/api/restore/install", json={"dest": str(staging)})
+    finally:
+        live.chmod(0o700)
+
+    assert any(r["outcome"] == "failed" for r in resp.json()["results"])
+    assert _marker(tmp_path).exists()
+    assert len(_journals(tmp_path)) == 1
+    assert client.get("/api/restore/migration-status").json() == {
+        "state": "resumable", "source_root": str(staging.resolve()), "mapping": []}
+
+
+def test_install_refuses_to_start_when_the_marker_cannot_be_written(
+        tmp_path: Path, monkeypatch):
+    """簿記寫不進去就**不准開始**（增補 spec §3.2）：照樣安裝的話，硬中斷之後只剩
+    journal → 沒有續作資訊 → 而 config 早已落檔、重走精靈會撞 adopt-config 的 409，
+    正好重現這張票要消除的那條死路。
+
+    要求是**回穩定判別碼且一個 target 都沒被動過**——不是「裝到一半卡死」。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    called: list[int] = []
+    monkeypatch.setattr(install, "install",
+                        lambda *a, **kw: called.append(1) or [])
+    fledge = tmp_path / "home" / ".fledge"
+    fledge.mkdir(parents=True, exist_ok=True)
+    fledge.chmod(0o500)                     # 目錄唯讀 → atomic write 的第一步就失敗
+    try:
+        resp = TestClient(create_app()).post("/api/restore/install",
+                                             json={"dest": str(staging)})
+    finally:
+        fledge.chmod(0o700)
+
+    assert resp.status_code == 500
+    assert resp.json()["error"] == "migration_marker_unavailable"
+    assert called == [], "簿記失敗時 install() 一次都不該被呼叫"
+    assert list(live.iterdir()) == []
+
+
+def test_marker_survives_when_journal_cleanup_fails_after_success(
+        tmp_path: Path, monkeypatch):
+    """**安裝成功但 journal 清不掉**（`install()` 用 suppress 吞掉，結果照樣無 failed）：
+    marker 必須保留。只憑「無 failed」就刪 marker 會留下「journal 還在、marker 沒了」
+    ＝ `unfinished_unknown`——安裝其實已經成功，使用者卻看到「未完成」而且**不能續作**。
+
+    保留 marker 的話狀態是 `resumable`，使用者頂多多按一次繼續（續作冪等、全部 skipped）。"""
+    _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    real_unlink = Path.unlink
+
+    def _refuse_journal_unlink(self: Path, *args, **kwargs):
+        if self.name.startswith("restore-journal-"):
+            raise PermissionError(13, "denied")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", _refuse_journal_unlink)
+    client = TestClient(create_app())
+
+    resp = client.post("/api/restore/install", json={"dest": str(staging)})
+
+    assert {r["outcome"] for r in resp.json()["results"]} == {"installed"}
+    assert _marker(tmp_path).exists(), "journal 還在，marker 就不能刪"
+    assert client.get("/api/restore/migration-status").json()["state"] == "resumable"
+
+
+def test_migration_status_hands_back_the_mapping_that_was_sent(
+        tmp_path: Path, monkeypatch):
+    """續作要能把上次填的專案對應原封不動帶回精靈——那組值只存在於這份簿記裡
+    （journal 記的是改名**後**的位置，推不回原始 mapping）。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    (staging / "accounts" / "work" / "projects" / "-old-a").mkdir(parents=True)
+    (staging / "accounts" / "work" / "projects" / "-old-a" / "s.jsonl").write_text(
+        json.dumps({"cwd": "/old/a"}) + "\n", encoding="utf-8")
+    client = TestClient(create_app())
+
+    live.chmod(0o500)                       # 製造 failed → 簿記保留（理由同上一條）
+    try:
+        client.post("/api/restore/install", json={
+            "dest": str(staging),
+            "mapping": [{"old": "/old/a", "new": str(tmp_path / "newa")}]})
+    finally:
+        live.chmod(0o700)
+
+    body = client.get("/api/restore/migration-status").json()
+    assert body["state"] == "resumable"
+    assert body["mapping"] == [{"old": "/old/a", "new": str(tmp_path / "newa")}]
+
+
+def test_marker_survives_failures_even_if_the_journal_vanishes(
+        tmp_path: Path, monkeypatch):
+    """刪除 gate 的**兩個條件各自有意義**（增補 spec §3.2：無 failed **且** journal 確認
+    不在了）。正常路徑下兩者互相蘊含——有 failed 就不會清 journal——所以只有把 journal
+    從外部拿掉，才驗得到「無 failed」那一半是不是真的在把關。
+
+    真實對應：使用者手動清了 `~/.fledge`，或另一個 Fledge 實例插手（單實例是假設不是
+    保證）。這時候安裝有失敗＝沒收尾，續作資訊就該留著。"""
+    live = _install_config(tmp_path, monkeypatch)
+    staging = make_staging(tmp_path)
+    real_install = install.install
+
+    def _install_then_lose_the_journal(plan, **kwargs):
+        results = real_install(plan, **kwargs)
+        install.journal_path(install.transaction_id(plan)).unlink(missing_ok=True)
+        return results
+
+    monkeypatch.setattr(install, "install", _install_then_lose_the_journal)
+    live.chmod(0o500)                       # 造 failed
+    try:
+        resp = TestClient(create_app()).post("/api/restore/install",
+                                             json={"dest": str(staging)})
+    finally:
+        live.chmod(0o700)
+
+    assert any(r["outcome"] == "failed" for r in resp.json()["results"])
+    assert _marker(tmp_path).exists(), "有 failed 就不該清掉續作資訊"

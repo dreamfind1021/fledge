@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from fledge_sidecar import app_config
 from fledge_sidecar.app_config import AppConfig
-from fledge_sidecar.backup import install, restore
+from fledge_sidecar.backup import install, migration_state, restore
 from fledge_sidecar.backup.containment import source_roots
 from fledge_sidecar.backup.script import scripts_root
 from fledge_sidecar.paths import expand_and_validate, probe_dir, resolve_best_effort
@@ -250,6 +250,19 @@ def landing_suggestions_route(dest: str):
         raise                               # 模組只拋判別碼，其餘不吞
 
 
+@router.get("/api/restore/migration-status")
+def migration_status_route():
+    """唯讀（票 07，增補 spec §3.3.2）：上一輪移機收尾了沒、能不能一鍵續作。
+
+    **前端不得自己讀 `~/.fledge/`**：判定牽涉 journal 定位、bundle 形狀驗證與損壞容錯，
+    全是後端已經有的能力。任何 I/O 失敗在模組內降級成某個 state，**不回 5xx**——還原卡
+    每次開啟都會打這支，它掛掉不該讓整張卡壞掉。
+
+    **不做任何寫入**：殘留的 marker 無害（每次都正確判成 `stale_marker`），下一次 install
+    的 atomic write 會覆蓋它。在唯讀查詢裡偷做清除，會讓「唯讀」的宣稱失真。"""
+    return migration_state.status()
+
+
 @router.get("/api/restore/project-paths")
 def project_paths_route(dest: str):
     """唯讀（票 06）：備份包裡有哪些專案、各自的舊路徑（讀歷史檔 cwd——編碼不可逆，
@@ -316,7 +329,32 @@ def install_route(body: DestBody):
                                     content={"error": "config_unreadable"})
             plan = install.plan(body.dest, config.accounts, extra=config.extra,
                                 mapping=[(m.old, m.new) for m in body.mapping])
+            tid = install.transaction_id(plan)
+            # **續作簿記寫不進去就不准開始**（票 07，增補 spec §3.2）：照樣安裝的話，硬
+            # 中斷之後只剩 journal → 沒有續作資訊 → 而 config 早已落檔、重走精靈會撞
+            # `adopt-config` 的 409，正好重現票 07 要消除的那條死路。與 `journal_unavailable`
+            # 同立場：簿記開不起來就不該動使用者的目錄。
+            #
+            # **由 route 寫而不是 `install()`**：模組層拿不到原始 mapping（`InstallPlan` 存的
+            # 是改名後的 `project_renames`），而且 in-progress 是精靈流程的便利性資料——
+            # `backup/install.py` 應該繼續不知道 UI 有幾頁、走什麼順序。
+            try:
+                migration_state.write_marker(
+                    tid, plan.source_root, [(m.old, m.new) for m in body.mapping])
+            except OSError:
+                logger.error("移機續作簿記寫入失敗，安裝未開始", exc_info=True)
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "migration_marker_unavailable"})
             results = install.install(plan, stale_out=stale)
+            # **刪除 gate 不能只看「無 failed」**（Codex spec review R3）：`install()` 清
+            # journal 用的是 `suppress(OSError)`，清除失敗不影響回傳。只憑無 failed 就刪
+            # marker 會留下「journal 還在、marker 沒了」＝ `unfinished_unknown`——安裝其實
+            # 已經成功，使用者卻看到「未完成」而且不能續作。journal 還在就保留 marker：
+            # 狀態是 `resumable`，使用者頂多多按一次繼續（續作冪等、全部 skipped）。
+            if (not any(r.outcome == "failed" for r in results)
+                    and not install.journal_path(tid).exists()):
+                migration_state.clear_marker()
     except ValueError as exc:
         return _module_error(exc)
     return {"results": [asdict(r) for r in results], "stale_temps": stale}
