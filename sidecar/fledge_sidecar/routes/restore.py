@@ -158,6 +158,84 @@ _ADOPT_CLIENT_ERRORS = frozenset({
 })
 
 
+def _bundle_config(dest: str) -> dict:
+    """讀備份包裡的 `fledge/config.json`（`backup-claude.sh:267` 打進去的整份）。
+
+    讀不出／JSON 壞掉／頂層不是物件 → 回空 dict，**移機不因此失敗**：舊版備份腳本產的包
+    根本沒有這一份，而它帶回的三個欄位全是「有就帶回、沒有就留空」的便利性資料，不參與
+    任何授權決策（落點的授權只認使用者在 targets 頁確認的那一份，spec §4.2.2）。
+
+    讀取走 `install.read_bundle_json`（票 10）——包裡的 config.json 與 manifest 同為展開
+    目錄裡的不可信輸入，**同一套標準**（逐層 `O_NOFOLLOW`、`fstat` 判一般檔、大小上限）。"""
+    try:
+        return install.read_bundle_json(resolve_best_effort(dest), "fledge", "config.json")
+    except ValueError:
+        return {}
+
+
+def _adopted_subscriptions(bundle_config: dict) -> list[dict]:
+    """**兩層容錯**：頂層不是 list → 整欄捨棄；list 內逐項走共用的 `normalize_subscription`，
+    壞項丟棄、好項保留、**不連坐**。
+
+    判準與 `PUT /api/config/subscriptions` 是同一份，只有處置不同（那邊 400、這邊丟棄）——
+    備份包是不可信輸入，一筆壞資料不該讓整個移機失敗。**不去重**：那支對同名項目不去重，
+    這裡也不，同一份資料兩條規則必然漂移。"""
+    raw = bundle_config.get("subscriptions")
+    if not isinstance(raw, list):
+        return []
+    adopted: list[dict] = []
+    for item in raw:
+        try:
+            adopted.append(app_config.normalize_subscription(item))
+        except ValueError:
+            continue
+    return adopted
+
+
+def _adopted_kms_root(bundle_config: dict) -> str:
+    """包裡的 `kms_root` 是**舊機的路徑**，走與 `roots` 相同的驗證（`expand_and_validate`
+    ＋ `probe_dir`，`denied` 放行比照 roots）；`missing`／`not_dir` 就不帶回。
+
+    帶回一個指不到東西的路徑比留空更糟——使用者會以為知識庫已經設好了，而記憶頁永遠是
+    空的。存 raw（比照 `set_kms_root`：raw 含 `~`，掃描時才展開）。"""
+    raw = bundle_config.get("kms_root")
+    if not isinstance(raw, str) or not raw.strip():
+        return ""
+    try:
+        abs_ = expand_and_validate(raw)
+    except ValueError:
+        return ""
+    if probe_dir(abs_) in ("missing", "not_dir"):
+        return ""
+    return raw.strip()
+
+
+def _adopted_roots(bundle_config: dict, account_keys: set[str]) -> list[tuple[str, str]]:
+    """包裡的 roots：頂層不是 list → 整欄捨棄；逐項驗，壞項丟棄、不連坐、**不失敗**。
+
+    形狀判準複用 `app_config.usable_entry`（`load()` 與 `project_scanner` 的同一條）。
+    `default_account` 指向本次沒確認的帳號時**只丟棄那一項**——與 `body.roots` 回
+    `unknown_account` 400 的處置不同：那是使用者送的、錯了要說，這裡是不可信輸入，而
+    使用者在 targets 頁只確認部分帳號本來就是正常情況（增補 spec §2.8.3）。"""
+    raw = bundle_config.get("roots")
+    if not isinstance(raw, list):
+        return []
+    adopted: list[tuple[str, str]] = []
+    for r in raw:
+        if not app_config.usable_entry(r, "path", "default_account"):
+            continue
+        if r["default_account"] not in account_keys:
+            continue
+        try:
+            abs_ = expand_and_validate(r["path"])
+        except ValueError:
+            continue
+        if probe_dir(abs_) in ("missing", "not_dir"):
+            continue
+        adopted.append((resolve_best_effort(abs_), r["default_account"]))
+    return adopted
+
+
 @router.post("/api/restore/adopt-config")
 def adopt_config(body: AdoptConfigBody):
     """用備份包重建 config.json（票 07）。**落點由使用者逐項確認後送回**，server 全部
@@ -204,6 +282,17 @@ def adopt_config(body: AdoptConfigBody):
             return JSONResponse(status_code=400, content={"error": "invalid_root"})
         roots.append((resolve_best_effort(abs_), r.default_account))
 
+    # Fledge 自己的設定（票 09／增補 spec 缺口 5）：這三個值本來就在備份包裡，只是移機
+    # 路徑從來不讀它，於是移機完的新機訂閱、知識庫根目錄、工作根目錄全是空的，而且沒有
+    # 任何一頁讓使用者發現。**入口只能是這裡**——`install()` 把包裡的 config.json 裝回
+    # `~/.fledge/` 會覆蓋掉使用者剛在 targets 頁確認的落點（明令不做，見票 09）。
+    bundle_config = _bundle_config(body.dest)
+    if not roots:
+        # `body.roots` 非空 → 完全以它為準，包裡的不摻進來：使用者送出的是授權，包裡的
+        # 只是「沒有更好來源時的替代」。移機分支目前一律送空陣列（前端此時還沒有工作根
+        # 目錄的資料來源，增補 spec §2.8.3），所以實務上走的是包裡那條。
+        roots = _adopted_roots(bundle_config, set(account_keys))
+
     def _build(config: AppConfig) -> None:
         config.accounts = {}                # 不留 DEFAULT_CONFIG 的 default 帳號
         for a in body.accounts:
@@ -211,6 +300,8 @@ def adopt_config(body: AdoptConfigBody):
         for path, acct in roots:
             config.add_root(path, acct)
         config.extra = {e.name: e.path.strip() for e in body.extra}
+        config.subscriptions = _adopted_subscriptions(bundle_config)
+        config.set_kms_root(_adopted_kms_root(bundle_config))
 
     try:
         with _config_lock:

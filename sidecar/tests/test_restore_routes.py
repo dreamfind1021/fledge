@@ -1332,3 +1332,194 @@ def test_marker_survives_failures_even_if_the_journal_vanishes(
 
     assert any(r["outcome"] == "failed" for r in resp.json()["results"])
     assert _marker(tmp_path).exists(), "有 failed 就不該清掉續作資訊"
+
+
+# ---------- 票 09：從備份包帶回 Fledge 自己的設定 ----------
+#
+# `backup-claude.sh:267` 把整份 `~/.fledge/config.json` 打進 `<bundle>/fledge/config.json`，
+# 但移機路徑從來不讀它——`subscriptions`／`kms_root`／`roots` 因此永遠停在 DEFAULT_CONFIG
+# 的空值，而且沒有任何一頁讓使用者發現（增補 spec §2.6 缺口 5、§2.8.3）。
+#
+# 讀取走票 10 的共用原語；**包裡的 config.json 與 manifest 同級，都是不可信輸入**。
+
+
+def _plant_bundle_config(src: Path, payload) -> None:
+    """比照備份腳本的產出佈局塞一份 `<bundle>/fledge/config.json`。"""
+    (src / "fledge").mkdir(exist_ok=True)
+    (src / "fledge" / "config.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _adopt(client, src: Path, home: Path, **extra):
+    return client.post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        **extra})
+
+
+def test_adopt_config_brings_back_subscriptions_kms_root_and_roots(
+        tmp_path: Path, monkeypatch):
+    """成功路徑：三欄都在包裡、在新機都通得過驗證 → 全部帶回。
+
+    這是本票存在的理由——這三個值本來就在備份包裡，只是沒人讀它。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    kms = tmp_path / "kms"
+    kms.mkdir()
+    projects = tmp_path / "projects"
+    projects.mkdir()
+    _plant_bundle_config(src, {
+        "version": 1,
+        "subscriptions": [{"name": "Codex", "monthly_cost": 20}],
+        "kms_root": str(kms),
+        "roots": [{"path": str(projects), "default_account": "work"}],
+        "accounts": {"work": {"config_dir": "/Users/olduser/.claude", "label": ""}},
+    })
+    resp = _adopt(TestClient(create_app()), src, home)
+    assert resp.status_code == 200
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    assert data["subscriptions"] == [{"name": "Codex", "monthly_cost": 20.0}]
+    assert data["kms_root"] == str(kms)
+    assert [(r["path"], r["default_account"]) for r in data["roots"]] == \
+        [(str(projects), "work")]
+    # 包裡的 accounts 是**舊機的落點**，一個位元組都不准回到 config——授權只認使用者
+    # 在 targets 頁確認的那一份（spec §4.2.2）。這是本票最容易做壞的地方。
+    assert data["accounts"] == {"work": {"config_dir": str(home / ".claude"), "label": ""}}
+    assert "/Users/olduser" not in cfg.read_text(encoding="utf-8")
+
+
+def test_adopt_config_succeeds_when_the_bundle_has_no_fledge_config(
+        tmp_path: Path, monkeypatch):
+    """舊版備份腳本產的包根本沒有 `fledge/`——三欄當作沒有，**移機不失敗**。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    resp = _adopt(TestClient(create_app()), src, home)
+    assert resp.status_code == 200
+    data = json.loads(cfg.read_text(encoding="utf-8"))
+    assert (data["subscriptions"], data["kms_root"], data["roots"]) == ([], "", [])
+
+
+def test_adopt_config_survives_a_hostile_fledge_config(tmp_path: Path, monkeypatch):
+    """**惡意包不得讓 `adopt-config` 回 5xx**——每一種壞形狀都要 200 且移機能繼續。
+
+    `null`／字串／數字／陣列的 item 正是既有 `put_subscriptions` 會 `AttributeError`
+    → 裸 500 的那組（它靠 Pydantic 擋，這條路徑沒有那層）。"""
+    hostile = [
+        "not an object", ["not", "an", "object"], 42, None,
+        {"subscriptions": "not a list"},
+        {"subscriptions": {"name": "Codex"}},
+        {"subscriptions": [None, "Codex", 7, ["a"], {"name": ""}]},
+        {"kms_root": 7}, {"kms_root": ["/tmp"]}, {"kms_root": "relative/path"},
+        {"roots": "not a list"}, {"roots": [None, 7, {"path": 1}, {}]},
+    ]
+    for i, payload in enumerate(hostile):
+        base = tmp_path / f"hostile{i}"
+        base.mkdir()
+        cfg, src, home = _adopt_env(base, monkeypatch)
+        _plant_bundle_config(src, payload)
+        resp = _adopt(TestClient(create_app()), src, home)
+        assert resp.status_code == 200, f"{payload!r} → {resp.status_code}"
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+        assert data["accounts"]["work"]["config_dir"] == str(home / ".claude")
+
+
+def test_adopt_config_drops_bad_subscription_items_and_keeps_good_ones(
+        tmp_path: Path, monkeypatch):
+    """兩層容錯的**第二層**：list 內逐項判，壞項丟棄、好項保留，**不連坐**。
+
+    同名不去重（`put_subscriptions` 也不去重——同一份資料兩條規則必然漂移）；
+    多餘欄位丟掉；`"12.5"` 這種可轉字串照收（沿用既有的寬鬆判準，不趁機收緊）。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    _plant_bundle_config(src, {"subscriptions": [
+        {"name": "Codex", "monthly_cost": 20, "note": "多餘欄位"},
+        None, "Codex", 7, ["Codex", 20],
+        {"name": "", "monthly_cost": 1},
+        {"name": "Bad", "monthly_cost": "abc"},
+        {"name": "Neg", "monthly_cost": -1},
+        {"name": "Inf", "monthly_cost": float("inf")},
+        {"name": "Codex", "monthly_cost": "12.5"},          # 同名不去重
+    ]})
+    assert _adopt(TestClient(create_app()), src, home).status_code == 200
+    assert json.loads(cfg.read_text(encoding="utf-8"))["subscriptions"] == [
+        {"name": "Codex", "monthly_cost": 20.0},
+        {"name": "Codex", "monthly_cost": 12.5},
+    ]
+
+
+def test_adopt_config_drops_a_kms_root_that_is_missing_on_the_new_machine(
+        tmp_path: Path, monkeypatch):
+    """`kms_root` 是**舊機的路徑**，在新機多半不存在——不存在就不帶回。
+
+    帶回一個指不到東西的路徑比留空更糟：使用者會以為知識庫已經設好了，而記憶頁
+    永遠是空的。走與 `roots` 相同的 `expand_and_validate` + `probe_dir`。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    a_file = tmp_path / "a-file"
+    a_file.write_text("x", encoding="utf-8")
+    _plant_bundle_config(src, {"kms_root": "/Users/olduser/kms"})
+    assert _adopt(TestClient(create_app()), src, home).status_code == 200
+    assert json.loads(cfg.read_text(encoding="utf-8"))["kms_root"] == ""
+
+    base = tmp_path / "notdir"
+    base.mkdir()
+    cfg2, src2, home2 = _adopt_env(base, monkeypatch)
+    _plant_bundle_config(src2, {"kms_root": str(a_file)})   # 存在但不是目錄
+    assert _adopt(TestClient(create_app()), src2, home2).status_code == 200
+    assert json.loads(cfg2.read_text(encoding="utf-8"))["kms_root"] == ""
+
+
+def test_adopt_config_drops_roots_that_are_missing_or_point_at_unconfirmed_accounts(
+        tmp_path: Path, monkeypatch):
+    """包裡的 roots 逐項驗、**壞項丟棄不連坐也不失敗**——與 `body.roots` 的處置不同。
+
+    `body.roots` 是使用者送的，`default_account` 指向沒確認的帳號要回 400
+    （`unknown_account`，既有行為）；包裡的是不可信輸入，同樣的情形只丟棄那一項——
+    使用者在 targets 頁只選了部分帳號時，指向沒選帳號的 root 是**正常情況**，
+    不該讓整個移機失敗。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    good = tmp_path / "good"
+    good.mkdir()
+    _plant_bundle_config(src, {"roots": [
+        {"path": str(good), "default_account": "work"},
+        {"path": str(good), "default_account": "personal"},   # 沒確認的帳號
+        {"path": "/Users/olduser/projects", "default_account": "work"},   # 新機沒有
+        {"path": "", "default_account": "work"},
+    ]})
+    assert _adopt(TestClient(create_app()), src, home).status_code == 200
+    assert [(r["path"], r["default_account"])
+            for r in json.loads(cfg.read_text(encoding="utf-8"))["roots"]] == \
+        [(str(good), "work")]
+
+
+def test_adopt_config_lets_user_sent_roots_win_over_the_bundle(tmp_path: Path, monkeypatch):
+    """`body.roots` 非空 → 完全以它為準，包裡的不摻進來。
+
+    使用者明確送出的是授權，包裡的只是「沒有更好的來源時的替代」。移機分支目前一律
+    送空陣列（`sidecar.ts`），所以實務上走的是包裡那條——但兩個來源合併會讓同一個
+    路徑出現兩次、`default_account` 還可能不同，那是說不清楚的狀態。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    mine = tmp_path / "mine"
+    mine.mkdir()
+    theirs = tmp_path / "theirs"
+    theirs.mkdir()
+    _plant_bundle_config(src, {"roots": [{"path": str(theirs), "default_account": "work"}]})
+    resp = _adopt(TestClient(create_app()), src, home,
+                  roots=[{"path": str(mine), "default_account": "work"}])
+    assert resp.status_code == 200
+    assert [r["path"] for r in json.loads(cfg.read_text(encoding="utf-8"))["roots"]] == \
+        [str(mine)]
+
+
+def test_adopt_config_reads_the_bundle_config_through_the_safe_primitive(
+        tmp_path: Path, monkeypatch):
+    """`fledge/` 是指向展開目錄外的 symlink → 讀取被票 10 的原語擋下，三欄當作沒有。
+
+    **不是 400**：讀不出來與「包裡沒有」對這三欄是同一件事（移機不因此失敗）。這條
+    釘的是「這條路徑真的走共用原語」——換回裸 `read_text()` 就會跟過去讀到包外的
+    JSON，然後把別人的 kms_root 寫進使用者的設定檔。"""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    kms = tmp_path / "kms"
+    kms.mkdir()
+    (outside / "config.json").write_text(
+        json.dumps({"kms_root": str(kms)}), encoding="utf-8")
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    (src / "fledge").symlink_to(outside, target_is_directory=True)
+    assert _adopt(TestClient(create_app()), src, home).status_code == 200
+    assert json.loads(cfg.read_text(encoding="utf-8"))["kms_root"] == ""

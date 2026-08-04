@@ -1,7 +1,6 @@
 """設定讀寫路由：細粒度寫入，每個操作在鎖內 load→驗證→改→save→回 updated config。spec §6.3 §7。"""
 from __future__ import annotations
 
-import math
 import re
 import threading
 
@@ -272,21 +271,30 @@ def check_dir(body: CheckDirBody):
 
 
 class SubscriptionsBody(BaseModel):
+    # `list[dict]` 這個註記是判準的一部分（非物件的 item → 422）：判準本體雖然搬進了
+    # `normalize_subscription`，這一層不能拿掉——拿掉之後非物件會變成 400，對外行為就變了。
     subscriptions: list[dict]
+
+
+# `normalize_subscription` 的判別碼 → 本端點的 400 文案。移機端（`adopt-config`）拿到同樣的
+# 判別碼卻是丟棄該項——**判準共用、處置各自**（票 09）。`bad_shape` 在這裡被 Pydantic 先擋成
+# 422 走不到，仍列出來：少一個 key 會變成 KeyError 裸 500。
+_SUBSCRIPTION_DETAIL = {
+    "bad_shape": "訂閱項目須為物件",
+    "bad_cost": "monthly_cost 須為數字",
+    "bad_values": "name 不可為空、monthly_cost 不可為負或非有限值",
+}
 
 
 @router.put("/api/config/subscriptions")
 def put_subscriptions(body: SubscriptionsBody):
     cleaned = []
     for s in body.subscriptions:
-        name = str(s.get("name") or "").strip()
         try:
-            cost = float(s.get("monthly_cost"))
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="monthly_cost 須為數字")
-        if not name or cost < 0 or not math.isfinite(cost):
-            raise HTTPException(status_code=400, detail="name 不可為空、monthly_cost 不可為負或非有限值")
-        cleaned.append({"name": name, "monthly_cost": cost})
+            cleaned.append(app_config.normalize_subscription(s))
+        except ValueError as exc:
+            raise HTTPException(status_code=400,
+                                detail=_SUBSCRIPTION_DETAIL[str(exc)]) from exc
     with _config_lock:
         config = AppConfig.load()
         config.subscriptions = cleaned

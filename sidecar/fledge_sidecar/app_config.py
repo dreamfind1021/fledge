@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,33 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ui": {"theme": "dark"},
     "subscriptions": [],
 }
+
+
+def normalize_subscription(item: Any) -> dict[str, Any]:
+    """一筆訂閱的合法形狀：`{"name": 非空字串, "monthly_cost": 有限非負數}`。額外欄位丟掉。
+
+    不合格一律 `ValueError(<判別碼>)`，**三種分開**——`bad_shape`（不是物件）／`bad_cost`
+    （`monthly_cost` 轉不出數字）／`bad_values`（name 空、cost 負或非有限）。分開的理由是
+    呼叫端的處置不同：`PUT /api/config/subscriptions` 要據此回它原本那兩句 400 文案，
+    移機的 `adopt-config` 則一律丟棄該項繼續。
+
+    **兩端共用一份判準**（票 09）：PUT 端原本靠 `SubscriptionsBody.subscriptions: list[dict]`
+    的 Pydantic 註記擋掉非物件，函式本體的 `item.get(...)` 對 `null`／字串／數字／陣列會
+    `AttributeError` → 裸 500。備份包是不可信輸入、沒有那層保護，所以「必須是物件」這一條
+    也要在這裡，不能留在型別註記裡。
+
+    **寬鬆處刻意保留**：可轉的數字字串（`"12.5"`）、bool、數字型 name 都照收——`float()`
+    與 `str()` 本來就吃得下，收緊就是改了 PUT 端的對外行為。判準搬家不是改判準。"""
+    if not isinstance(item, dict):
+        raise ValueError("bad_shape")
+    name = str(item.get("name") or "").strip()
+    try:
+        cost = float(item.get("monthly_cost"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("bad_cost") from exc
+    if not name or cost < 0 or not math.isfinite(cost):
+        raise ValueError("bad_values")
+    return {"name": name, "monthly_cost": cost}
 
 
 def default_config_path() -> Path:

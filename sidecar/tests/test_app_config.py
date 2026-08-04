@@ -1,7 +1,13 @@
 import json
 from pathlib import Path
 
-from fledge_sidecar.app_config import AppConfig, DEFAULT_CONFIG
+import pytest
+
+from fledge_sidecar.app_config import (
+    AppConfig,
+    DEFAULT_CONFIG,
+    normalize_subscription,
+)
 
 
 def test_load_missing_returns_default(tmp_path: Path):
@@ -361,3 +367,58 @@ def test_extra_field_roundtrip_and_tolerance(tmp_path: Path):
     assert json.loads(p.read_text(encoding="utf-8"))["extra"] == {"agents": "~/.agents"}
     assert AppConfig.load(_write(tmp_path, {})).extra == {}
     assert AppConfig.load(_write(tmp_path, {"extra": "oops"})).extra == {}
+
+
+# ---------- 票 09：訂閱項目的共用 normalization ----------
+#
+# 判準只有這一份：`PUT /api/config/subscriptions`（使用者送的）與移機的 `adopt-config`
+# （備份包裡的不可信輸入）兩端共用，各自決定失敗處置（400 vs 丟棄該項）。
+
+
+def test_normalize_subscription_keeps_only_the_two_fields():
+    """合格項只留 `name`／`monthly_cost`，多餘欄位丟掉、name 去空白、cost 轉 float。"""
+    assert normalize_subscription(
+        {"name": "  Codex  ", "monthly_cost": 20, "note": "多餘", "id": 7}
+    ) == {"name": "Codex", "monthly_cost": 20.0}
+
+
+def test_normalize_subscription_rejects_non_mapping_items():
+    """**這一條是本票的核心**：原本的 `put_subscriptions` 靠 Pydantic 的
+    `list[dict]` 註記擋掉非物件，函式本體對 `null`／字串／數字／陣列會 `AttributeError`
+    → 裸 500。移機那一側沒有那層保護（備份包是不可信輸入），判準必須整條在同一個地方。"""
+    for bad in (None, "Codex", 7, 1.5, True, ["Codex", 20], ("a", 1)):
+        with pytest.raises(ValueError, match="bad_shape"):
+            normalize_subscription(bad)
+
+
+def test_normalize_subscription_rejects_unconvertible_cost():
+    """`monthly_cost` 轉不出 float → `bad_cost`（PUT 端據此回自己那句 400）。"""
+    for bad in (None, "abc", [1], {}, object()):
+        with pytest.raises(ValueError, match="bad_cost"):
+            normalize_subscription({"name": "Codex", "monthly_cost": bad})
+
+
+def test_normalize_subscription_rejects_empty_name_or_bad_cost_values():
+    """空 name／負值／`inf`／`NaN` → `bad_values`（與 `bad_cost` 分開，PUT 端的兩句
+    400 文案因此一字不變）。"""
+    for bad in ({"name": "", "monthly_cost": 1}, {"name": "   ", "monthly_cost": 1},
+                {"monthly_cost": 1}, {"name": None, "monthly_cost": 1},
+                {"name": "Codex", "monthly_cost": -1},
+                {"name": "Codex", "monthly_cost": float("inf")},
+                {"name": "Codex", "monthly_cost": float("nan")}):
+        with pytest.raises(ValueError, match="bad_values"):
+            normalize_subscription(bad)
+
+
+def test_normalize_subscription_keeps_the_loose_coercions_it_always_had():
+    """**釘住既有的寬鬆處**，不順手收緊：可轉的數字字串、bool、數字型 name 都照收。
+
+    票面把「`monthly_cost` 是字串」「bool」列在壞資料裡，但 `put_subscriptions` 從來
+    就接受它們（`float("12.5")`／`float(True)` 都成功）。這支 helper 的職責是**讓判準
+    只有一份**，不是趁機改判準——收緊了就是 PUT 端的對外行為變了（票 09 明令不可）。"""
+    assert normalize_subscription({"name": "Codex", "monthly_cost": "12.5"}) == \
+        {"name": "Codex", "monthly_cost": 12.5}
+    assert normalize_subscription({"name": "Codex", "monthly_cost": True}) == \
+        {"name": "Codex", "monthly_cost": 1.0}
+    assert normalize_subscription({"name": 123, "monthly_cost": 0}) == \
+        {"name": "123", "monthly_cost": 0.0}

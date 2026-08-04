@@ -70,7 +70,15 @@
         "reloadFailed": "Your settings file was created — it just hasn't been read back yet. Hit “Read again” to retry; nothing gets created twice."
       },
       "retry": "Read again",
-      "reused": "This machine already had a settings file, so it was reused instead of creating another."
+      "reused": "This machine already had a settings file, so it was reused instead of creating another.",
+      "adopted": {
+        "subscriptions": "Subscriptions",
+        "roots": "Work roots",
+        "kms": "Knowledge base root",
+        "count": "{{count}}",
+        "kmsNone": "Not restored",
+        "note": "These came from the Fledge settings inside the backup bundle. Anything whose old location doesn't exist on this machine is left out (a network drive you haven't mounted yet, for example) — you can fill it in later from Settings."
+      }
     },
     "paths": {
       "h": "Map project paths",

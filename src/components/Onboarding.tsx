@@ -520,6 +520,29 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
                     setConfigCreated(true);
                   }}
                 />
+                {/* 從備份包帶回的 Fledge 自身設定（票 09／增補 spec 缺口 5）。這三個值
+                    一直都在包裡（`backup-claude.sh` 打包整份 `~/.fledge/config.json`），
+                    只是移機路徑以前不讀它，於是新機的訂閱、工作根目錄、知識庫根目錄
+                    全是空的而且**沒有任何一頁讓使用者發現**。
+
+                    **落檔之後才報**（綁 `configCreated`）：帶回哪些是後端在
+                    `adopt-config` 裡決定的（舊機的路徑在新機不存在就不帶回），前端只讀
+                    落檔後的 config——自己從包裡推會變成第二份判準。 */}
+                {configCreated && (
+                  <>
+                    <dl className="ob-sum">
+                      <dt>{t("mig.targets.adopted.subscriptions")}</dt>
+                      <dd>{t("mig.targets.adopted.count",
+                             { count: config?.subscriptions?.length ?? 0 })}</dd>
+                      <dt>{t("mig.targets.adopted.roots")}</dt>
+                      <dd>{t("mig.targets.adopted.count",
+                             { count: config?.roots?.length ?? 0 })}</dd>
+                      <dt>{t("mig.targets.adopted.kms")}</dt>
+                      <dd>{config?.kms_root || t("mig.targets.adopted.kmsNone")}</dd>
+                    </dl>
+                    <p className="ob-note">{t("mig.targets.adopted.note")}</p>
+                  </>
+                )}
                 {migNav(!configCreated)}
               </div>
             )

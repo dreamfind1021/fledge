@@ -479,6 +479,68 @@ describe("Onboarding 精靈外殼", () => {
     expect(loads).toBe(2);
   });
 
+  // 票 09：`adopt-config` 會從備份包帶回 Fledge 自己的設定（訂閱／工作根目錄／知識庫
+  // 根目錄）。**帶回哪些是後端決定的**（舊機的路徑在新機不存在就不帶回），這一頁的職責
+  // 只是把落檔後的結果照實說出來——使用者以前完全看不到這件事發生過。
+  async function reachTargetsAndAdopt(ui: ReturnType<typeof render>) {
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    // 落檔**之前**不該報任何帶回結果：那時 config 還是 in-memory 的預設值
+    expect(ui.queryByText(zh.mig.targets.adopted.kms)).toBeNull();
+    ui.getByText("adopt").click();
+  }
+
+  it("落檔後照實說出從備份包帶回了哪些 Fledge 設定", async () => {
+    useAppStore.setState({
+      config: { ...baseConfig, is_first_run: true },
+      loadConfig: async () => {
+        useAppStore.setState({
+          config: {
+            ...baseConfig,
+            is_first_run: false,
+            roots: [{ path: "/w/a", default_account: "work" },
+                    { path: "/w/b", default_account: "work" }],
+            subscriptions: [{ name: "Codex", monthly_cost: 20 }],
+            kms_root: "/Users/me/kms",
+          },
+        });
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachTargetsAndAdopt(ui);
+
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.adopted.kms)).toBeTruthy());
+    expect(ui.getByText("/Users/me/kms")).toBeTruthy();
+    // 兩列的數字各自對得上——共用同一個值格式，串錯欄位會在這裡被抓到
+    const rows = [...ui.container.querySelectorAll(".ob-sum dt")].map(
+      (dt) => [dt.textContent, dt.nextElementSibling?.textContent]);
+    expect(rows).toContainEqual([zh.mig.targets.adopted.subscriptions, "1 筆"]);
+    expect(rows).toContainEqual([zh.mig.targets.adopted.roots, "2 筆"]);
+  });
+
+  it("知識庫根目錄沒帶回來時說清楚，並指路到設定頁", async () => {
+    useAppStore.setState({
+      config: { ...baseConfig, is_first_run: true },
+      // 後端把新機不存在的舊路徑濾掉了 → 三欄都空。**這是常態不是失敗**
+      loadConfig: async () => {
+        useAppStore.setState({ config: { ...baseConfig, is_first_run: false } });
+      },
+    });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachTargetsAndAdopt(ui);
+
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.targets.adopted.kmsNone)).toBeTruthy());
+    expect(ui.getByText(zh.mig.targets.adopted.note)).toBeTruthy();
+    // 仍然放行：Fledge 自己的設定沒帶回來不是移機失敗（票 09：移機不失敗）
+    expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false);
+  });
+
   // 票 04：這一頁不寫任何東西，對應關係住在精靈——走到下一頁再回來必須還在，
   // 而且它要能一路帶到 install 頁（票 05 用它算預覽）
   it("專案對應住在精靈：離開這一頁再回來還在，且拿得到這一包的專案數", async () => {

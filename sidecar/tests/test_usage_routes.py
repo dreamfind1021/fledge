@@ -83,6 +83,26 @@ def test_put_subscriptions_validates(tmp_path: Path, monkeypatch):
         assert bad.status_code == 400
 
 
+def test_put_subscriptions_keeps_its_two_distinct_400_messages(tmp_path: Path, monkeypatch):
+    """**回歸保護**（票 09）：判準抽成共用 helper 之後，這支的對外行為要一字不變。
+
+    兩句 400 是分開的——「轉不出數字」與「值不合法」是使用者要採取不同動作的兩件事。
+    helper 若把失敗原因合併成一種，這條會紅。非物件的 item 仍由 Pydantic 的
+    `list[dict]` 註記擋成 422（不是 400），那一層也不能因為 helper 接手就拿掉。"""
+    _env(tmp_path, monkeypatch)
+    with TestClient(create_app()) as client:
+        cost = client.put("/api/config/subscriptions",
+                          json={"subscriptions": [{"name": "Codex", "monthly_cost": "abc"}]})
+        assert (cost.status_code, cost.json()["detail"]) == (400, "monthly_cost 須為數字")
+        values = client.put("/api/config/subscriptions",
+                            json={"subscriptions": [{"name": "", "monthly_cost": 1}]})
+        assert (values.status_code, values.json()["detail"]) == \
+            (400, "name 不可為空、monthly_cost 不可為負或非有限值")
+        shape = client.put("/api/config/subscriptions",
+                           json={"subscriptions": ["Codex"]})
+        assert shape.status_code == 422
+
+
 def test_steady_state_second_poll_reports_ok(tmp_path: Path, monkeypatch):
     # 穩態：snapshot 存在、本請求自己觸發的 rescan 不得標 scanning（design §10）
     _env(tmp_path, monkeypatch)
