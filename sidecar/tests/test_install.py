@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -2397,3 +2398,79 @@ def test_install_never_writes_the_bundles_fledge_config_into_the_live_dir(
     assert live.read_bytes() == before, "包裡的 config.json 蓋掉了現役的那一份"
     assert not (tgt / "config.json").exists()
     assert not (tgt / "fledge").exists(), "fledge/ 整個目錄都不該進安裝範圍"
+
+
+# ---------- 票 14：project_paths() 的 symlink 防護與 key 判準 ----------
+#
+# 兩個缺口與票 02 修掉的是同一型，但這裡**比 `bundle_info` 嚴重**：後者只回一個數字，
+# 這裡會讀 jsonl 的 `cwd`（絕對路徑）並回給前端。
+
+
+def _outside_projects(base: Path, cwd: str) -> Path:
+    """展開目錄**外**的一份專案歷史——冒充「這台機器上別人的資料」。回 projects 目錄。"""
+    proj = base / "outside" / "projects" / "-Users-victim-secret"
+    proj.mkdir(parents=True)
+    (proj / "s.jsonl").write_text(json.dumps({"cwd": cwd}) + "\n", encoding="utf-8")
+    return proj.parent
+
+
+def test_project_paths_refuses_symlinked_projects_dir(tmp_path: Path):
+    """`accounts/<key>/projects` 是指向包外的連結 → **一筆都不回**。
+
+    `Path.is_dir()` 跟隨 symlink，而子項那層雖然有擋（`not child.is_symlink()`），
+    目錄這一層沒有——實測會讓 `old_path` 變成包外的絕對路徑並回給前端。`_peek_cwd`
+    自己的 `O_NOFOLLOW` 是單檔層級的，擋不住目錄那一層被換掉。"""
+    src = _staging(tmp_path)
+    secret = "/Users/victim/secret-project"
+    outside = _outside_projects(tmp_path, secret)
+    (src / "accounts" / "work" / "projects").symlink_to(outside, target_is_directory=True)
+
+    found = inst.project_paths(str(src))
+    assert found == []
+    assert secret not in json.dumps(found)      # 那個絕對路徑一個字都不准出去
+
+
+def test_project_paths_refuses_symlinked_account_dir(tmp_path: Path):
+    """`accounts/<key>` 本身是連結時同樣擋——三層各驗一次，漏掉中間那層等於沒擋。"""
+    src = _staging(tmp_path)
+    secret = "/Users/victim/secret-project"
+    _outside_projects(tmp_path, secret)
+    shutil.rmtree(src / "accounts" / "work")
+    (src / "accounts" / "work").symlink_to(tmp_path / "outside", target_is_directory=True)
+
+    found = inst.project_paths(str(src))
+    assert found == []
+    assert secret not in json.dumps(found)
+
+
+def test_project_paths_refuses_symlinked_accounts_dir(tmp_path: Path):
+    """最外面那層也一樣。`plan()` 對 `accounts/` 已經 lstat 判型（不跟隨），這條唯讀
+    路徑要對齊——同一份備份包在兩支函式底下不該有兩種可及範圍。"""
+    src = _staging(tmp_path)
+    secret = "/Users/victim/secret-project"
+    _outside_projects(tmp_path, secret)
+    fake_accounts = tmp_path / "fake-accounts"
+    (fake_accounts / "work").mkdir(parents=True)
+    (fake_accounts / "work" / "projects").symlink_to(
+        tmp_path / "outside" / "projects", target_is_directory=True)
+    shutil.rmtree(src / "accounts")
+    (src / "accounts").symlink_to(fake_accounts, target_is_directory=True)
+
+    found = inst.project_paths(str(src))
+    assert found == []
+    assert secret not in json.dumps(found)
+
+
+def test_project_paths_rejects_path_like_account_key(tmp_path: Path):
+    """缺口 (b)：這道防線原本**沒有任何測試守著**——把那兩行拿掉，全套 sidecar 測試不會紅。
+
+    它與 `bundle_info` 的同一段程式碼逐字相同，票 02 的 mutation 錨點因此改到了前面那一處、
+    測試全綠，看起來像「mutant 存活」，實際上是改錯了地方——而那個全綠本身就是這個缺口的
+    證據。矩陣比照 `test_plan_rejects_path_like_account_keys`。"""
+    src = _staging(tmp_path)
+    for bad in ("/etc", "../outside", "a/b", ".", "..", "", "wo rk"):
+        manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+        manifest["accounts"] = {bad: "/Users/olduser/.claude"}
+        (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(ValueError, match="invalid_account_key"):
+            inst.project_paths(str(src))

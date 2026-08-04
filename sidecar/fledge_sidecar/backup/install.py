@@ -440,19 +440,31 @@ def project_paths(source_root: str) -> list[dict]:
     """列出備份包裡每個專案的舊路徑與建議新路徑。純唯讀（票 06）。
 
     建議值規則同落點（spec §4.2.2 決策 9）：舊路徑在舊 home 底下 → 換 home 前綴；
-    其餘留空**不猜**。一律由使用者確認後經 mapping 送回。"""
+    其餘留空**不猜**。一律由使用者確認後經 mapping 送回。
+
+    **三層都走 `_real_subdir`**（票 14，與 `bundle_info` 逐字同一條判準）：`Path.is_dir()`
+    跟隨 symlink，而這支比計數那支嚴重得多——它讀 jsonl 的 `cwd`（絕對路徑）並回給前端，
+    所以一份把 `accounts`／`accounts/<key>`／`projects` 任一層做成包外連結的備份包，就能
+    讓本機任意目錄下的專案路徑列在精靈畫面上。`_peek_cwd` 自己的 `O_NOFOLLOW` 是**單檔
+    層級**的，擋不住目錄那一層被換掉。
+
+    **這是行為變更不是純加固**：`projects/` 是 symlink 的備份包會從「列得出專案」變成
+    「列不出」。那種包只可能是手工或惡意構造的（`backup-claude.sh` 用 `cp -Rc`／`cp -R`
+    產實體目錄），代價可接受。"""
     root = resolve_best_effort(source_root)
     manifest = read_manifest(root)          # 順便驗它確實是我們展開的目錄
     old_home = manifest.get("home", "")
     new_home = str(Path.home().resolve())
     found: list[dict] = []
+    accounts_dir = _real_subdir(root, "accounts")
     for key in sorted(manifest.get("accounts", {})):
         if not _SAFE_KEY_RE.fullmatch(key):
             raise ValueError("invalid_account_key")   # key 拼進路徑，同規則重驗
-        pdir = Path(root, "accounts", key, _PROJECTS_DIR)
-        if not pdir.is_dir():
-            continue
-        for child in sorted(pdir.iterdir()):
+        acct = None if accounts_dir is None else _real_subdir(accounts_dir, key)
+        pdir = None if acct is None else _real_subdir(acct, _PROJECTS_DIR)
+        if pdir is None:
+            continue                        # 從沒用過 /resume 的帳號＝沒有專案，不是錯
+        for child in sorted(Path(pdir).iterdir()):
             if not child.is_dir() or child.is_symlink():
                 continue
             cwd = _peek_cwd(child)
@@ -473,12 +485,17 @@ def project_paths(source_root: str) -> list[dict]:
 def _real_subdir(parent: str, name: str) -> str | None:
     """`parent/name` 是**實體目錄**（lstat 語意）就回路徑，否則 None。
 
-    **每一層都要驗**（Codex 票 02 R1 F3）：`Path.is_dir()` 會跟隨 symlink，一份惡意備份包
-    只要把 `accounts/<key>` 或它底下的 `projects` 做成指向包外的連結，唯讀的計數就會走出
-    展開目錄去遍歷本機任意目錄。與 `plan()` 對 `accounts/` 的 `os.lstat` 判型同一條判準。
+    **唯讀掃描進入展開目錄的共通判準**（票 14 起兩處共用：`bundle_info` 與 `project_paths`）。
+    誰能被走進去這件事只能有一份規則——同一份備份包在兩支函式底下有兩種可及範圍，就是這批
+    票反覆出現的「一邊有一邊沒有」。
 
-    這一層是 pathname-based 而非 fd-relative：本函式只服務**唯讀計數**，TOCTOU 的後果是
-    數字不準，不是寫錯位置（寫入路徑一律走 fd-relative + `O_NOFOLLOW`）。"""
+    **每一層都要驗**（Codex 票 02 R1 F3）：`Path.is_dir()` 會跟隨 symlink，一份惡意備份包
+    只要把 `accounts`、`accounts/<key>` 或它底下的 `projects` 做成指向包外的連結，唯讀掃描
+    就會走出展開目錄去遍歷本機任意目錄。與 `plan()` 對 `accounts/` 的 `os.lstat` 判型同一條
+    判準。**`project_paths` 那一側的後果比計數大**：它讀 jsonl 的 `cwd` 並回給前端。
+
+    這一層是 pathname-based 而非 fd-relative：本函式只服務**唯讀掃描**，TOCTOU 的後果是
+    列出來的東西不準，不是寫錯位置（寫入路徑一律走 fd-relative + `O_NOFOLLOW`）。"""
     path = os.path.join(parent, name)
     try:
         st = os.lstat(path)
