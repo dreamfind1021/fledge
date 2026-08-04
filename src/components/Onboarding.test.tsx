@@ -1094,6 +1094,45 @@ describe("Onboarding 精靈外殼", () => {
     expect(numbers).toEqual(["5", "2"]);
   });
 
+  it("有一輪結果不明時，完成頁不報一個它不知道的數字", async () => {
+    // Codex 票 08 R2 F3：第一輪其實完整跑完了，只是**回應遺失**（連線斷／非合約 500）
+    // → 前端不知道裝了什麼，退回可再送。重試時 no-clobber 讓每一項都回報 `skipped`，
+    // 累積器加 0 → 完成頁會說「搬回 0 項」，而實際上東西都在。
+    //
+    // **前端沒有辦法知道真相**（那要對 provenance journal 對帳，是後端的能力），所以
+    // 正確處置是**不報那個數字**——比照票 06 的 `installUnknown`：拿不到判別碼時不斷言
+    // 「什麼都沒發生」。報一個確定錯的數字比不報更糟。
+    vi.mocked(runInstall)
+      .mockRejectedValueOnce(new Error("connection lost"))     // 無判別碼＝結果不明
+      .mockResolvedValueOnce({
+        results: [
+          { account: "work", rel_path: "a", outcome: "skipped", error: null },
+          { account: "work", rel_path: "b", outcome: "skipped", error: null },
+        ],
+        stale_temps: [],
+      });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachMigStep(ui, zh.mig.install.h);
+    ui.getByText("preview-loaded").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.mig.install.run).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.mig.install.run).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.install.errors.installUnknown)).toBeTruthy());
+    ui.getByText(zh.mig.install.run).click();                  // 重送
+    await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
+
+    for (const heading of [zh.env.h, zh.login.h, zh.mig.repair.h, zh.done.h]) {
+      await waitFor(() =>
+        expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      ui.getByText(zh.common.next).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+
+    expect(ui.getByText(zh.done.migSummaryUnknown)).toBeTruthy();
+    // 那個會說謊的數字不得出現
+    expect(ui.container.querySelectorAll(".ob-summary strong")).toHaveLength(0);
+  });
+
   it("移機分支一路走到完成頁，全程不出現共通設置與範本部署", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 

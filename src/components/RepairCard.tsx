@@ -63,7 +63,6 @@ export function RepairCard({ port, accounts, rescanToken }: RepairCardProps) {
   // load-vs-load 的先後，管不到 `onRepair`（同族的第三處，掃 diff 時找到的）。
   const ctx = JSON.stringify([port, accountsSig]);
   const liveCtx = useRef(ctx);
-  liveCtx.current = ctx;
 
   useEffect(() => {
     mounted.current = true;   // StrictMode 會 mount→cleanup→再 mount，這裡要重設回來
@@ -72,12 +71,26 @@ export function RepairCard({ port, accounts, rescanToken }: RepairCardProps) {
     };
   }, []);
 
+  // 上下文一變就**同步**清掉已經寫進來的結果與錯誤（render body，比照 `Onboarding` 的
+  // 換包清空）。`liveCtx` 只擋得住「還沒寫進來的遲到回應」，攔不到**已經在畫面上**的
+  // 那一份——換帳號後它會與新一輪的掃描並列，被讀成當下這組帳號的結果（Codex 票 08 R2 F4）。
+  if (liveCtx.current !== ctx) {
+    liveCtx.current = ctx;
+    if (results !== null) setResults(null);
+    if (error !== null) setError(null);
+  }
+
   const scanLinks = useCallback(async () => {
     // **序號先遞增再判前提**（Codex 票 08 R1 F2）：兩條「還沒送出就返回」的分支
     // （port 為 null、只剩一個帳號）若不作廢在飛的那一輪，舊回應抵達時序號仍然相等，
     // 就把畫面覆寫回舊帳號組合的結果——連修復按鈕都會重新出現。
     const myId = ++scanReq.current;
-    if (port == null) return;
+    // port 還沒好＝還沒開始檢查。**不能直接 return**：那會讓畫面停在上一個狀態，上面
+    // 還掛著一顆按下去只會被擋掉的修復鍵——那是在說一件當下不成立的事（R2 F4）。
+    if (port == null) {
+      setScan({ phase: "scanning" });
+      return;
+    }
     const scope = repairScope(Object.keys(accounts));
     if (scope === null) {
       setScan({ phase: "not_applicable" });

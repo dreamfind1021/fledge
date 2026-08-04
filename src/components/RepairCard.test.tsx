@@ -135,6 +135,15 @@ describe("RepairCard", () => {
     return { promise, resolve };
   }
 
+  /** 觸發 resolve 並把後續的 microtask 全部跑完，讓「遲到的回應」真的走到它想寫 state
+   *  的那一行。之後用**同步**斷言——那才證明得了「它跑過了、但沒有改到畫面」。 */
+  async function flush(trigger: () => void) {
+    await act(async () => {
+      trigger();
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+    });
+  }
+
   it("掃描在飛時帳號變成只剩一個 → 舊回應不得把畫面覆寫回去", async () => {
     const first = deferred<CommonConfigPlan>();
     commonConfigPlan.mockReturnValueOnce(first.promise);
@@ -144,8 +153,10 @@ describe("RepairCard", () => {
     ui.rerender(<RepairCard port={1234} accounts={{ work: ACCOUNTS.work }} />);
     await screen.findByText(zh.links.notApplicable);
 
-    first.resolve(planWith(["broken_link"]));       // 舊帳號組合的回應遲到
-    await waitFor(() => expect(screen.getByText(zh.links.notApplicable)).toBeTruthy());
+    // **等舊回應真的被處理完**再斷言（Codex 票 08 R2 F5）：`waitFor` 對一個 resolve 前
+    // 就成立的條件會立刻返回，那樣拿掉作廢邏輯也可能照樣綠——保護就成了碰巧而不是建立的
+    await flush(() => first.resolve(planWith(["broken_link"])));
+    expect(screen.getByText(zh.links.notApplicable)).toBeTruthy();
     expect(screen.queryByRole("button", { name: zh.links.repair })).toBeNull();
   });
 
@@ -159,11 +170,7 @@ describe("RepairCard", () => {
     // **正向斷言＋確實 flush**：第一版寫成 `waitFor(queryByRole(...)).toBeNull()`，那在
     // 舊回應被處理**之前**就成立，waitFor 立刻返回——測試名稱說的事沒真的驗（把作廢
     // 邏輯整個拿掉也照樣綠）。改成「畫面必須仍停在檢查中」，被覆寫就會紅。
-    await act(async () => {
-      first.resolve(planWith(["broken_link"]));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
+    await flush(() => first.resolve(planWith(["broken_link"])));
     expect(screen.getByText(zh.links.scanning)).toBeTruthy();
   });
 
@@ -179,10 +186,42 @@ describe("RepairCard", () => {
     ui.rerender(<RepairCard port={1234} accounts={{ work: ACCOUNTS.work }} />);
     await screen.findByText(zh.links.notApplicable);
 
-    job.resolve([{ account: "personal", entry: "skills", outcome: "relinked",
-                   backup_path: null, error: null }]);
-    await waitFor(() => expect(screen.getByText(zh.links.notApplicable)).toBeTruthy());
+    await flush(() => job.resolve([
+      { account: "personal", entry: "skills", outcome: "relinked",
+        backup_path: null, error: null },
+    ]));
+    expect(screen.getByText(zh.links.notApplicable)).toBeTruthy();
     expect(screen.queryByText(zh.repair.result.relinked)).toBeNull();
+  });
+
+  it("帳號換了 → 上一組的修復結果不得留在畫面上", async () => {
+    // 作廢在飛的回應只擋得住「還沒寫進來的」；**已經寫進來的**要在上下文變動時清掉，
+    // 否則畫面會同時顯示新一輪的掃描與一份屬於別組帳號的結果（Codex 票 08 R2 F4）
+    commonConfigPlan.mockResolvedValue(planWith(["broken_link"]));
+    commonConfigRepair.mockResolvedValue([
+      { account: "personal", entry: "skills", outcome: "relinked",
+        backup_path: null, error: null },
+    ]);
+    const ui = render(<RepairCard port={1234} accounts={ACCOUNTS} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.links.repair }));
+    await screen.findByText(zh.repair.result.relinked);
+
+    ui.rerender(<RepairCard port={1234} accounts={{ work: ACCOUNTS.work }} />);
+    await screen.findByText(zh.links.notApplicable);
+    expect(screen.queryByText(zh.repair.result.relinked)).toBeNull();
+  });
+
+  it("port 斷了 → 不停在「有斷鏈、可以修」的過期畫面", async () => {
+    // `scanLinks` 在 port 為 null 時直接返回，畫面就會停在上一個狀態——上面還掛著一顆
+    // 按下去只會被擋掉的修復鍵。那是在說一件當下不成立的事
+    commonConfigPlan.mockResolvedValue(planWith(["broken_link"]));
+    const ui = render(<RepairCard port={1234} accounts={ACCOUNTS} />);
+    await screen.findByRole("button", { name: zh.links.repair });
+
+    ui.rerender(<RepairCard port={null} accounts={ACCOUNTS} />);
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: zh.links.repair })).toBeNull());
+    expect(screen.getByText(zh.links.scanning)).toBeTruthy();
   });
 
   it("rescanToken 一變就重測並清掉上一輪結果", async () => {

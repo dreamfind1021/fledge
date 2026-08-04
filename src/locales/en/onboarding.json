@@ -310,7 +310,8 @@
     "enter": "Open Fledge",
     "migSummary": "Moved <strong>{{installed}}</strong> items across <br /><strong>{{accounts}}</strong> account(s)",
     "migHint": "Once you're signed back in you're ready to go. Your conversation history came along with each account directory — run /resume inside a project to find it. Projects you left unmapped are the exception: Claude Code won't list their history (the files are still on disk).",
-    "migCaveats": "Two things rebuild themselves over time: your tool permission list and MCP settings didn't come along (they live in the same file as machine identity and caches, and moving that file wholesale would wipe the state you just signed in to). Normal use fills them back in."
+    "migCaveats": "Two things rebuild themselves over time: your tool permission list and MCP settings didn't come along (they live in the same file as machine identity and caches, and moving that file wholesale would wipe the state you just signed in to). Normal use fills them back in.",
+    "migSummaryUnknown": "Migration finished. One install round never reported back, so there's no item count here — the install results page on the previous step is the accurate record."
   },
   "st": {
     "devEnv": "Development environment",

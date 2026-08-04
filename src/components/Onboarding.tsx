@@ -118,8 +118,13 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   // 本次流程（同一個 `bundle.gen`）累積裝成的 node。與 `installRun` 是兩件事：那個是
   // 「最後一輪跑出什麼」（結果頁要照實顯示這一輪），這個是「這次移機總共搬回了什麼」
   // （完成頁要的）。重試會覆寫前者，但不該讓後者忘掉前幾輪。
+  // `unknown`＝有一輪的結果沒能回報（連線斷／非合約 500）。那一輪**可能已經完整跑完**，
+  // 而重試會讓 no-clobber 把那些項目回報成 `skipped`——累積器看不到它們，數字就會少報甚至
+  // 歸零。前端沒有辦法知道真相（那要對 provenance journal 對帳，是後端的能力），所以旗標
+  // 一旦豎起來就**不報數字**，比照票 06 的 `installUnknown`（Codex 票 08 R2 F3）。
   const [installedTally, setInstalledTally] =
-    useState<{ gen: number; keys: string[] }>({ gen: -1, keys: [] });
+    useState<{ gen: number; keys: string[]; unknown: boolean }>(
+      { gen: -1, keys: [], unknown: false });
   // 當下的來源身分（render body 同步寫回）：續作探測的錯誤路徑要靠它判斷「這個訊息還
   // 屬不屬於現在這一包」——`setBundle` 的 functional update 讀得到最新的 gen，`setError`
   // 讀不到（比照 `InstallPreviewCard.liveSource`）
@@ -149,7 +154,9 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   // 是為了讓「同一項在兩輪都算成」不會被數兩次（no-clobber 下不該發生，但這是計數的
   // 正確性前提，不該建立在別處的行為上）。
   // 同樣綁 `bundle.gen`：換包就重新開始數，上一包裝了什麼與這一包無關。
-  const installedCount = installedTally.gen === bundle.gen ? installedTally.keys.length : 0;
+  const tally = installedTally.gen === bundle.gen
+    ? installedTally : { gen: bundle.gen, keys: [] as string[], unknown: false };
+  const installedCount = tally.keys.length;
   const adoptedFromBundle = adoptedFrom.gen === bundle.gen && adoptedFrom.value;
   const overlayRef = useRef<HTMLDivElement>(null);
 
@@ -270,11 +277,13 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
       // 完成頁要的是「這次移機總共搬回了什麼」，所以**累積**而不是覆寫（Codex 票 08 R1 F1）。
       // `gen` 不同就從頭數——那是換了一包，上一包裝了什麼與這一包無關。
       setInstalledTally((cur) => {
-        const keys = new Set(cur.gen === gen ? cur.keys : []);
+        const same = cur.gen === gen;
+        const keys = new Set(same ? cur.keys : []);
         for (const r of outcome.results) {
           if (r.outcome === "installed") keys.add(`${r.account}/${r.rel_path}`);
         }
-        return { gen, keys: [...keys] };
+        // 一輪成功**不會**洗掉先前的「結果不明」：那一輪裝了什麼仍然沒人知道
+        return { gen, keys: [...keys], unknown: same && cur.unknown };
       });
     } catch (e) {
       // 判別碼與例外原文只進 console（CLAUDE.md §4.6.13）——`HTTP 500` 對使用者沒有意義
@@ -291,6 +300,11 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
       // node），而不讓重送才是真的死路。**已經寫進去的東西會在重跑的結果裡顯示成
       // 「跳過」**——那也是使用者唯一能拿到的「東西確實在那裡」的證據
       setInstallRun({ gen, value: { kind: "idle" } });
+      if (!refused) {
+        // 結果不明的那一輪：重試會把它裝過的東西回報成 `skipped`，累積器看不到
+        setInstalledTally((cur) => (cur.gen === gen
+          ? { ...cur, unknown: true } : { gen, keys: [], unknown: true }));
+      }
     }
   };
 
@@ -723,11 +737,13 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
               <h2 className="ob-h">{t("done.h")}</h2>
               <p className="ob-summary">
                 {mode === "restore" ? (
-                  <Trans
-                    t={t}
-                    i18nKey="done.migSummary"
-                    values={{ installed: installedCount, accounts: accountKeys.length }}
-                  />
+                  tally.unknown ? t("done.migSummaryUnknown") : (
+                    <Trans
+                      t={t}
+                      i18nKey="done.migSummary"
+                      values={{ installed: installedCount, accounts: accountKeys.length }}
+                    />
+                  )
                 ) : (
                   <Trans
                     t={t}
