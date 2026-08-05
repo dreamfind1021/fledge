@@ -947,6 +947,32 @@ def test_nonexistent_source_root_under_a_symlinked_ancestor_still_blocks(tmp_pat
     assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
 
 
+def test_a_dangling_symlink_source_root_still_blocks(tmp_path: Path):
+    """來源根是**懸空的 symlink**（目標還不存在）時也要擋（Codex 票 18 R3 F1）。
+
+    `alias -> real/ghost` 而 `real/ghost` 不存在：`[ -d alias ]` 為假，把 alias 當成普通的
+    缺失尾段就只會記下字面路徑，而輸出 `real/ghost/backups` 解出來是另一個字串——放行。
+    接著 `mkdir -p "${OUT_DIR}"` 把 `real/ghost` 建出來，**那條連結當場變成有效目錄**，
+    打包迴圈重新判斷時就把含 staging 的整棵樹收進備份。
+
+    既有的 symlink-ancestor 測試涵蓋不到這一格：它的 target 一開始就存在。"""
+    home, _ = _fake_home(tmp_path)
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    ghost = real_parent / "ghost"                      # 尚不存在
+    alias = home / "alias"
+    alias.symlink_to(ghost, target_is_directory=True)  # 懸空的連結
+    assert alias.is_symlink() and not alias.exists(), "前提：這條連結現在是懸空的"
+    cfg = json.loads((home / ".fledge" / "config.json").read_text(encoding="utf-8"))
+    cfg["accounts"]["dangling"] = {"config_dir": str(alias), "label": ""}
+    (home / ".fledge" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+    proc, sentinel = _refusal_run(tmp_path, home, ghost / "backups")
+    assert proc.returncode != 0, "懸空的來源連結讓 containment 被繞過"
+    assert not sentinel.exists(), "已經開始複製才擋"
+    assert not ghost.exists(), "拒絕之前就把連結的目標建出來了（那會讓來源當場生效）"
+
+
 def test_root_as_a_source_blocks_every_output_dir(tmp_path: Path):
     """來源根是 `/` 時，任何絕對輸出路徑都要擋（Codex 票 18 R2 F1）。
 

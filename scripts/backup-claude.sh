@@ -91,35 +91,24 @@ fi
 
 expand_home() { case "$1" in "~/"*) echo "${HOME}/${1#\~/}" ;; "~") echo "${HOME}" ;; *) echo "$1" ;; esac; }
 
-# 把路徑正規化成「絕對、且祖先都解參照過」的形式。**路徑本身可以尚不存在**——對最深的
-# 既存祖先做 `pwd -P`，再把缺的尾段接回去。
+# 把路徑正規化成「絕對、每一段都解參照過」的形式。**路徑本身可以尚不存在**。
 #
-# 為什麼不能只對已存在的路徑解參照（Codex 票 18 R1 F1）：登記來源根時 `config_dir` 可能
-# 還不存在（`mkdir -p "${OUT_DIR}"` 之後它就會存在，於是打包迴圈照樣把它當來源）。而
-# 「不存在就沒有 inode、也就沒有別名問題」這個推論是錯的——**別名可以在祖先上**：
-# `alias -> real` 時 `alias/ghost` 與 `real/ghost` 是同一個位置，字串卻對不上。
+# 為什麼不能只對已存在的路徑解參照（票 18 R1 F1）：登記來源根時 `config_dir` 可能還不
+# 存在，而 `mkdir -p "${OUT_DIR}"` 之後它就會存在、打包迴圈照樣把它當來源。「不存在就
+# 沒有 inode、也就沒有別名問題」這個推論是錯的——**別名可以在祖先上**（`alias -> real`
+# 時 `alias/ghost` 與 `real/ghost` 是同一個位置），也可以是**懸空的連結本身**（票 18 R3
+# F1：`alias -> real/ghost` 而 target 還不存在，`mkdir` 一建它當場就變成有效目錄）。
 #
-# 相對路徑不必特別處理：上溯終究會停在某個存在的祖先（最壞是 `.`），而 `cd` 到它再
-# `pwd -P` 得到的就是絕對路徑。
+# **走 Python 的 `os.path.realpath` 而不是自己在 bash 裡上溯**：手寫版本要同時處理
+# 「不存在的尾段」「祖先上的連結」「懸空的終端連結」「連結環」「`//` 的實作定義語意」
+# （bash 的 `pwd -P` 對 `//` 回 `//`，zsh 回 `/`——在互動 shell 裡驗會得到錯誤結論），
+# 每一項都踩過一次。realpath 一次全部處理，而且與 sidecar 的路徑語意是同一套。
+# 成本約 17ms／次、每次備份呼叫數次，可忽略。
 #
-# 空字串會被正規化成 CWD，呼叫端必須先擋掉（見來源根登記處）。
+# 路徑走 argv、程式碼用單引號包住（與本檔其他 python3 呼叫同一個理由：HOME 含單引號時
+# 插值進去會變成 SyntaxError）。空字串會被正規化成 CWD，呼叫端必須先擋掉。
 resolve_path() {
-  local p="$1" tail="" head
-  head="${p}"
-  while [ ! -d "${head}" ]; do          # `/` 必為目錄，迴圈一定會停
-    tail="$(basename "${head}")${tail:+/}${tail}"
-    head="$(dirname "${head}")"
-  done
-  head=$(cd "${head}" && pwd -P)
-  # **bash 的 `pwd -P` 對 `//` 回 `//`**（POSIX 允許前導雙斜線有實作定義的意義；zsh 回
-  # `/`，所以在互動 shell 裡驗會得到錯誤結論）。留著它的話 `//` 這個根組出的 pattern
-  # 是 `//*`，只匹配以兩條斜線開頭的字串——來源是整個檔案系統，卻放行所有輸出目錄。
-  case "${head}" in //*) head="/${head#//}" ;; esac
-  if [ -n "${tail}" ]; then
-    printf '%s/%s\n' "${head%/}" "${tail}"
-  else
-    printf '%s\n' "${head}"
-  fi
+  python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
 }
 
 # ── 帳號清單 ────────────────────────────────────────────────────────────────
