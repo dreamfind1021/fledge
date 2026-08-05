@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from dataclasses import asdict
 
@@ -162,6 +164,24 @@ _ADOPT_CLIENT_ERRORS = frozenset({
 })
 
 
+def _request_fingerprint(body: AdoptConfigBody) -> str:
+    """這一次確認的**內容**指紋（票 15 R1 F1）。
+
+    `request_id` 只說「是同一次操作」，說不出「送的是同一份東西」——收尾失敗時欄位還能
+    編輯，使用者改了落點再按一次就是同一個 id 配不同 body。只比對 id 的話會回**第一次的**
+    config，而前端以為新落點生效了（帳號那側有落點對帳擋著，`extra` 那側沒有）。
+
+    **排序後才雜湊**：指紋是內容的指紋不是 JSON 字面的，同一組落點換個順序仍是同一次。
+    `dest` 也進去——同一個 id 指向另一包必然是另一次確認。"""
+    payload = json.dumps({
+        "dest": resolve_best_effort(body.dest),
+        "accounts": sorted((a.key, a.config_dir.strip()) for a in body.accounts),
+        "extra": sorted((e.name, e.path.strip()) for e in body.extra),
+        "roots": sorted((r.path.strip(), r.default_account) for r in body.roots),
+    }, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _bundle_config(dest: str) -> dict:
     """讀備份包裡的 `fledge/config.json`（`backup-claude.sh:267` 打進去的整份）。
 
@@ -299,6 +319,7 @@ def adopt_config(body: AdoptConfigBody):
     # 路徑從來不讀它，於是移機完的新機訂閱、知識庫根目錄、工作根目錄全是空的，而且沒有
     # 任何一頁讓使用者發現。**入口只能是這裡**——`install()` 把包裡的 config.json 裝回
     # `~/.fledge/` 會覆蓋掉使用者剛在 targets 頁確認的落點（明令不做，見票 09）。
+    fingerprint = _request_fingerprint(body)
     bundle_config = _bundle_config(body.dest)
     if not roots:
         # `body.roots` 非空 → 完全以它為準，包裡的不摻進來：使用者送出的是授權，包裡的
@@ -318,6 +339,7 @@ def adopt_config(body: AdoptConfigBody):
         # 純記帳、不參與任何授權決策（票 15）。`dest` 存 resolved 的展開位置——衝突時
         # 前端要能說「這份設定檔是從**哪一包**建的」，那是使用者唯一分得出來的線索。
         config.set_created_by({"source": "adopt-config", "request_id": body.request_id,
+                               "fingerprint": fingerprint,
                                "dest": resolve_best_effort(body.dest)})
 
     try:
@@ -329,7 +351,9 @@ def adopt_config(body: AdoptConfigBody):
             config = app_config.create_if_absent(
                 _build, matches=lambda existing: (
                     existing.created_by.get("source") == "adopt-config"
-                    and existing.created_by.get("request_id") == body.request_id))
+                    and existing.created_by.get("request_id") == body.request_id
+                    # **內容也要相同**：同一個 id 配不同 body 是另一次確認（R1 F1）
+                    and existing.created_by.get("fingerprint") == fingerprint))
     except app_config.ConfigAlreadyExists as exc:
         # **說得出那份設定檔是誰建的**：409 原本只證明「有一份 config」，前端因此分不出
         # 「重跑引導」與「另一個來源剛建了一份」。`created_by` 是本機資訊，回給本機前端。

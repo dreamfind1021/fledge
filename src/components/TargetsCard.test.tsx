@@ -225,6 +225,67 @@ describe("TargetsCard", () => {
   // 票 03 R4 F2 的價值在票 15 之後仍然成立：沿用既有設定之後那段說明**必須是中性的**
   // ——它會配著成功狀態一起留在畫面上，這時顯示「請移除既有設定檔」那種指示會讓使用者
   // 去做危險的事。（「409 要不要自動轉收尾」那一半已被票 15 取代：現在停下來問使用者。）
+  it("沿用之後收尾失敗 → 重試只重跑收尾，不再問一次要不要沿用", async () => {
+    // Codex 票 15 R1 F2：選「沿用」是**使用者的決策**，不是對後端狀態的推測——記住它
+    // 是合法的。不記的話重試會重新 POST、拿到同一個 409、又要他再選一次，暫時性的讀取
+    // 失敗就變成重複確認的迴圈。
+    adoptConfig.mockRejectedValue(new RestoreError("config_already_initialized", 409, {
+      source: "onboard",
+    }));
+    let reloads = 0;
+    const onSaved = vi.fn(async (_c: unknown, _r: boolean) => {
+      reloads += 1;
+      if (reloads === 1) throw Object.assign(new Error("reload"), { code: null });
+    });
+    const ui = render(
+      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
+                   requestId="req-1" onSaved={onSaved} />,
+    );
+    await loaded(ui);
+    ui.getByText(zh.mig.targets.save).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.conflict.reuse)).toBeTruthy());
+    ui.getByText(zh.mig.targets.conflict.reuse).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.errors.reloadFailed)).toBeTruthy());
+
+    ui.getByText(zh.mig.targets.retry).click();
+    await waitFor(() => expect(reloads).toBe(2));
+    expect(adoptConfig).toHaveBeenCalledTimes(1);            // 沒有再 POST
+    expect(ui.queryByText(zh.mig.targets.conflict.reuse)).toBeNull();   // 沒有再問一次
+    expect(onSaved.mock.calls.map((c) => c[1])).toEqual([true, true]);  // 決策留著
+  });
+
+  it("改了落點就撤回沿用的決策——那是新的一次確認", async () => {
+    // 沿用之後若收尾失敗，欄位還能編輯。使用者改了落點就是要建立**新的**設定，不該再
+    // 沿用那份舊的——不撤回的話會直接走收尾（帶著新落點配舊 config），只剩父層對帳擋著。
+    //
+    //（「按停下來也撤回」那一行是防禦性的：`reuseAgreed` 為真時衝突 UI 已經不會再出現，
+    // 所以那條路徑當下不可達，不為它寫測試。）
+    adoptConfig.mockRejectedValue(new RestoreError("config_already_initialized", 409, {
+      source: "onboard",
+    }));
+    const onSaved = vi.fn(async (_c: unknown, _r: boolean) => {
+      throw Object.assign(new Error("reload"), { code: null });
+    });
+    const ui = render(
+      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
+                   requestId="req-1" onSaved={onSaved} />,
+    );
+    await loaded(ui);
+    ui.getByText(zh.mig.targets.save).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.conflict.reuse)).toBeTruthy());
+    ui.getByText(zh.mig.targets.conflict.reuse).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.errors.reloadFailed)).toBeTruthy());
+    expect(adoptConfig).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(ui.getByDisplayValue("/Users/me/.claude"),
+                     { target: { value: "/Users/me/somewhere-else" } });
+    ui.getByText(zh.mig.targets.retry).click();
+    // 改了落點 → 重新走一次落檔（而不是拿新落點配舊 config 直接收尾）
+    await waitFor(() => expect(adoptConfig).toHaveBeenCalledTimes(2));
+    expect(adoptConfig.mock.calls[1][1].accounts).toEqual(
+      [{ key: "work", config_dir: "/Users/me/somewhere-else" }]);
+  });
+
   it("選了沿用之後，說明是中性的、不含刪檔指示", async () => {
     adoptConfig.mockRejectedValue(new RestoreError("config_already_initialized", 409, {
       source: "onboard",

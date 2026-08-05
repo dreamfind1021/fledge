@@ -1648,11 +1648,11 @@ def test_adopt_config_is_idempotent_for_the_same_request_id(tmp_path: Path, monk
     assert first.status_code == 200
     before = cfg.read_bytes()
 
-    again = _adopt_with_id(client, src, home, "req-A",
-                           extra=[{"name": "agents", "path": str(home / ".other")}])
+    again = _adopt_with_id(client, src, home, "req-A")
     assert again.status_code == 200
     assert again.json() == first.json()
-    assert cfg.read_bytes() == before, "冪等是回既有結果，不是用新 body 覆寫"
+    assert cfg.read_bytes() == before, "冪等是回既有結果，不是重跑一次 build"
+    # 「不用新 body 覆寫」由 `..._but_different_body_...` 那條守著：改了 body 就不算重送
 
 
 def test_adopt_config_reports_the_other_source_on_conflict(tmp_path: Path, monkeypatch):
@@ -1712,5 +1712,52 @@ def test_adopt_config_records_who_created_it(tmp_path: Path, monkeypatch):
     cfg, src, home = _adopt_env(tmp_path, monkeypatch)
     assert _adopt_with_id(TestClient(create_app()), src, home, "req-A").status_code == 200
     created = json.loads(cfg.read_text(encoding="utf-8"))["created_by"]
-    assert created == {"source": "adopt-config", "request_id": "req-A",
-                       "dest": str(Path(src).resolve())}
+    assert created["source"] == "adopt-config"
+    assert created["request_id"] == "req-A"
+    assert created["dest"] == str(Path(src).resolve())
+    assert len(created["fingerprint"]) == 64      # sha256 hex；內容指紋，見 R1 F1
+
+
+def test_adopt_config_same_request_id_but_different_body_is_not_the_same_request(
+        tmp_path: Path, monkeypatch):
+    """**同一個 `request_id` 配不同的 body 不算同一次確認**（Codex 票 15 R1 F1）。
+
+    收尾失敗時欄位還能編輯（`saved` 仍是 false），使用者改了落點再按一次就是這個形狀。
+    只比對 `request_id` 的話會回**第一次的** config，而前端以為新落點生效了——帳號那側
+    有落點對帳擋著，`extra` 那側沒有。所以 `created_by` 連同**請求內容的指紋**一起存，
+    兩者都相同才算重送。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    assert _adopt_with_id(client, src, home, "req-A").status_code == 200
+    before = cfg.read_bytes()
+
+    resp = _adopt_with_id(client, src, home, "req-A",
+                          extra=[{"name": "agents", "path": str(home / ".agents")}])
+    assert resp.status_code == 409
+    assert resp.json()["created_by"]["request_id"] == "req-A"
+    assert cfg.read_bytes() == before
+
+
+def test_adopt_config_idempotency_survives_field_order(tmp_path: Path, monkeypatch):
+    """指紋是**內容**的指紋，不是 JSON 字面的：同一組落點換個順序送仍算同一次。
+    否則使用者什麼都沒改、只因為前端換了迭代順序就被判成另一次確認。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    manifest["extra"] = {"agents": "/Users/olduser/.agents", "tools": "/Users/olduser/.tools"}
+    (src / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    client = TestClient(create_app())
+    a = {"name": "agents", "path": str(home / ".agents")}
+    b = {"name": "tools", "path": str(home / ".tools")}
+    first = client.post("/api/restore/adopt-config", json={
+        "request_id": "req-A", "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "extra": [a, b], "roots": []})
+    assert first.status_code == 200
+    # **元素順序顛倒**（不只是 JSON key 順序——那個 `sort_keys=True` 本來就處理了，
+    # 拿它當「換個順序」是驗不到 `sorted()` 的）
+    again = client.post("/api/restore/adopt-config", json={
+        "roots": [], "extra": [b, a],
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        "dest": str(src), "request_id": "req-A"})
+    assert again.status_code == 200
+    assert again.json() == first.json()

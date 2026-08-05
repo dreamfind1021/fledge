@@ -90,6 +90,10 @@ export function TargetsCard({ port, dest, info, saved, requestId, onSaved }: Tar
   // 不同的事，落檔那一步還沒成功過時說「重新讀取」是錯的。票 15 之前這個判斷搭在
   // `adopted` 上（它同時兼「要不要再 POST」的推測），拔掉推測之後這一半仍然要留。
   const [lastFailure, setLastFailure] = useState<"adopt" | "reload" | null>(null);
+  // 使用者**已經決定沿用**既有的設定（票 15 R1 F2）。這是他的決策，不是對後端狀態的推測
+  // ——記住它是合法的。不記的話，沿用之後若收尾失敗，重試會重新 POST、拿到同一個 409、
+  // 又要他再選一次；暫時性的讀取失敗就變成重複確認的迴圈。按「停下來」會撤回它。
+  const [reuseAgreed, setReuseAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
 
@@ -134,7 +138,9 @@ export function TargetsCard({ port, dest, info, saved, requestId, onSaved }: Tar
 
   const browse = useCallback(async (id: string) => {
     const dir = await pickDirectory();
-    if (dir !== null) setValues((v) => ({ ...v, [id]: dir }));
+    if (dir === null) return;
+    setValues((v) => ({ ...v, [id]: dir }));
+    setReuseAgreed(false);      // 同上：換了落點就是新的一次確認
   }, []);
 
   const filled = (s: LandingSpot) => (values[spotId(s)] ?? "").trim();
@@ -186,6 +192,11 @@ export function TargetsCard({ port, dest, info, saved, requestId, onSaved }: Tar
         .filter((s) => s.kind === "extra" && filled(s))
         .map((s) => ({ name: s.key, path: filled(s) })),
     };
+    if (reuseAgreed) {
+      // 已經同意沿用：那一份 config 不是這次建的，再 POST 一次只會拿到同一個 409
+      await finish(confirmed, true);
+      return;
+    }
     try {
       await adoptConfig(port, confirmed);
       if (!mounted.current) return;
@@ -211,7 +222,7 @@ export function TargetsCard({ port, dest, info, saved, requestId, onSaved }: Tar
     }
     await finish(confirmed, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [port, dest, spots, values, requestId, finish, t]);
+  }, [port, dest, spots, values, requestId, reuseAgreed, finish, t]);
 
 
   if (stale) {
@@ -241,7 +252,12 @@ export function TargetsCard({ port, dest, info, saved, requestId, onSaved }: Tar
           <div className="ob-row">
             <input
               value={values[spotId(s)] ?? ""}
-              onChange={(e) => setValues((v) => ({ ...v, [spotId(s)]: e.target.value }))}
+              onChange={(e) => {
+                setValues((v) => ({ ...v, [spotId(s)]: e.target.value }));
+                // 改了落點＝這是**新的一次確認**，先前「沿用既有設定」的決定不再適用
+                // （票 15 R1 F2）：不撤回的話會拿新落點配舊 config 直接走收尾。
+                setReuseAgreed(false);
+              }}
               placeholder={t("mig.targets.placeholder")}
               disabled={saved || busy}
               className="ob-input"
@@ -289,6 +305,7 @@ export function TargetsCard({ port, dest, info, saved, requestId, onSaved }: Tar
             <button
               onClick={() => {
                 setConflict(null);
+                setReuseAgreed(true);
                 setReused(true);   // 沿用＝不是這一次建的；父層據此不報「帶回了什麼」
                 void finish({
                   dest,
@@ -302,7 +319,9 @@ export function TargetsCard({ port, dest, info, saved, requestId, onSaved }: Tar
               disabled={busy}
               className="ob-btn"
             >{t("mig.targets.conflict.reuse")}</button>
-            <button onClick={() => setConflict(null)} disabled={busy}
+            {/* 「停下來」**撤回**沿用的決策：下一次確認要重新問（不偷偷留著） */}
+            <button onClick={() => { setConflict(null); setReuseAgreed(false); }}
+                    disabled={busy}
                     className="ob-btn-ghost">{t("mig.targets.conflict.stop")}</button>
           </div>
         </div>

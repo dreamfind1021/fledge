@@ -1162,6 +1162,28 @@ describe("Onboarding 精靈外殼", () => {
     expect(ui.getByTestId("targets-request-id").textContent).not.toBe(first);
   });
 
+  it("重開精靈也不會撞到上一次的 request_id", async () => {
+    // Codex 票 15 R1 F1：第一版用 `adopt-${bundle.gen}`，而 `gen` 每次掛載都從 0 起算
+    // ——重開精靈選第一包又是 `adopt-1`。後端會把它判成「同一次確認的重送」而回**上一次
+    // 那份 config**（200），前端連衝突確認都不會看到，直接帶著別的包的設定往下走。
+    // **比原本的 409 更糟**：至少 409 會停下來。
+    const ids: string[] = [];
+    for (let round = 0; round < 2; round++) {
+      const ui = render(<Onboarding onClose={onClose} />);
+      ui.getByText(zh.welcome.restore).click();
+      await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+      ui.getByText("probe-present").click();
+      await waitFor(() =>
+        expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      ui.getByText(zh.common.next).click();
+      await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+      ids.push(ui.getByTestId("targets-request-id").textContent ?? "");
+      cleanup();
+    }
+    expect(ids[0]).not.toBe(ids[1]);
+    expect(ids[0]).not.toBe("");
+  });
+
   it("移機分支一路走到完成頁，全程不出現共通設置與範本部署", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
