@@ -111,6 +111,10 @@ resolve_path() {
     head="$(dirname "${head}")"
   done
   head=$(cd "${head}" && pwd -P)
+  # **bash 的 `pwd -P` 對 `//` 回 `//`**（POSIX 允許前導雙斜線有實作定義的意義；zsh 回
+  # `/`，所以在互動 shell 裡驗會得到錯誤結論）。留著它的話 `//` 這個根組出的 pattern
+  # 是 `//*`，只匹配以兩條斜線開頭的字串——來源是整個檔案系統，卻放行所有輸出目錄。
+  case "${head}" in //*) head="/${head#//}" ;; esac
   if [ -n "${tail}" ]; then
     printf '%s/%s\n' "${head%/}" "${tail}"
   else
@@ -139,10 +143,9 @@ for key, acc in cfg.get("accounts", {}).items():
 ' "${CONFIG_JSON}")
 [ -n "${accounts}" ] || { echo "設定檔裡沒有任何帳號。" >&2; exit 1; }
 
-# ── 掃描：這次會收什麼、跳過什麼、有沒有沒判定過的新東西 ──────────────────────
-stamp=$(date +%Y%m%d-%H%M)
-declare -a plan_lines=()
-# 備份會讀的所有來源根（帳號的 config_dir ∪ 額外來源），供下方輸出目錄的前置檢查用。
+# ── 來源根與輸出目錄的 containment ───────────────────────────────────────────
+#
+# 備份會讀的所有來源根（帳號的 config_dir ∪ 額外來源）。
 #
 # **交錯存放**（說明, 根, 說明, 根…）而不是用分隔字元把兩者串成一筆：路徑是不受限的
 # 檔案系統字串，tab 在 Unix 路徑裡合法，串起來再從第一個 tab 切開就會被路徑自己的 tab
@@ -152,19 +155,96 @@ declare -a plan_lines=()
 # 迴圈重新判斷時它已經是目錄、照樣會被複製，而裡面只有剛寫進去的 staging。sidecar 的
 # `source_roots()` 同樣不管來源存不存在。一律走 `resolve_path`（絕對、祖先解參照）——
 # 「不存在就沒有 inode、也就不會有別名問題」是錯的，**別名可以在祖先上**（票 18 R1 F1）。
+#
+# 空路徑不是來源根。登記它會讓比對的 pattern 變成 `/*`＝**任何**輸出目錄都被判成落在
+# 來源裡，備份完全不能用。含換行的 `config_dir` 會真的走到這裡：`accounts` 那份逐行
+# 資料被換行拆成兩行，第二行沒有 tab，`raw_dir` 就是空的。
 declare -a source_roots=()
+
+while IFS=$'\t' read -r key raw_dir; do
+  dir=$(expand_home "${raw_dir}")
+  if [ -n "${dir}" ]; then
+    source_roots+=("帳號 ${key} 的目錄" "$(resolve_path "${dir}")")
+  fi
+done <<< "${accounts}"
+
+for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
+  p=$(expand_home "${extra}")
+  if [ -n "${p}" ]; then
+    source_roots+=("額外來源 ${extra}" "$(resolve_path "${p}")")
+  fi
+done
+
+# 輸出目錄不得落在**任何來源根**之下（帳號的 config_dir ∪ 額外來源）。staging 建在
+# OUT_DIR 底下，落在來源裡就會被複製進自己。兩邊的症狀不同、都不可接受：
+#
+#   - extra（票 17）：`cp -R "${p}/."` 會遞迴到路徑過長而**失敗**——rc≠0，訊息是一長串
+#     看不懂的路徑，且失敗前已經寫了大量資料。
+#   - 帳號（票 18）：`cp -R "${dir}/${item}"` 複製的是開始當下的樹、不追自己新寫的內容，
+#     所以**不報錯**。它靜靜地把 staging 連同輸出目錄裡**既有的備份包**收進新包——實測
+#     新包 3004 KB 含著舊包 3000 KB，每次備份吞掉之前所有的包，體積指數成長到磁碟滿，
+#     而每一次的 `rc` 都是 0。更隱蔽，也更持久。
+#
+# **粒度是粗判**（落在 config_dir 之下即擋，不細到 ASSET_DIRS），與 sidecar 的
+# `check_backup_dir` 逐字一致——實測它對 `<config_dir>/backups` 也回 `inside_source`。
+# 細判會讓判準隨 `ASSET_DIRS` 清單漂移：哪天把某個目錄加進清單，本來放行的落點就變成
+# 不安全，而使用者不會知道。
+#
+# 這是 sidecar 那份 containment 的第二份實作，**刻意的**：腳本必須能獨立執行、拿不到
+# sidecar 的 Python，而它的用法說明明確支援直接跑。兩邊漂移會造成「GUI 擋、CLI 放行」，
+# 所以 `test_script_and_sidecar_agree_on_containment` 拿同一組落點對帳釘住。
+#
+# 兩邊都經過 `resolve_path`（絕對、祖先解參照），字串比對足夠：APFS 的大小寫別名在
+# `pwd -P` 這一層已經正規化，不必為此引入 inode 比對。
+#
+# **檢查排在 `mkdir -p "${OUT_DIR}"` 之前**（Codex 票 18 R1 F2）：反過來的話，落點在來源
+# 樹裡而尚不存在時，腳本會先在使用者的資料裡建出整段目錄再說「不行」——直接違反檔頭
+# 宣告的「來源全程唯讀」。所以 `out_real` 也要能正規化**尚不存在**的路徑。
+#
+# **檢查排在掃描之前**：掃描會對每個來源 `du`，來源清單荒謬時（有人把 `/` 列進去）光是
+# 估算就會讀遍整個檔案系統。檢查是廉價的，要排在任何昂貴或有副作用的動作之前——這與
+# 「拒絕前不得寫入來源樹」是同一條原則的兩面。
+#
+# `"${root}"` 的**引號不可省**：case 的 pattern 位置若讓變數裸展開，路徑裡的 `[bc]`、`*`
+# 會被當成萬用字元，`/home/a[bc]/*` 反而去匹配 `/home/ab/…`——真正落在來源裡的輸出目錄
+# 漏擋。加引號後那段是字面比對，只有結尾的 `/*` 保留 glob 意義。
+out_real=$(resolve_path "${OUT_DIR}")
+idx=0
+label=""
+for entry in ${source_roots[@]+"${source_roots[@]}"}; do
+  # 交錯陣列：偶數位是說明、奇數位是來源根（見宣告處的理由）。用位置計數而不是
+  # 「label 是不是空的」判斷——後者會依賴值的內容，路徑理論上可以是任何字串。
+  if [ $((idx % 2)) -eq 0 ]; then
+    label="${entry}"
+  else
+    root="${entry}"
+    # **去掉尾斜線再組 pattern**（Codex 票 18 R2 F1）：來源根是 `/` 時直接組出的是 `//*`，
+    # 只匹配以兩條斜線開頭的字串——於是把 `/` 列進來源反而讓 containment 完全失效，而那
+    # 正是「整個檔案系統都是來源」、沒有任何安全落點的情況。`${root%/}` 讓 `/` 變成空字串，
+    # pattern 成為 `/*`＝匹配所有絕對路徑；其餘來源根不受影響（它們沒有尾斜線）。
+    root_prefix="${root%/}"
+    case "${out_real}/" in
+      "${root_prefix}"/*)
+        echo "輸出目錄在備份來源裡：${out_real}" >&2
+        echo "    它落在 ${root} 之下，而那是${label}。" >&2
+        echo "    備份會把正在寫入的暫存區收進自己，換一個不在來源樹裡的輸出目錄。" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  idx=$((idx + 1))
+done
+
+
+# ── 掃描：這次會收什麼、跳過什麼、有沒有沒判定過的新東西 ──────────────────────
+stamp=$(date +%Y%m%d-%H%M)
+declare -a plan_lines=()
 unknown_found=false
 outside_link_found=false
 total_kb=0
 
 while IFS=$'\t' read -r key raw_dir; do
   dir=$(expand_home "${raw_dir}")
-  # 空路徑不是來源根，登記它會讓 `case` 的 pattern 變成 `/*`＝**任何**輸出目錄都被判成
-  # 落在來源裡，備份完全不能用。含換行的 `config_dir` 會真的走到這裡：`accounts` 那份
-  # 逐行資料被換行拆成兩行，第二行沒有 tab，`raw_dir` 就是空的。
-  if [ -n "${dir}" ]; then
-    source_roots+=("帳號 ${key} 的目錄" "$(resolve_path "${dir}")")
-  fi
   if [ ! -d "${dir}" ]; then
     plan_lines+=("  [${key}] ${raw_dir} — 目錄不存在，略過整個帳號")
     continue
@@ -223,15 +303,8 @@ done <<< "${accounts}"
 
 for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   p=$(expand_home "${extra}")
-  # 空路徑不登記，理由同帳號那一段（清單檔的讀取會跳過空行，這裡是對稱防護）。
-  # **用 `if` 不用 `[ -n … ] && …`**：後者為假時整個運算式回非零，`set -e` 會在這裡把
-  # 腳本殺掉——本檔下方記過同一個坑（`[ -e ] && echo` 那段）。
-  if [ -n "${p}" ]; then
-    real=$(resolve_path "${p}")
-    source_roots+=("額外來源 ${extra}" "${real}")
-  fi
-
   [ -e "${p}" ] || continue
+  real=$(resolve_path "${p}")     # 來源根已在上面登記過，這裡只是估算與提示要用
   # extra 一律當**目錄樹**處理（見打包段的合約註解）。普通檔案、或指向檔案的連結都不收，
   # 但要出聲——靜靜跳過等於讓使用者以為收了。
   if [ ! -d "${p}" ]; then
@@ -272,57 +345,6 @@ fi
 
 # ── 打包 ────────────────────────────────────────────────────────────────────
 #
-# 輸出目錄不得落在**任何來源根**之下（帳號的 config_dir ∪ 額外來源）。staging 建在
-# OUT_DIR 底下，落在來源裡就會被複製進自己。兩邊的症狀不同、都不可接受：
-#
-#   - extra（票 17）：`cp -R "${p}/."` 會遞迴到路徑過長而**失敗**——rc≠0，訊息是一長串
-#     看不懂的路徑，且失敗前已經寫了大量資料。
-#   - 帳號（票 18）：`cp -R "${dir}/${item}"` 複製的是開始當下的樹、不追自己新寫的內容，
-#     所以**不報錯**。它靜靜地把 staging 連同輸出目錄裡**既有的備份包**收進新包——實測
-#     新包 3004 KB 含著舊包 3000 KB，每次備份吞掉之前所有的包，體積指數成長到磁碟滿，
-#     而每一次的 `rc` 都是 0。更隱蔽，也更持久。
-#
-# **粒度是粗判**（落在 config_dir 之下即擋，不細到 ASSET_DIRS），與 sidecar 的
-# `check_backup_dir` 逐字一致——實測它對 `<config_dir>/backups` 也回 `inside_source`。
-# 細判會讓判準隨 `ASSET_DIRS` 清單漂移：哪天把某個目錄加進清單，本來放行的落點就變成
-# 不安全，而使用者不會知道。
-#
-# 這是 sidecar 那份 containment 的第二份實作，**刻意的**：腳本必須能獨立執行、拿不到
-# sidecar 的 Python，而它的用法說明明確支援直接跑。兩邊漂移會造成「GUI 擋、CLI 放行」，
-# 所以 `test_script_and_sidecar_agree_on_containment` 拿同一組落點對帳釘住。
-#
-# 兩邊都經過 `resolve_path`（絕對、祖先解參照），字串比對足夠：APFS 的大小寫別名在
-# `pwd -P` 這一層已經正規化，不必為此引入 inode 比對。
-#
-# **檢查排在 `mkdir -p "${OUT_DIR}"` 之前**（Codex 票 18 R1 F2）：反過來的話，落點在來源
-# 樹裡而尚不存在時，腳本會先在使用者的資料裡建出整段目錄再說「不行」——直接違反檔頭
-# 宣告的「來源全程唯讀」。所以 `out_real` 也要能正規化**尚不存在**的路徑。
-#
-# `"${root}"` 的**引號不可省**：case 的 pattern 位置若讓變數裸展開，路徑裡的 `[bc]`、`*`
-# 會被當成萬用字元，`/home/a[bc]/*` 反而去匹配 `/home/ab/…`——真正落在來源裡的輸出目錄
-# 漏擋。加引號後那段是字面比對，只有結尾的 `/*` 保留 glob 意義。
-out_real=$(resolve_path "${OUT_DIR}")
-idx=0
-label=""
-for entry in ${source_roots[@]+"${source_roots[@]}"}; do
-  # 交錯陣列：偶數位是說明、奇數位是來源根（見宣告處的理由）。用位置計數而不是
-  # 「label 是不是空的」判斷——後者會依賴值的內容，路徑理論上可以是任何字串。
-  if [ $((idx % 2)) -eq 0 ]; then
-    label="${entry}"
-  else
-    root="${entry}"
-    case "${out_real}/" in
-      "${root}"/*)
-        echo "輸出目錄在備份來源裡：${out_real}" >&2
-        echo "    它落在 ${root} 之下，而那是${label}。" >&2
-        echo "    備份會把正在寫入的暫存區收進自己，換一個不在來源樹裡的輸出目錄。" >&2
-        exit 1
-        ;;
-    esac
-  fi
-  idx=$((idx + 1))
-done
-
 mkdir -p "${OUT_DIR}"
 out="${OUT_DIR}/claude-backup-${stamp}.tar.gz"
 # 驗證通過前寫的名字：前導 `.` 加 `.partial` 後綴，兩重都不符合「完整備份包」的形狀，

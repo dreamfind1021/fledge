@@ -947,6 +947,32 @@ def test_nonexistent_source_root_under_a_symlinked_ancestor_still_blocks(tmp_pat
     assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
 
 
+def test_root_as_a_source_blocks_every_output_dir(tmp_path: Path):
+    """來源根是 `/` 時，任何絕對輸出路徑都要擋（Codex 票 18 R2 F1）。
+
+    `case "${out}/" in "/"/*)` 的 pattern 會變成 `//*`，只匹配以**兩條**斜線開頭的字串
+    ——於是把 `/` 列進來源清單反而讓 containment 完全失效。而那正是「整個檔案系統都是
+    來源」的情況，沒有任何輸出位置是安全的，本該全部擋下。
+
+    `//` 要單獨測：**bash 的 `pwd -P` 對 `//` 回 `//`**（zsh 回 `/`，在互動 shell 裡驗會
+    得到錯誤結論），所以它不會自動退化成 `/` 那一格。
+
+    **刻意用 `--list`**：這條測試的失敗模式有副作用——擋不住的話腳本會往下走到打包，
+    真的開始把整個檔案系統 `cp` 進 staging，被 timeout 殺掉後 trap 不會執行，留下數百 GB
+    且帶唯讀權限的殘骸（實際發生過，清了很久）。`--list` 不寫任何東西，擋不住時最壞
+    只是 `du` 讀得很慢而 timeout——紅得一樣清楚，但不會弄髒磁碟。"""
+    home, _ = _fake_home(tmp_path)
+    for listed in ("/\n", "//\n"):
+        script = _script_with_extra_list(tmp_path, listed)
+        env = {**os.environ, "HOME": str(home)}
+        env.pop("FLEDGE_BACKUP_DIR", None)
+        proc = subprocess.run(
+            ["/bin/bash", str(script), "--list", "-o", str(tmp_path / "out")],
+            capture_output=True, text=True, env=env, timeout=30)
+        assert proc.returncode != 0, f"來源是 {listed!r} 卻放行了"
+        assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
 def test_a_blank_source_root_never_matches_everything(tmp_path: Path):
     """空字串不得被登記成來源根——`case` 的 pattern 會變成 `/*`，**任何**輸出目錄都判成
     落在來源裡，備份完全不能用。
