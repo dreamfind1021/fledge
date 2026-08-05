@@ -2584,19 +2584,19 @@ def test_plan_preview_matches_install_for_a_symlinked_extra(
 
 def test_plan_and_install_agree_on_a_symlinked_extra_from_the_real_backup_script(
         tmp_path: Path, monkeypatch):
-    """端到端（Codex 票 14 R2 F3）：**真的跑 `backup-claude.sh`**，而舊機的 `~/.agents`
-    本身是 symlink（skill 真身放第三個位置的常見設置）。
+    """端到端（Codex 票 14 R2 F3 揭露 → 票 17 定合約）：**真的跑 `backup-claude.sh`**，
+    而舊機的 `~/.agents` 本身是 symlink（skill 真身放第三個位置的常見設置）。
 
-    腳本用 `cp -R`（不跟隨），所以產出的 `extra/.agents` 是一條指向**舊機絕對路徑**的
-    symlink——這是腳本的合法產出，不是惡意構造，而手工 fixture 複製不出這個形狀（票 13
-    的教訓）。
+    票 17 把備份端的合約定成「extra ＝ **解一層參照後的真實目錄樹**」，所以包裡的
+    `extra/.agents` 是真目錄，這一項裝得回去。在那之前腳本用 `cp -R`（不跟隨最外層），
+    包裡是一條指向**舊機絕對路徑**的連結，install 的 fd-relative `O_NOFOLLOW` 必然
+    `not_a_directory`——備份包 rc = 0 看起來成功，裡面卻有一項永遠搬不回去。
 
-    **這種包一直都裝不回去**：install 的 fd-relative `O_NOFOLLOW` 開不了 symlink 來源，
-    整項 `failed`。票 14 改的是預覽——修法前 `_scan_spot` 的 `Path.is_dir()` 跟隨連結，
-    在舊路徑還在的機器上會把包外的內容數進 `will_install`，於是預覽說會裝、結果一項沒裝。
-    **修法沒有讓任何原本裝得成的東西變成裝不成**，它讓預覽與結果一致。
+    **這條守的一直是同一件事：預覽數字與實際落地一致。** 票 14 修的是預覽會把包外的內容
+    數進 `will_install`（`_scan_spot` 的 `Path.is_dir()` 跟隨連結）；票 17 之後兩邊都是
+    「裝得成」而不是都是「零」。
 
-    備份腳本產出一個必然裝不回去的包，是**腳本那一側的產品缺口**，記在票 14 的收尾。"""
+    手工 fixture 造不出真腳本的產出（票 13 的教訓），所以一定要跑真的腳本。"""
     old_home = tmp_path / "oldhome"
     (old_home / ".claude" / "skills").mkdir(parents=True)
     (old_home / ".claude" / "skills" / "a.md").write_text("A", encoding="utf-8")
@@ -2619,9 +2619,15 @@ def test_plan_and_install_agree_on_a_symlinked_extra_from_the_real_backup_script
     src = tmp_path / "unpacked"
     with tarfile.open(next(out.glob("claude-backup-*.tar.gz"))) as tf:
         tf.extractall(src, filter="tar")
-    assert (src / "extra" / ".agents").is_symlink(), "腳本產出的形狀變了，這條測試要重寫"
+    agents_in_bundle = src / "extra" / ".agents"
+    assert not agents_in_bundle.is_symlink() and agents_in_bundle.is_dir(), \
+        "備份端的合約變了（票 17），這條測試要重寫"
 
-    # **舊路徑還在的機器**（同機展開）＝最有利於「被數進去」的情境
+    # 備份**之後**改掉包外真身的內容：落地的必須是包裡的快照，不是連結另一端的現況。
+    # 少了這一手，同機測試裡兩邊內容相同，「裝的是哪一份」根本驗不出來。
+    (real_agents / "s.md").write_text("MUTATED-AFTER-BACKUP", encoding="utf-8")
+
+    # **舊路徑還在的機器**（同機展開）＝最有利於「數到包外」的情境
     new_home = tmp_path / "newhome"
     new_home.mkdir()
     monkeypatch.setenv("HOME", str(new_home))
@@ -2629,12 +2635,18 @@ def test_plan_and_install_agree_on_a_symlinked_extra_from_the_real_backup_script
     tgt.mkdir()
     spot = new_home / ".agents"
     accounts = {"work": {"config_dir": str(tgt), "label": ""}}
-    # 比對「有沒有確認 extra 落點」兩次預覽的差：extra 不該貢獻任何一項
+    # 比對「有沒有確認 extra 落點」兩次預覽的差
     without = inst.plan(str(src), accounts).will_install
     p = inst.plan(str(src), accounts, extra={".agents": str(spot)})
-    assert p.will_install == without, "symlink 的 extra 不得算進預覽"
+    assert p.will_install > without, "extra 的內容要算進預覽"
 
     results = inst.install(p)
-    assert [(r.outcome, r.error) for r in results if r.account == "extra:.agents"] == \
-        [("failed", "not_a_directory")]
-    assert not spot.exists(), "零內容落地"
+    extra_results = [r for r in results if r.account == "extra:.agents"]
+    assert extra_results, "extra 整項不見了"
+    assert [r for r in extra_results if r.outcome != "installed"] == []
+    # **預覽與結果一致**：預覽為 extra 多算的量，要恰好等於它實際裝成的項目數。
+    # 不寫死數字——macOS 的 tar 會為帶 xattr 的檔案多產生 AppleDouble（`._x`）entry，
+    # 數量隨執行環境變動，寫死會讓這條測試驗的變成環境而不是契約。
+    assert p.will_install - without == len(extra_results)
+    assert (spot / "skills" / "s.md").read_text(encoding="utf-8") == "X", \
+        "落地的不是備份當下的快照"

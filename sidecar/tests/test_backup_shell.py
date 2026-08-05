@@ -6,6 +6,7 @@
 import json
 import os
 import subprocess
+import tarfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -468,3 +469,369 @@ def test_publish_still_refuses_to_clobber_when_ln_unsupported(tmp_path: Path):
     if proc.returncode == 0:
         return  # 跨過分鐘邊界，沒撞名
     assert existing.read_bytes() == original, "既有備份包被覆寫了"
+
+
+# ── extra 本身是 symlink 的合約（票 17）─────────────────────────────────────
+#
+# 合約：**extra 的語意是「解一層參照後的真實目錄樹」**。`~/.agents` 本身是連結（skill
+# 真身放第三個位置的常見設置）時，備份收的是它指向的內容，名字沿用連結本身的 basename。
+#
+# 改這條之前，`cp -R` 不跟隨最外層，包裡的 `extra/.agents` 是一條指向**舊機絕對路徑**的
+# 連結——install 端的 fd-relative `O_NOFOLLOW` 必然 `not_a_directory`，而腳本 rc = 0。
+# 使用者拿到一個看起來成功、裡面有一項永遠搬不回去的包，失敗要到移機最後一步才看得到。
+
+
+def _symlinked_agents(tmp_path: Path, home: Path) -> Path:
+    """把 `~/.agents` 做成指向第三處的 symlink，回**真身目錄**。
+
+    這是本節所有測試的前提形狀；手工造備份包複製不出真腳本的產出（票 13 的教訓），
+    所以每條測試都跑真的 `backup-claude.sh`。"""
+    real = tmp_path / "real-agents"
+    (real / "skills").mkdir(parents=True)
+    (real / "skills" / "s.md").write_text("REAL", encoding="utf-8")
+    (home / ".agents").symlink_to(real, target_is_directory=True)
+    return real
+
+
+def _pack(tmp_path: Path, home: Path, name: str = "out") -> Path:
+    """跑真腳本，回產出的備份包路徑。"""
+    out = tmp_path / f"out-{name}"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    return bundle
+
+
+def _pack_and_unpack(tmp_path: Path, home: Path, name: str = "unpacked") -> Path:
+    """跑真腳本、解開產出的備份包，回解開後的根目錄。
+
+    **解開後的檔案系統驗不了「包裡有什麼」**：`extra/.agents` 若是一條指向包外的連結，
+    同機測試下它會解析成功，`iterdir()`／`exists()` 看到的全是包外的真身。要驗包的
+    內容形狀請改用 `_pack()` ＋ `tarfile.getmembers()`。"""
+    bundle = _pack(tmp_path, home, name)
+    dest = tmp_path / name
+    with tarfile.open(bundle) as tf:
+        tf.extractall(dest, filter="tar")
+    return dest
+
+
+def test_symlinked_extra_is_packed_as_a_real_directory(tmp_path: Path):
+    """核心合約：連結的 extra 要收成**真目錄＋真內容**，不是一條連結。
+
+    一條指向舊機絕對路徑的連結在新機上什麼都不是，而在舊機上更糟——它讓
+    「備份包」與「包外的現役資料」看起來一樣，於是預覽會數到包裡根本沒有的東西。"""
+    home, _ = _fake_home(tmp_path)
+    _symlinked_agents(tmp_path, home)
+    src = _pack_and_unpack(tmp_path, home)
+    agents = src / "extra" / ".agents"
+    assert not agents.is_symlink(), "extra 仍是一條連結＝這個包裝不回去"
+    assert agents.is_dir()
+    assert (agents / "skills" / "s.md").read_text(encoding="utf-8") == "REAL"
+
+
+def test_only_the_outermost_link_is_dereferenced(tmp_path: Path):
+    """**界線**：只解最外層那一層，內容裡的連結仍原樣存連結。
+
+    這條守的是「解一層」與「整棵跟隨」的分界。改成 `cp -RL` 同樣能讓上一條測試變綠，
+    但那會把連結指向的任何東西（可能是整個家目錄）拖進備份包。
+
+    **驗的是 tar 成員不是解開後的檔案系統**：`extra/.agents` 若還是一條指向包外的連結，
+    同機下解開後的路徑會解析到包外的真身，`iterdir()` 剛好看到正確的形狀而測試假綠。"""
+    home, _ = _fake_home(tmp_path)
+    real = _symlinked_agents(tmp_path, home)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "big.md").write_text("OUTSIDE", encoding="utf-8")
+    (real / "skills" / "linked").symlink_to(outside, target_is_directory=True)
+
+    with tarfile.open(_pack(tmp_path, home)) as tf:
+        members = {m.name: m for m in tf.getmembers()}
+    assert members["extra/.agents"].isdir(), "最外層沒解參照"
+    inner = members["extra/.agents/skills/linked"]
+    assert inner.issym(), "內容裡的連結被解開了＝整棵跟隨"
+    assert inner.linkname == str(outside)
+    assert "extra/.agents/skills/linked/big.md" not in members, "連結目標的內容被收進包裡了"
+
+
+def test_extra_name_comes_from_the_link_not_its_target(tmp_path: Path):
+    """名字沿用**連結本身**的 basename（`.agents`），不是 target 的（`real-agents`）。
+
+    manifest 的 key、`_safe_extra_name`（票 13）、落點對應三處都靠這個名字；用了 target
+    的名字，還原端會拿一個本機 config 查不到的 key，整項被略過。"""
+    home, _ = _fake_home(tmp_path)
+    _symlinked_agents(tmp_path, home)
+    src = _pack_and_unpack(tmp_path, home)
+    # `.exists()` 對連結為真（同機解析得到包外的真身）——要一併釘住形狀才驗得到名字
+    assert (src / "extra" / ".agents").is_dir() and not (src / "extra" / ".agents").is_symlink()
+    assert not (src / "extra" / "real-agents").exists()
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    assert list(manifest["extra"]) == [".agents"]
+    # manifest 存**連結本身**的路徑：那是使用者在舊機認得的位置。還原端只用 key 查本機
+    # config（`local_live_paths` 明確不退回 manifest 的路徑），這個值純粹是舊機資訊。
+    assert manifest["extra"][".agents"] == str(home / ".agents")
+
+
+def test_scan_reports_the_real_size_of_a_symlinked_extra(tmp_path: Path):
+    """掃描的大小要跟隨連結算。`du -sk` 對 symlink 參數回 0——使用者會看到
+    「[帳號外] ~/.agents  0 KB」然後備份包比預估大好幾 GB。"""
+    home, _ = _fake_home(tmp_path)
+    real = _symlinked_agents(tmp_path, home)
+    (real / "skills" / "big.md").write_text("x" * 200_000, encoding="utf-8")
+    proc = _run(["--list", "-o", str(tmp_path / "out")], home)
+    assert proc.returncode == 0, proc.stderr
+    rows = [ln for ln in proc.stdout.splitlines() if "[帳號外]" in ln and ".agents" in ln]
+    assert len(rows) == 1, proc.stdout
+    kb = int(rows[0].split()[-2])
+    assert kb >= 190, f"連結的 extra 大小沒跟隨算：{rows[0]!r}"
+
+
+def test_scan_size_uses_the_same_boundary_as_packing(tmp_path: Path):
+    """估算與打包必須用**同一條界線**：只解最外層。
+
+    `du -L` 是整棵跟隨，會把內容裡的連結指向的東西也算進來——而打包不跟隨那些，於是
+    預估比實收大好幾十倍（實測 5100 KB vs 實收 100 KB）。修「最外層不算大小」時很容易
+    順手用 `-L`，那是把一個「一邊有一邊沒有」換成另一個。"""
+    home, _ = _fake_home(tmp_path)
+    real = _symlinked_agents(tmp_path, home)
+    (real / "skills" / "own.bin").write_bytes(b"x" * 100_000)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "huge.bin").write_bytes(b"x" * 3_000_000)
+    (real / "skills" / "linked").symlink_to(elsewhere, target_is_directory=True)
+
+    proc = _run(["--list", "-o", str(tmp_path / "out")], home)
+    assert proc.returncode == 0, proc.stderr
+    rows = [ln for ln in proc.stdout.splitlines() if "[帳號外]" in ln and ".agents" in ln]
+    assert len(rows) == 1, proc.stdout
+    kb = int(rows[0].split()[-2])
+    assert kb >= 90, f"最外層沒解參照，估算又變回 0：{rows[0]!r}"
+    assert kb < 1000, f"估算跟隨了內容裡的連結（實收不含那些）：{kb} KB"
+
+
+def test_scan_says_where_a_symlinked_extra_really_points(tmp_path: Path):
+    """收的東西與使用者寫在清單裡的路徑不是同一個位置時，備份前就要看得到。"""
+    home, _ = _fake_home(tmp_path)
+    real = _symlinked_agents(tmp_path, home)
+    proc = _run(["--list", "-o", str(tmp_path / "out")], home)
+    assert proc.returncode == 0, proc.stderr
+    assert str(real) in proc.stdout, "掃描沒說這一項實際會收哪個目錄的內容"
+
+
+def test_plain_directory_extra_is_unchanged(tmp_path: Path):
+    """回歸：普通目錄的 extra 形狀不變（多數機器走的是這條）。"""
+    home, _ = _fake_home(tmp_path)
+    (home / ".agents" / "skills").mkdir(parents=True)
+    (home / ".agents" / "skills" / "s.md").write_text("PLAIN", encoding="utf-8")
+    src = _pack_and_unpack(tmp_path, home)
+    agents = src / "extra" / ".agents"
+    assert not agents.is_symlink()
+    assert (agents / "skills" / "s.md").read_text(encoding="utf-8") == "PLAIN"
+
+
+def test_a_non_directory_extra_is_skipped_and_says_so(tmp_path: Path):
+    """extra 一律當**目錄樹**處理。是普通檔案時明確跳過並出聲，不留半套形狀。
+
+    收窄合約的理由：現行對「指向檔案的連結」同樣是壞的（包裡存一條斷鏈），與其支援
+    兩種形狀，不如讓不符的當場說出來。"""
+    home, _ = _fake_home(tmp_path)
+    (home / ".agents").write_text("not a directory", encoding="utf-8")
+    proc = _run(["--list", "-o", str(tmp_path / "out-list")], home)
+    assert proc.returncode == 0, proc.stderr
+    assert "不是目錄" in proc.stdout, "靜靜跳過等於讓使用者以為收了"
+    src = _pack_and_unpack(tmp_path, home)
+    assert not (src / "extra").exists(), "非目錄的 extra 不該進包"
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    # manifest 與包內容必須一致：說有卻沒收，還原端會拿一個空 key 對帳
+    assert manifest["extra"] == {}
+
+
+def _script_with_extra_list(tmp_path: Path, lines: str) -> Path:
+    """把腳本複製到自帶 extra 清單檔的目錄，用來測 repo 那份清單以外的路徑形狀。
+    （腳本以 `SCRIPT_DIR` 找清單檔，比照 `test_missing_shared_list_file_is_not_fatal`。）"""
+    d = tmp_path / "scriptdir"
+    d.mkdir(exist_ok=True)
+    copy = d / "backup-claude.sh"
+    copy.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    copy.chmod(0o755)
+    (d / "backup-extra-paths.txt").write_text(lines, encoding="utf-8")
+    return copy
+
+
+def test_extra_path_containing_a_tab_keeps_its_name(tmp_path: Path):
+    """路徑含 tab 時，manifest 的 key 與包裡的目錄名必須一致（Codex 票 17 R2 F1）。
+
+    tab 在 Unix 路徑裡合法。用 tab 把兩個不受限的檔案系統字串串成一筆記錄，再從第一個
+    tab 切開，路徑自己的 tab 就會把切割點帶偏——manifest 的 key 被截短，還原端拿著一個
+    對不上包內容的名字，那一項就選不出來。"""
+    home, _ = _fake_home(tmp_path)
+    weird = home / "we\tird"
+    (weird / "skills").mkdir(parents=True)
+    (weird / "skills" / "s.md").write_text("T", encoding="utf-8")
+    script = _script_with_extra_list(tmp_path, "~/we\tird\n")
+
+    out = tmp_path / "out"
+    env = {**os.environ, "HOME": str(home)}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    proc = subprocess.run(["/bin/bash", str(script), "-o", str(out)],
+                          capture_output=True, text=True, env=env, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    dest = tmp_path / "unpacked"
+    with tarfile.open(bundle) as tf:
+        tf.extractall(dest, filter="tar")
+
+    assert (dest / "extra" / "we\tird" / "skills" / "s.md").is_file(), \
+        "包裡的目錄名不是完整的 basename"
+    manifest = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
+    assert list(manifest["extra"]) == ["we\tird"], \
+        f"manifest 的 key 與包內容對不上：{list(manifest['extra'])!r}"
+
+
+def test_tab_in_extra_path_does_not_bypass_the_output_dir_check(tmp_path: Path):
+    """含 tab 的來源路徑不得讓輸出目錄的 containment 檢查失準（Codex 票 17 R2 F1）。
+
+    切割點被帶偏時，比對用的 root 會是路徑的一段殘餘，於是真正落在來源樹裡的輸出
+    目錄反而通過檢查——備份照樣把 staging 收進自己。
+
+    **tab 要在清單那一側**：記錄是「清單寫法 TAB 解參照根」，只有前半含 tab 才會讓
+    「切第一個 tab」取到錯的後半。第一版把 tab 放在 target 上，切割點恰好還是對的，
+    測試就綠著——fixture 不觸發要測的情境。"""
+    home, _ = _fake_home(tmp_path)
+    real = home / "we\tird"
+    (real / "skills").mkdir(parents=True)
+    (real / "skills" / "s.md").write_text("T", encoding="utf-8")
+    script = _script_with_extra_list(tmp_path, "~/we\tird\n")
+
+    sentinel = tmp_path / "cp-was-called"
+    fake = _fake_bin(tmp_path, "cp", (
+        "#!/bin/sh\n"
+        f"echo called >> '{sentinel}'\n"
+        "exec /bin/cp \"$@\"\n"
+    ))
+    env = {**os.environ, "HOME": str(home), "PATH": f"{fake}:{os.environ['PATH']}"}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    proc = subprocess.run(["/bin/bash", str(script), "-o", str(real / "backups")],
+                          capture_output=True, text=True, env=env, timeout=120)
+    assert proc.returncode != 0, "含 tab 的來源讓 containment 檢查被繞過"
+    assert not sentinel.exists(), "已經開始複製才擋"
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
+def test_glob_chars_in_extra_path_do_not_break_the_output_dir_check(tmp_path: Path):
+    """來源路徑含 glob 特殊字元時 containment 仍要正確。
+
+    `case` 的 pattern 會把 `[bc]` 當「b 或 c 其中一個字元」，於是 `/home/a[bc]/*` 匹配的是
+    `/home/ab/…`，真正落在 `/home/a[bc]/` 裡的輸出目錄反而**漏擋**。比對必須是純字串，
+    不能經過任何 pattern 展開。含中括號的目錄名並不罕見。"""
+    home, _ = _fake_home(tmp_path)
+    weird = home / "a[bc]"
+    (weird / "skills").mkdir(parents=True)
+    (weird / "skills" / "s.md").write_text("G", encoding="utf-8")
+    script = _script_with_extra_list(tmp_path, "~/a[bc]\n")
+
+    sentinel = tmp_path / "cp-was-called"
+    fake = _fake_bin(tmp_path, "cp", (
+        "#!/bin/sh\n"
+        f"echo called >> '{sentinel}'\n"
+        "exec /bin/cp \"$@\"\n"
+    ))
+    env = {**os.environ, "HOME": str(home), "PATH": f"{fake}:{os.environ['PATH']}"}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    proc = subprocess.run(["/bin/bash", str(script), "-o", str(weird / "backups")],
+                          capture_output=True, text=True, env=env, timeout=120)
+    assert proc.returncode != 0, "glob 字元讓 containment 檢查漏擋"
+    assert not sentinel.exists(), "已經開始複製才擋"
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
+def test_refuses_when_output_dir_sits_inside_a_symlinked_extra(tmp_path: Path):
+    """輸出目錄落在 extra 解參照後的樹裡面時，在寫任何東西之前就拒絕（Codex 票 17 R1 F2）。
+
+    解一層參照之後 `cp -R "${p}/."` 複製的是連結指向的整棵樹，而 staging 就建在 OUT_DIR
+    底下——實測會遞迴吸入自己，路徑一路長到 `cp` 失敗，訊息是一長串看不懂的路徑，而且
+    失敗前已經寫了大量資料。**改之前只存一條連結，這個情境意外免疫**，所以這是回歸。
+
+    **驗的是「一個位元組都沒複製」而不只是「失敗了」**：第一版斷言（rc≠0＋stderr 含
+    `.agents`＋沒出包）在 `cp` 爆炸的情況下全部成立——爆炸的訊息裡本來就有一長串含
+    `.agents` 的路徑，trap 也會把 staging 清掉。那樣測到的是「它會壞」，不是「它擋住」。"""
+    home, _ = _fake_home(tmp_path)
+    real = _symlinked_agents(tmp_path, home)
+    out = real / "backups"
+    sentinel = tmp_path / "cp-was-called"
+    fake = _fake_bin(tmp_path, "cp", (
+        "#!/bin/sh\n"
+        f"echo called >> '{sentinel}'\n"
+        "exec /bin/cp \"$@\"\n"
+    ))
+    proc = _run(["-o", str(out)], home,
+                extra_env={"PATH": f"{fake}:{os.environ['PATH']}"})
+    assert proc.returncode != 0, "備份把自己收進去了，卻沒有擋"
+    assert not sentinel.exists(), "已經開始複製才擋＝擋得太晚"
+    assert "輸出目錄在備份來源裡" in proc.stderr, \
+        f"失敗了但沒說原因，使用者不知道該怎麼辦：{proc.stderr[:300]!r}"
+    assert ".agents" in proc.stderr, f"沒說是哪一項來源害的：{proc.stderr[:300]!r}"
+    assert list(out.glob("*.tar.gz")) == []
+
+
+def test_refuses_when_output_dir_is_the_extra_root_itself(tmp_path: Path):
+    """輸出目錄**恰好等於**來源根時同樣要擋。比對字串少一個尾斜線就會漏掉這一格，
+    而那正是最直接的誤用（把備份直接倒進 `~/.agents`）。"""
+    home, _ = _fake_home(tmp_path)
+    real = _symlinked_agents(tmp_path, home)
+    proc = _run(["-o", str(real)], home)
+    assert proc.returncode != 0, "輸出目錄就是來源根本身，卻沒有擋"
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
+def test_output_dir_outside_the_extra_tree_still_works(tmp_path: Path):
+    """回歸：擋的是「落在來源樹裡」，不是「有 symlink 的 extra 就不能備份」。"""
+    home, _ = _fake_home(tmp_path)
+    _symlinked_agents(tmp_path, home)
+    src = _pack_and_unpack(tmp_path, home)
+    assert (src / "extra" / ".agents" / "skills" / "s.md").is_file()
+
+
+def test_manifest_lists_exactly_what_was_packed(tmp_path: Path):
+    """manifest 必須由**打包結果**產生，不是打包完再對現役來源問一次（Codex 票 17 R1 F1）。
+
+    兩段各自探測時，中間的變化會讓 manifest 與包內容對不上：來源在打包後消失，包裡有
+    `extra/.agents` 而 manifest 沒有那個 key——還原端靠 manifest 列出可搬的項目，於是
+    **已經備份到的資料選不出來**。反向變化則讓 manifest 宣稱一個包裡沒有的項目。
+
+    判準逐字一致（三處都是 `-d`）只解決了「判準不同」那一半，沒解決「觀測時機不同」。
+
+    造法：假的 `cp` 在處理到 `config.json` 那一步（extra 已複製完、manifest 尚未產生）
+    抽掉來源。這是唯一能精準落在兩段之間的 hook。"""
+    home, _ = _fake_home(tmp_path)
+    _symlinked_agents(tmp_path, home)
+    fake = _fake_bin(tmp_path, "cp", (
+        "#!/bin/sh\n"
+        "for a in \"$@\"; do\n"
+        f"  case \"$a\" in *config.json) rm -f '{home}/.agents' ;; esac\n"
+        "done\n"
+        "exec /bin/cp \"$@\"\n"
+    ))
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home,
+                extra_env={"PATH": f"{fake}:{os.environ['PATH']}"})
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    dest = tmp_path / "unpacked"
+    with tarfile.open(bundle) as tf:
+        tf.extractall(dest, filter="tar")
+
+    packed = (dest / "extra" / ".agents").is_dir()
+    manifest = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
+    assert packed, "前提變了：extra 根本沒被打包，這條測試證明不了東西"
+    assert ".agents" in manifest["extra"], "包裡有，manifest 卻沒有——還原端選不到它"
+
+
+def test_a_link_to_a_file_is_skipped_too(tmp_path: Path):
+    """`-d` 是**跟隨**判定：指向檔案的連結同樣不是目錄樹，走同一條跳過路徑。"""
+    home, _ = _fake_home(tmp_path)
+    lone = tmp_path / "lone.txt"
+    lone.write_text("x", encoding="utf-8")
+    (home / ".agents").symlink_to(lone)
+    proc = _run(["--list", "-o", str(tmp_path / "out")], home)
+    assert proc.returncode == 0, proc.stderr
+    assert "不是目錄" in proc.stdout
