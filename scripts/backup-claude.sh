@@ -289,6 +289,7 @@ done <<< "${accounts}"
 # 在 BSD cp 會把內容攤平到 `extra/` 底下，`.agents` 這個名字整個消失；而名字必須來自
 # **連結本身**的 basename，不是 target 的——manifest 的 key、`_safe_extra_name`（票 13）、
 # 落點對應三處都靠它，用 target 的名字會讓還原端拿到一個本機 config 查不到的 key。
+declare -a packed_extra=()
 for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   p=$(expand_home "${extra}")
   [ -d "${p}" ] || continue     # `-d` 跟隨連結；非目錄在掃描階段已經說明過了
@@ -296,6 +297,8 @@ for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   mkdir -p "${stage}/extra/${name}"
   cp -Rc "${p}/." "${stage}/extra/${name}/" 2>/dev/null \
     || cp -R "${p}/." "${stage}/extra/${name}/"
+  # manifest 只從這份清單產生，不重新探測來源（見下方 manifest 段的理由）
+  packed_extra+=("$(printf '%s\t%s' "${name}" "${p}")")
 done
 
 mkdir -p "${stage}/fledge"
@@ -305,17 +308,18 @@ cp "${CONFIG_JSON}" "${stage}/fledge/config.json"
 # 迴圈以非零狀態結束，command substitution 跟著非零，`set -e` 就在**做完所有工作之後**
 # 把腳本殺掉。有 ~/.agents 的機器永遠踩不到，沒有的機器每次備份都在最後一刻失敗。
 #
-# 判準要與上面的打包迴圈**逐字一致**（`-d`）：一邊 `-e` 一邊 `-d` 的話，非目錄的項目會被
-# 寫進 manifest 卻不在包裡，還原端就拿著一個查得到 key、找不到內容的項目對帳。
+# **manifest 描述的是「包裡有什麼」，所以只能從打包結果產生**（Codex 票 17 R1 F1）。
+# 原本這裡對現役來源重新探測一次，於是打包與 manifest 是兩次獨立觀測：來源在兩段之間
+# 被刪掉或換掉，包裡有 `extra/.agents` 而 manifest 沒有那個 key——還原端靠 manifest 列出
+# 可搬的項目，已經備份到的資料就選不出來；反向變化則讓 manifest 宣稱一個包裡沒有的項目。
+# 把判準統一成 `-d` 只解決了「判準不同」那一半，沒解決「觀測時機不同」。
 #
 # 值存**連結本身**的路徑（`~/.agents`），不是解參照後的真實路徑：那是使用者在舊機認得的
 # 位置。還原端只用 key 查本機 config（`local_live_paths` 明確不退回 manifest 的路徑），
 # 這個值純粹是舊機資訊。
-extra_json=$(printf '%s\n' ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"} | while read -r e; do
-  p=$(expand_home "${e}")
-  [ -d "${p}" ] || continue
-  printf '%s\t%s\n' "$(basename "${p}")" "${p}"
-done)
+#
+# 空陣列時 `printf` 仍會輸出一個空行，但下面的 Python 只收含 tab 的行，空行自然被濾掉。
+extra_json=$(printf '%s\n' ${packed_extra[@]+"${packed_extra[@]}"})
 python3 - "${stage}/manifest.json" "${stamp}" "${extra_json}" <<'PY'
 import json, os, sys, platform
 out_path, stamp, extra_raw = sys.argv[1], sys.argv[2], sys.argv[3]

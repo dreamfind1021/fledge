@@ -645,6 +645,41 @@ def test_a_non_directory_extra_is_skipped_and_says_so(tmp_path: Path):
     assert manifest["extra"] == {}
 
 
+def test_manifest_lists_exactly_what_was_packed(tmp_path: Path):
+    """manifest 必須由**打包結果**產生，不是打包完再對現役來源問一次（Codex 票 17 R1 F1）。
+
+    兩段各自探測時，中間的變化會讓 manifest 與包內容對不上：來源在打包後消失，包裡有
+    `extra/.agents` 而 manifest 沒有那個 key——還原端靠 manifest 列出可搬的項目，於是
+    **已經備份到的資料選不出來**。反向變化則讓 manifest 宣稱一個包裡沒有的項目。
+
+    判準逐字一致（三處都是 `-d`）只解決了「判準不同」那一半，沒解決「觀測時機不同」。
+
+    造法：假的 `cp` 在處理到 `config.json` 那一步（extra 已複製完、manifest 尚未產生）
+    抽掉來源。這是唯一能精準落在兩段之間的 hook。"""
+    home, _ = _fake_home(tmp_path)
+    _symlinked_agents(tmp_path, home)
+    fake = _fake_bin(tmp_path, "cp", (
+        "#!/bin/sh\n"
+        "for a in \"$@\"; do\n"
+        f"  case \"$a\" in *config.json) rm -f '{home}/.agents' ;; esac\n"
+        "done\n"
+        "exec /bin/cp \"$@\"\n"
+    ))
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home,
+                extra_env={"PATH": f"{fake}:{os.environ['PATH']}"})
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    dest = tmp_path / "unpacked"
+    with tarfile.open(bundle) as tf:
+        tf.extractall(dest, filter="tar")
+
+    packed = (dest / "extra" / ".agents").is_dir()
+    manifest = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
+    assert packed, "前提變了：extra 根本沒被打包，這條測試證明不了東西"
+    assert ".agents" in manifest["extra"], "包裡有，manifest 卻沒有——還原端選不到它"
+
+
 def test_a_link_to_a_file_is_skipped_too(tmp_path: Path):
     """`-d` 是**跟隨**判定：指向檔案的連結同樣不是目錄樹，走同一條跳過路徑。"""
     home, _ = _fake_home(tmp_path)
