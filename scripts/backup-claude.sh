@@ -115,6 +115,7 @@ for key, acc in cfg.get("accounts", {}).items():
 # ── 掃描：這次會收什麼、跳過什麼、有沒有沒判定過的新東西 ──────────────────────
 stamp=$(date +%Y%m%d-%H%M)
 declare -a plan_lines=()
+declare -a extra_roots=()      # 「原始寫法 TAB 解參照後的根」，供下方輸出目錄的前置檢查用
 unknown_found=false
 outside_link_found=false
 total_kb=0
@@ -193,6 +194,7 @@ for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   # 不收那些——實測 5100 KB 對實收 100 KB。修掉「最外層算成 0」時很容易順手用 `-L`，
   # 那只是把一個「一邊有一邊沒有」換成另一個。
   real=$(cd "${p}" && pwd -P)
+  extra_roots+=("$(printf '%s\t%s' "${extra}" "${real}")")
   kb=$(du -sk "${real}" 2>/dev/null | cut -f1 || echo 0)
   total_kb=$((total_kb + kb))
   plan_lines+=("$(printf '  [帳號外] %-24s %8s KB' "${extra}" "${kb}")")
@@ -221,6 +223,33 @@ fi
 
 # ── 打包 ────────────────────────────────────────────────────────────────────
 mkdir -p "${OUT_DIR}"
+
+# 輸出目錄不得落在任何 extra 的**解參照後**來源樹裡。解一層參照之後 `cp -R "${p}/."`
+# 複製的是連結指向的整棵樹，而 staging 就建在 OUT_DIR 底下——它會被複製進自己，路徑
+# 一路長到 `cp` 失敗（實測：訊息是一長串看不懂的路徑，且失敗前已經寫了大量資料）。
+# 舊寫法只存最外層那條連結，所以這個情境原本意外免疫，是新合約的前置條件。
+#
+# **只擋 extra 這一格**：帳號 `config_dir` 同樣有這個洞（`-o ~/.claude/x` 一樣會遞迴），
+# 但那是既有缺口、不是本次改動造成的，另行處理。GUI 那條路由 sidecar 的 containment
+# 擋（讀同一份清單、`os.stat` 跟隨連結，判得出解參照後的樹），這裡補的是腳本被直接
+# 執行的用法——腳本的用法說明明確支援它，而它拿不到那份防呆。
+#
+# 兩邊都是 `pwd -P` 的輸出（實際的目錄項名稱），字串比對足夠：APFS 的大小寫別名在
+# `pwd -P` 這一層已經正規化，不必為此引入 inode 比對。
+out_real=$(cd "${OUT_DIR}" && pwd -P)
+for entry in ${extra_roots[@]+"${extra_roots[@]}"}; do
+  root=${entry#*$'\t'}
+  label=${entry%%$'\t'*}
+  case "${out_real}/" in
+    "${root}"/*)
+      echo "輸出目錄在備份來源裡：${out_real}" >&2
+      echo "    它落在 ${root} 之下，而那是額外來源 ${label} 指向的目錄。" >&2
+      echo "    備份會把正在寫入的暫存區收進自己，換一個不在來源樹裡的輸出目錄。" >&2
+      exit 1
+      ;;
+  esac
+done
+
 out="${OUT_DIR}/claude-backup-${stamp}.tar.gz"
 # 驗證通過前寫的名字：前導 `.` 加 `.partial` 後綴，兩重都不符合「完整備份包」的形狀，
 # 所以半成品永遠不會被 UI 當成一次成功的備份（原子發布）。

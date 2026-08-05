@@ -645,6 +645,53 @@ def test_a_non_directory_extra_is_skipped_and_says_so(tmp_path: Path):
     assert manifest["extra"] == {}
 
 
+def test_refuses_when_output_dir_sits_inside_a_symlinked_extra(tmp_path: Path):
+    """輸出目錄落在 extra 解參照後的樹裡面時，在寫任何東西之前就拒絕（Codex 票 17 R1 F2）。
+
+    解一層參照之後 `cp -R "${p}/."` 複製的是連結指向的整棵樹，而 staging 就建在 OUT_DIR
+    底下——實測會遞迴吸入自己，路徑一路長到 `cp` 失敗，訊息是一長串看不懂的路徑，而且
+    失敗前已經寫了大量資料。**改之前只存一條連結，這個情境意外免疫**，所以這是回歸。
+
+    **驗的是「一個位元組都沒複製」而不只是「失敗了」**：第一版斷言（rc≠0＋stderr 含
+    `.agents`＋沒出包）在 `cp` 爆炸的情況下全部成立——爆炸的訊息裡本來就有一長串含
+    `.agents` 的路徑，trap 也會把 staging 清掉。那樣測到的是「它會壞」，不是「它擋住」。"""
+    home, _ = _fake_home(tmp_path)
+    real = _symlinked_agents(tmp_path, home)
+    out = real / "backups"
+    sentinel = tmp_path / "cp-was-called"
+    fake = _fake_bin(tmp_path, "cp", (
+        "#!/bin/sh\n"
+        f"echo called >> '{sentinel}'\n"
+        "exec /bin/cp \"$@\"\n"
+    ))
+    proc = _run(["-o", str(out)], home,
+                extra_env={"PATH": f"{fake}:{os.environ['PATH']}"})
+    assert proc.returncode != 0, "備份把自己收進去了，卻沒有擋"
+    assert not sentinel.exists(), "已經開始複製才擋＝擋得太晚"
+    assert "輸出目錄在備份來源裡" in proc.stderr, \
+        f"失敗了但沒說原因，使用者不知道該怎麼辦：{proc.stderr[:300]!r}"
+    assert ".agents" in proc.stderr, f"沒說是哪一項來源害的：{proc.stderr[:300]!r}"
+    assert list(out.glob("*.tar.gz")) == []
+
+
+def test_refuses_when_output_dir_is_the_extra_root_itself(tmp_path: Path):
+    """輸出目錄**恰好等於**來源根時同樣要擋。比對字串少一個尾斜線就會漏掉這一格，
+    而那正是最直接的誤用（把備份直接倒進 `~/.agents`）。"""
+    home, _ = _fake_home(tmp_path)
+    real = _symlinked_agents(tmp_path, home)
+    proc = _run(["-o", str(real)], home)
+    assert proc.returncode != 0, "輸出目錄就是來源根本身，卻沒有擋"
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
+def test_output_dir_outside_the_extra_tree_still_works(tmp_path: Path):
+    """回歸：擋的是「落在來源樹裡」，不是「有 symlink 的 extra 就不能備份」。"""
+    home, _ = _fake_home(tmp_path)
+    _symlinked_agents(tmp_path, home)
+    src = _pack_and_unpack(tmp_path, home)
+    assert (src / "extra" / ".agents" / "skills" / "s.md").is_file()
+
+
 def test_manifest_lists_exactly_what_was_packed(tmp_path: Path):
     """manifest 必須由**打包結果**產生，不是打包完再對現役來源問一次（Codex 票 17 R1 F1）。
 
