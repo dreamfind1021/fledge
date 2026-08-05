@@ -658,7 +658,7 @@ def _script_with_extra_list(tmp_path: Path, lines: str) -> Path:
 
 
 def _refusal_run(tmp_path: Path, home: Path, out: Path,
-                 script: Path | None = None, tag: str = "cp"):
+                 script: Path | None = None, tag: str = "cp", cwd: Path | None = None):
     """跑備份、期望被輸出目錄的前置檢查擋下。回 `(proc, sentinel)`。
 
     假 `cp` 寫哨兵檔是為了驗**一個位元組都沒被複製**——只斷言「失敗了」會被壞掉的路徑
@@ -674,7 +674,8 @@ def _refusal_run(tmp_path: Path, home: Path, out: Path,
     env = {**os.environ, "HOME": str(home), "PATH": f"{fake}:{os.environ['PATH']}"}
     env.pop("FLEDGE_BACKUP_DIR", None)
     proc = subprocess.run(["/bin/bash", str(script or SCRIPT), "-o", str(out)],
-                          capture_output=True, text=True, env=env, timeout=120)
+                          capture_output=True, text=True, env=env, timeout=120,
+                          cwd=str(cwd) if cwd else None)
     return proc, sentinel
 
 
@@ -890,6 +891,62 @@ def test_refuses_when_the_source_root_does_not_exist_yet(tmp_path: Path):
     assert not sentinel.exists()
 
 
+def test_refusal_writes_nothing_to_the_filesystem(tmp_path: Path):
+    """拒絕的路徑上不得對來源樹寫任何東西（Codex 票 18 R1 F2）。
+
+    `mkdir -p "${OUT_DIR}"` 若排在 containment 之前，腳本會先在使用者的資料裡建出整段
+    目錄再說「不行」——直接違反檔頭宣告的**來源全程唯讀**。
+
+    `_refusal_run` 的哨兵只監測 `cp`，抓不到 `mkdir` 的副作用：那是我的測試盲點，
+    「一個位元組都沒複製」不等於「什麼都沒寫」。"""
+    home, config_dir = _fake_home(tmp_path)
+    out = config_dir / "skills" / "deep" / "backups"
+    proc, _ = _refusal_run(tmp_path, home, out)
+    assert proc.returncode != 0
+    assert not (config_dir / "skills" / "deep").exists(), \
+        "拒絕之前就在來源樹裡建了目錄——來源不再是唯讀的"
+
+
+def test_relative_config_dir_is_normalised_before_comparison(tmp_path: Path):
+    """`config_dir` 是相對路徑時要先轉成絕對路徑再比對（Codex 票 18 R1 F1）。
+
+    否則登記的 root 是 `ghost` 而 `out_real` 是絕對路徑，兩者永遠不匹配＝繞過。"""
+    home, _ = _fake_home(tmp_path)
+    workdir = tmp_path / "wd"
+    workdir.mkdir()
+    ghost = workdir / "ghost"      # 相對於腳本的 CWD 就是 `ghost`
+    cfg = json.loads((home / ".fledge" / "config.json").read_text(encoding="utf-8"))
+    cfg["accounts"]["rel"] = {"config_dir": "ghost", "label": ""}
+    (home / ".fledge" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+    proc, _ = _refusal_run(tmp_path, home, ghost / "backups", cwd=workdir)
+    assert proc.returncode != 0, "相對路徑的來源根沒被正規化，containment 被繞過"
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
+def test_nonexistent_source_root_under_a_symlinked_ancestor_still_blocks(tmp_path: Path):
+    """尚不存在的來源根位於 **symlink 祖先**底下時也要擋（Codex 票 18 R1 F1）。
+
+    `alias -> real` 而 `config_dir` 是 `alias/ghost`（還不存在）：`out_real` 走 `pwd -P`
+    會得到 `<real>/ghost/backups`，與登記的字串 `<alias>/ghost` 對不上——繞過。
+
+    我實作時的推論「不存在的目錄沒有 inode，也就不會有別名問題」是錯的：**別名可以在
+    祖先上**。正規化要對最深的既存祖先做 `pwd -P`，再把缺的尾段接回去。"""
+    home, _ = _fake_home(tmp_path)
+    real = tmp_path / "real"
+    real.mkdir()
+    alias = home / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    ghost = alias / "ghost"        # 尚不存在，且祖先是連結
+    cfg = json.loads((home / ".fledge" / "config.json").read_text(encoding="utf-8"))
+    cfg["accounts"]["ghost"] = {"config_dir": str(ghost), "label": ""}
+    (home / ".fledge" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+    proc, _ = _refusal_run(tmp_path, home, ghost / "backups")
+    assert proc.returncode != 0, "symlink 祖先讓不存在的來源根繞過了 containment"
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
 def test_a_blank_source_root_never_matches_everything(tmp_path: Path):
     """空字串不得被登記成來源根——`case` 的 pattern 會變成 `/*`，**任何**輸出目錄都判成
     落在來源裡，備份完全不能用。
@@ -909,7 +966,14 @@ def test_a_blank_source_root_never_matches_everything(tmp_path: Path):
     }), encoding="utf-8")
 
     out = tmp_path / "out"     # 明顯不在任何來源樹裡
-    proc = _run(["-o", str(out)], home)
+    env = {**os.environ, "HOME": str(home)}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    # **CWD 刻意設在 `tmp_path`**：空字串經過 `resolve_path` 會變成 CWD 而不是留著空——
+    # 登記它一樣是錯的（把跑腳本的目錄當成備份來源）。CWD 若與 `out` 無關，這條測試就
+    # 只是「空的來源根沒有變成 `/*`」而驗不到「根本不該登記」，是假綠。
+    proc = subprocess.run(["/bin/bash", str(SCRIPT), "-o", str(out)],
+                          capture_output=True, text=True, env=env, timeout=120,
+                          cwd=str(tmp_path))
     assert proc.returncode == 0, f"空的來源根把一切都擋掉了：{proc.stderr[:300]!r}"
     assert list(out.glob("claude-backup-*.tar.gz"))
 

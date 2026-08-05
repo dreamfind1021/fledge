@@ -91,6 +91,33 @@ fi
 
 expand_home() { case "$1" in "~/"*) echo "${HOME}/${1#\~/}" ;; "~") echo "${HOME}" ;; *) echo "$1" ;; esac; }
 
+# 把路徑正規化成「絕對、且祖先都解參照過」的形式。**路徑本身可以尚不存在**——對最深的
+# 既存祖先做 `pwd -P`，再把缺的尾段接回去。
+#
+# 為什麼不能只對已存在的路徑解參照（Codex 票 18 R1 F1）：登記來源根時 `config_dir` 可能
+# 還不存在（`mkdir -p "${OUT_DIR}"` 之後它就會存在，於是打包迴圈照樣把它當來源）。而
+# 「不存在就沒有 inode、也就沒有別名問題」這個推論是錯的——**別名可以在祖先上**：
+# `alias -> real` 時 `alias/ghost` 與 `real/ghost` 是同一個位置，字串卻對不上。
+#
+# 相對路徑不必特別處理：上溯終究會停在某個存在的祖先（最壞是 `.`），而 `cd` 到它再
+# `pwd -P` 得到的就是絕對路徑。
+#
+# 空字串會被正規化成 CWD，呼叫端必須先擋掉（見來源根登記處）。
+resolve_path() {
+  local p="$1" tail="" head
+  head="${p}"
+  while [ ! -d "${head}" ]; do          # `/` 必為目錄，迴圈一定會停
+    tail="$(basename "${head}")${tail:+/}${tail}"
+    head="$(dirname "${head}")"
+  done
+  head=$(cd "${head}" && pwd -P)
+  if [ -n "${tail}" ]; then
+    printf '%s/%s\n' "${head%/}" "${tail}"
+  else
+    printf '%s\n' "${head}"
+  fi
+}
+
 # ── 帳號清單 ────────────────────────────────────────────────────────────────
 if [ ! -f "${CONFIG_JSON}" ]; then
   echo "找不到 ${CONFIG_JSON}——Fledge 尚未落檔，無從得知有哪些帳號。" >&2
@@ -123,8 +150,8 @@ declare -a plan_lines=()
 #
 # **尚不存在的來源根也要登記**：`mkdir -p "${OUT_DIR}"` 會把祖先一起建出來，於是打包
 # 迴圈重新判斷時它已經是目錄、照樣會被複製，而裡面只有剛寫進去的 staging。sidecar 的
-# `source_roots()` 同樣不管來源存不存在。存在的登記 `pwd -P`（解參照後的真實位置），
-# 不存在的只能登記展開後的字串——它沒有 inode，也就不會有別名問題。
+# `source_roots()` 同樣不管來源存不存在。一律走 `resolve_path`（絕對、祖先解參照）——
+# 「不存在就沒有 inode、也就不會有別名問題」是錯的，**別名可以在祖先上**（票 18 R1 F1）。
 declare -a source_roots=()
 unknown_found=false
 outside_link_found=false
@@ -136,8 +163,7 @@ while IFS=$'\t' read -r key raw_dir; do
   # 落在來源裡，備份完全不能用。含換行的 `config_dir` 會真的走到這裡：`accounts` 那份
   # 逐行資料被換行拆成兩行，第二行沒有 tab，`raw_dir` 就是空的。
   if [ -n "${dir}" ]; then
-    if [ -d "${dir}" ]; then dir_real=$(cd "${dir}" && pwd -P); else dir_real="${dir}"; fi
-    source_roots+=("帳號 ${key} 的目錄" "${dir_real}")
+    source_roots+=("帳號 ${key} 的目錄" "$(resolve_path "${dir}")")
   fi
   if [ ! -d "${dir}" ]; then
     plan_lines+=("  [${key}] ${raw_dir} — 目錄不存在，略過整個帳號")
@@ -200,8 +226,8 @@ for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   # 空路徑不登記，理由同帳號那一段（清單檔的讀取會跳過空行，這裡是對稱防護）。
   # **用 `if` 不用 `[ -n … ] && …`**：後者為假時整個運算式回非零，`set -e` 會在這裡把
   # 腳本殺掉——本檔下方記過同一個坑（`[ -e ] && echo` 那段）。
-  if [ -d "${p}" ]; then real=$(cd "${p}" && pwd -P); else real="${p}"; fi
   if [ -n "${p}" ]; then
+    real=$(resolve_path "${p}")
     source_roots+=("額外來源 ${extra}" "${real}")
   fi
 
@@ -245,8 +271,7 @@ fi
 [ "${LIST_ONLY}" = true ] && exit 0
 
 # ── 打包 ────────────────────────────────────────────────────────────────────
-mkdir -p "${OUT_DIR}"
-
+#
 # 輸出目錄不得落在**任何來源根**之下（帳號的 config_dir ∪ 額外來源）。staging 建在
 # OUT_DIR 底下，落在來源裡就會被複製進自己。兩邊的症狀不同、都不可接受：
 #
@@ -266,13 +291,17 @@ mkdir -p "${OUT_DIR}"
 # sidecar 的 Python，而它的用法說明明確支援直接跑。兩邊漂移會造成「GUI 擋、CLI 放行」，
 # 所以 `test_script_and_sidecar_agree_on_containment` 拿同一組落點對帳釘住。
 #
-# 兩邊都是 `pwd -P` 的輸出（實際的目錄項名稱），字串比對足夠：APFS 的大小寫別名在
+# 兩邊都經過 `resolve_path`（絕對、祖先解參照），字串比對足夠：APFS 的大小寫別名在
 # `pwd -P` 這一層已經正規化，不必為此引入 inode 比對。
+#
+# **檢查排在 `mkdir -p "${OUT_DIR}"` 之前**（Codex 票 18 R1 F2）：反過來的話，落點在來源
+# 樹裡而尚不存在時，腳本會先在使用者的資料裡建出整段目錄再說「不行」——直接違反檔頭
+# 宣告的「來源全程唯讀」。所以 `out_real` 也要能正規化**尚不存在**的路徑。
 #
 # `"${root}"` 的**引號不可省**：case 的 pattern 位置若讓變數裸展開，路徑裡的 `[bc]`、`*`
 # 會被當成萬用字元，`/home/a[bc]/*` 反而去匹配 `/home/ab/…`——真正落在來源裡的輸出目錄
 # 漏擋。加引號後那段是字面比對，只有結尾的 `/*` 保留 glob 意義。
-out_real=$(cd "${OUT_DIR}" && pwd -P)
+out_real=$(resolve_path "${OUT_DIR}")
 idx=0
 label=""
 for entry in ${source_roots[@]+"${source_roots[@]}"}; do
@@ -294,6 +323,7 @@ for entry in ${source_roots[@]+"${source_roots[@]}"}; do
   idx=$((idx + 1))
 done
 
+mkdir -p "${OUT_DIR}"
 out="${OUT_DIR}/claude-backup-${stamp}.tar.gz"
 # 驗證通過前寫的名字：前導 `.` 加 `.partial` 後綴，兩重都不符合「完整備份包」的形狀，
 # 所以半成品永遠不會被 UI 當成一次成功的備份（原子發布）。
