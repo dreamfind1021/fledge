@@ -118,6 +118,22 @@ def create_if_absent(build: Callable[[AppConfig], None],
     return config
 
 
+def read_if_matches(matches: Callable[[AppConfig], bool],
+                    path: Path | None = None) -> AppConfig | None:
+    """既有 config 符合條件就回它，否則 None（含檔案不存在、讀不出來）。
+
+    **冪等重送的第一道**（票 15 R2）：要在任何來源驗證**之前**跑。第一次已經落檔而
+    回應遺失時，展開目錄可能已經被清掉／換掉——那時再去驗來源只會 400，而使用者要的
+    結果早就在磁碟上了。查詢本身不碰來源，所以來源在不在都答得出來。
+
+    呼叫端自行持 `_config_lock`。"""
+    target = path or default_config_path()
+    if not target.exists():
+        return None
+    existing = _load_for_conflict(target)
+    return existing if existing is not None and matches(existing) else None
+
+
 def _load_for_conflict(target: Path) -> AppConfig | None:
     """衝突判定用的既有 config。**讀不出來回 None 而不是拋**：那份檔案可能被手編壞了，
     而「它壞掉」不該讓建立流程改回報一個 JSON 解析錯誤——呼叫端要的答案仍然是「已經有

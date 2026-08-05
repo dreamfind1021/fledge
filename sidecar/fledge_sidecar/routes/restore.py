@@ -281,6 +281,21 @@ def adopt_config(body: AdoptConfigBody):
     不擴充 onboard：它的 first-run 語意是審查後刻意加的，且「採用備份包」與「手動
     onboard」是兩種語意。兩支共用 `create_if_absent` 原語與同一把 `_config_lock`
     （spec §4.3.1——各寫一份 first-run 判定必然漂移）。"""
+    # **冪等查詢排在最前面**（票 15 R2 F1）：第一次已經落檔而回應遺失時，展開目錄可能
+    # 已經被清掉／換掉——那時再去驗來源只會 400，而使用者要的結果早就在磁碟上。這一段
+    # 完全不碰來源（指紋只算 body 與 dest 的字面路徑），所以來源在不在都答得出來。
+    #
+    # **捷徑只給「同一次確認」**：`request_id` 與內容指紋都要對得上。不是重送的請求照樣
+    # 走完整驗證，否則就變成「編一個 request_id 就能跳過所有輸入驗證」。
+    fingerprint = _request_fingerprint(body)
+    with _config_lock:
+        replay = app_config.read_if_matches(lambda existing: (
+            existing.created_by.get("source") == "adopt-config"
+            and existing.created_by.get("request_id") == body.request_id
+            and existing.created_by.get("fingerprint") == fingerprint))
+    if replay is not None:
+        return replay.to_dict()
+
     account_keys = [a.key for a in body.accounts]
     extra_names = [e.name for e in body.extra]
     # 同名重複＝「後蓋前」的授權歧義，直接拒——不讓 dict 建構默默挑一個
@@ -319,7 +334,6 @@ def adopt_config(body: AdoptConfigBody):
     # 路徑從來不讀它，於是移機完的新機訂閱、知識庫根目錄、工作根目錄全是空的，而且沒有
     # 任何一頁讓使用者發現。**入口只能是這裡**——`install()` 把包裡的 config.json 裝回
     # `~/.fledge/` 會覆蓋掉使用者剛在 targets 頁確認的落點（明令不做，見票 09）。
-    fingerprint = _request_fingerprint(body)
     bundle_config = _bundle_config(body.dest)
     if not roots:
         # `body.roots` 非空 → 完全以它為準，包裡的不摻進來：使用者送出的是授權，包裡的

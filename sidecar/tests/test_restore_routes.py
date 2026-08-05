@@ -1761,3 +1761,36 @@ def test_adopt_config_idempotency_survives_field_order(tmp_path: Path, monkeypat
         "dest": str(src), "request_id": "req-A"})
     assert again.status_code == 200
     assert again.json() == first.json()
+
+
+def test_adopt_config_replay_survives_a_vanished_source(tmp_path: Path, monkeypatch):
+    """**冪等查詢要在任何來源驗證之前**（Codex 票 15 R2 F1）。
+
+    第一次 POST 已經建好 config，但回應沒回到前端（連線中斷、卡片卸載）。使用者重送時
+    展開目錄可能已經被清掉——`/tmp` 被清理、使用者自己刪了、磁碟滿了刪暫存。原本的順序
+    是先 `read_manifest` 再驗成員再查冪等，於是重送會先撞 `source_not_a_bundle` 400，
+    **永遠拿不到那份已經在磁碟上的結果**：config 建好了、精靈卻走不下去，死路。
+
+    要的答案是「這一次確認的結果」，而那份結果早就落檔了——它不需要來源還在。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    first = _adopt_with_id(client, src, home, "req-A")
+    assert first.status_code == 200
+    before = cfg.read_bytes()
+
+    shutil.rmtree(src)                       # 展開目錄不見了
+    again = _adopt_with_id(client, src, home, "req-A")
+    assert again.status_code == 200
+    assert again.json() == first.json()
+    assert cfg.read_bytes() == before
+
+
+def test_adopt_config_still_validates_the_source_for_a_new_request(
+        tmp_path: Path, monkeypatch):
+    """反面：**不是重送**的請求照樣要驗來源。冪等的捷徑只給「同一次確認」，
+    否則就變成「只要編一個 request_id 就能跳過所有輸入驗證」。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    shutil.rmtree(src)
+    resp = _adopt_with_id(TestClient(create_app()), src, home, "req-A")
+    assert (resp.status_code, resp.json()["error"]) == (400, "source_not_a_bundle")
+    assert not cfg.exists()
