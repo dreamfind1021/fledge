@@ -44,6 +44,7 @@ function Harness({ onDone, info = INFO }: { onDone?: () => void; info?: BundleIn
       dest="/tmp/staging"
       info={info}
       saved={saved}
+      requestId="req-1"
       onSaved={() => {
         setSaved(true);
         onDone?.();
@@ -94,6 +95,7 @@ describe("TargetsCard", () => {
                      { target: { value: "/Users/me/work-claude" } });
     ui.getByText(zh.mig.targets.save).click();
     await waitFor(() => expect(adoptConfig).toHaveBeenCalledWith(1234, {
+      request_id: "req-1",
       dest: "/tmp/staging",
       accounts: [{ key: "work", config_dir: "/Users/me/work-claude" }],
       extra: [{ name: ".agents", path: "/Users/me/.agents" }],
@@ -110,6 +112,7 @@ describe("TargetsCard", () => {
     await waitFor(() => expect(ui.getByText(skipText(".agents、nas"))).toBeTruthy());
     ui.getByText(zh.mig.targets.save).click();
     await waitFor(() => expect(adoptConfig).toHaveBeenCalledWith(1234, {
+      request_id: "req-1",
       dest: "/tmp/staging",
       accounts: [{ key: "work", config_dir: "/Users/me/.claude" }],
       extra: [],                                       // 留空的整項不送
@@ -135,35 +138,110 @@ describe("TargetsCard", () => {
       expect(ui.getByText(zhRestore.errors.overlapping_config_dirs)).toBeTruthy());
   });
 
-  // 409 有兩個來源，前端分不出也**不需要**分（Codex 票 03 R3）：重跑引導（設定檔本來就在），
-  // 或這次 POST 其實成功了而前端不知道——請求途中使用者按了上一步讓卡片卸載、或回應在
-  // 傳輸中遺失。把 409 當失敗會讓後兩者卡死：`adopted` 只活在元件 state，重進來又是 false，
-  // 於是每一次重試都再撞一次 409。**設定檔已經在了就是「這一步完成了」**，往下走收尾。
-  it("設定檔已經存在 → 不是死路：轉入收尾並說明設定不是這次建立的", async () => {
-    adoptConfig.mockRejectedValueOnce(new RestoreError("config_already_initialized", 409));
-    // 明寫參數型別：`vi.fn(async () => {})` 會被推成零參數，`mock.calls[n][1]` 取不到
-    const onSaved = vi.fn(async (_confirmed: unknown, _reused: boolean) => {});
+  // ── 票 15：冪等契約落地之後，前端不再推測「上一次到底寫進去了沒」 ──────────────
+  //
+  // 後端現在能分辨「這份 config 是不是這一次確認建的」（`request_id`），所以：
+  //   · 同一次重送 → 200（後端回既有結果）→ 前端**每次都可以送**，不必記 `adopted`
+  //   · 別的來源建的 → 409 + `created_by` → 把事實講出來，讓使用者決定要不要沿用
+  // 票 03 R2–R4 連續三輪的 finding 全是那個推測旗標造成的，這裡拔掉的是根因。
+
+  it("每次按下都真的送出——不再用元件內的旗標推測上一次寫進去了沒", async () => {
+    // `adopted` 旗標只活在元件 state，卸載就沒了（票 03 R3）。後端冪等之後重送是安全的：
+    // 同一個 request_id 回既有結果，不會建立第二份。
+    const onSaved = vi.fn(async (_c: unknown, _r: boolean) => {
+      throw Object.assign(new Error("reload failed"), { code: null });
+    });
     const ui = render(
       <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
-                   onSaved={onSaved} />,
+                   requestId="req-1" onSaved={onSaved} />,
+    );
+    await loaded(ui);
+    ui.getByText(zh.mig.targets.save).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.errors.reloadFailed)).toBeTruthy());
+
+    ui.getByText(zh.mig.targets.retry).click();
+    await waitFor(() => expect(adoptConfig).toHaveBeenCalledTimes(2));
+    // 兩次都帶同一個 request_id——那正是後端判「同一次確認」的依據
+    expect(adoptConfig.mock.calls.map((c) => c[1].request_id)).toEqual(["req-1", "req-1"]);
+  });
+
+  it("設定檔是別的來源建的 → 把事實講出來，讓使用者選沿用或停下來", async () => {
+    adoptConfig.mockRejectedValue(new RestoreError("config_already_initialized", 409, {
+      source: "adopt-config", request_id: "req-OTHER", dest: "/tmp/unpack-A",
+    }));
+    const onSaved = vi.fn(async (_c: unknown, _r: boolean) => {});
+    const ui = render(
+      <TargetsCard port={1234} dest="/tmp/unpack-B" info={INFO} saved={false}
+                   requestId="req-B" onSaved={onSaved} />,
     );
     await loaded(ui);
     ui.getByText(zh.mig.targets.save).click();
 
-    // 說明是**中性 notice**，不含「移除既有設定檔」那種指示（Codex 票 03 R4 F2）：
-    // 收尾成功之後這段還會留在畫面上，配著成功狀態一起顯示刪檔建議會讓人做危險的事
+    // 兩個展開位置都要看得見——那是使用者唯一分得出「這不是同一包」的線索
+    await waitFor(() => expect(ui.getByText("/tmp/unpack-A")).toBeTruthy());
+    expect(ui.getByText("/tmp/unpack-B")).toBeTruthy();
+    // **不自動放行**：收尾還沒跑，下一步也就還被擋著
+    expect(onSaved).not.toHaveBeenCalled();
+
+    ui.getByText(zh.mig.targets.conflict.reuse).click();
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(onSaved.mock.calls[0][1]).toBe(true);   // reused＝沿用既有的，不是這次建的
+  });
+
+  it("衝突時選「停下來」→ 不跑收尾，畫面留在這一頁", async () => {
+    adoptConfig.mockRejectedValue(new RestoreError("config_already_initialized", 409, {
+      source: "onboard",
+    }));
+    const onSaved = vi.fn(async (_c: unknown, _r: boolean) => {});
+    const ui = render(
+      <TargetsCard port={1234} dest="/tmp/unpack-B" info={INFO} saved={false}
+                   requestId="req-B" onSaved={onSaved} />,
+    );
+    await loaded(ui);
+    ui.getByText(zh.mig.targets.save).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.conflict.stop)).toBeTruthy());
+
+    ui.getByText(zh.mig.targets.conflict.stop).click();
+    await waitFor(() => expect(ui.queryByText(zh.mig.targets.conflict.stop)).toBeNull());
+    expect(onSaved).not.toHaveBeenCalled();
+    // 回到可以重按的狀態——停下來不是死路
+    expect(ui.getByText(zh.mig.targets.save)).toBeTruthy();
+  });
+
+  it("來源摘要缺 dest（onboard 建的）→ 說得出是誰建的，不印出 undefined", async () => {
+    adoptConfig.mockRejectedValue(new RestoreError("config_already_initialized", 409, {
+      source: "onboard",
+    }));
+    const ui = render(
+      <TargetsCard port={1234} dest="/tmp/unpack-B" info={INFO} saved={false}
+                   requestId="req-B" onSaved={vi.fn(async () => {})} />,
+    );
+    await loaded(ui);
+    ui.getByText(zh.mig.targets.save).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.conflict.fromOnboard)).toBeTruthy());
+    expect(ui.container.textContent).not.toContain("undefined");
+  });
+
+  // 票 03 R4 F2 的價值在票 15 之後仍然成立：沿用既有設定之後那段說明**必須是中性的**
+  // ——它會配著成功狀態一起留在畫面上，這時顯示「請移除既有設定檔」那種指示會讓使用者
+  // 去做危險的事。（「409 要不要自動轉收尾」那一半已被票 15 取代：現在停下來問使用者。）
+  it("選了沿用之後，說明是中性的、不含刪檔指示", async () => {
+    adoptConfig.mockRejectedValue(new RestoreError("config_already_initialized", 409, {
+      source: "onboard",
+    }));
+    const onSaved = vi.fn(async (_confirmed: unknown, _reused: boolean) => {});
+    const ui = render(
+      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
+                   requestId="req-1" onSaved={onSaved} />,
+    );
+    await loaded(ui);
+    ui.getByText(zh.mig.targets.save).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.conflict.reuse)).toBeTruthy());
+
+    ui.getByText(zh.mig.targets.conflict.reuse).click();
     await waitFor(() => expect(ui.getByText(zh.mig.targets.reused)).toBeTruthy());
     expect(ui.queryByText(zhRestore.errors.config_already_initialized)).toBeNull();
-    expect(onSaved).toHaveBeenCalledTimes(1);          // 收尾照跑（父層把實際的 config 讀回來）
-    // 主按鈕轉成「重新讀取」——再按不會重複 POST（那只會再撞一次 409）
-    await waitFor(() => expect(ui.getByText(zh.mig.targets.retry)).toBeTruthy());
-    ui.getByText(zh.mig.targets.retry).click();
-    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(2));
-    expect(adoptConfig).toHaveBeenCalledTimes(1);
-    // 沿用既有設定檔這件事要**傳給父層**（票 09 R1 F2）：它據此決定能不能說「這些設定
-    // 是從備份包帶回來的」。**重試那一輪也要照樣是 true**——那一輪不再 POST，409 的
-    // 事實只留在 state 裡，讀 callback 內的 state 會拿到舊值。
-    expect(onSaved.mock.calls.map((c) => c[1])).toEqual([true, true]);
+    expect(onSaved).toHaveBeenCalledTimes(1);
   });
 
   // 票 09 R1 F2 的另一半：**沒有**沿用時要回報 false，否則父層永遠不敢說帶回了什麼。
@@ -172,7 +250,7 @@ describe("TargetsCard", () => {
     // 明寫參數型別：`vi.fn(async () => {})` 會被推成零參數，`mock.calls[n][1]` 取不到
     const onSaved = vi.fn(async (_confirmed: unknown, _reused: boolean) => {});
     const ui = render(
-      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
+      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} requestId="req-1" saved={false}
                    onSaved={onSaved} />,
     );
     await loaded(ui);
@@ -219,6 +297,7 @@ describe("TargetsCard", () => {
     expect(ui.getByDisplayValue("/Users/me/.agents")).toBeTruthy();
     ui.getByText(zh.mig.targets.save).click();
     await waitFor(() => expect(adoptConfig).toHaveBeenCalledWith(1234, {
+      request_id: "req-1",
       dest: "/tmp/staging",
       accounts: [{ key: "agents", config_dir: "/Users/me/A" }],
       extra: [{ name: "agents", path: "/Users/me/.agents" }],
@@ -251,7 +330,7 @@ describe("TargetsCard", () => {
       if (reloads === 1) throw new Error("RELOAD-SENTINEL");
     });
     const ui = render(
-      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
+      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} requestId="req-1" saved={false}
                    onSaved={onSaved} />,
     );
     await loaded(ui);
@@ -262,9 +341,13 @@ describe("TargetsCard", () => {
     expect(adoptConfig).toHaveBeenCalledTimes(1);
     expect(ui.container.textContent).not.toContain("RELOAD-SENTINEL");
 
-    ui.getByText(zh.mig.targets.retry).click();       // 重試：只重讀
+    ui.getByText(zh.mig.targets.retry).click();
     await waitFor(() => expect(reloads).toBe(2));
-    expect(adoptConfig).toHaveBeenCalledTimes(1);     // **沒有再 POST 一次**
+    // 票 15 之前這裡斷言「沒有再 POST 一次」——那是為了避開 409 死路而用元件內的旗標
+    // 記住「已經落檔了」。後端冪等之後**重送是安全的**（同一個 request_id 回既有結果），
+    // 所以兩段都重跑，前端不必再推測上一次寫進去了沒。
+    expect(adoptConfig).toHaveBeenCalledTimes(2);
+    expect(adoptConfig.mock.calls.map((c) => c[1].request_id)).toEqual(["req-1", "req-1"]);
   });
 
   it("落檔本身失敗 → 重按會重新落檔（那一步還沒成功過）", async () => {
@@ -287,14 +370,17 @@ describe("TargetsCard", () => {
       throw Object.assign(new Error("mismatch"), { code: "config_mismatch" });
     });
     const ui = render(
-      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
+      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} requestId="req-1" saved={false}
                    onSaved={onSaved} />,
     );
     await loaded(ui);
     ui.getByText(zh.mig.targets.save).click();
+    // 票 15：409 先停下來問使用者。**選了沿用之後**父層的對帳才跑，而它擋得住
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.conflict.reuse)).toBeTruthy());
+    ui.getByText(zh.mig.targets.conflict.reuse).click();
     await waitFor(() =>
       expect(ui.getByText(zhRestore.errors.config_mismatch)).toBeTruthy());
-    expect(ui.getByText(zh.mig.targets.retry)).toBeTruthy();   // 不再重複 POST
+    expect(ui.getByText(zh.mig.targets.retry)).toBeTruthy();   // 上一次失敗在收尾那一段
   });
 
   it("載入建議值失敗 → 通用訊息，例外原文不進畫面", async () => {

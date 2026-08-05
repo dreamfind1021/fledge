@@ -150,6 +150,10 @@ class AdoptConfigBody(BaseModel):
     accounts: list[AdoptAccount] = Field(min_length=1)   # 落點是使用者的授權，必填
     roots: list[AdoptRoot] = []
     extra: list[AdoptExtra] = []
+    # 這一次確認的識別碼（票 15）。**必填**：冪等契約沒有它就不成立，而「沒帶就退回舊
+    # 行為」會讓同一支端點有兩套語意，呼叫端分不出自己拿到的 409 是哪一種。內容不透明
+    # ——後端只拿它比對「是不是同一次」，不解讀也不顯示（顯示的是 `dest`）。
+    request_id: str = Field(min_length=1, max_length=200)
 
 
 _ADOPT_CLIENT_ERRORS = frozenset({
@@ -311,13 +315,26 @@ def adopt_config(body: AdoptConfigBody):
         config.extra = {e.name: e.path.strip() for e in body.extra}
         config.subscriptions = _adopted_subscriptions(bundle_config)
         config.set_kms_root(_adopted_kms_root(bundle_config))
+        # 純記帳、不參與任何授權決策（票 15）。`dest` 存 resolved 的展開位置——衝突時
+        # 前端要能說「這份設定檔是從**哪一包**建的」，那是使用者唯一分得出來的線索。
+        config.set_created_by({"source": "adopt-config", "request_id": body.request_id,
+                               "dest": resolve_best_effort(body.dest)})
 
     try:
         with _config_lock:
-            config = app_config.create_if_absent(_build)
-    except FileExistsError:
-        return JSONResponse(status_code=409,
-                            content={"error": "config_already_initialized"})
+            # **冪等契約**（票 15）：同一個 `request_id` 重送 → 回既有結果（200）。這一格
+            # 對應「這次 POST 其實成功了，只是回應沒回到前端」——請求途中卡片被卸載、連線
+            # 中斷、回應在傳輸中遺失。前端原本只能靠元件內的 `adopted` 旗標推測，而那個
+            # 旗標卸載就沒了（票 03 R3 連續三輪的根因）。
+            config = app_config.create_if_absent(
+                _build, matches=lambda existing: (
+                    existing.created_by.get("source") == "adopt-config"
+                    and existing.created_by.get("request_id") == body.request_id))
+    except app_config.ConfigAlreadyExists as exc:
+        # **說得出那份設定檔是誰建的**：409 原本只證明「有一份 config」，前端因此分不出
+        # 「重跑引導」與「另一個來源剛建了一份」。`created_by` 是本機資訊，回給本機前端。
+        return JSONResponse(status_code=409, content={
+            "error": "config_already_initialized", "created_by": exc.created_by})
     return config.to_dict()
 
 

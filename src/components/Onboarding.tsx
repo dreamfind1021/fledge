@@ -548,6 +548,10 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
                   dest={bundle.probe.dest}
                   info={bundle.probe.info}
                   saved={configCreated}
+                  // 這一次確認的識別碼（票 15）。**綁 `bundle.gen`**：換一包就換一個，
+                  // 後端才分得出「A 建的 config」與「B 這次要建的」——票 09 R3 那條路徑
+                  // （A 的請求在飛時使用者換到 B）靠的就是這個。
+                  requestId={`adopt-${bundle.gen}`}
                   // **先把剛建立的設定讀回 store 才算完成**（Codex 票 03 R1 F2）：後面的
                   // 頁面（登入卡等）讀的是 store 的 accounts，只翻旗標會讓使用者看到
                   // in-memory 的預設帳號。讀不回來就 throw 回卡片——它會顯示錯誤且不轉

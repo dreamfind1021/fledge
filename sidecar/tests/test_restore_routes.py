@@ -436,10 +436,12 @@ def test_adopt_config_revalidates_landing_spots(tmp_path: Path, monkeypatch):
     cfg, src, home = _adopt_env(tmp_path, monkeypatch)
     client = TestClient(create_app())
     resp = client.post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(home)}]})
     assert (resp.status_code, resp.json()["error"]) == (400, "unsafe_config_dir")
     resp = client.post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
         "extra": [{"name": "agents", "path": str(home / ".claude" / "sub")}]})
@@ -453,6 +455,7 @@ def test_adopt_config_refuses_when_config_exists(tmp_path: Path, monkeypatch):
     cfg.write_text('{"version": 1, "accounts": {}}', encoding="utf-8")
     before = cfg.read_bytes()
     resp = TestClient(create_app()).post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(home / ".claude")}]})
     assert (resp.status_code, resp.json()["error"]) == (409, "config_already_initialized")
@@ -464,15 +467,18 @@ def test_adopt_config_rejects_undeclared_or_duplicate_names(tmp_path: Path, monk
     cfg, src, home = _adopt_env(tmp_path, monkeypatch)
     client = TestClient(create_app())
     resp = client.post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "ghost", "config_dir": str(home / ".x")}]})
     assert (resp.status_code, resp.json()["error"]) == (400, "unknown_account_key")
     resp = client.post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
         "extra": [{"name": "ghost", "path": str(home / ".g")}]})
     assert (resp.status_code, resp.json()["error"]) == (400, "unknown_extra_name")
     resp = client.post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(home / ".c1")},
                      {"key": "work", "config_dir": str(home / ".c2")}]})
@@ -486,6 +492,7 @@ def test_adopt_config_rejects_root_with_unknown_account(tmp_path: Path, monkeypa
     projects = tmp_path / "projects"
     projects.mkdir()
     resp = TestClient(create_app()).post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
         "roots": [{"path": str(projects), "default_account": "ghost"}]})
@@ -500,6 +507,7 @@ def test_adopt_config_writes_confirmed_spots_not_manifest_suggestions(
     projects = tmp_path / "projects"
     projects.mkdir()
     resp = TestClient(create_app()).post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
         "roots": [{"path": str(projects), "default_account": "work"}],
@@ -554,6 +562,7 @@ def test_adopt_config_accepts_extra_name_from_the_real_backup_script(
     monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
     client = TestClient(create_app())
     resp = client.post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(new_home / ".claude")}],
         "extra": [{"name": ".agents", "path": str(new_home / ".agents")}]})
@@ -573,6 +582,7 @@ def test_install_endpoints_use_config_extra(tmp_path: Path, monkeypatch):
     cfg, src, home = _adopt_env(tmp_path, monkeypatch)
     client = TestClient(create_app())
     resp = client.post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
         "extra": [{"name": "agents", "path": str(home / ".agents")}]})
@@ -591,6 +601,7 @@ def test_install_plan_excludes_extra_without_config_entry(tmp_path: Path, monkey
     cfg, src, home = _adopt_env(tmp_path, monkeypatch)
     client = TestClient(create_app())
     client.post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(home / ".claude")}]})
     resp = client.post("/api/restore/install-plan", json={"dest": str(src)})
@@ -705,6 +716,7 @@ def test_install_endpoints_apply_mapping(tmp_path: Path, monkeypatch):
     _add_history(src)
     client = TestClient(create_app())
     assert client.post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
     }).status_code == 200
@@ -1351,6 +1363,7 @@ def _plant_bundle_config(src: Path, payload) -> None:
 
 def _adopt(client, src: Path, home: Path, **extra):
     return client.post("/api/restore/adopt-config", json={
+        "request_id": "req-test",
         "dest": str(src),
         "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
         **extra})
@@ -1606,3 +1619,98 @@ def test_adopt_config_survives_lone_surrogate_paths(tmp_path: Path, monkeypatch)
         assert resp.status_code == 200, f"{payload!r} → {resp.status_code}"
         data = json.loads(cfg.read_text(encoding="utf-8"))
         assert (data["kms_root"], data["roots"]) == ("", [])
+
+
+# ---------- 票 15：adopt-config 的冪等契約 ----------
+#
+# 409 原本只證明「有一份 config」。票 03 的緩解是前端逐一比對 accounts 的 config_dir，
+# 擋得住「無關的既有 config」，**擋不住「落點完全相同但來自別的來源」**——票 09 R3 給了
+# 一條具體可達路徑：A 包的 adopt 請求在飛時使用者換到 B 包，A 照樣建好 config（帶著 A 的
+# subscriptions／kms_root／roots），B 再確認撞 409、落點對帳通過，精靈就帶著 A 的設定走完。
+
+
+def _adopt_with_id(client, src: Path, home: Path, request_id: str, **extra):
+    return client.post("/api/restore/adopt-config", json={
+        "dest": str(src), "request_id": request_id,
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}],
+        **extra})
+
+
+def test_adopt_config_is_idempotent_for_the_same_request_id(tmp_path: Path, monkeypatch):
+    """**同一次確認重送 → 200 且逐位元組不變**（不是 409，也不是用新 body 重跑一次）。
+
+    這一格對應「這次 POST 其實成功了，只是回應沒回到前端」：請求途中卡片被卸載、連線
+    中斷、回應在傳輸中遺失。前端原本只能靠元件內的 `adopted` 旗標推測，而那個旗標卸載
+    就沒了（票 03 R3）——現在由後端說了算。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    client = TestClient(create_app())
+    first = _adopt_with_id(client, src, home, "req-A")
+    assert first.status_code == 200
+    before = cfg.read_bytes()
+
+    again = _adopt_with_id(client, src, home, "req-A",
+                           extra=[{"name": "agents", "path": str(home / ".other")}])
+    assert again.status_code == 200
+    assert again.json() == first.json()
+    assert cfg.read_bytes() == before, "冪等是回既有結果，不是用新 body 覆寫"
+
+
+def test_adopt_config_reports_the_other_source_on_conflict(tmp_path: Path, monkeypatch):
+    """**不同的 request_id → 409，而且說得出那份設定檔是誰建的**（票 09 R3 的根治）。
+
+    前端據此把事實講出來（「這份設定檔是從 <別的展開位置> 建立的」），讓使用者決定要不要
+    沿用——不再靠落點對帳碰運氣：A 與 B 是同一個人的兩份備份，帳號 key 與建議落點很可能
+    相同，對帳一定會通過。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    other = tmp_path / "bundle-b"
+    other.mkdir()
+    client = TestClient(create_app())
+    assert _adopt_with_id(client, src, home, "req-A").status_code == 200
+    before = cfg.read_bytes()
+
+    resp = client.post("/api/restore/adopt-config", json={
+        "dest": str(src), "request_id": "req-B",
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}]})
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"] == "config_already_initialized"
+    assert body["created_by"]["source"] == "adopt-config"
+    assert body["created_by"]["dest"] == str(Path(src).resolve())
+    assert cfg.read_bytes() == before, "衝突時零寫入"
+
+
+def test_adopt_config_conflict_names_onboard_as_the_other_source(
+        tmp_path: Path, monkeypatch):
+    """既有 config 是 `onboard` 建的（使用者先走了全新設定）→ 摘要要說得出來。
+    兩支共用 `create_if_absent`，記帳也要兩支都記，否則就是「一邊有一邊沒有」。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    roots = tmp_path / "projects"
+    roots.mkdir()
+    client = TestClient(create_app())
+    assert client.post("/api/config/onboard", json={
+        "roots": [{"path": str(roots), "default_account": "default"}]}).status_code == 200
+
+    resp = _adopt_with_id(client, src, home, "req-A")
+    assert resp.status_code == 409
+    assert resp.json()["created_by"] == {"source": "onboard"}
+
+
+def test_adopt_config_requires_a_request_id(tmp_path: Path, monkeypatch):
+    """`request_id` 必填：冪等契約沒有它就不成立，而「沒帶就退回舊行為」會讓同一支端點
+    有兩套語意——呼叫端分不出自己拿到的 409 是哪一種。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    resp = TestClient(create_app()).post("/api/restore/adopt-config", json={
+        "dest": str(src),
+        "accounts": [{"key": "work", "config_dir": str(home / ".claude")}]})
+    assert resp.status_code == 422
+    assert not cfg.exists()
+
+
+def test_adopt_config_records_who_created_it(tmp_path: Path, monkeypatch):
+    """成功路徑：`created_by` 進 config.json。**純記帳不參與授權**——落點仍然只認
+    使用者確認的那一份。"""
+    cfg, src, home = _adopt_env(tmp_path, monkeypatch)
+    assert _adopt_with_id(TestClient(create_app()), src, home, "req-A").status_code == 200
+    created = json.loads(cfg.read_text(encoding="utf-8"))["created_by"]
+    assert created == {"source": "adopt-config", "request_id": "req-A",
+                       "dest": str(Path(src).resolve())}

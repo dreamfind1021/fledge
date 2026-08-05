@@ -172,10 +172,19 @@ export class SessionError extends Error {
 
 /** 從錯誤回應取出後端判別碼；非 JSON body（422 的 detail 陣列、裸 5xx）→ null（無碼可映射）。 */
 async function readErrorCode(resp: Response): Promise<string | null> {
+  return (await readErrorPayload(resp)).error;
+}
+
+/** 錯誤回應的完整 body。多數端點只要 `error`（`readErrorCode`），但 `adopt-config` 的
+ *  409 還帶 `created_by`（票 15）——**body 只能讀一次**，所以兩者共用這一支。 */
+async function readErrorPayload(
+  resp: Response,
+): Promise<{ error: string | null; created_by?: ConfigCreatedBy }> {
   try {
-    return (await resp.json())?.error ?? null;
+    const data = await resp.json();
+    return { error: data?.error ?? null, created_by: data?.created_by };
   } catch {
-    return null;
+    return { error: null };
   }
 }
 
@@ -640,10 +649,22 @@ export interface BundleInfo {
 
 /** 還原端點的判別碼錯誤。理由同 `BackupError`：`code` 只放欄位、不進 message。 */
 export class RestoreError extends Error {
-  constructor(public readonly code: string | null, public readonly status: number) {
+  constructor(public readonly code: string | null, public readonly status: number,
+              /** 409 `config_already_initialized` 時後端附上的來源摘要（票 15）。
+               *  只在那一格有值——**不要拿它當「有沒有出錯」的判斷依據**。 */
+              public readonly createdBy: ConfigCreatedBy | null = null) {
     super(`restore request failed: ${status}`);
     this.name = "RestoreError";
   }
+}
+
+/** 那份設定檔是誰建的（票 15）。後端純記帳、不參與授權——它存在的理由是讓「已經有一份
+ *  config」這件事**說得出來源**，前端才不必靠落點對帳碰運氣（票 09 R3）。
+ *  欄位全部選填：舊的 config.json 沒有這一欄，手編過的也可能只有一半。 */
+export interface ConfigCreatedBy {
+  source?: string;        // "onboard" | "adopt-config"
+  request_id?: string;
+  dest?: string;          // adopt-config：那一次確認用的展開位置
 }
 
 async function postRestorePlan(
@@ -706,6 +727,9 @@ export async function fetchLandingSuggestions(
 
 export interface AdoptConfigBody {
   dest: string;
+  /** 這一次確認的識別碼（票 15）。**同一次確認的重送要用同一個**——後端據此回既有結果
+   *  （200）而不是 409，前端因此不必再用元件內的旗標推測「上一次到底寫進去了沒」。 */
+  request_id: string;
   accounts: { key: string; config_dir: string }[];
   extra?: { name: string; path: string }[];
 }
@@ -721,7 +745,11 @@ export async function adoptConfig(port: number, body: AdoptConfigBody): Promise<
     headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({ roots: [], extra: [], ...body }),
   });
-  if (!resp.ok) throw new RestoreError(await readErrorCode(resp), resp.status);
+  if (resp.ok) return;
+  // 409 帶著來源摘要（票 15）：**這一支要讀整個 body 而不只是 `error`**，否則呼叫端
+  // 說不出「那份設定檔是從哪一包建的」——那是使用者唯一分得出來的線索。
+  const payload = await readErrorPayload(resp);
+  throw new RestoreError(payload.error, resp.status, payload.created_by ?? null);
 }
 
 /** `install-plan` 的預覽。**不是備份包內容的完整分類**（增補 spec §2.5.1）：symlink、

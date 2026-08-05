@@ -506,11 +506,13 @@ describe("落點建議值與 adopt-config（票 03）", () => {
     const seen = captureBody({ ok: true });
     const m = await import("./sidecar");
     await m.adoptConfig(1234, {
-      dest: "/tmp/x",
+      request_id: "req-1", dest: "/tmp/x",
       accounts: [{ key: "work", config_dir: "/Users/me/.claude" }],
       extra: [{ name: ".agents", path: "/Users/me/.agents" }],
     });
     expect(seen[0].body).toEqual({
+      // 票 15：同一次確認的識別碼一路送到後端——後端據此在重送時回既有結果而不是 409
+      request_id: "req-1",
       dest: "/tmp/x",
       accounts: [{ key: "work", config_dir: "/Users/me/.claude" }],
       extra: [{ name: ".agents", path: "/Users/me/.agents" }],
@@ -523,7 +525,7 @@ describe("落點建議值與 adopt-config（票 03）", () => {
       ok: false, status: 400, json: async () => ({ error: "overlapping_config_dirs" }),
     }) as unknown as Response));
     const m = await import("./sidecar");
-    await expect(m.adoptConfig(1234, { dest: "/tmp/x", accounts: [] }))
+    await expect(m.adoptConfig(1234, { request_id: "req-1", dest: "/tmp/x", accounts: [] }))
       .rejects.toMatchObject({ code: "overlapping_config_dirs" });
   });
 });

@@ -193,6 +193,7 @@ def onboard(body: OnboardBody):
     def _build(config: AppConfig) -> None:
         for r in body.roots:  # 先全驗證帳號，任一非法則整批不落檔（raise 在 save 前）
             _require_account(config, r.default_account)
+        config.set_created_by({"source": "onboard"})   # 票 15：兩支都要記，否則不對稱
         seen: set[str] = set()
         for r in body.roots:
             path = _validated_dir_or_400(r.path)
