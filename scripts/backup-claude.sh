@@ -115,16 +115,30 @@ for key, acc in cfg.get("accounts", {}).items():
 # ── 掃描：這次會收什麼、跳過什麼、有沒有沒判定過的新東西 ──────────────────────
 stamp=$(date +%Y%m%d-%H%M)
 declare -a plan_lines=()
-# 供下方輸出目錄的前置檢查用。**交錯存放**（清單寫法, 解參照根, 清單寫法, 解參照根…）
-# 而不是用分隔字元把兩者串成一筆：路徑是不受限的檔案系統字串，tab 在 Unix 路徑裡合法，
-# 串起來再從第一個 tab 切開就會被路徑自己的 tab 帶偏，取到錯的 root 而讓檢查失準。
-declare -a extra_roots=()
+# 備份會讀的所有來源根（帳號的 config_dir ∪ 額外來源），供下方輸出目錄的前置檢查用。
+#
+# **交錯存放**（說明, 根, 說明, 根…）而不是用分隔字元把兩者串成一筆：路徑是不受限的
+# 檔案系統字串，tab 在 Unix 路徑裡合法，串起來再從第一個 tab 切開就會被路徑自己的 tab
+# 帶偏，取到錯的根而讓檢查失準。
+#
+# **尚不存在的來源根也要登記**：`mkdir -p "${OUT_DIR}"` 會把祖先一起建出來，於是打包
+# 迴圈重新判斷時它已經是目錄、照樣會被複製，而裡面只有剛寫進去的 staging。sidecar 的
+# `source_roots()` 同樣不管來源存不存在。存在的登記 `pwd -P`（解參照後的真實位置），
+# 不存在的只能登記展開後的字串——它沒有 inode，也就不會有別名問題。
+declare -a source_roots=()
 unknown_found=false
 outside_link_found=false
 total_kb=0
 
 while IFS=$'\t' read -r key raw_dir; do
   dir=$(expand_home "${raw_dir}")
+  # 空路徑不是來源根，登記它會讓 `case` 的 pattern 變成 `/*`＝**任何**輸出目錄都被判成
+  # 落在來源裡，備份完全不能用。含換行的 `config_dir` 會真的走到這裡：`accounts` 那份
+  # 逐行資料被換行拆成兩行，第二行沒有 tab，`raw_dir` 就是空的。
+  if [ -n "${dir}" ]; then
+    if [ -d "${dir}" ]; then dir_real=$(cd "${dir}" && pwd -P); else dir_real="${dir}"; fi
+    source_roots+=("帳號 ${key} 的目錄" "${dir_real}")
+  fi
   if [ ! -d "${dir}" ]; then
     plan_lines+=("  [${key}] ${raw_dir} — 目錄不存在，略過整個帳號")
     continue
@@ -183,6 +197,14 @@ done <<< "${accounts}"
 
 for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   p=$(expand_home "${extra}")
+  # 空路徑不登記，理由同帳號那一段（清單檔的讀取會跳過空行，這裡是對稱防護）。
+  # **用 `if` 不用 `[ -n … ] && …`**：後者為假時整個運算式回非零，`set -e` 會在這裡把
+  # 腳本殺掉——本檔下方記過同一個坑（`[ -e ] && echo` 那段）。
+  if [ -d "${p}" ]; then real=$(cd "${p}" && pwd -P); else real="${p}"; fi
+  if [ -n "${p}" ]; then
+    source_roots+=("額外來源 ${extra}" "${real}")
+  fi
+
   [ -e "${p}" ] || continue
   # extra 一律當**目錄樹**處理（見打包段的合約註解）。普通檔案、或指向檔案的連結都不收，
   # 但要出聲——靜靜跳過等於讓使用者以為收了。
@@ -196,8 +218,6 @@ for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   # **不要圖省事用 `du -L`**：那是整棵跟隨，會把內容裡的連結指向的東西也算進來，而打包
   # 不收那些——實測 5100 KB 對實收 100 KB。修掉「最外層算成 0」時很容易順手用 `-L`，
   # 那只是把一個「一邊有一邊沒有」換成另一個。
-  real=$(cd "${p}" && pwd -P)
-  extra_roots+=("${extra}" "${real}")
   kb=$(du -sk "${real}" 2>/dev/null | cut -f1 || echo 0)
   total_kb=$((total_kb + kb))
   plan_lines+=("$(printf '  [帳號外] %-24s %8s KB' "${extra}" "${kb}")")
@@ -227,17 +247,24 @@ fi
 # ── 打包 ────────────────────────────────────────────────────────────────────
 mkdir -p "${OUT_DIR}"
 
-# 輸出目錄不得落在任何 extra 的**解參照後**來源樹裡。解一層參照之後 `cp -R "${p}/."`
-# 複製的是連結指向的整棵樹，而 staging 就建在 OUT_DIR 底下——它會被複製進自己，路徑
-# 一路長到 `cp` 失敗（實測：訊息是一長串看不懂的路徑，且失敗前已經寫了大量資料）。
-# 舊寫法只存最外層那條連結，所以這個情境原本意外免疫，是新合約的前置條件。
+# 輸出目錄不得落在**任何來源根**之下（帳號的 config_dir ∪ 額外來源）。staging 建在
+# OUT_DIR 底下，落在來源裡就會被複製進自己。兩邊的症狀不同、都不可接受：
 #
-# **只擋 extra 這一格**：帳號側同樣有這個洞——`-o ~/.claude/skills/backups` 會讓 staging
-# 落在正在複製的 `skills` 樹裡（要落在 ASSET_DIRS 之一底下才觸發；`~/.claude/x` 這種不在
-# 清單上的目錄根本不會被複製，擋不擋都一樣）。那是既有缺口、不是本次改動造成的，另行
-# 處理。GUI 那條路由 sidecar 的 containment 擋（讀同一份清單、`os.stat` 跟隨連結，判得出
-# 解參照後的樹），這裡補的是腳本被直接執行的用法——用法說明明確支援它，而它拿不到
-# 那份防呆。
+#   - extra（票 17）：`cp -R "${p}/."` 會遞迴到路徑過長而**失敗**——rc≠0，訊息是一長串
+#     看不懂的路徑，且失敗前已經寫了大量資料。
+#   - 帳號（票 18）：`cp -R "${dir}/${item}"` 複製的是開始當下的樹、不追自己新寫的內容，
+#     所以**不報錯**。它靜靜地把 staging 連同輸出目錄裡**既有的備份包**收進新包——實測
+#     新包 3004 KB 含著舊包 3000 KB，每次備份吞掉之前所有的包，體積指數成長到磁碟滿，
+#     而每一次的 `rc` 都是 0。更隱蔽，也更持久。
+#
+# **粒度是粗判**（落在 config_dir 之下即擋，不細到 ASSET_DIRS），與 sidecar 的
+# `check_backup_dir` 逐字一致——實測它對 `<config_dir>/backups` 也回 `inside_source`。
+# 細判會讓判準隨 `ASSET_DIRS` 清單漂移：哪天把某個目錄加進清單，本來放行的落點就變成
+# 不安全，而使用者不會知道。
+#
+# 這是 sidecar 那份 containment 的第二份實作，**刻意的**：腳本必須能獨立執行、拿不到
+# sidecar 的 Python，而它的用法說明明確支援直接跑。兩邊漂移會造成「GUI 擋、CLI 放行」，
+# 所以 `test_script_and_sidecar_agree_on_containment` 拿同一組落點對帳釘住。
 #
 # 兩邊都是 `pwd -P` 的輸出（實際的目錄項名稱），字串比對足夠：APFS 的大小寫別名在
 # `pwd -P` 這一層已經正規化，不必為此引入 inode 比對。
@@ -248,8 +275,8 @@ mkdir -p "${OUT_DIR}"
 out_real=$(cd "${OUT_DIR}" && pwd -P)
 idx=0
 label=""
-for entry in ${extra_roots[@]+"${extra_roots[@]}"}; do
-  # 交錯陣列：偶數位是清單寫法、奇數位是解參照根（見宣告處的理由）。用位置計數而不是
+for entry in ${source_roots[@]+"${source_roots[@]}"}; do
+  # 交錯陣列：偶數位是說明、奇數位是來源根（見宣告處的理由）。用位置計數而不是
   # 「label 是不是空的」判斷——後者會依賴值的內容，路徑理論上可以是任何字串。
   if [ $((idx % 2)) -eq 0 ]; then
     label="${entry}"
@@ -258,7 +285,7 @@ for entry in ${extra_roots[@]+"${extra_roots[@]}"}; do
     case "${out_real}/" in
       "${root}"/*)
         echo "輸出目錄在備份來源裡：${out_real}" >&2
-        echo "    它落在 ${root} 之下，而那是額外來源 ${label} 指向的目錄。" >&2
+        echo "    它落在 ${root} 之下，而那是${label}。" >&2
         echo "    備份會把正在寫入的暫存區收進自己，換一個不在來源樹裡的輸出目錄。" >&2
         exit 1
         ;;

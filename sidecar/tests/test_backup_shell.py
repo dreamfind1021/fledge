@@ -657,6 +657,27 @@ def _script_with_extra_list(tmp_path: Path, lines: str) -> Path:
     return copy
 
 
+def _refusal_run(tmp_path: Path, home: Path, out: Path,
+                 script: Path | None = None, tag: str = "cp"):
+    """跑備份、期望被輸出目錄的前置檢查擋下。回 `(proc, sentinel)`。
+
+    假 `cp` 寫哨兵檔是為了驗**一個位元組都沒被複製**——只斷言「失敗了」會被壞掉的路徑
+    滿足：`cp` 自己遞迴爆炸同樣 rc≠0、同樣有錯誤訊息、trap 同樣會清乾淨（票 17 實踩）。
+
+    `tag` 讓同一個 `tmp_path` 裡的多次呼叫各有自己的哨兵（對帳測試會連跑好幾格）。"""
+    sentinel = tmp_path / f"{tag}-was-called"
+    fake = _fake_bin(tmp_path, "cp", (
+        "#!/bin/sh\n"
+        f"echo called >> '{sentinel}'\n"
+        "exec /bin/cp \"$@\"\n"
+    ))
+    env = {**os.environ, "HOME": str(home), "PATH": f"{fake}:{os.environ['PATH']}"}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    proc = subprocess.run(["/bin/bash", str(script or SCRIPT), "-o", str(out)],
+                          capture_output=True, text=True, env=env, timeout=120)
+    return proc, sentinel
+
+
 def test_extra_path_containing_a_tab_keeps_its_name(tmp_path: Path):
     """路徑含 tab 時，manifest 的 key 與包裡的目錄名必須一致（Codex 票 17 R2 F1）。
 
@@ -702,16 +723,7 @@ def test_tab_in_extra_path_does_not_bypass_the_output_dir_check(tmp_path: Path):
     (real / "skills" / "s.md").write_text("T", encoding="utf-8")
     script = _script_with_extra_list(tmp_path, "~/we\tird\n")
 
-    sentinel = tmp_path / "cp-was-called"
-    fake = _fake_bin(tmp_path, "cp", (
-        "#!/bin/sh\n"
-        f"echo called >> '{sentinel}'\n"
-        "exec /bin/cp \"$@\"\n"
-    ))
-    env = {**os.environ, "HOME": str(home), "PATH": f"{fake}:{os.environ['PATH']}"}
-    env.pop("FLEDGE_BACKUP_DIR", None)
-    proc = subprocess.run(["/bin/bash", str(script), "-o", str(real / "backups")],
-                          capture_output=True, text=True, env=env, timeout=120)
+    proc, sentinel = _refusal_run(tmp_path, home, real / "backups", script=script)
     assert proc.returncode != 0, "含 tab 的來源讓 containment 檢查被繞過"
     assert not sentinel.exists(), "已經開始複製才擋"
     assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
@@ -729,16 +741,7 @@ def test_glob_chars_in_extra_path_do_not_break_the_output_dir_check(tmp_path: Pa
     (weird / "skills" / "s.md").write_text("G", encoding="utf-8")
     script = _script_with_extra_list(tmp_path, "~/a[bc]\n")
 
-    sentinel = tmp_path / "cp-was-called"
-    fake = _fake_bin(tmp_path, "cp", (
-        "#!/bin/sh\n"
-        f"echo called >> '{sentinel}'\n"
-        "exec /bin/cp \"$@\"\n"
-    ))
-    env = {**os.environ, "HOME": str(home), "PATH": f"{fake}:{os.environ['PATH']}"}
-    env.pop("FLEDGE_BACKUP_DIR", None)
-    proc = subprocess.run(["/bin/bash", str(script), "-o", str(weird / "backups")],
-                          capture_output=True, text=True, env=env, timeout=120)
+    proc, sentinel = _refusal_run(tmp_path, home, weird / "backups", script=script)
     assert proc.returncode != 0, "glob 字元讓 containment 檢查漏擋"
     assert not sentinel.exists(), "已經開始複製才擋"
     assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
@@ -757,14 +760,7 @@ def test_refuses_when_output_dir_sits_inside_a_symlinked_extra(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     real = _symlinked_agents(tmp_path, home)
     out = real / "backups"
-    sentinel = tmp_path / "cp-was-called"
-    fake = _fake_bin(tmp_path, "cp", (
-        "#!/bin/sh\n"
-        f"echo called >> '{sentinel}'\n"
-        "exec /bin/cp \"$@\"\n"
-    ))
-    proc = _run(["-o", str(out)], home,
-                extra_env={"PATH": f"{fake}:{os.environ['PATH']}"})
+    proc, sentinel = _refusal_run(tmp_path, home, out)
     assert proc.returncode != 0, "備份把自己收進去了，卻沒有擋"
     assert not sentinel.exists(), "已經開始複製才擋＝擋得太晚"
     assert "輸出目錄在備份來源裡" in proc.stderr, \
@@ -789,6 +785,165 @@ def test_output_dir_outside_the_extra_tree_still_works(tmp_path: Path):
     _symlinked_agents(tmp_path, home)
     src = _pack_and_unpack(tmp_path, home)
     assert (src / "extra" / ".agents" / "skills" / "s.md").is_file()
+
+
+# ── 帳號側的來源根也要擋（票 18）──────────────────────────────────────────
+#
+# 票 17 只為 extra 加了這個檢查（解一層參照是那張票引入的回歸）。帳號側是既有缺口，
+# **而且行為與 extra 完全不同**：`cp -R "${dir}/${item}"` 複製的是開始當下的樹、不會追
+# 自己新寫的內容，所以**不會爆炸也不會失敗**——它靜靜地把 staging 連同輸出目錄裡既有的
+# 備份包一起收進新包。實測：新包 3004 KB 含著舊包 3000 KB，每次備份吞掉之前所有的包，
+# 體積指數成長到磁碟滿，而每一次的 `rc` 都是 0。
+#
+# 粒度用**粗判**（落在 `config_dir` 之下即擋，不細到 `ASSET_DIRS`），與 sidecar 的
+# `check_backup_dir` 逐字一致——實測它對 `<config_dir>/backups` 也回 `inside_source`。
+
+
+def test_refuses_when_output_dir_is_inside_an_account_config_dir(tmp_path: Path):
+    """帳號側最直接的一格：輸出目錄落在會被複製的資產目錄底下。"""
+    home, config_dir = _fake_home(tmp_path)
+    proc, sentinel = _refusal_run(tmp_path, home, config_dir / "skills" / "backups")
+    assert proc.returncode != 0, "備份會把 staging 與舊備份包收進新包，卻沒有擋"
+    assert not sentinel.exists(), "已經開始複製才擋"
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+    assert "default" in proc.stderr, f"沒說是哪個帳號：{proc.stderr[:300]!r}"
+
+
+def test_account_containment_is_coarse_not_per_asset_dir(tmp_path: Path):
+    """粒度是「落在 `config_dir` 之下」，不是「落在 `ASSET_DIRS` 之下」。
+
+    `<config_dir>/backups` 技術上不會被複製（`backups` 不在清單裡），但仍要擋：細判會讓
+    判準**隨 `ASSET_DIRS` 清單漂移**——哪天把某個目錄加進清單，本來放行的落點就變成不
+    安全，而使用者不會知道。sidecar 對這一格也回 `inside_source`，兩邊要一致。"""
+    home, config_dir = _fake_home(tmp_path)
+    proc, sentinel = _refusal_run(tmp_path, home, config_dir / "backups")
+    assert proc.returncode != 0, "粗判沒生效——這一格 sidecar 會擋而腳本放行"
+    assert not sentinel.exists()
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
+def test_refuses_when_output_dir_is_the_config_dir_itself(tmp_path: Path):
+    """輸出目錄恰好等於 `config_dir`。比對少一個尾斜線就會漏掉這一格。"""
+    home, config_dir = _fake_home(tmp_path)
+    proc, sentinel = _refusal_run(tmp_path, home, config_dir)
+    assert proc.returncode != 0
+    assert not sentinel.exists()
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
+def test_account_containment_follows_a_symlinked_config_dir(tmp_path: Path):
+    """`config_dir` 本身是 symlink 時，比對要用解參照後的真實位置。
+
+    sidecar 那側走 `os.stat`（跟隨連結）判身分，腳本用字串比對就必須先 `pwd -P`，否則
+    使用者用真實路徑指定輸出目錄時腳本放行、GUI 卻擋——兩份實作對同一件事給不同答案。"""
+    home = tmp_path / "home"
+    real_claude = tmp_path / "elsewhere" / "claude"
+    (real_claude / "skills").mkdir(parents=True)
+    (real_claude / "skills" / "a.md").write_text("x", encoding="utf-8")
+    home.mkdir()
+    (home / ".claude").symlink_to(real_claude, target_is_directory=True)
+    fledge = home / ".fledge"
+    fledge.mkdir()
+    (fledge / "config.json").write_text(json.dumps({
+        "version": 1, "roots": [],
+        "accounts": {"default": {"config_dir": str(home / ".claude"), "label": ""}},
+    }), encoding="utf-8")
+
+    # 用**真實路徑**指定輸出目錄——字串上與 config_dir 的寫法完全不同
+    proc, sentinel = _refusal_run(tmp_path, home, real_claude / "skills" / "backups")
+    assert proc.returncode != 0, "config_dir 是連結時漏擋了"
+    assert not sentinel.exists()
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
+def test_refuses_for_any_account_not_just_the_first(tmp_path: Path):
+    """多帳號時每一個 `config_dir` 都是來源根，不能只檢查第一個。"""
+    home, first = _fake_home(tmp_path)
+    second = home / ".claude-work"
+    (second / "skills").mkdir(parents=True)
+    (second / "skills" / "b.md").write_text("y", encoding="utf-8")
+    cfg = json.loads((home / ".fledge" / "config.json").read_text(encoding="utf-8"))
+    cfg["accounts"]["work"] = {"config_dir": str(second), "label": ""}
+    (home / ".fledge" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+    proc, sentinel = _refusal_run(tmp_path, home, second / "skills" / "backups")
+    assert proc.returncode != 0, "只檢查了第一個帳號"
+    assert not sentinel.exists()
+    assert "work" in proc.stderr, f"沒說是哪個帳號：{proc.stderr[:300]!r}"
+
+
+def test_refuses_when_the_source_root_does_not_exist_yet(tmp_path: Path):
+    """來源根**目前不存在**時也要擋——`mkdir -p "${OUT_DIR}"` 會把它建出來。
+
+    掃描階段對不存在的 `config_dir` 是「略過整個帳號」，但那之後 OUT_DIR 一建，祖先就
+    連帶存在了；打包迴圈重新判斷時它已經是目錄，於是照樣被複製，而裡面只有 staging。
+    sidecar 那側不管來源存不存在都列進 `source_roots`，這裡要一致。"""
+    home, _ = _fake_home(tmp_path)
+    ghost = home / ".claude-ghost"
+    cfg = json.loads((home / ".fledge" / "config.json").read_text(encoding="utf-8"))
+    cfg["accounts"]["ghost"] = {"config_dir": str(ghost), "label": ""}
+    (home / ".fledge" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    assert not ghost.exists()
+
+    proc, sentinel = _refusal_run(tmp_path, home, ghost / "backups")
+    assert proc.returncode != 0, "來源根還不存在就放行——OUT_DIR 一建它就存在了"
+    assert not sentinel.exists()
+
+
+def test_a_blank_source_root_never_matches_everything(tmp_path: Path):
+    """空字串不得被登記成來源根——`case` 的 pattern 會變成 `/*`，**任何**輸出目錄都判成
+    落在來源裡，備份完全不能用。
+
+    含換行的 `config_dir` 會真的走到這一格：`accounts` 那份逐行資料被換行拆成兩行，
+    第二行沒有 tab，`read -r key raw_dir` 讀到的 `raw_dir` 就是空的。這個回歸是**跑全套
+    測試**才抓到的（`test_restore_shell` 用真腳本產包），單獨跑 backup 那一檔看不到。"""
+    home = tmp_path / "home"
+    weird = home / "we\nird"
+    (weird / "skills").mkdir(parents=True)
+    (weird / "skills" / "demo.md").write_text("x", encoding="utf-8")
+    fledge = home / ".fledge"
+    fledge.mkdir()
+    (fledge / "config.json").write_text(json.dumps({
+        "version": 1, "roots": [],
+        "accounts": {"default": {"config_dir": str(weird), "label": ""}},
+    }), encoding="utf-8")
+
+    out = tmp_path / "out"     # 明顯不在任何來源樹裡
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, f"空的來源根把一切都擋掉了：{proc.stderr[:300]!r}"
+    assert list(out.glob("claude-backup-*.tar.gz"))
+
+
+def test_script_and_sidecar_agree_on_containment(tmp_path: Path):
+    """**對帳**：腳本與 sidecar 這兩份實作對同一組落點要給相同結論。
+
+    腳本裡有一份是刻意的——它必須能獨立執行、拿不到 sidecar 的 Python——但兩邊漂移的話
+    就會出現「GUI 擋、CLI 放行」（或反過來），而使用者不知道自己走的是哪一條。這正是
+    票 08／09 被連抓三輪的那一族：規則寫兩份必然漂移，除非有東西釘住。"""
+    from fledge_sidecar.app_config import AppConfig
+    from fledge_sidecar.backup.containment import check_backup_dir, source_roots
+
+    home, config_dir = _fake_home(tmp_path)
+    cfg = AppConfig(path=tmp_path / "cfg.json",
+                    accounts={"default": {"config_dir": str(config_dir), "label": ""}})
+    roots = source_roots(cfg, str(REPO / "scripts"))
+
+    cases = {
+        "asset": config_dir / "skills" / "backups",
+        "coarse": config_dir / "backups",
+        "itself": config_dir,
+        "outside": tmp_path / "elsewhere",
+    }
+    for tag, out in cases.items():
+        sidecar_blocks = check_backup_dir(str(out), roots) != "ok"
+        proc, _ = _refusal_run(tmp_path, home, out, tag=tag)
+        script_blocks = proc.returncode != 0
+        assert script_blocks == sidecar_blocks, (
+            f"[{tag}] {out}：腳本擋={script_blocks} 但 sidecar 擋={sidecar_blocks}"
+        )
+    # 前提哨兵：這組案例必須真的涵蓋兩種結論，否則「全擋」或「全放行」也會讓上面全綠
+    verdicts = {check_backup_dir(str(o), roots) != "ok" for o in cases.values()}
+    assert verdicts == {True, False}, "案例沒有涵蓋擋與不擋兩種結論"
 
 
 def test_manifest_lists_exactly_what_was_packed(tmp_path: Path):
