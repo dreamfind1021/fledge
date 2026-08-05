@@ -115,7 +115,10 @@ for key, acc in cfg.get("accounts", {}).items():
 # ── 掃描：這次會收什麼、跳過什麼、有沒有沒判定過的新東西 ──────────────────────
 stamp=$(date +%Y%m%d-%H%M)
 declare -a plan_lines=()
-declare -a extra_roots=()      # 「原始寫法 TAB 解參照後的根」，供下方輸出目錄的前置檢查用
+# 供下方輸出目錄的前置檢查用。**交錯存放**（清單寫法, 解參照根, 清單寫法, 解參照根…）
+# 而不是用分隔字元把兩者串成一筆：路徑是不受限的檔案系統字串，tab 在 Unix 路徑裡合法，
+# 串起來再從第一個 tab 切開就會被路徑自己的 tab 帶偏，取到錯的 root 而讓檢查失準。
+declare -a extra_roots=()
 unknown_found=false
 outside_link_found=false
 total_kb=0
@@ -194,7 +197,7 @@ for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   # 不收那些——實測 5100 KB 對實收 100 KB。修掉「最外層算成 0」時很容易順手用 `-L`，
   # 那只是把一個「一邊有一邊沒有」換成另一個。
   real=$(cd "${p}" && pwd -P)
-  extra_roots+=("$(printf '%s\t%s' "${extra}" "${real}")")
+  extra_roots+=("${extra}" "${real}")
   kb=$(du -sk "${real}" 2>/dev/null | cut -f1 || echo 0)
   total_kb=$((total_kb + kb))
   plan_lines+=("$(printf '  [帳號外] %-24s %8s KB' "${extra}" "${kb}")")
@@ -229,25 +232,39 @@ mkdir -p "${OUT_DIR}"
 # 一路長到 `cp` 失敗（實測：訊息是一長串看不懂的路徑，且失敗前已經寫了大量資料）。
 # 舊寫法只存最外層那條連結，所以這個情境原本意外免疫，是新合約的前置條件。
 #
-# **只擋 extra 這一格**：帳號 `config_dir` 同樣有這個洞（`-o ~/.claude/x` 一樣會遞迴），
-# 但那是既有缺口、不是本次改動造成的，另行處理。GUI 那條路由 sidecar 的 containment
-# 擋（讀同一份清單、`os.stat` 跟隨連結，判得出解參照後的樹），這裡補的是腳本被直接
-# 執行的用法——腳本的用法說明明確支援它，而它拿不到那份防呆。
+# **只擋 extra 這一格**：帳號側同樣有這個洞——`-o ~/.claude/skills/backups` 會讓 staging
+# 落在正在複製的 `skills` 樹裡（要落在 ASSET_DIRS 之一底下才觸發；`~/.claude/x` 這種不在
+# 清單上的目錄根本不會被複製，擋不擋都一樣）。那是既有缺口、不是本次改動造成的，另行
+# 處理。GUI 那條路由 sidecar 的 containment 擋（讀同一份清單、`os.stat` 跟隨連結，判得出
+# 解參照後的樹），這裡補的是腳本被直接執行的用法——用法說明明確支援它，而它拿不到
+# 那份防呆。
 #
 # 兩邊都是 `pwd -P` 的輸出（實際的目錄項名稱），字串比對足夠：APFS 的大小寫別名在
 # `pwd -P` 這一層已經正規化，不必為此引入 inode 比對。
+#
+# `"${root}"` 的**引號不可省**：case 的 pattern 位置若讓變數裸展開，路徑裡的 `[bc]`、`*`
+# 會被當成萬用字元，`/home/a[bc]/*` 反而去匹配 `/home/ab/…`——真正落在來源裡的輸出目錄
+# 漏擋。加引號後那段是字面比對，只有結尾的 `/*` 保留 glob 意義。
 out_real=$(cd "${OUT_DIR}" && pwd -P)
+idx=0
+label=""
 for entry in ${extra_roots[@]+"${extra_roots[@]}"}; do
-  root=${entry#*$'\t'}
-  label=${entry%%$'\t'*}
-  case "${out_real}/" in
-    "${root}"/*)
-      echo "輸出目錄在備份來源裡：${out_real}" >&2
-      echo "    它落在 ${root} 之下，而那是額外來源 ${label} 指向的目錄。" >&2
-      echo "    備份會把正在寫入的暫存區收進自己，換一個不在來源樹裡的輸出目錄。" >&2
-      exit 1
-      ;;
-  esac
+  # 交錯陣列：偶數位是清單寫法、奇數位是解參照根（見宣告處的理由）。用位置計數而不是
+  # 「label 是不是空的」判斷——後者會依賴值的內容，路徑理論上可以是任何字串。
+  if [ $((idx % 2)) -eq 0 ]; then
+    label="${entry}"
+  else
+    root="${entry}"
+    case "${out_real}/" in
+      "${root}"/*)
+        echo "輸出目錄在備份來源裡：${out_real}" >&2
+        echo "    它落在 ${root} 之下，而那是額外來源 ${label} 指向的目錄。" >&2
+        echo "    備份會把正在寫入的暫存區收進自己，換一個不在來源樹裡的輸出目錄。" >&2
+        exit 1
+        ;;
+    esac
+  fi
+  idx=$((idx + 1))
 done
 
 out="${OUT_DIR}/claude-backup-${stamp}.tar.gz"
@@ -326,17 +343,14 @@ for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   mkdir -p "${stage}/extra/${name}"
   cp -Rc "${p}/." "${stage}/extra/${name}/" 2>/dev/null \
     || cp -R "${p}/." "${stage}/extra/${name}/"
-  # manifest 只從這份清單產生，不重新探測來源（見下方 manifest 段的理由）
-  packed_extra+=("$(printf '%s\t%s' "${name}" "${p}")")
+  # manifest 只從這份清單產生，不重新探測來源（見下方 manifest 段的理由）。
+  # 名字與路徑**交錯存放**，不用分隔字元串接——理由同 extra_roots。
+  packed_extra+=("${name}" "${p}")
 done
 
 mkdir -p "${stage}/fledge"
 cp "${CONFIG_JSON}" "${stage}/fledge/config.json"
 
-# 用 `|| continue` 而不是 `[ -e ] && echo`：後者在「所有 EXTRA_PATHS 都不存在」時會讓
-# 迴圈以非零狀態結束，command substitution 跟著非零，`set -e` 就在**做完所有工作之後**
-# 把腳本殺掉。有 ~/.agents 的機器永遠踩不到，沒有的機器每次備份都在最後一刻失敗。
-#
 # **manifest 描述的是「包裡有什麼」，所以只能從打包結果產生**（Codex 票 17 R1 F1）。
 # 原本這裡對現役來源重新探測一次，於是打包與 manifest 是兩次獨立觀測：來源在兩段之間
 # 被刪掉或換掉，包裡有 `extra/.agents` 而 manifest 沒有那個 key——還原端靠 manifest 列出
@@ -347,13 +361,14 @@ cp "${CONFIG_JSON}" "${stage}/fledge/config.json"
 # 位置。還原端只用 key 查本機 config（`local_live_paths` 明確不退回 manifest 的路徑），
 # 這個值純粹是舊機資訊。
 #
-# 空陣列時 `printf` 仍會輸出一個空行，但下面的 Python 只收含 tab 的行，空行自然被濾掉。
-extra_json=$(printf '%s\n' ${packed_extra[@]+"${packed_extra[@]}"})
-python3 - "${stage}/manifest.json" "${stamp}" "${extra_json}" <<'PY'
+# 名字與路徑**逐項走 argv**（交錯：name path name path…），不串成一份文字再解析：
+# 兩者都是不受限的檔案系統字串，用 tab 串再切會被路徑自己的 tab 帶偏，用換行分行則會被
+# `splitlines()` 截斷——兩種字元在 Unix 路徑裡都合法。argv 沒有這個問題。
+python3 - "${stage}/manifest.json" "${stamp}" ${packed_extra[@]+"${packed_extra[@]}"} <<'PY'
 import json, os, sys, platform
-out_path, stamp, extra_raw = sys.argv[1], sys.argv[2], sys.argv[3]
+out_path, stamp = sys.argv[1], sys.argv[2]
 cfg = json.load(open(os.path.expanduser("~/.fledge/config.json")))
-extra = dict(line.split("\t", 1) for line in extra_raw.splitlines() if "\t" in line)
+extra = dict(zip(sys.argv[3::2], sys.argv[4::2]))
 json.dump({
     "format": 1,
     "created": stamp,

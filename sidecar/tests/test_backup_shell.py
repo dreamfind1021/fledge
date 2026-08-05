@@ -645,6 +645,105 @@ def test_a_non_directory_extra_is_skipped_and_says_so(tmp_path: Path):
     assert manifest["extra"] == {}
 
 
+def _script_with_extra_list(tmp_path: Path, lines: str) -> Path:
+    """把腳本複製到自帶 extra 清單檔的目錄，用來測 repo 那份清單以外的路徑形狀。
+    （腳本以 `SCRIPT_DIR` 找清單檔，比照 `test_missing_shared_list_file_is_not_fatal`。）"""
+    d = tmp_path / "scriptdir"
+    d.mkdir(exist_ok=True)
+    copy = d / "backup-claude.sh"
+    copy.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    copy.chmod(0o755)
+    (d / "backup-extra-paths.txt").write_text(lines, encoding="utf-8")
+    return copy
+
+
+def test_extra_path_containing_a_tab_keeps_its_name(tmp_path: Path):
+    """路徑含 tab 時，manifest 的 key 與包裡的目錄名必須一致（Codex 票 17 R2 F1）。
+
+    tab 在 Unix 路徑裡合法。用 tab 把兩個不受限的檔案系統字串串成一筆記錄，再從第一個
+    tab 切開，路徑自己的 tab 就會把切割點帶偏——manifest 的 key 被截短，還原端拿著一個
+    對不上包內容的名字，那一項就選不出來。"""
+    home, _ = _fake_home(tmp_path)
+    weird = home / "we\tird"
+    (weird / "skills").mkdir(parents=True)
+    (weird / "skills" / "s.md").write_text("T", encoding="utf-8")
+    script = _script_with_extra_list(tmp_path, "~/we\tird\n")
+
+    out = tmp_path / "out"
+    env = {**os.environ, "HOME": str(home)}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    proc = subprocess.run(["/bin/bash", str(script), "-o", str(out)],
+                          capture_output=True, text=True, env=env, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    dest = tmp_path / "unpacked"
+    with tarfile.open(bundle) as tf:
+        tf.extractall(dest, filter="tar")
+
+    assert (dest / "extra" / "we\tird" / "skills" / "s.md").is_file(), \
+        "包裡的目錄名不是完整的 basename"
+    manifest = json.loads((dest / "manifest.json").read_text(encoding="utf-8"))
+    assert list(manifest["extra"]) == ["we\tird"], \
+        f"manifest 的 key 與包內容對不上：{list(manifest['extra'])!r}"
+
+
+def test_tab_in_extra_path_does_not_bypass_the_output_dir_check(tmp_path: Path):
+    """含 tab 的來源路徑不得讓輸出目錄的 containment 檢查失準（Codex 票 17 R2 F1）。
+
+    切割點被帶偏時，比對用的 root 會是路徑的一段殘餘，於是真正落在來源樹裡的輸出
+    目錄反而通過檢查——備份照樣把 staging 收進自己。
+
+    **tab 要在清單那一側**：記錄是「清單寫法 TAB 解參照根」，只有前半含 tab 才會讓
+    「切第一個 tab」取到錯的後半。第一版把 tab 放在 target 上，切割點恰好還是對的，
+    測試就綠著——fixture 不觸發要測的情境。"""
+    home, _ = _fake_home(tmp_path)
+    real = home / "we\tird"
+    (real / "skills").mkdir(parents=True)
+    (real / "skills" / "s.md").write_text("T", encoding="utf-8")
+    script = _script_with_extra_list(tmp_path, "~/we\tird\n")
+
+    sentinel = tmp_path / "cp-was-called"
+    fake = _fake_bin(tmp_path, "cp", (
+        "#!/bin/sh\n"
+        f"echo called >> '{sentinel}'\n"
+        "exec /bin/cp \"$@\"\n"
+    ))
+    env = {**os.environ, "HOME": str(home), "PATH": f"{fake}:{os.environ['PATH']}"}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    proc = subprocess.run(["/bin/bash", str(script), "-o", str(real / "backups")],
+                          capture_output=True, text=True, env=env, timeout=120)
+    assert proc.returncode != 0, "含 tab 的來源讓 containment 檢查被繞過"
+    assert not sentinel.exists(), "已經開始複製才擋"
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
+def test_glob_chars_in_extra_path_do_not_break_the_output_dir_check(tmp_path: Path):
+    """來源路徑含 glob 特殊字元時 containment 仍要正確。
+
+    `case` 的 pattern 會把 `[bc]` 當「b 或 c 其中一個字元」，於是 `/home/a[bc]/*` 匹配的是
+    `/home/ab/…`，真正落在 `/home/a[bc]/` 裡的輸出目錄反而**漏擋**。比對必須是純字串，
+    不能經過任何 pattern 展開。含中括號的目錄名並不罕見。"""
+    home, _ = _fake_home(tmp_path)
+    weird = home / "a[bc]"
+    (weird / "skills").mkdir(parents=True)
+    (weird / "skills" / "s.md").write_text("G", encoding="utf-8")
+    script = _script_with_extra_list(tmp_path, "~/a[bc]\n")
+
+    sentinel = tmp_path / "cp-was-called"
+    fake = _fake_bin(tmp_path, "cp", (
+        "#!/bin/sh\n"
+        f"echo called >> '{sentinel}'\n"
+        "exec /bin/cp \"$@\"\n"
+    ))
+    env = {**os.environ, "HOME": str(home), "PATH": f"{fake}:{os.environ['PATH']}"}
+    env.pop("FLEDGE_BACKUP_DIR", None)
+    proc = subprocess.run(["/bin/bash", str(script), "-o", str(weird / "backups")],
+                          capture_output=True, text=True, env=env, timeout=120)
+    assert proc.returncode != 0, "glob 字元讓 containment 檢查漏擋"
+    assert not sentinel.exists(), "已經開始複製才擋"
+    assert "輸出目錄在備份來源裡" in proc.stderr, proc.stderr[:300]
+
+
 def test_refuses_when_output_dir_sits_inside_a_symlinked_extra(tmp_path: Path):
     """輸出目錄落在 extra 解參照後的樹裡面時，在寫任何東西之前就拒絕（Codex 票 17 R1 F2）。
 
