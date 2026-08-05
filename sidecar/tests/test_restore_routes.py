@@ -1785,6 +1785,39 @@ def test_adopt_config_replay_survives_a_vanished_source(tmp_path: Path, monkeypa
     assert cfg.read_bytes() == before
 
 
+def test_adopt_config_replay_survives_a_vanished_symlinked_source(
+        tmp_path: Path, monkeypatch):
+    """**指紋不得依賴檔案系統的當下狀態**（Codex 票 15 R3）。
+
+    `dest` 是 symlink 時（展開到一個連結指向的位置），第一次算指紋會跟隨連結拿到真實
+    路徑；連結與目標一起被刪掉之後，同一份 body 再算會拿到連結本身的字面路徑——指紋不符、
+    捷徑不走、接著讀已消失的來源回 400。**上一條 replay 測試用普通目錄，刪前刪後 resolve
+    的字串相同，所以它是假綠、蓋不到這條分支。**
+
+    實測（macOS）：`resolve_best_effort` 對存在的 symlink 回 `/.../real`、刪除後回
+    `/.../link`；`normpath` 兩次都是 `/.../link`。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    cfg = tmp_path / "fledge-config.json"
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    real = make_staging(tmp_path)
+    link = tmp_path / "unpacked-link"
+    link.symlink_to(real, target_is_directory=True)
+
+    client = TestClient(create_app())
+    first = _adopt_with_id(client, link, home, "req-A")
+    assert first.status_code == 200
+    before = cfg.read_bytes()
+
+    link.unlink()
+    shutil.rmtree(real)
+    again = _adopt_with_id(client, link, home, "req-A")
+    assert again.status_code == 200
+    assert again.json() == first.json()
+    assert cfg.read_bytes() == before
+
+
 def test_adopt_config_still_validates_the_source_for_a_new_request(
         tmp_path: Path, monkeypatch):
     """反面：**不是重送**的請求照樣要驗來源。冪等的捷徑只給「同一次確認」，

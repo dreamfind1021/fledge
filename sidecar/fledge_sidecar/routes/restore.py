@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from dataclasses import asdict
 
 from fastapi import APIRouter
@@ -172,9 +173,15 @@ def _request_fingerprint(body: AdoptConfigBody) -> str:
     config，而前端以為新落點生效了（帳號那側有落點對帳擋著，`extra` 那側沒有）。
 
     **排序後才雜湊**：指紋是內容的指紋不是 JSON 字面的，同一組落點換個順序仍是同一次。
-    `dest` 也進去——同一個 id 指向另一包必然是另一次確認。"""
+    `dest` 也進去——同一個 id 指向另一包必然是另一次確認。
+
+    **完全不碰檔案系統**（Codex 票 15 R3）：`dest` 只做字面正規化（`normpath`），不能用
+    `resolve_best_effort`——那會跟隨 symlink，於是「`dest` 是連結、第一次成功後連結與目標
+    一起被刪掉」時兩次算出來的指紋不同，捷徑不走、接著讀已消失的來源回 400，正好打在本
+    契約最需要成立的那一格。實測（macOS）：存在時回 `/…/real`、刪除後回 `/…/link`。
+    `created_by.dest`（給人看的那一欄）仍存 resolved，兩者用途不同。"""
     payload = json.dumps({
-        "dest": resolve_best_effort(body.dest),
+        "dest": os.path.normpath(body.dest.strip()),
         "accounts": sorted((a.key, a.config_dir.strip()) for a in body.accounts),
         "extra": sorted((e.name, e.path.strip()) for e in body.extra),
         "roots": sorted((r.path.strip(), r.default_account) for r in body.roots),
