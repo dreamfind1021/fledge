@@ -136,12 +136,24 @@ export function TargetsCard({ port, dest, info, saved, requestId, onSaved }: Tar
     })();
   }, [port, dest, info, t]);
 
+  /** 換一個落點＝**新的一次確認**（票 15 R4）：把上一輪留下的整組狀態一起清掉。
+   *
+   *  只清 `reuseAgreed` 的話會湊出一個矛盾的畫面——它同時宣稱「正在沿用既有設定」、
+   *  按鈕說「重新讀取」，而點下去其實是送一份改過的新確認。鍵盤改與「選擇…」是同一
+   *  件事，所以走同一支：兩個入口各寫一次必然漂移。 */
+  const changeSpot = useCallback((id: string, value: string) => {
+    setValues((v) => ({ ...v, [id]: value }));
+    setReuseAgreed(false);
+    setReused(false);
+    setLastFailure(null);
+    setSaveError(null);
+    setConflict(null);
+  }, []);
+
   const browse = useCallback(async (id: string) => {
     const dir = await pickDirectory();
-    if (dir === null) return;
-    setValues((v) => ({ ...v, [id]: dir }));
-    setReuseAgreed(false);      // 同上：換了落點就是新的一次確認
-  }, []);
+    if (dir !== null) changeSpot(id, dir);
+  }, [changeSpot]);
 
   const filled = (s: LandingSpot) => (values[spotId(s)] ?? "").trim();
   const skipped = (spots ?? []).filter((s) => !filled(s));
@@ -252,12 +264,7 @@ export function TargetsCard({ port, dest, info, saved, requestId, onSaved }: Tar
           <div className="ob-row">
             <input
               value={values[spotId(s)] ?? ""}
-              onChange={(e) => {
-                setValues((v) => ({ ...v, [spotId(s)]: e.target.value }));
-                // 改了落點＝這是**新的一次確認**，先前「沿用既有設定」的決定不再適用
-                // （票 15 R1 F2）：不撤回的話會拿新落點配舊 config 直接走收尾。
-                setReuseAgreed(false);
-              }}
+              onChange={(e) => changeSpot(spotId(s), e.target.value)}
               placeholder={t("mig.targets.placeholder")}
               disabled={saved || busy}
               className="ob-input"

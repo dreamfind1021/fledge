@@ -279,11 +279,39 @@ describe("TargetsCard", () => {
 
     fireEvent.change(ui.getByDisplayValue("/Users/me/.claude"),
                      { target: { value: "/Users/me/somewhere-else" } });
-    ui.getByText(zh.mig.targets.retry).click();
+
+    // **整組狀態都要跟著重置**（Codex 票 15 R4）：只清 `reuseAgreed` 的話，畫面會同時
+    // 宣稱「正在沿用既有設定」、按鈕說「重新讀取」，而點下去其實是送一份改過的新確認。
+    // 上一版只驗了「有重新 POST」——那是第六條假綠。
+    expect(ui.queryByText(zh.mig.targets.reused)).toBeNull();
+    expect(ui.queryByText(zh.mig.targets.errors.reloadFailed)).toBeNull();
+    expect(ui.getByText(zh.mig.targets.save)).toBeTruthy();   // 不是「重新讀取」
+
+    ui.getByText(zh.mig.targets.save).click();
     // 改了落點 → 重新走一次落檔（而不是拿新落點配舊 config 直接收尾）
     await waitFor(() => expect(adoptConfig).toHaveBeenCalledTimes(2));
     expect(adoptConfig.mock.calls[1][1].accounts).toEqual(
       [{ key: "work", config_dir: "/Users/me/somewhere-else" }]);
+  });
+
+  it("用「選擇…」換落點也走同一條重置", async () => {
+    // 兩個入口各寫一次必然漂移——鍵盤改與按鈕選是同一件事：這是新的一次確認
+    adoptConfig.mockRejectedValue(new RestoreError("config_already_initialized", 409, {
+      source: "onboard",
+    }));
+    pickDirectory.mockResolvedValue("/Users/me/picked");
+    const ui = render(
+      <TargetsCard port={1234} dest="/tmp/staging" info={INFO} saved={false}
+                   requestId="req-1" onSaved={vi.fn(async () => {})} />,
+    );
+    await loaded(ui);
+    ui.getByText(zh.mig.targets.save).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.conflict.reuse)).toBeTruthy());
+    ui.getByText(zh.mig.targets.conflict.reuse).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.reused)).toBeTruthy());
+
+    ui.getAllByText(zh.mig.targets.browse)[0].click();
+    await waitFor(() => expect(ui.queryByText(zh.mig.targets.reused)).toBeNull());
   });
 
   it("選了沿用之後，說明是中性的、不含刪檔指示", async () => {
