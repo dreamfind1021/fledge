@@ -180,9 +180,21 @@ done <<< "${accounts}"
 for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   p=$(expand_home "${extra}")
   [ -e "${p}" ] || continue
-  kb=$(du -sk "${p}" 2>/dev/null | cut -f1 || echo 0)
+  # extra 一律當**目錄樹**處理（見打包段的合約註解）。普通檔案、或指向檔案的連結都不收，
+  # 但要出聲——靜靜跳過等於讓使用者以為收了。
+  if [ ! -d "${p}" ]; then
+    plan_lines+=("  [帳號外] ${extra} — 不是目錄，不收")
+    continue
+  fi
+  # `-L`：`du` 對 symlink 參數預設**不跟隨**，回的是連結本身的 0 KB。備份會收它指向的
+  # 內容，估算卻報 0——使用者看到「0 KB」然後拿到大好幾 GB 的包。
+  kb=$(du -Lsk "${p}" 2>/dev/null | cut -f1 || echo 0)
   total_kb=$((total_kb + kb))
   plan_lines+=("$(printf '  [帳號外] %-24s %8s KB' "${extra}" "${kb}")")
+  # 收的東西與清單上寫的路徑不是同一個位置時，備份前就要看得到
+  if [ -L "${p}" ]; then
+    plan_lines+=("           ↳ 是連結，實收 $(cd "${p}" && pwd -P) 的內容")
+  fi
 done
 
 printf '%s\n' "${plan_lines[@]}"
@@ -256,11 +268,29 @@ while IFS=$'\t' read -r key raw_dir; do
   done
 done <<< "${accounts}"
 
+# extra 的合約：**解一層參照後的真實目錄樹**。
+#
+# `~/.agents` 本身是連結（skill 真身放第三個位置，常見設置）時，`cp -R "${p}"` 不跟隨
+# 最外層，包裡會是一條指向**舊機絕對路徑**的連結。還原端是 fd-relative `O_NOFOLLOW`，
+# 那一項必然 `not_a_directory` 而腳本 rc = 0——使用者拿到一個看起來成功、裡面有一項
+# 永遠搬不回去的包，失敗要到移機的最後一步才看得到。
+#
+# **界線是「只解最外層那一層」**：`cp -R "${p}/."` 複製的是連結指向的目錄內容，而內容
+# 裡的連結仍原樣存連結（`-R` 的天然行為）。不要改成 `-L`——那會把每條連結指向的東西
+# 都拖進來，備份包會膨脹成不相干的資料。跟隨最外層是使用者的意圖（那條路徑是他自己
+# 寫進 `backup-extra-paths.txt` 的），跟隨內容裡的連結不是。
+#
+# 目的地名字**明確給 `${name}`**，兩個理由：`cp -R "${p}/" "${stage}/extra/"`（尾斜線）
+# 在 BSD cp 會把內容攤平到 `extra/` 底下，`.agents` 這個名字整個消失；而名字必須來自
+# **連結本身**的 basename，不是 target 的——manifest 的 key、`_safe_extra_name`（票 13）、
+# 落點對應三處都靠它，用 target 的名字會讓還原端拿到一個本機 config 查不到的 key。
 for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   p=$(expand_home "${extra}")
-  [ -e "${p}" ] || continue
-  mkdir -p "${stage}/extra"
-  cp -Rc "${p}" "${stage}/extra/" 2>/dev/null || cp -R "${p}" "${stage}/extra/"
+  [ -d "${p}" ] || continue     # `-d` 跟隨連結；非目錄在掃描階段已經說明過了
+  name=$(basename "${p}")
+  mkdir -p "${stage}/extra/${name}"
+  cp -Rc "${p}/." "${stage}/extra/${name}/" 2>/dev/null \
+    || cp -R "${p}/." "${stage}/extra/${name}/"
 done
 
 mkdir -p "${stage}/fledge"
@@ -269,9 +299,16 @@ cp "${CONFIG_JSON}" "${stage}/fledge/config.json"
 # 用 `|| continue` 而不是 `[ -e ] && echo`：後者在「所有 EXTRA_PATHS 都不存在」時會讓
 # 迴圈以非零狀態結束，command substitution 跟著非零，`set -e` 就在**做完所有工作之後**
 # 把腳本殺掉。有 ~/.agents 的機器永遠踩不到，沒有的機器每次備份都在最後一刻失敗。
+#
+# 判準要與上面的打包迴圈**逐字一致**（`-d`）：一邊 `-e` 一邊 `-d` 的話，非目錄的項目會被
+# 寫進 manifest 卻不在包裡，還原端就拿著一個查得到 key、找不到內容的項目對帳。
+#
+# 值存**連結本身**的路徑（`~/.agents`），不是解參照後的真實路徑：那是使用者在舊機認得的
+# 位置。還原端只用 key 查本機 config（`local_live_paths` 明確不退回 manifest 的路徑），
+# 這個值純粹是舊機資訊。
 extra_json=$(printf '%s\n' ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"} | while read -r e; do
   p=$(expand_home "${e}")
-  [ -e "${p}" ] || continue
+  [ -d "${p}" ] || continue
   printf '%s\t%s\n' "$(basename "${p}")" "${p}"
 done)
 python3 - "${stage}/manifest.json" "${stamp}" "${extra_json}" <<'PY'
