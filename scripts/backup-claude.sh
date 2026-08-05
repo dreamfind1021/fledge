@@ -186,14 +186,19 @@ for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
     plan_lines+=("  [帳號外] ${extra} — 不是目錄，不收")
     continue
   fi
-  # `-L`：`du` 對 symlink 參數預設**不跟隨**，回的是連結本身的 0 KB。備份會收它指向的
-  # 內容，估算卻報 0——使用者看到「0 KB」然後拿到大好幾 GB 的包。
-  kb=$(du -Lsk "${p}" 2>/dev/null | cut -f1 || echo 0)
+  # 估算要與打包**同一條界線**：先把最外層解開（`du` 對 symlink 參數不跟隨，直接量會
+  # 得到連結本身的 0 KB），再用不跟隨的 `du` 量那棵樹。
+  #
+  # **不要圖省事用 `du -L`**：那是整棵跟隨，會把內容裡的連結指向的東西也算進來，而打包
+  # 不收那些——實測 5100 KB 對實收 100 KB。修掉「最外層算成 0」時很容易順手用 `-L`，
+  # 那只是把一個「一邊有一邊沒有」換成另一個。
+  real=$(cd "${p}" && pwd -P)
+  kb=$(du -sk "${real}" 2>/dev/null | cut -f1 || echo 0)
   total_kb=$((total_kb + kb))
   plan_lines+=("$(printf '  [帳號外] %-24s %8s KB' "${extra}" "${kb}")")
   # 收的東西與清單上寫的路徑不是同一個位置時，備份前就要看得到
   if [ -L "${p}" ]; then
-    plan_lines+=("           ↳ 是連結，實收 $(cd "${p}" && pwd -P) 的內容")
+    plan_lines+=("           ↳ 是連結，實收 ${real} 的內容")
   fi
 done
 

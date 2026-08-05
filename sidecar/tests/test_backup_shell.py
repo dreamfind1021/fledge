@@ -585,6 +585,29 @@ def test_scan_reports_the_real_size_of_a_symlinked_extra(tmp_path: Path):
     assert kb >= 190, f"連結的 extra 大小沒跟隨算：{rows[0]!r}"
 
 
+def test_scan_size_uses_the_same_boundary_as_packing(tmp_path: Path):
+    """估算與打包必須用**同一條界線**：只解最外層。
+
+    `du -L` 是整棵跟隨，會把內容裡的連結指向的東西也算進來——而打包不跟隨那些，於是
+    預估比實收大好幾十倍（實測 5100 KB vs 實收 100 KB）。修「最外層不算大小」時很容易
+    順手用 `-L`，那是把一個「一邊有一邊沒有」換成另一個。"""
+    home, _ = _fake_home(tmp_path)
+    real = _symlinked_agents(tmp_path, home)
+    (real / "skills" / "own.bin").write_bytes(b"x" * 100_000)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "huge.bin").write_bytes(b"x" * 3_000_000)
+    (real / "skills" / "linked").symlink_to(elsewhere, target_is_directory=True)
+
+    proc = _run(["--list", "-o", str(tmp_path / "out")], home)
+    assert proc.returncode == 0, proc.stderr
+    rows = [ln for ln in proc.stdout.splitlines() if "[帳號外]" in ln and ".agents" in ln]
+    assert len(rows) == 1, proc.stdout
+    kb = int(rows[0].split()[-2])
+    assert kb >= 90, f"最外層沒解參照，估算又變回 0：{rows[0]!r}"
+    assert kb < 1000, f"估算跟隨了內容裡的連結（實收不含那些）：{kb} KB"
+
+
 def test_scan_says_where_a_symlinked_extra_really_points(tmp_path: Path):
     """收的東西與使用者寫在清單裡的路徑不是同一個位置時，備份前就要看得到。"""
     home, _ = _fake_home(tmp_path)
