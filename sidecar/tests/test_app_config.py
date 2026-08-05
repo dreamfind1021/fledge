@@ -422,3 +422,65 @@ def test_normalize_subscription_keeps_the_loose_coercions_it_always_had():
         {"name": "Codex", "monthly_cost": 1.0}
     assert normalize_subscription({"name": 123, "monthly_cost": 0}) == \
         {"name": "123", "monthly_cost": 0.0}
+
+
+# ---------- 票 15：create_if_absent 的冪等契約 ----------
+#
+# 409 原本只證明「有一份 config」，不帶任何資訊說明它是誰建的。三種處境因此分不出：
+# 這次 POST 其實成功了只是回應遺失／使用者在重跑引導／另一個來源放了一份無關的 config。
+
+
+def test_create_if_absent_is_idempotent_for_the_same_request(tmp_path: Path):
+    """`matches` 說「這就是同一次請求」→ 回**既有**的 config，不重跑 build。
+
+    重跑 build 會用新 body 覆寫既有內容，那不是冪等是覆蓋——回應遺失後重送的使用者
+    要拿回的是第一次的結果，不是第二次的。"""
+    from fledge_sidecar import app_config
+    cfg = tmp_path / "config.json"
+    app_config.create_if_absent(
+        lambda c: c.add_account("first", "/tmp/a", ""), cfg)
+    before = cfg.read_bytes()
+
+    got = app_config.create_if_absent(
+        lambda c: c.add_account("second", "/tmp/b", ""), cfg,
+        matches=lambda existing: "first" in existing.accounts)
+    assert "first" in got.accounts
+    assert "second" not in got.accounts, "冪等是回既有結果，不是用新 body 重跑一次"
+    assert cfg.read_bytes() == before, "逐位元組不變"
+
+
+def test_create_if_absent_reports_who_created_it_when_it_does_not_match(tmp_path: Path):
+    """不是同一次請求 → 仍然拒絕，但**帶著既有 config 的 `created_by`**，
+    呼叫端才說得出「這份設定檔是誰建的」。"""
+    from fledge_sidecar import app_config
+    cfg = tmp_path / "config.json"
+    app_config.create_if_absent(
+        lambda c: c.set_created_by({"source": "adopt-config", "dest": "/tmp/unpack-A"}), cfg)
+
+    with pytest.raises(app_config.ConfigAlreadyExists) as exc:
+        app_config.create_if_absent(lambda c: None, cfg, matches=lambda _: False)
+    assert exc.value.created_by == {"source": "adopt-config", "dest": "/tmp/unpack-A"}
+
+
+def test_create_if_absent_without_matches_keeps_the_old_behaviour(tmp_path: Path):
+    """**onboard 那一側不傳 `matches`，行為要一個字都不變**（共用原語，spec §4.3.1）。
+    `ConfigAlreadyExists` 是 `FileExistsError` 的子類，既有的 `except` 照樣接得住。"""
+    from fledge_sidecar import app_config
+    cfg = tmp_path / "config.json"
+    app_config.create_if_absent(lambda c: c.add_account("work", "/tmp/x", ""), cfg)
+    with pytest.raises(FileExistsError):
+        app_config.create_if_absent(lambda c: c.add_account("other", "/tmp/y", ""), cfg)
+
+
+def test_created_by_roundtrips_and_tolerates_junk(tmp_path: Path):
+    """`created_by` 存進 config.json 並讀得回來；舊檔沒有這欄 → 空 dict；
+    非 dict（手編過）→ 空 dict，不讓一個記帳欄位讓整份設定讀不出來。"""
+    p = _write(tmp_path, {"created_by": {"source": "onboard"}})
+    assert AppConfig.load(p).created_by == {"source": "onboard"}
+    assert AppConfig.load(_write(tmp_path, {})).created_by == {}
+    assert AppConfig.load(_write(tmp_path, {"created_by": "oops"})).created_by == {}
+    cfg = AppConfig.load(_write(tmp_path, {}))
+    cfg.set_created_by({"source": "adopt-config"})
+    cfg.save()
+    assert json.loads(cfg.path.read_text(encoding="utf-8"))["created_by"] == \
+        {"source": "adopt-config"}

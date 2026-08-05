@@ -78,6 +78,16 @@
         "count": "{{count}}",
         "kmsNone": "Not restored",
         "note": "These came from the Fledge settings inside the backup bundle. Anything whose old location doesn't exist on this machine is left out (a network drive you haven't mounted yet, for example) — you can fill it in later from Settings."
+      },
+      "conflict": {
+        "h": "This machine already has a settings file",
+        "fromDest": "It was created from this unpacked bundle:",
+        "thisDest": "You're currently working from:",
+        "fromOnboard": "It came from the “Start fresh” path, not from a backup bundle.",
+        "unknown": "There's no record of where it came from.",
+        "note": "If you reuse it, the remaining steps will use its destinations — which may not be the ones from this bundle. If you're unsure, stop here and take a look in Settings first.",
+        "reuse": "Reuse the existing settings",
+        "stop": "Stop, let me check"
       }
     },
     "paths": {

@@ -41,14 +41,16 @@ vi.mock("./BundleCard", async () => {
 vi.mock("./TargetsCard", async () => {
   const catalog = (await import("../locales/zh-TW/onboarding.json")).default;
   return {
-    TargetsCard: ({ dest, saved, onSaved }: {
-      dest: string; saved: boolean;
+    TargetsCard: ({ dest, saved, requestId, onSaved }: {
+      dest: string; saved: boolean; requestId: string;
       onSaved: (c: { dest: string; accounts: { key: string; config_dir: string }[] },
                 reused: boolean) => void | Promise<void>;
     }) => (
       <div>
         <h2>{catalog.mig.targets.h}</h2>
         <span data-testid="targets-dest">{dest}</span>
+        {/* 票 15：換一包要換一個——後端靠它分辨「同一次確認的重送」與「別的來源」 */}
+        <span data-testid="targets-request-id">{requestId}</span>
         {/* 409：這台機器本來就有設定檔，沿用它、沒有建立新的（真卡片的 `reused`）。
             父層據此決定能不能說「這些是從備份包帶回來的」（票 09 R1 F2） */}
         <button
@@ -1131,6 +1133,55 @@ describe("Onboarding 精靈外殼", () => {
     expect(ui.getByText(zh.done.migSummaryUnknown)).toBeTruthy();
     // 那個會說謊的數字不得出現
     expect(ui.container.querySelectorAll(".ob-summary strong")).toHaveLength(0);
+  });
+
+  // ── 票 15：換一包就換一個 request_id ────────────────────────────────────────
+  //
+  // 票 09 R3 的可達路徑：A 包的 adopt 請求在飛時使用者按上一步、換到 B 包。A 照樣建好
+  // config（帶著 A 的 subscriptions／kms_root／roots），B 再確認就撞 409——而票 03 的
+  // 落點對帳擋不住它（同一個人的兩份備份，帳號 key 與建議落點很可能相同）。
+  //
+  // 根治靠**後端分得出來**：request_id 綁 `bundle.gen`，換包就換一個。
+  it("換一包就換一個 request_id——後端才分得出是不是同一次確認", async () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+    ui.getByText(zh.welcome.restore).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();
+    await waitFor(() =>
+      expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+    const first = ui.getByTestId("targets-request-id").textContent;
+
+    ui.getByText(zh.common.prev).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+    ui.getByText("probe-present").click();            // 換包（gen 推進）
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+
+    expect(ui.getByTestId("targets-request-id").textContent).not.toBe(first);
+  });
+
+  it("重開精靈也不會撞到上一次的 request_id", async () => {
+    // Codex 票 15 R1 F1：第一版用 `adopt-${bundle.gen}`，而 `gen` 每次掛載都從 0 起算
+    // ——重開精靈選第一包又是 `adopt-1`。後端會把它判成「同一次確認的重送」而回**上一次
+    // 那份 config**（200），前端連衝突確認都不會看到，直接帶著別的包的設定往下走。
+    // **比原本的 409 更糟**：至少 409 會停下來。
+    const ids: string[] = [];
+    for (let round = 0; round < 2; round++) {
+      const ui = render(<Onboarding onClose={onClose} />);
+      ui.getByText(zh.welcome.restore).click();
+      await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
+      ui.getByText("probe-present").click();
+      await waitFor(() =>
+        expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
+      ui.getByText(zh.common.next).click();
+      await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
+      ids.push(ui.getByTestId("targets-request-id").textContent ?? "");
+      cleanup();
+    }
+    expect(ids[0]).not.toBe(ids[1]);
+    expect(ids[0]).not.toBe("");
   });
 
   it("移機分支一路走到完成頁，全程不出現共通設置與範本部署", async () => {

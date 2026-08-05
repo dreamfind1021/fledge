@@ -5,6 +5,7 @@ import {
   adoptConfig,
   type AdoptConfigBody,
   type BundleInfo,
+  type ConfigCreatedBy,
   type LandingSpot,
 } from "../lib/sidecar";
 import { pickDirectory } from "../lib/dialog";
@@ -39,6 +40,10 @@ interface TargetsCardProps {
   /** 上一頁確認過的這一包有哪些成員。用來與建議值的成員對帳（增補 spec §2.8.4）。 */
   info: BundleInfo;
   saved: boolean;
+  /** 這一次確認的識別碼（票 15）。**同一個值代表同一次確認**——後端據此在重送時回既有
+   *  結果（200）而不是 409，所以這張卡不必再記「上一次到底寫進去了沒」。由父層持有並綁
+   *  在來源身分上：換一包就換一個，那才分得出「A 建的 config」與「B 這次要建的」。 */
+  requestId: string;
   /** 落檔成功後的收尾。**允許非同步且允許失敗**——父層要先把新 config 讀回 store 才算
    *  完成（後面的頁面讀的是 store 的 accounts），失敗就不該轉唯讀、也不該放行下一步。
    *
@@ -63,7 +68,7 @@ interface TargetsCardProps {
  * 後端的預覽**完全不會提到**被略過的帳號（增補 spec §2.5.1），所以這一頁必須自己把
  * 「哪幾項不會被搬」講出來，否則使用者會以為都搬了。
  */
-export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardProps) {
+export function TargetsCard({ port, dest, info, saved, requestId, onSaved }: TargetsCardProps) {
   const { t } = useTranslation(["onboarding", "restore"]);
   const [spots, setSpots] = useState<LandingSpot[] | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -73,9 +78,22 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
   // 409 的說明是**中性 notice** 而不是錯誤：收尾成功後它還會留著，配著成功狀態顯示
   // 「請移除既有設定檔」那種指示會讓使用者做危險的事（Codex 票 03 R4 F2）
   const [reused, setReused] = useState(false);
-  // 後端已經落檔了嗎。與父層的 `saved`（store 已刷新）**是兩件事**——中間失敗時，
-  // 重試只能重跑收尾，不能再 POST 一次（見 `save`）。
-  const [adopted, setAdopted] = useState(false);
+  // 這台機器上已經有一份設定檔，而且**不是這一次確認建的**（票 15）：後端回 409 時附上
+  // 它的來源摘要。**不自動放行也不自動擋**——把事實講出來由使用者決定：沿用既有的、
+  // 或停下來去確認。`null`＝沒有衝突。
+  //
+  // 票 15 之前這裡是一個 `adopted` 旗標，用來記「後端已經落檔了嗎」，於是重試時不再
+  // POST。那個旗標只活在元件 state、卸載就沒了（票 03 R3），而 R2–R4 連續三輪的 finding
+  // 全是它造成的。**後端冪等之後不需要推測**：同一個 `requestId` 重送回既有結果。
+  const [conflict, setConflict] = useState<ConfigCreatedBy | null>(null);
+  // 上一次失敗在哪一段。**主按鈕的文案需要這個**——「建立設定檔」與「重新讀取」是兩件
+  // 不同的事，落檔那一步還沒成功過時說「重新讀取」是錯的。票 15 之前這個判斷搭在
+  // `adopted` 上（它同時兼「要不要再 POST」的推測），拔掉推測之後這一半仍然要留。
+  const [lastFailure, setLastFailure] = useState<"adopt" | "reload" | null>(null);
+  // 使用者**已經決定沿用**既有的設定（票 15 R1 F2）。這是他的決策，不是對後端狀態的推測
+  // ——記住它是合法的。不記的話，沿用之後若收尾失敗，重試會重新 POST、拿到同一個 409、
+  // 又要他再選一次；暫時性的讀取失敗就變成重複確認的迴圈。按「停下來」會撤回它。
+  const [reuseAgreed, setReuseAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const mounted = useRef(true);
 
@@ -118,13 +136,48 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
     })();
   }, [port, dest, info, t]);
 
+  /** 換一個落點＝**新的一次確認**（票 15 R4）：把上一輪留下的整組狀態一起清掉。
+   *
+   *  只清 `reuseAgreed` 的話會湊出一個矛盾的畫面——它同時宣稱「正在沿用既有設定」、
+   *  按鈕說「重新讀取」，而點下去其實是送一份改過的新確認。鍵盤改與「選擇…」是同一
+   *  件事，所以走同一支：兩個入口各寫一次必然漂移。 */
+  const changeSpot = useCallback((id: string, value: string) => {
+    setValues((v) => ({ ...v, [id]: value }));
+    setReuseAgreed(false);
+    setReused(false);
+    setLastFailure(null);
+    setSaveError(null);
+    setConflict(null);
+  }, []);
+
   const browse = useCallback(async (id: string) => {
     const dir = await pickDirectory();
-    if (dir !== null) setValues((v) => ({ ...v, [id]: dir }));
-  }, []);
+    if (dir !== null) changeSpot(id, dir);
+  }, [changeSpot]);
 
   const filled = (s: LandingSpot) => (values[spotId(s)] ?? "").trim();
   const skipped = (spots ?? []).filter((s) => !filled(s));
+
+  /** 收尾：把新設定讀回 store。`reusedFlag`＝沿用既有的、不是這一次建的。 */
+  const finish = useCallback(async (confirmed: AdoptConfigBody, reusedFlag: boolean) => {
+    setBusy(true);
+    try {
+      await onSaved(confirmed, reusedFlag);
+      if (mounted.current) setLastFailure(null);
+    } catch (e) {
+      console.error("[TargetsCard] 讀回新設定失敗", e);
+      if (!mounted.current) return;
+      // 這一步失敗**不是**「建立失敗」——設定檔已經在了，說錯會讓使用者去做危險的事
+      // （刪掉剛建立的設定檔重來）。父層的對帳不符則有自己的說法：那是真的衝突，
+      // 不是暫時讀不到（Codex 票 03 R4 F1）。
+      const code = (e as { code?: string | null }).code ?? null;
+      setSaveError(code !== null && CODE_KEY[code]
+        ? t(CODE_KEY[code]) : t("mig.targets.errors.reloadFailed"));
+      setLastFailure("reload");
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  }, [onSaved, t]);
 
   const save = useCallback(async () => {
     if (port == null || spots === null) return;
@@ -139,64 +192,50 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
     }
     setBusy(true);
     setSaveError(null);
-    // 用區域變數而不是讀 `reused` state：同一個 callback 內 `setReused` 之後讀到的還是
-    // 舊值。初值取 state 是為了「收尾失敗後重試」——那一輪不再 POST，409 的事實只留在
-    // state 裡（Codex 票 09 R1 F2）。
-    let reusedNow = reused;
-    // **落檔與收尾不是同一個原子操作**（Codex 票 03 R2 F1）：`adopt-config` 走
-    // `create_if_absent`，成功之後再 POST 一次只會拿到 409。所以落檔成功就記下來，
-    // 收尾失敗時的重試**只重跑收尾**——否則使用者會卡在「設定已經建好、卻永遠讀不回來
-    // 也走不下去」的死路。兩段各自 catch，訊息才說得準是哪一步失敗。
+    setConflict(null);
+    // **落檔與收尾不是同一個原子操作**（Codex 票 03 R2 F1），兩段各自 catch，訊息才說得
+    // 準是哪一步失敗。但**重試時兩段都重跑**——後端冪等了（票 15），再 POST 一次回的是
+    // 既有結果，不會建立第二份、也不會覆寫。
     const confirmed: AdoptConfigBody = {
       dest,
+      request_id: requestId,
       accounts,
       extra: spots
         .filter((s) => s.kind === "extra" && filled(s))
         .map((s) => ({ name: s.key, path: filled(s) })),
     };
+    if (reuseAgreed) {
+      // 已經同意沿用：那一份 config 不是這次建的，再 POST 一次只會拿到同一個 409
+      await finish(confirmed, true);
+      return;
+    }
     try {
-      if (!adopted) {
-        await adoptConfig(port, confirmed);
-        if (!mounted.current) return;
-        setAdopted(true);
-      }
+      await adoptConfig(port, confirmed);
+      if (!mounted.current) return;
     } catch (e) {
       console.error("[TargetsCard] 建立設定檔失敗", e);
       if (!mounted.current) return;
-      const code = (e as { code?: string | null }).code ?? null;
-      // **`config_already_initialized` 不是失敗，是「這一步已經完成了」**（Codex 票 03 R3）。
-      // 409 有兩個來源，前端分不出也不需要分：重跑引導（設定檔本來就在），或這次 POST
-      // 其實成功了而前端不知道——請求途中使用者按了上一步讓卡片卸載（`mounted` 轉 false，
-      // 上面那個 return 讓 `adopted` 沒被記下）、或成功回應在傳輸中遺失。把它當失敗會讓
-      // 後兩者卡死：`adopted` 只活在元件 state，重進來又是 false，每次重試都再撞一次 409。
-      // 沿用 roots 頁對 onboard 的同一個取向：**落檔與否只有後端說了算**，前端的快照推斷
-      // 不出來，所以往下走收尾讓父層把實際的 config 讀回來。
+      const err = e as { code?: string | null; createdBy?: ConfigCreatedBy | null };
+      const code = err.code ?? null;
       if (code !== "config_already_initialized") {
         setSaveError((code !== null && CODE_KEY[code] ? t(CODE_KEY[code]) : null)
           ?? t("mig.targets.errors.saveFailed"));
+        setLastFailure("adopt");
         setBusy(false);
         return;
       }
-      setAdopted(true);
-      setReused(true);     // 中性說明；是否放行由父層對帳決定（見下方 onSaved）
-      reusedNow = true;
+      // 409 現在只有一種意思：**已經有一份設定檔，而且不是這一次確認建的**（票 15——
+      // 同一次的重送後端會回 200）。它可能是重跑引導時本來就在的，也可能是另一輪確認
+      // 剛建的（票 09 R3：A 包的請求在飛時使用者換到 B 包）。前端分不出，**也不該替
+      // 使用者決定**——把來源講出來，停在這裡等他選。
+      setConflict(err.createdBy ?? {});
+      setBusy(false);
+      return;
     }
-    try {
-      await onSaved(confirmed, reusedNow);
-    } catch (e) {
-      console.error("[TargetsCard] 讀回新設定失敗", e);
-      if (!mounted.current) return;
-      // 這一步失敗**不是**「建立失敗」——設定檔已經在了，說錯會讓使用者去做危險的事
-      // （刪掉剛建立的設定檔重來）。父層的對帳不符則有自己的說法：那是真的衝突，
-      // 不是暫時讀不到（Codex 票 03 R4 F1）。
-      const code = (e as { code?: string | null }).code ?? null;
-      setSaveError(code !== null && CODE_KEY[code]
-        ? t(CODE_KEY[code]) : t("mig.targets.errors.reloadFailed"));
-    } finally {
-      if (mounted.current) setBusy(false);
-    }
+    await finish(confirmed, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [port, dest, spots, values, adopted, reused, onSaved, t]);
+  }, [port, dest, spots, values, requestId, reuseAgreed, finish, t]);
+
 
   if (stale) {
     return (
@@ -225,7 +264,7 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
           <div className="ob-row">
             <input
               value={values[spotId(s)] ?? ""}
-              onChange={(e) => setValues((v) => ({ ...v, [spotId(s)]: e.target.value }))}
+              onChange={(e) => changeSpot(spotId(s), e.target.value)}
               placeholder={t("mig.targets.placeholder")}
               disabled={saved || busy}
               className="ob-input"
@@ -251,6 +290,49 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
           {t("mig.targets.skipNote", { names: skipped.map((s) => s.key).join("、") })}
         </p>
       )}
+      {/* 已經有一份設定檔、而且不是這一次確認建的（票 15）。**把事實講出來，不替使用者
+          決定**——沿用的話後面幾步會用那份設定的落點，那可能不是這一包的。 */}
+      {conflict !== null && (
+        <div className="ob-spot">
+          <p className="ob-warn">{t("mig.targets.conflict.h")}</p>
+          {conflict.source === "onboard" ? (
+            <p className="ob-note">{t("mig.targets.conflict.fromOnboard")}</p>
+          ) : conflict.dest ? (
+            <dl className="ob-sum">
+              <dt>{t("mig.targets.conflict.fromDest")}</dt>
+              <dd>{conflict.dest}</dd>
+              <dt>{t("mig.targets.conflict.thisDest")}</dt>
+              <dd>{dest}</dd>
+            </dl>
+          ) : (
+            <p className="ob-note">{t("mig.targets.conflict.unknown")}</p>
+          )}
+          <p className="ob-note">{t("mig.targets.conflict.note")}</p>
+          <div className="ob-actions">
+            <button
+              onClick={() => {
+                setConflict(null);
+                setReuseAgreed(true);
+                setReused(true);   // 沿用＝不是這一次建的；父層據此不報「帶回了什麼」
+                void finish({
+                  dest,
+                  request_id: requestId,
+                  accounts: spots!.filter((s) => s.kind === "account" && filled(s))
+                    .map((s) => ({ key: s.key, config_dir: filled(s) })),
+                  extra: spots!.filter((s) => s.kind === "extra" && filled(s))
+                    .map((s) => ({ name: s.key, path: filled(s) })),
+                }, true);
+              }}
+              disabled={busy}
+              className="ob-btn"
+            >{t("mig.targets.conflict.reuse")}</button>
+            {/* 「停下來」**撤回**沿用的決策：下一次確認要重新問（不偷偷留著） */}
+            <button onClick={() => { setConflict(null); setReuseAgreed(false); }}
+                    disabled={busy}
+                    className="ob-btn-ghost">{t("mig.targets.conflict.stop")}</button>
+          </div>
+        </div>
+      )}
       {reused && <p className="ob-note">{t("mig.targets.reused")}</p>}
       {(loadError ?? saveError) && <p className="ob-error">{loadError ?? saveError}</p>}
       {saved
@@ -258,7 +340,8 @@ export function TargetsCard({ port, dest, info, saved, onSaved }: TargetsCardPro
         : spots !== null && (
           <button onClick={save} disabled={busy} className="ob-btn">
             {busy ? t("mig.targets.saving")
-              : adopted ? t("mig.targets.retry") : t("mig.targets.save")}
+              : lastFailure === "reload" ? t("mig.targets.retry")
+                : t("mig.targets.save")}
           </button>
         )}
     </div>

@@ -13,7 +13,10 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import os
 from dataclasses import asdict
 
 from fastapi import APIRouter
@@ -150,12 +153,40 @@ class AdoptConfigBody(BaseModel):
     accounts: list[AdoptAccount] = Field(min_length=1)   # 落點是使用者的授權，必填
     roots: list[AdoptRoot] = []
     extra: list[AdoptExtra] = []
+    # 這一次確認的識別碼（票 15）。**必填**：冪等契約沒有它就不成立，而「沒帶就退回舊
+    # 行為」會讓同一支端點有兩套語意，呼叫端分不出自己拿到的 409 是哪一種。內容不透明
+    # ——後端只拿它比對「是不是同一次」，不解讀也不顯示（顯示的是 `dest`）。
+    request_id: str = Field(min_length=1, max_length=200)
 
 
 _ADOPT_CLIENT_ERRORS = frozenset({
     "source_not_a_bundle", "invalid_config_dir", "unsafe_config_dir",
     "invalid_account_key", "overlapping_config_dirs",
 })
+
+
+def _request_fingerprint(body: AdoptConfigBody) -> str:
+    """這一次確認的**內容**指紋（票 15 R1 F1）。
+
+    `request_id` 只說「是同一次操作」，說不出「送的是同一份東西」——收尾失敗時欄位還能
+    編輯，使用者改了落點再按一次就是同一個 id 配不同 body。只比對 id 的話會回**第一次的**
+    config，而前端以為新落點生效了（帳號那側有落點對帳擋著，`extra` 那側沒有）。
+
+    **排序後才雜湊**：指紋是內容的指紋不是 JSON 字面的，同一組落點換個順序仍是同一次。
+    `dest` 也進去——同一個 id 指向另一包必然是另一次確認。
+
+    **完全不碰檔案系統**（Codex 票 15 R3）：`dest` 只做字面正規化（`normpath`），不能用
+    `resolve_best_effort`——那會跟隨 symlink，於是「`dest` 是連結、第一次成功後連結與目標
+    一起被刪掉」時兩次算出來的指紋不同，捷徑不走、接著讀已消失的來源回 400，正好打在本
+    契約最需要成立的那一格。實測（macOS）：存在時回 `/…/real`、刪除後回 `/…/link`。
+    `created_by.dest`（給人看的那一欄）仍存 resolved，兩者用途不同。"""
+    payload = json.dumps({
+        "dest": os.path.normpath(body.dest.strip()),
+        "accounts": sorted((a.key, a.config_dir.strip()) for a in body.accounts),
+        "extra": sorted((e.name, e.path.strip()) for e in body.extra),
+        "roots": sorted((r.path.strip(), r.default_account) for r in body.roots),
+    }, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _bundle_config(dest: str) -> dict:
@@ -257,6 +288,21 @@ def adopt_config(body: AdoptConfigBody):
     不擴充 onboard：它的 first-run 語意是審查後刻意加的，且「採用備份包」與「手動
     onboard」是兩種語意。兩支共用 `create_if_absent` 原語與同一把 `_config_lock`
     （spec §4.3.1——各寫一份 first-run 判定必然漂移）。"""
+    # **冪等查詢排在最前面**（票 15 R2 F1）：第一次已經落檔而回應遺失時，展開目錄可能
+    # 已經被清掉／換掉——那時再去驗來源只會 400，而使用者要的結果早就在磁碟上。這一段
+    # 完全不碰來源（指紋只算 body 與 dest 的字面路徑），所以來源在不在都答得出來。
+    #
+    # **捷徑只給「同一次確認」**：`request_id` 與內容指紋都要對得上。不是重送的請求照樣
+    # 走完整驗證，否則就變成「編一個 request_id 就能跳過所有輸入驗證」。
+    fingerprint = _request_fingerprint(body)
+    with _config_lock:
+        replay = app_config.read_if_matches(lambda existing: (
+            existing.created_by.get("source") == "adopt-config"
+            and existing.created_by.get("request_id") == body.request_id
+            and existing.created_by.get("fingerprint") == fingerprint))
+    if replay is not None:
+        return replay.to_dict()
+
     account_keys = [a.key for a in body.accounts]
     extra_names = [e.name for e in body.extra]
     # 同名重複＝「後蓋前」的授權歧義，直接拒——不讓 dict 建構默默挑一個
@@ -311,13 +357,29 @@ def adopt_config(body: AdoptConfigBody):
         config.extra = {e.name: e.path.strip() for e in body.extra}
         config.subscriptions = _adopted_subscriptions(bundle_config)
         config.set_kms_root(_adopted_kms_root(bundle_config))
+        # 純記帳、不參與任何授權決策（票 15）。`dest` 存 resolved 的展開位置——衝突時
+        # 前端要能說「這份設定檔是從**哪一包**建的」，那是使用者唯一分得出來的線索。
+        config.set_created_by({"source": "adopt-config", "request_id": body.request_id,
+                               "fingerprint": fingerprint,
+                               "dest": resolve_best_effort(body.dest)})
 
     try:
         with _config_lock:
-            config = app_config.create_if_absent(_build)
-    except FileExistsError:
-        return JSONResponse(status_code=409,
-                            content={"error": "config_already_initialized"})
+            # **冪等契約**（票 15）：同一個 `request_id` 重送 → 回既有結果（200）。這一格
+            # 對應「這次 POST 其實成功了，只是回應沒回到前端」——請求途中卡片被卸載、連線
+            # 中斷、回應在傳輸中遺失。前端原本只能靠元件內的 `adopted` 旗標推測，而那個
+            # 旗標卸載就沒了（票 03 R3 連續三輪的根因）。
+            config = app_config.create_if_absent(
+                _build, matches=lambda existing: (
+                    existing.created_by.get("source") == "adopt-config"
+                    and existing.created_by.get("request_id") == body.request_id
+                    # **內容也要相同**：同一個 id 配不同 body 是另一次確認（R1 F1）
+                    and existing.created_by.get("fingerprint") == fingerprint))
+    except app_config.ConfigAlreadyExists as exc:
+        # **說得出那份設定檔是誰建的**：409 原本只證明「有一份 config」，前端因此分不出
+        # 「重跑引導」與「另一個來源剛建了一份」。`created_by` 是本機資訊，回給本機前端。
+        return JSONResponse(status_code=409, content={
+            "error": "config_already_initialized", "created_by": exc.created_by})
     return config.to_dict()
 
 

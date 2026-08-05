@@ -73,8 +73,25 @@ def default_config_path() -> Path:
     return Path.home() / ".fledge" / "config.json"
 
 
+class ConfigAlreadyExists(FileExistsError):
+    """設定檔已存在，而且**不是同一次請求**建的（票 15）。
+
+    帶著既有 config 的 `created_by`，呼叫端才說得出「這份設定檔是誰建的」——409 原本
+    只證明「有一份 config」，前端因此分不出三種處境（這次 POST 其實成功了只是回應遺失／
+    使用者在重跑引導／另一個來源放了一份無關的 config）。
+
+    **刻意繼承 `FileExistsError`**：`onboard` 那一側的 `except FileExistsError` 一個字
+    都不必改（共用原語，spec §4.3.1）。"""
+
+    def __init__(self, path: str, created_by: dict[str, Any]):
+        super().__init__(path)
+        self.created_by = created_by
+
+
 def create_if_absent(build: Callable[[AppConfig], None],
-                     path: Path | None = None) -> AppConfig:
+                     path: Path | None = None,
+                     *,
+                     matches: Callable[[AppConfig], bool] | None = None) -> AppConfig:
     """建立設定檔，**只在它還不存在時**。已存在 → FileExistsError（票 07，spec §4.3.1）。
 
     `onboard` 與 `adopt-config` 都會建立同一個 config.json，兩份 first-run 檢查必然
@@ -82,14 +99,50 @@ def create_if_absent(build: Callable[[AppConfig], None],
     共用這一個原語，各端點只提供「填什麼」。呼叫端自行持 `_config_lock`。
 
     跨 process 的 race 不在此防護內（沿用 routes/config.py 的既有限制，歸 Plan 04）：
-    兩個 app 實例並存時 sidecar 會先互殺，單實例假設早於此失效。"""
+    兩個 app 實例並存時 sidecar 會先互殺，單實例假設早於此失效。
+
+    `matches`（票 15）：檔案已存在時拿既有 config 問「這是不是同一次請求建的」。是就
+    **回既有結果**（冪等——回應遺失後重送要拿回第一次的結果，不是用新 body 重跑一次），
+    否則 `ConfigAlreadyExists` 並附上它的 `created_by`。**不傳＝行為與票 15 之前完全
+    相同**，`onboard` 那一側因此一個字都不必改。"""
     target = path or default_config_path()
     if target.exists():
-        raise FileExistsError(str(target))
+        existing = _load_for_conflict(target)
+        if matches is not None and existing is not None and matches(existing):
+            return existing
+        raise ConfigAlreadyExists(
+            str(target), existing.created_by if existing is not None else {})
     config = AppConfig.load(target)
     build(config)
     config.save()
     return config
+
+
+def read_if_matches(matches: Callable[[AppConfig], bool],
+                    path: Path | None = None) -> AppConfig | None:
+    """既有 config 符合條件就回它，否則 None（含檔案不存在、讀不出來）。
+
+    **冪等重送的第一道**（票 15 R2）：要在任何來源驗證**之前**跑。第一次已經落檔而
+    回應遺失時，展開目錄可能已經被清掉／換掉——那時再去驗來源只會 400，而使用者要的
+    結果早就在磁碟上了。查詢本身不碰來源，所以來源在不在都答得出來。
+
+    呼叫端自行持 `_config_lock`。"""
+    target = path or default_config_path()
+    if not target.exists():
+        return None
+    existing = _load_for_conflict(target)
+    return existing if existing is not None and matches(existing) else None
+
+
+def _load_for_conflict(target: Path) -> AppConfig | None:
+    """衝突判定用的既有 config。**讀不出來回 None 而不是拋**：那份檔案可能被手編壞了，
+    而「它壞掉」不該讓建立流程改回報一個 JSON 解析錯誤——呼叫端要的答案仍然是「已經有
+    一份 config 了」，只是說不出它是誰建的。"""
+    try:
+        return AppConfig.load(target)
+    except (OSError, ValueError):
+        logger.warning("既有設定檔讀不出來，衝突回報不含來源：%s", target, exc_info=True)
+        return None
 
 
 def usable_entry(item: Any, *fields: str) -> bool:
@@ -130,6 +183,10 @@ class AppConfig:
     # 移機 extra（帳號外資產）的使用者確認落點 {name: raw path}（票 07，spec §4.2.2）：
     # adopt-config 逐項確認後寫入，install 端點從這裡讀——manifest 只能建議不能授權。
     extra: dict[str, str] = field(default_factory=dict)
+    # 這份設定檔是誰建的（票 15）：`{"source": "onboard"|"adopt-config", ...}`。
+    # **純記帳、不參與任何授權決策**——它只讓「已經有一份 config」這件事說得出來源，
+    # 落點的授權仍然只認使用者在 targets 頁確認的那一份（spec §4.2.2）。
+    created_by: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Path | None = None) -> AppConfig:
@@ -213,6 +270,8 @@ class AppConfig:
             ui=data.get("ui", DEFAULT_CONFIG["ui"]),
             subscriptions=data.get("subscriptions", []),
             kms_root=data.get("kms_root", "") or "",
+            created_by=(data.get("created_by")
+                        if isinstance(data.get("created_by"), dict) else {}),
             backup_dir=data.get("backup_dir", "") or "",
             # 非 dict（手編壞形狀）退空：畸形的 extra 進到 install 端點會變 500
             extra=data["extra"] if isinstance(data.get("extra"), dict) else {},
@@ -230,6 +289,7 @@ class AppConfig:
             "kms_root": self.kms_root,
             "backup_dir": self.backup_dir,
             "extra": self.extra,
+            "created_by": self.created_by,
         }
 
     def save(self) -> None:
@@ -240,6 +300,11 @@ class AppConfig:
             encoding="utf-8",
         )
         os.replace(tmp, self.path)  # 原子替換，避免 crash 中途留下半寫壞檔
+
+    def set_created_by(self, info: dict[str, Any]) -> None:
+        """記下這份設定檔是誰建的（票 15）。只在建立當下寫一次——後續的細粒度
+        寫入端點不碰它，那些改的是內容不是「誰建的」。"""
+        self.created_by = dict(info)
 
     def add_root(self, path: str, default_account: str) -> None:
         self.roots.append({"path": path, "default_account": default_account})

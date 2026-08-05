@@ -90,6 +90,11 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   // ／`installRun` 全都綁 gen，這是同一族防線，新 state 不能漏套。
   const [adoptedFrom, setAdoptedFrom] = useState<{ gen: number; value: boolean }>(
     { gen: -1, value: false });
+  // 這一次確認的識別碼（票 15）。**必須高熵**（Codex R1 F1）：第一版用 `adopt-${bundle.gen}`，
+  // 而 `gen` 每次掛載都從 0 起算——重開精靈選第一包又是 `adopt-1`，後端會把它判成「同一次
+  // 確認的重送」而回上一次那份 config，前端連衝突確認都看不到就往下走。**比原本的 409
+  // 更糟**：至少 409 會停下來。換包時重新產生（見下面的換包清空區塊）。
+  const [adoptRequestId, setAdoptRequestId] = useState(() => crypto.randomUUID());
   // 備份包的選擇（票 02）：選了哪一包、解到哪裡、裡面有什麼。**整組住在這裡而不是卡片裡**
   // ——卡片會隨換頁卸載，只把包資訊留在上層會讓「還沒選任何包的卡片」顯示上一包的摘要
   // （Codex 票 02 R1 F2）。其中包資訊還是**序列本身的輸入**：`paths` 頁在包裡沒有專案歷史
@@ -144,6 +149,7 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
     if (installRun.gen !== bundle.gen) {
       setInstallRun({ gen: bundle.gen, value: { kind: "idle" } });
     }
+    setAdoptRequestId(crypto.randomUUID());   // 換一包＝另一次確認（票 15）
   }
   const run: InstallRun = installRun.gen === bundle.gen
     ? installRun.value : { kind: "idle" };
@@ -548,6 +554,7 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
                   dest={bundle.probe.dest}
                   info={bundle.probe.info}
                   saved={configCreated}
+                  requestId={adoptRequestId}
                   // **先把剛建立的設定讀回 store 才算完成**（Codex 票 03 R1 F2）：後面的
                   // 頁面（登入卡等）讀的是 store 的 accounts，只翻旗標會讓使用者看到
                   // in-memory 的預設帳號。讀不回來就 throw 回卡片——它會顯示錯誤且不轉
