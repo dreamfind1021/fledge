@@ -59,13 +59,13 @@ def test_normalize_codex_size_variants_never_get_fullsize_price():
 
 
 def test_normalize_codex_gpt56_tiers_have_own_price_bands():
-    # gpt-5.6 以 sol/terra/luna tier 命名＝各自獨立價格帶（LiteLLM 2026-07-18 釘價）
+    # gpt-5.6 以 sol/terra/luna tier 命名＝各自獨立價格帶（LiteLLM 2026-08-26 釘價）
     assert pricing.normalize_codex_model("gpt-5.6-sol") == "gpt-5.6-sol"
     assert pricing.normalize_codex_model("gpt-5.6-terra-2026-07-09") == "gpt-5.6-terra"
     # 三欄全鎖（in/cached/out）：1M in 含 0.4M cached + 0.1M out
-    for model, (p_in, p_cached, p_out) in [("gpt-5.6-sol", (5.0, 0.5, 30.0)),
-                                           ("gpt-5.6-terra", (2.5, 0.25, 15.0)),
-                                           ("gpt-5.6-luna", (1.0, 0.1, 6.0))]:
+    for model, (p_in, p_cached, p_out) in [("gpt-5.6-sol", (4.0, 0.4, 20.0)),
+                                           ("gpt-5.6-terra", (2.0, 0.2, 12.0)),
+                                           ("gpt-5.6-luna", (0.2, 0.02, 1.2))]:
         cost, missing = pricing.codex_cost(model, 1_000_000, 400_000, 100_000)
         assert missing is False, model
         assert abs(cost - (0.6 * p_in + 0.4 * p_cached + 0.1 * p_out)) < 1e-9, model

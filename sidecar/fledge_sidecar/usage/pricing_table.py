@@ -8,7 +8,7 @@ from __future__ import annotations
 
 # <生成日期>.<表內容 sha256 前 8 碼>：內容一變就變，改表不可能忘記遞增。
 # cache.py 只做相等比對，不解析內容。
-TABLE_VERSION = "2026-07-28.36e853f9"
+TABLE_VERSION = "2026-08-26.d2718bc9"
 
 # Claude：(input, output, cache_5m_write, cache_1h_write, cache_read)——三層 cache 存
 # 上游真價而非倍率（倍率只對現行世代成立，claude-3-haiku 實為 1.2x/0.12x）；
@@ -21,6 +21,8 @@ CLAUDE_PRICING: dict[str, tuple[float, float, float, float, float]] = {
     "claude-4-sonnet": (3.0, 15.0, 3.75, 6.0, 0.3),
     "claude-fable-5": (10.0, 50.0, 12.5, 20.0, 1.0),
     "claude-haiku-4-5": (1.0, 5.0, 1.25, 2.0, 0.1),
+    "claude-mythos-5": (10.0, 50.0, 12.5, 20.0, 1.0),
+    "claude-mythos-preview": (10.0, 50.0, 12.5, 20.0, 1.0),
     "claude-opus-4": (15.0, 75.0, 18.75, 30.0, 1.5),
     "claude-opus-4-1": (15.0, 75.0, 18.75, 30.0, 1.5),
     "claude-opus-4-5": (5.0, 25.0, 6.25, 10.0, 0.5),
@@ -61,7 +63,8 @@ CODEX_PRICING: dict[str, tuple[float, float, float]] = {
     "gpt-5.4-pro": (30.0, 3.0, 180.0),
     "gpt-5.5": (5.0, 0.5, 30.0),
     "gpt-5.5-pro": (30.0, 3.0, 180.0),
-    "gpt-5.6-luna": (1.0, 0.1, 6.0),
-    "gpt-5.6-sol": (5.0, 0.5, 30.0),
-    "gpt-5.6-terra": (2.5, 0.25, 15.0),
+    "gpt-5.6-cyber": (12.5, 1.25, 75.0),
+    "gpt-5.6-luna": (0.2, 0.02, 1.2),
+    "gpt-5.6-sol": (4.0, 0.4, 20.0),
+    "gpt-5.6-terra": (2.0, 0.2, 12.0),
 }
