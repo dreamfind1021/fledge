@@ -1043,3 +1043,28 @@ export const confirmSuggestion = (p: number, project: string, topic: string) => 
 export const dismissSuggestion = (p: number, project: string, topic: string) => memoryJson(p, "links/dismiss", "POST", { project, topic });
 export const addMemoryLink = (p: number, from: string, to: string, note = "") => memoryJson(p, "links", "POST", { from, to, note });
 export const removeMemoryLink = (p: number, from: string, to: string) => memoryJson(p, "links", "DELETE", { from, to });
+
+// ===== 待辦面板（tasks；design §7）=====
+
+export type TasksStatus = "ok" | "absent" | "unavailable";
+
+export interface TasksProjectRow {
+  path: string;
+  name: string;
+  account: string;
+  /** 未完成條數。tasks_status !== "ok" 時為 null——「讀不到」不可畫成 0（design §6.3） */
+  unfinished: number | null;
+  tasks_status: TasksStatus;
+}
+
+export interface TasksOverview {
+  projects: TasksProjectRow[];
+  permission_error: boolean;
+}
+
+/** 第一層總覽：每個已知專案的未完成條數 ＋ tasks_status。 */
+export async function fetchTasksOverview(port: number): Promise<TasksOverview> {
+  const resp = await fetch(`${base(port)}/tasks/overview`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`fetchTasksOverview failed: ${resp.status}`);
+  return (await resp.json()) as TasksOverview;
+}

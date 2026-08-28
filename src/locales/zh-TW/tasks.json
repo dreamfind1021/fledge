@@ -1,0 +1,12 @@
+{
+  "tabTitle": "待辦",
+  "entry": "待辦",
+  "overview": {
+    "colProject": "專案",
+    "colUnfinished": "未完成",
+    "empty": "尚無專案",
+    "unavailable": "讀不到",
+    "loading": "載入中…",
+    "loadError": "待辦讀取失敗"
+  }
+}

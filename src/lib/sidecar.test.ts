@@ -13,6 +13,7 @@ import {
   fetchDirTree,
   waitForSidecarPort,
   fetchConfig,
+  fetchTasksOverview,
 } from "./sidecar";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -552,5 +553,26 @@ describe("專案路徑對應（票 04）", () => {
     const m = await import("./sidecar");
     await expect(m.fetchProjectPaths(1234, "/tmp/x"))
       .rejects.toMatchObject({ code: "source_not_a_bundle" });
+  });
+});
+
+describe("fetchTasksOverview", () => {
+  // plan §1.0：Tasks.tsx 一律經 wrapper。若它自己 fetch，接線測試仍會全綠，
+  // 但正式 sidecar 會因缺 token 回 401——dev 看似正常、打包版整個死掉。
+  it("打對 endpoint、用 GET、帶 auth header", async () => {
+    setAuthToken("tok-tasks");
+    const spy = vi.fn(async () => ({ ok: true, json: async () => ({ projects: [], permission_error: false }) }) as unknown as Response);
+    vi.stubGlobal("fetch", spy);
+    await fetchTasksOverview(4321);
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4321/tasks/overview");
+    expect(init.method ?? "GET").toBe("GET");
+    expect(init.headers).toEqual({ "X-Fledge-Token": "tok-tasks" });
+    setAuthToken(null);
+  });
+
+  it("非 2xx 時 throw", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 500 }) as unknown as Response));
+    await expect(fetchTasksOverview(4321)).rejects.toThrow();
   });
 });

@@ -1,0 +1,12 @@
+{
+  "tabTitle": "Tasks",
+  "entry": "Tasks",
+  "overview": {
+    "colProject": "Project",
+    "colUnfinished": "Unfinished",
+    "empty": "No projects yet",
+    "unavailable": "Unreadable",
+    "loading": "Loading…",
+    "loadError": "Failed to load tasks"
+  }
+}

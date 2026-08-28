@@ -3,6 +3,7 @@ import { TabBar } from "./TabBar";
 import { Terminal } from "./Terminal";
 import Dashboard from "./Dashboard";
 import { Memory } from "./Memory";
+import { Tasks } from "./Tasks";
 import { RelatedFloat } from "./RelatedFloat";
 import { useAppStore } from "../store/useAppStore";
 import "./Workspace.css";
@@ -45,6 +46,8 @@ export function Workspace() {
               >
                 {t.kind === "memory" ? (
                   <Memory port={port} isActive={t.id === activeTabId} />
+                ) : t.kind === "tasks" ? (
+                  <Tasks port={port} />
                 ) : t.kind === "dashboard" ? (
                   <Dashboard port={port} isActive={t.id === activeTabId} />
                 ) : (t.status === "ready" || t.status === "offline") && t.sessionId ? (

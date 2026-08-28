@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDraggable } from "@dnd-kit/core";
-import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, ChevronsLeft, ChevronsRight, ChartColumn, Brain, ChevronRight, ChevronDown } from "lucide-react";
+import { Pin, Folder, FolderOpen, FolderPlus, Search, Settings, ChevronsLeft, ChevronsRight, ChartColumn, Brain, ListTodo, ChevronRight, ChevronDown } from "lucide-react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useAppStore } from "../store/useAppStore";
 import type { Project } from "../lib/sidecar";
@@ -55,6 +55,7 @@ function ProjectRow({
 export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => void; onOpenSettings: () => void }) {
   const { t: tDash } = useTranslation("dashboard");
   const { t: tMem } = useTranslation("memory");
+  const { t: tTasks } = useTranslation("tasks");
   const { t: tSide } = useTranslation("sidebar");
   const projects = useAppStore((s) => s.projects);
   const tabs = useAppStore((s) => s.tabs);
@@ -240,6 +241,14 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           >
             <Brain size={18} strokeWidth={1.75} />
           </button>
+          <button
+            className="sidebar-rail-btn"
+            aria-label={tTasks("entry")}
+            title={tTasks("entry")}
+            onClick={() => useAppStore.getState().openTasks()}
+          >
+            <ListTodo size={18} strokeWidth={1.75} />
+          </button>
         </div>
         {/* 彈性 spacer：把開資料夾鈕推到底 */}
         <div className="sidebar-rail-spacer" />
@@ -310,6 +319,14 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           title={tMem("entry")}
         >
           <Brain size={16} strokeWidth={1.75} />
+        </button>
+        <button
+          className="sidebar-dash-btn"
+          onClick={() => useAppStore.getState().openTasks()}
+          aria-label={tTasks("entry")}
+          title={tTasks("entry")}
+        >
+          <ListTodo size={16} strokeWidth={1.75} />
         </button>
       </div>
 

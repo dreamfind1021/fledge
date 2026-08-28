@@ -239,6 +239,14 @@ describe("useAppStore", () => {
     expect(mem.length).toBe(1);
   });
 
+  // 接線測試（design §9.1）：openTasks 也要是單例，鏡像 openMemory
+  it("openTasks 單例：重複呼叫只一個 tasks tab", () => {
+    const s = useAppStore.getState();
+    s.openTasks(); s.openTasks();
+    const tasks = useAppStore.getState().tabs.filter((t) => t.kind === "tasks");
+    expect(tasks.length).toBe(1);
+  });
+
   it("removeAccount 帶 reassignTo 呼叫後重掃", async () => {
     const cfg = {
       version: 1, roots: [], accounts: { work: { config_dir: "~/.claude", label: "工作" } },

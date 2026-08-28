@@ -8,7 +8,7 @@ from starlette.responses import JSONResponse
 
 from fledge_sidecar import auth
 from fledge_sidecar.routes import (
-    backup, config, health, memory, projects, restore, sessions, setup, usage,
+    backup, config, health, memory, projects, restore, sessions, setup, tasks, usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(config.router)
     app.include_router(usage.router)
     app.include_router(memory.router)
+    app.include_router(tasks.router)
     app.include_router(setup.router)
     app.include_router(backup.router)
     app.include_router(restore.router)
