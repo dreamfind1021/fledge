@@ -14,6 +14,7 @@ import {
   waitForSidecarPort,
   fetchConfig,
   fetchTasksOverview,
+  fetchTasks,
 } from "./sidecar";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -574,5 +575,23 @@ describe("fetchTasksOverview", () => {
   it("非 2xx 時 throw", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 500 }) as unknown as Response));
     await expect(fetchTasksOverview(4321)).rejects.toThrow();
+  });
+});
+
+describe("fetchTasks", () => {
+  it("打對 endpoint、帶 project query 與 auth header", async () => {
+    setAuthToken("tok-list");
+    const spy = vi.fn(async () => ({ ok: true, json: async () => ({ project: "/p", tasks_status: "ok", tasks: [], next_step: "" }) }) as unknown as Response);
+    vi.stubGlobal("fetch", spy);
+    await fetchTasks(4321, "/Users/tc/NAS/work/Meeting Agent");
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4321/tasks?project=%2FUsers%2Ftc%2FNAS%2Fwork%2FMeeting%20Agent");
+    expect(init.headers).toEqual({ "X-Fledge-Token": "tok-list" });
+    setAuthToken(null);
+  });
+
+  it("非 2xx 時 throw", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 400 }) as unknown as Response));
+    await expect(fetchTasks(4321, "/x")).rejects.toThrow();
   });
 });

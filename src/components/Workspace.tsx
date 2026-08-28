@@ -47,7 +47,7 @@ export function Workspace() {
                 {t.kind === "memory" ? (
                   <Memory port={port} isActive={t.id === activeTabId} />
                 ) : t.kind === "tasks" ? (
-                  <Tasks port={port} />
+                  <Tasks port={port} isActive={t.id === activeTabId} />
                 ) : t.kind === "dashboard" ? (
                   <Dashboard port={port} isActive={t.id === activeTabId} />
                 ) : (t.status === "ready" || t.status === "offline") && t.sessionId ? (

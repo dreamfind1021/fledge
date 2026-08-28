@@ -4,9 +4,42 @@
   "overview": {
     "colProject": "Project",
     "colUnfinished": "Unfinished",
+    "colNextStep": "Next step",
     "empty": "No projects yet",
     "unavailable": "Unreadable",
     "loading": "Loading…",
     "loadError": "Failed to load tasks"
+  },
+  "list": {
+    "back": "All projects",
+    "unfinished": "Unfinished",
+    "done": "Done",
+    "empty": "No tasks in this project yet",
+    "unavailable": "This project's tasks folder cannot be read",
+    "noNumber": "—"
+  },
+  "status": {
+    "todo": "To do",
+    "doing": "In progress",
+    "done": "Done"
+  },
+  "source": {
+    "me": "me",
+    "ai": "AI"
+  },
+  "anomaly": {
+    "label": "Something is off with this file",
+    "frontmatter_missing": "No frontmatter block; defaults used",
+    "status_invalid": "Unrecognised status; treated as To do",
+    "source_invalid": "Unrecognised source",
+    "created_invalid": "Unrecognised created date",
+    "title_missing": "No heading line; filename used as title",
+    "number_missing": "Filename has no number prefix",
+    "number_duplicate": "Another file uses the same number; rename one",
+    "unreadable": "File could not be read"
+  },
+  "a11y": {
+    "expandDone": "Show done",
+    "collapseDone": "Hide done"
   }
 }

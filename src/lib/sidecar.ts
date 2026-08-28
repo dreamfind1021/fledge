@@ -1055,6 +1055,29 @@ export interface TasksProjectRow {
   /** 未完成條數。tasks_status !== "ok" 時為 null——「讀不到」不可畫成 0（design §6.3） */
   unfinished: number | null;
   tasks_status: TasksStatus;
+  /** 該專案 .fledge/state.md 前 20 行抽出的「下一步」；沒有就是空字串 */
+  next_step: string;
+}
+
+export interface TaskRow {
+  name: string;
+  /** 檔名前綴的編號（唯一真相源）。沒有數字前綴時為 null，該票會帶 number_missing */
+  number: number | null;
+  title: string;
+  status: "todo" | "doing" | "done";
+  source: string;        // "me" | "ai"；判不出來為空字串
+  created: string;       // YYYY-MM-DD；判不出來為空字串
+  /** 異常代碼（英文），由前端 i18n 映射成畫面文字。有值不代表要隱藏這張票 */
+  anomalies: string[];
+  fingerprint: string;
+}
+
+export interface TasksListResponse {
+  project: string;
+  tasks_status: TasksStatus;
+  /** 讀不到時是 null 而不是空清單：空清單與「這個專案沒待辦」在畫面上長得一樣（design §6.3） */
+  tasks: TaskRow[] | null;
+  next_step: string;
 }
 
 export interface TasksOverview {
@@ -1067,4 +1090,11 @@ export async function fetchTasksOverview(port: number): Promise<TasksOverview> {
   const resp = await fetch(`${base(port)}/tasks/overview`, { headers: authHeaders() });
   if (!resp.ok) throw new Error(`fetchTasksOverview failed: ${resp.status}`);
   return (await resp.json()) as TasksOverview;
+}
+
+/** 第二層：單一專案的票列表（含異常標記與 fingerprint）。 */
+export async function fetchTasks(port: number, project: string): Promise<TasksListResponse> {
+  const resp = await fetch(`${base(port)}/tasks?project=${encodeURIComponent(project)}`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`fetchTasks failed: ${resp.status}`);
+  return (await resp.json()) as TasksListResponse;
 }

@@ -99,3 +99,81 @@ def test_overview_reports_unavailable_not_zero(tmp_path, monkeypatch):
         assert row["unfinished"] != 0
     finally:
         os.chmod(tasks, 0o755)
+
+
+# ── GET /tasks（T2）────────────────────────────────────────────────
+
+def _proj_with_tasks(tmp_path):
+    root = _project_root(tmp_path)
+    proj = root / "p1"
+    (proj / ".fledge" / "tasks").mkdir(parents=True)
+    return root, proj
+
+
+def test_list_tasks_shape_and_fingerprint(tmp_path, monkeypatch):
+    """正常路徑：200 ＋ 清單 shape ＋ **每票帶 name 與 fingerprint**（design §7.1 末）。"""
+    root, proj = _proj_with_tasks(tmp_path)
+    (proj / ".fledge" / "tasks" / "01-a.md").write_text(
+        "---\nstatus: todo\nsource: me\ncreated: 2026-08-29\n---\n\n# 第一件\n", encoding="utf-8"
+    )
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    r = c.get("/tasks", params={"project": str(proj)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["tasks_status"] == "ok"
+    (t,) = body["tasks"]
+    assert t["name"] == "01-a.md" and t["number"] == 1 and t["title"] == "第一件"
+    assert t["status"] == "todo" and t["source"] == "me" and t["anomalies"] == []
+    assert len(t["fingerprint"]) == 64  # sha256 hex
+
+
+def test_list_tasks_rejects_unknown_project(tmp_path, monkeypatch):
+    """P1 不過 → error code，唯讀寫入皆同（design §7.1 的失敗分類表）。"""
+    root, _ = _proj_with_tasks(tmp_path)
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    r = c.get("/tasks", params={"project": str(tmp_path / "outside")})
+    assert r.status_code == 400
+    assert r.json()["error"] == "unknown_project"
+
+
+def test_list_tasks_unavailable_is_null_not_empty_list(tmp_path, monkeypatch):
+    """讀不到 → `tasks: null`，**不是空清單**（design §6.3）。
+
+    空清單與「這個專案沒待辦」在畫面上長得一模一樣——那正是這個功能存在的理由的反面。"""
+    import os
+
+    import pytest
+
+    if os.geteuid() == 0:
+        pytest.skip("root 無視目錄權限")
+    root, proj = _proj_with_tasks(tmp_path)
+    tasks = proj / ".fledge" / "tasks"
+    os.chmod(tasks, 0o000)
+    try:
+        c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+        body = c.get("/tasks", params={"project": str(proj)}).json()
+        assert body["tasks_status"] == "unavailable"
+        assert body["tasks"] is None
+        assert body["tasks"] != []
+    finally:
+        os.chmod(tasks, 0o755)
+
+
+def test_list_tasks_absent_is_empty_list(tmp_path, monkeypatch):
+    root = _project_root(tmp_path)
+    proj = root / "bare"
+    proj.mkdir()
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    body = c.get("/tasks", params={"project": str(proj)}).json()
+    assert body["tasks_status"] == "absent"
+    assert body["tasks"] == []
+
+
+def test_list_tasks_requires_token_when_auth_enforced(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "accounts": {}, "roots": [], "kms_root": ""}), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.delenv("FLEDGE_TEST_UNAUTH", raising=False)
+    monkeypatch.setenv("FLEDGE_TOKEN", "secret")
+    c = TestClient(create_app())
+    assert c.get("/tasks", params={"project": "/x"}).status_code == 401

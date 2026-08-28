@@ -3,12 +3,13 @@
 沒有那道檢查，一個過期或錯誤的路徑就能改寫或刪除專案外的檔案。既有的
 `routes/memory.py:89-109` 與 `/api/projects/tree` 都有對等機制。
 
-T1 只做唯讀側：resolver ＋ 未完成條數。`tasks_status` 三態、重複編號、`state.md` 的
-「下一步」留待 T2；`POST` 需要的 `mkdir` 與建檔留待 T3（**仍寫在本檔，不新增模組**）。
+寫入側（`POST` 的 `mkdir` 與建檔）留待 T3，**仍寫在本檔、不新增模組**。
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator
@@ -16,27 +17,37 @@ from typing import Any, Iterator
 from fledge_sidecar.app_config import AppConfig
 from fledge_sidecar.paths import canonicalize, same_dir
 from fledge_sidecar.project_scanner import scan_all
-from fledge_sidecar.tasks.parser import effective_status
+from fledge_sidecar.tasks.parser import ANOMALY_NUMBER_DUPLICATE, ANOMALY_UNREADABLE, Task, parse_task
 
 FLEDGE_DIRNAME = ".fledge"
 TASKS_DIRNAME = "tasks"
+STATE_FILENAME = "state.md"
+STATE_HEAD_LINES = 20  # 只讀前 20 行（design §5.1）
 
 # tasks_status 三態（design §6.3）。**不可壓成一個數字**——把「讀不到」顯示成「沒有」，
 # 正是這個功能存在的理由的反面。
 STATUS_OK = "ok"
-STATUS_ABSENT = "absent"          # `.fledge/tasks/` 不存在 → 0 條，不是錯誤
+STATUS_ABSENT = "absent"            # `.fledge/tasks/` 不存在 → 0 條，不是錯誤
 STATUS_UNAVAILABLE = "unavailable"  # 存在但讀不到（權限、I/O、O_NOFOLLOW 擋下）
 # P1 不過：`project` 未知或不合法。**不是 tasks_status 的值**，路由層一律轉 error code。
 STATUS_UNKNOWN_PROJECT = "unknown_project"
 
+# `/resume-note` skill 寫死的格式合約（該 skill 不需要修改）。中英兩種標籤、全半形冒號都認。
+_NEXT_STEP = re.compile(r"^\*\*(?:下一步|Next)\*\*[:：]\s*(.+)$")
+
 
 @dataclass(frozen=True)
 class TasksDir:
-    """resolver 的結果。`fd` 只在 status == ok 時有值，且生命週期綁在 with 區塊內。"""
+    """resolver 的結果。fd 的生命週期綁在 with 區塊內，離開就關閉。
 
-    fd: int | None
+    `fledge_fd` 在 `.fledge` 開得起來時就有值——即使 `tasks/` 不存在。理由：`state.md`
+    住在 `.fledge/` 而不是 `tasks/`，而實測 22 個專案中唯一有 `state.md` 的那個
+    （Meeting Agent）正好沒有 `tasks/`。綁在一起會讓它的「下一步」永遠是空的。"""
+
+    fd: int | None          # tasks 目錄；只在 status == ok 時有值
+    fledge_fd: int | None   # .fledge 目錄；開得起來就有值
     status: str
-    project: str  # 已知專案的 canonical 路徑；unknown_project 時為空字串
+    project: str            # 已知專案的 canonical 路徑；unknown_project 時為空字串
 
 
 def _open_dir(name: str | int, dir_fd: int | None = None) -> int:
@@ -74,23 +85,22 @@ def open_tasks_dir(
     """
     known = _match_known_project(project, projects if projects is not None else scan_all(config)[0])
     if known is None:
-        yield TasksDir(None, STATUS_UNKNOWN_PROJECT, "")
+        yield TasksDir(None, None, STATUS_UNKNOWN_PROJECT, "")
         return
 
     proj_fd = fledge_fd = tasks_fd = None
+    status = STATUS_OK
     try:
         try:
             proj_fd = _open_dir(known)
             fledge_fd = _open_dir(FLEDGE_DIRNAME, dir_fd=proj_fd)
             tasks_fd = _open_dir(TASKS_DIRNAME, dir_fd=fledge_fd)
         except FileNotFoundError:
-            yield TasksDir(None, STATUS_ABSENT, known)
-            return
+            status = STATUS_ABSENT
         except OSError:
             # 權限、I/O、ENOTDIR（該層是一般檔案）、ELOOP（該層是 symlink，被 O_NOFOLLOW 擋下）
-            yield TasksDir(None, STATUS_UNAVAILABLE, known)
-            return
-        yield TasksDir(tasks_fd, STATUS_OK, known)
+            status = STATUS_UNAVAILABLE
+        yield TasksDir(tasks_fd, fledge_fd, status, known)
     finally:
         for fd in (tasks_fd, fledge_fd, proj_fd):
             if fd is not None:
@@ -111,19 +121,64 @@ def list_task_files(tasks_fd: int) -> list[str]:
         return []  # 契約 2：掃不動就當這個專案沒票，不讓整個總覽失敗
 
 
-def read_task_text(tasks_fd: int, name: str) -> str | None:
-    """在已 pin 的 `tasks_dir_fd` 上讀一張票。任何 OSError → None（契約 1、2）。
+def read_task_bytes(tasks_fd: int, name: str) -> bytes | None:
+    """在已 pin 的 `tasks_dir_fd` 上讀一張票的**原始位元組**。任何 OSError → None。
 
-    `errors="replace"` 讓無效 UTF-8 也解得出字串——parser 的契約是永不拋例外。"""
+    回位元組而不是字串：fingerprint 必須算在原始內容上，解碼過的字串會把無效 UTF-8
+    換成替代字元，兩個不同的檔案可能算出同一個雜湊。"""
     try:
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=tasks_fd)
     except OSError:
         return None
     try:
         with os.fdopen(fd, "rb") as fh:
-            return fh.read().decode("utf-8", errors="replace")
+            return fh.read()
     except OSError:
         return None
+
+
+def fingerprint(raw: bytes) -> str:
+    """票檔內容的雜湊（design §7.2）。**best-effort stale detection，不是併發保證。**"""
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _decode(raw: bytes) -> str:
+    """`errors="replace"` 讓無效 UTF-8 也解得出字串——parser 的契約是永不拋例外。"""
+    return raw.decode("utf-8", errors="replace")
+
+
+def _unreadable_task(name: str) -> Task:
+    """讀不到內容的票：仍然回一張票（契約 3 不隱藏），status 判不出來 → fallback todo。"""
+    return Task(name=name, number=None, title=name, body="", status="todo",
+                source="", created="", anomalies=(ANOMALY_UNREADABLE,))
+
+
+def scan_tasks(tasks_fd: int) -> list[dict[str, Any]]:
+    """掃出一個專案的全部票，逐檔隔離（契約 2）。回 API 形狀的 dict。
+
+    重複編號（design §2.4.2）不只來自併發——手動改檔名、複製一份票檔都會造成。
+    **兩張票都顯示、都標異常**，提示使用者手動改名。"""
+    rows: list[dict[str, Any]] = []
+    for name in list_task_files(tasks_fd):
+        raw = read_task_bytes(tasks_fd, name)
+        if raw is None:
+            task, fp = _unreadable_task(name), ""
+        else:
+            task, fp = parse_task(name, _decode(raw)), fingerprint(raw)
+        rows.append({
+            "name": task.name, "number": task.number, "title": task.title,
+            "status": task.status, "source": task.source, "created": task.created,
+            "anomalies": list(task.anomalies), "fingerprint": fp,
+        })
+
+    seen: dict[int, int] = {}
+    for row in rows:
+        if row["number"] is not None:
+            seen[row["number"]] = seen.get(row["number"], 0) + 1
+    for row in rows:
+        if row["number"] is not None and seen[row["number"]] > 1:
+            row["anomalies"].append(ANOMALY_NUMBER_DUPLICATE)
+    return rows
 
 
 def count_unfinished(tasks_fd: int) -> int:
@@ -131,13 +186,29 @@ def count_unfinished(tasks_fd: int) -> int:
 
     讀不到內容的票依 §6.1 的規則——`status` 本身判不出來 → fallback `todo` → 計入未完成。
     票不會因為讀不懂就從計數裡消失（契約 3）。"""
-    total = 0
-    for name in list_task_files(tasks_fd):
-        text = read_task_text(tasks_fd, name)
-        status = effective_status(text) if text is not None else "todo"
-        if status in ("todo", "doing"):
-            total += 1
-    return total
+    return sum(1 for row in scan_tasks(tasks_fd) if row["status"] in ("todo", "doing"))
+
+
+def read_next_step(fledge_fd: int | None) -> str:
+    """從 `.fledge/state.md` 的前 20 行抽「下一步」（design §5.1）。讀不到一律回空字串。
+
+    這是 `/resume-note` skill 已經寫死的格式合約，**該 skill 完全不需要修改**。"""
+    if fledge_fd is None:
+        return ""
+    try:
+        fd = os.open(STATE_FILENAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fledge_fd)
+    except OSError:
+        return ""
+    try:
+        with os.fdopen(fd, "rb") as fh:
+            head = _decode(fh.read(64 * 1024))
+    except OSError:
+        return ""
+    for line in head.splitlines()[:STATE_HEAD_LINES]:
+        m = _NEXT_STEP.match(line.strip())
+        if m:
+            return m.group(1).strip()
+    return ""
 
 
 def build_overview(config: AppConfig) -> dict[str, Any]:
@@ -155,19 +226,16 @@ def build_overview(config: AppConfig) -> dict[str, Any]:
         with open_tasks_dir(entry["path"], config, projects=projects) as td:
             if td.status == STATUS_OK and td.fd is not None:
                 unfinished: int | None = count_unfinished(td.fd)
-                status = STATUS_OK
             elif td.status == STATUS_ABSENT:
-                unfinished, status = 0, STATUS_ABSENT
+                unfinished = 0
             else:
-                # unknown_project 不會在這裡發生（清單就來自 scan_all），保守歸 unavailable
-                unfinished, status = None, STATUS_UNAVAILABLE
-        rows.append(
-            {
+                unfinished = None
+            rows.append({
                 "path": entry["path"],
                 "name": entry.get("name", ""),
                 "account": entry.get("account", ""),
                 "unfinished": unfinished,
-                "tasks_status": status,
-            }
-        )
+                "tasks_status": td.status,
+                "next_step": read_next_step(td.fledge_fd),
+            })
     return {"projects": rows, "permission_error": permission_error}
