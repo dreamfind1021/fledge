@@ -17,7 +17,10 @@ from typing import Any, Iterator
 from fledge_sidecar.app_config import AppConfig
 from fledge_sidecar.paths import canonicalize, same_dir
 from fledge_sidecar.project_scanner import scan_all
-from fledge_sidecar.tasks.parser import ANOMALY_NUMBER_DUPLICATE, ANOMALY_UNREADABLE, Task, parse_task
+from fledge_sidecar.tasks.parser import (
+    ANOMALY_NUMBER_DUPLICATE, ANOMALY_UNREADABLE, Task,
+    is_plain_name, make_short_name, parse_task, render_task,
+)
 
 FLEDGE_DIRNAME = ".fledge"
 TASKS_DIRNAME = "tasks"
@@ -55,6 +58,23 @@ def _open_dir(name: str | int, dir_fd: int | None = None) -> int:
     return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
 
 
+def _open_or_make(name: str, dir_fd: int, create: bool) -> int:
+    """開一層目錄；`create` 時不存在就先 `mkdir`（design §7.1 步驟 3）。
+
+    `mkdir` 撞到 `EEXIST` 不算失敗——交給下面的 open 決定，**symlink 仍會被
+    `O_NOFOLLOW` 擋下**，所以「先建再開」不會變成繞過 symlink 檢查的路徑。"""
+    try:
+        return _open_dir(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        if not create:
+            raise
+        try:
+            os.mkdir(name, dir_fd=dir_fd)
+        except FileExistsError:
+            pass
+        return _open_dir(name, dir_fd=dir_fd)
+
+
 def _match_known_project(project: str, projects: list[dict[str, Any]]) -> str | None:
     """P1 ＋ P2（design §7.1）：`project` 必須是 `scan_all` 的已知專案之一。
 
@@ -73,7 +93,8 @@ def _match_known_project(project: str, projects: list[dict[str, Any]]) -> str | 
 
 @contextmanager
 def open_tasks_dir(
-    project: str, config: AppConfig, *, projects: list[dict[str, Any]] | None = None
+    project: str, config: AppConfig, *, projects: list[dict[str, Any]] | None = None,
+    create: bool = False,
 ) -> Iterator[TasksDir]:
     """`project -> tasks_dir_fd` 的**唯一入口**（design §7.1）。
 
@@ -93,8 +114,8 @@ def open_tasks_dir(
     try:
         try:
             proj_fd = _open_dir(known)
-            fledge_fd = _open_dir(FLEDGE_DIRNAME, dir_fd=proj_fd)
-            tasks_fd = _open_dir(TASKS_DIRNAME, dir_fd=fledge_fd)
+            fledge_fd = _open_or_make(FLEDGE_DIRNAME, proj_fd, create)
+            tasks_fd = _open_or_make(TASKS_DIRNAME, fledge_fd, create)
         except FileNotFoundError:
             status = STATUS_ABSENT
         except OSError:
@@ -153,6 +174,15 @@ def _unreadable_task(name: str) -> Task:
                 source="", created="", anomalies=(ANOMALY_UNREADABLE,))
 
 
+def _row(task: Task, fp: str) -> dict[str, Any]:
+    """一張票的 API 形狀。`scan_tasks` 與 `create_task` 共用，避免兩份必然漂移。"""
+    return {
+        "name": task.name, "number": task.number, "title": task.title,
+        "status": task.status, "source": task.source, "created": task.created,
+        "anomalies": list(task.anomalies), "fingerprint": fp,
+    }
+
+
 def scan_tasks(tasks_fd: int) -> list[dict[str, Any]]:
     """掃出一個專案的全部票，逐檔隔離（契約 2）。回 API 形狀的 dict。
 
@@ -165,11 +195,7 @@ def scan_tasks(tasks_fd: int) -> list[dict[str, Any]]:
             task, fp = _unreadable_task(name), ""
         else:
             task, fp = parse_task(name, _decode(raw)), fingerprint(raw)
-        rows.append({
-            "name": task.name, "number": task.number, "title": task.title,
-            "status": task.status, "source": task.source, "created": task.created,
-            "anomalies": list(task.anomalies), "fingerprint": fp,
-        })
+        rows.append(_row(task, fp))
 
     seen: dict[int, int] = {}
     for row in rows:
@@ -239,3 +265,41 @@ def build_overview(config: AppConfig) -> dict[str, Any]:
                 "next_step": read_next_step(td.fledge_fd),
             })
     return {"projects": rows, "permission_error": permission_error}
+
+
+def _create_file(name: str, tasks_fd: int) -> int:
+    """建一個新檔。`O_EXCL` 保證不覆蓋既有檔案、`O_NOFOLLOW` 擋 symlink（design §7.1）。
+
+    獨立成一個函式是為了讓測試能注入「選完號之後、open 之前才出現同名檔」的競態——
+    預置同名檔測不到重試（那個檔案本身就成了最大號，下一次配號會直接跳過它）。"""
+    return os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=tasks_fd)
+
+
+def create_task(tasks_fd: int, title: str, *, created: str, max_attempts: int = 64) -> dict[str, Any]:
+    """建一張新票（design §2.4、§7.1）。
+
+    編號取當前資料夾內最大號 +1。**撞到 `EEXIST` 取下一個編號重試，不是直接失敗**——
+    使用者手動複製或改名就會造成同號，這是單一寫入者也會遇到的正常情境。
+
+    **併發建票與配號是未定義行為**（design §2.4.1）：本函式不偵測、不加固。
+    `O_EXCL` 保護的是完整路徑，不是 `NN` 前綴——兩個寫入者同時建票且短名相同時，
+    先寫的那份會被覆蓋，且 `.fledge/` 不進 git，不可回復。
+    """
+    rows = scan_tasks(tasks_fd)
+    number = max((r["number"] for r in rows if r["number"] is not None), default=0) + 1
+    short = make_short_name(title)
+    raw = render_task(title, created=created).encode("utf-8")
+    for _ in range(max_attempts):
+        name = f"{number:02d}-{short}.md"
+        # allowlist 與 T1 是兩道，不是二選一（design §7.1）
+        if not is_plain_name(name):
+            raise ValueError("generated name is not a plain filename")
+        try:
+            fd = _create_file(name, tasks_fd)
+        except FileExistsError:
+            number += 1
+            continue
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(raw)
+        return _row(parse_task(name, raw.decode("utf-8")), fingerprint(raw))
+    raise OSError("too many number collisions")

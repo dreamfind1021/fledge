@@ -1098,3 +1098,14 @@ export async function fetchTasks(port: number, project: string): Promise<TasksLi
   if (!resp.ok) throw new Error(`fetchTasks failed: ${resp.status}`);
   return (await resp.json()) as TasksListResponse;
 }
+
+/** 建票（design §5.2）：source: me、status: todo、created 為當天，皆由 sidecar 決定。 */
+export async function createTask(port: number, project: string, title: string): Promise<TaskRow> {
+  const resp = await fetch(`${base(port)}/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },   // token 在 headers 內
+    body: JSON.stringify({ project, title }),
+  });
+  if (!resp.ok) throw new Error(`createTask failed: ${resp.status}`);
+  return (await resp.json()) as TaskRow;
+}

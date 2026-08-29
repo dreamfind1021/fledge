@@ -32,13 +32,28 @@ function Ticket({ task, t }: { task: TaskRow; t: (k: string) => string }) {
 
 // 第二層：未完成區在上，done 摺疊在下（design §5.3）。**做完不刪檔案**——
 // 上一版的第一條結構性缺陷就是「完成即移除在燒資產」。
-export function TasksList({ data, failed, onBack, t }: {
+export function TasksList({ data, failed, onBack, onCreate, t }: {
   data: TasksListResponse | null;
   failed: boolean;
   onBack: () => void;
+  onCreate: (title: string) => Promise<void>;
   t: (k: string) => string;
 }) {
   const [showDone, setShowDone] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [createFailed, setCreateFailed] = useState(false);
+
+  // 一行輸入建票（design §5.2）。要寫內文得開檔案——刻意不做票詳情編輯表單。
+  const submit = () => {
+    const title = draft.trim();
+    if (!title || busy) return;
+    setBusy(true); setCreateFailed(false);
+    onCreate(title)
+      .then(() => setDraft(""))
+      .catch(() => setCreateFailed(true))
+      .finally(() => setBusy(false));
+  };
   const back = (
     <button className="tasks-back" onClick={onBack}>
       <ChevronLeft size={14} strokeWidth={2} />{t("list.back")}
@@ -57,6 +72,17 @@ export function TasksList({ data, failed, onBack, t }: {
     <div className="tasks-pane">
       {back}
       {data.next_step ? <div className="tasks-next">{data.next_step}</div> : null}
+      <form className="tasks-new" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <input
+          className="tasks-new-input"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder={t("list.newPlaceholder")}
+          aria-label={t("list.newPlaceholder")}
+        />
+        <button className="tasks-new-btn" type="submit" disabled={!draft.trim() || busy}>{t("list.add")}</button>
+      </form>
+      {createFailed ? <div className="tasks-note is-error">{t("list.createError")}</div> : null}
       {data.tasks.length === 0 ? (
         <div className="tasks-note">{t("list.empty")}</div>
       ) : (

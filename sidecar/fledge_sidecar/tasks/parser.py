@@ -152,3 +152,52 @@ def parse_task(name: str, text: str) -> Task:
         name=name, number=number, title=title, body=body,
         status=status, source=source, created=created, anomalies=tuple(anomalies),
     )
+
+
+# ── 寫：產生一張新票（design §7.1 的短名規則、§2.2 的檔案格式）──────────
+#
+# 放在 parser.py 而不是 scanner.py：本檔的職責是「單一票檔的讀與寫」（design §10.1 第 1 項），
+# scanner.py 管的是資料夾層級的 fd 操作。
+
+# allowlist：只保留中日韓文字、英數字、底線與連字號（design §7.1）。
+# 其餘一律換成連字號 → `/`、`.`、`\0` 在來源就不可能出現。
+# CJK 用明碼區段而不是 \p{Han}：Python 的 re 不支援 Unicode property。
+_SHORT_NAME_DENY = re.compile(
+    r"[^0-9A-Za-z_\-"
+    r"぀-ゟ"   # 平假名
+    r"゠-ヿ"   # 片假名
+    r"㐀-䶿"   # CJK 擴充 A
+    r"一-鿿"   # CJK 基本區
+    r"가-힯"   # 諺文
+    r"豈-﫿"   # CJK 相容表意文字
+    r"]"
+)
+SHORT_NAME_MAX = 40          # 字元數。CJK 在 UTF-8 是 3 bytes，40 字 ＝ 120 bytes，遠低於檔名上限
+SHORT_NAME_FALLBACK = "untitled"
+
+
+def make_short_name(title: str) -> str:
+    """從標題產生檔名用的短名（design §7.1，allowlist 制）。
+
+    **正規化後為空時用 `untitled`，不拒絕建票**：`title` 是使用者的自由文字，
+    `A/B` 這種標題應該被正規化成 `A-B` 而不是被擋下來。"""
+    s = _SHORT_NAME_DENY.sub("-", title)
+    s = re.sub(r"-{2,}", "-", s).strip("-")
+    return s[:SHORT_NAME_MAX].strip("-") or SHORT_NAME_FALLBACK
+
+
+def is_plain_name(name: str) -> bool:
+    """T1（design §7.1）：必須是純檔名——不含 `/`、不是 `.` 或 `..`。
+
+    **allowlist 與這道檢查是兩道，不是二選一。** `POST` 產生的檔名也必須過這裡：
+    短名由 `title` 截取，若只靠 allowlist 而漏了這道，日後改寬 allowlist 就會開一個洞。"""
+    return bool(name) and "/" not in name and "\0" not in name and name not in (".", "..")
+
+
+def render_task(title: str, *, created: str, status: str = DEFAULT_STATUS, source: str = "me") -> str:
+    """產生一張新票的檔案內容（design §2.2）。
+
+    標題壓成單行：多行標題會讓 `# ` 之後的內容被 parser 當成內文，
+    存回去再讀出來就不是原本那張票了（§9 要求「產生的檔案能被自己讀回」）。"""
+    one_line = " ".join(title.split()) or SHORT_NAME_FALLBACK
+    return f"---\nstatus: {status}\nsource: {source}\ncreated: {created}\n---\n\n# {one_line}\n"

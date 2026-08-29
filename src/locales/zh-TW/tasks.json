@@ -16,7 +16,10 @@
     "done": "已完成",
     "empty": "這個專案還沒有待辦",
     "unavailable": "這個專案的待辦資料夾讀不到",
-    "noNumber": "—"
+    "noNumber": "—",
+    "newPlaceholder": "打一行字，按 Enter 新增",
+    "add": "新增",
+    "createError": "建立待辦失敗"
   },
   "status": {
     "todo": "待辦",

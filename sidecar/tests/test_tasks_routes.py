@@ -177,3 +177,99 @@ def test_list_tasks_requires_token_when_auth_enforced(tmp_path, monkeypatch):
     monkeypatch.setenv("FLEDGE_TOKEN", "secret")
     c = TestClient(create_app())
     assert c.get("/tasks", params={"project": "/x"}).status_code == 401
+
+
+# ── POST /tasks（T3）──────────────────────────────────────────
+
+def test_post_creates_ticket_and_returns_name_and_fingerprint(tmp_path, monkeypatch):
+    root = _project_root(tmp_path)
+    proj = root / "p1"
+    proj.mkdir()
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    r = c.post("/tasks", json={"project": str(proj), "title": "匯出的檔名要能自訂"})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["name"] == "01-匯出的檔名要能自訂.md"
+    assert body["number"] == 1 and body["status"] == "todo" and body["source"] == "me"
+    assert len(body["fingerprint"]) == 64
+    assert (proj / ".fledge" / "tasks" / body["name"]).exists()   # 逐層建出來了
+
+
+def test_post_rejects_blank_title(tmp_path, monkeypatch):
+    root = _project_root(tmp_path)
+    proj = root / "p1"
+    proj.mkdir()
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    for title in ("", "   ", "\n\t"):
+        r = c.post("/tasks", json={"project": str(proj), "title": title})
+        assert r.status_code == 400 and r.json()["error"] == "title_required"
+
+
+def test_post_rejects_unknown_project(tmp_path, monkeypatch):
+    root = _project_root(tmp_path)
+    (root / "p1").mkdir()
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    r = c.post("/tasks", json={"project": str(tmp_path / "outside"), "title": "x"})
+    assert r.status_code == 400 and r.json()["error"] == "unknown_project"
+    assert not (tmp_path / "outside" / ".fledge").exists()   # 沒有在未知路徑底下建東西
+
+
+def test_post_requires_token_when_auth_enforced(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "accounts": {}, "roots": [], "kms_root": ""}), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.delenv("FLEDGE_TEST_UNAUTH", raising=False)
+    monkeypatch.setenv("FLEDGE_TOKEN", "secret")
+    assert TestClient(create_app()).post("/tasks", json={"project": "/x", "title": "y"}).status_code == 401
+
+
+def _post_title_lands_inside_tasks(tmp_path, monkeypatch, title, *, preseed_dir=None):
+    """送一個惡意 title，斷言 ① 建票成功 ② 檔案落在 tasks 目錄下 ③ 專案根沒多出東西。
+
+    **不要寫成「拒絕」**——`A/B` 是合法的使用者標題，設計 §7.1 要求正規化成 `A-B`。"""
+    root = _project_root(tmp_path)
+    proj = root / "p1"
+    tasks = proj / ".fledge" / "tasks"
+    tasks.mkdir(parents=True)
+    if preseed_dir:
+        (tasks / preseed_dir).mkdir()
+    before_root = set(p.name for p in proj.iterdir())
+    before_parent = set(p.name for p in root.iterdir())
+
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    r = c.post("/tasks", json={"project": str(proj), "title": title})
+    assert r.status_code == 201, r.text                       # ① 正規化後建票成功
+    name = r.json()["name"]
+    assert "/" not in name and name not in (".", "..")
+    assert (tasks / name).is_file()                           # ② 落在 tasks 目錄下
+    assert set(p.name for p in proj.iterdir()) == before_root       # ③ 專案根沒多出東西
+    assert set(p.name for p in root.iterdir()) == before_parent     #    上一層也沒有
+
+
+def test_post_title_with_slash_is_normalised(tmp_path, monkeypatch):
+    _post_title_lands_inside_tasks(tmp_path, monkeypatch, "A/B/C")
+
+
+def test_post_title_with_dotdot_is_normalised(tmp_path, monkeypatch):
+    _post_title_lands_inside_tasks(tmp_path, monkeypatch, "../../etc/passwd")
+
+
+def test_post_title_with_nul_is_normalised(tmp_path, monkeypatch):
+    _post_title_lands_inside_tasks(tmp_path, monkeypatch, "a\x00b")
+
+
+def test_post_traversal_title_with_preseeded_plain_dir(tmp_path, monkeypatch):
+    """design §7.1 第四輪審查抓到的洞：tasks 底下有一般目錄 `01-` 時，`O_NOFOLLOW`
+    **不會**禁止一般目錄之後的 `..`——所以 POST 產生的檔名也必須過 T1，不能只靠 allowlist。"""
+    _post_title_lands_inside_tasks(tmp_path, monkeypatch, "/../../../x", preseed_dir="01-")
+
+
+def test_post_punctuation_only_title_falls_back_to_untitled(tmp_path, monkeypatch):
+    root = _project_root(tmp_path)
+    proj = root / "p1"
+    proj.mkdir()
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    r = c.post("/tasks", json={"project": str(proj), "title": "。。。！！！"})
+    assert r.status_code == 201
+    assert r.json()["name"] == "01-untitled.md"
+    assert r.json()["title"] == "。。。！！！"    # 標題本身保留原文，只有檔名被正規化

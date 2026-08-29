@@ -44,3 +44,12 @@ button.tov-row:hover { background: var(--surface); }
 .tk-flagbody { margin: 0 9px 6px 35px; padding: 7px 10px; border-radius: 8px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border)); font-size: 11.5px; color: var(--dim); }
 .tk-flagbody .tk-file { font-family: var(--font-mono); font-size: 11px; color: var(--faint); margin-bottom: 4px; }
 .tk-flagbody ul { margin: 0; padding-left: 16px; }
+
+/* 一行輸入建票 */
+.tasks-new { display: flex; gap: 7px; margin: 4px 0 6px; }
+.tasks-new-input { flex: 1; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 7px 11px; color: var(--text); font-size: 12.5px; font-family: var(--font-ui); }
+.tasks-new-input::placeholder { color: var(--faint); }
+.tasks-new-input:focus { outline: none; border-color: var(--focus); }
+.tasks-new-btn { flex-shrink: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 0 13px; color: var(--text); font-size: 12px; font-weight: 600; font-family: var(--font-ui); cursor: pointer; }
+.tasks-new-btn:hover:not(:disabled) { background: var(--hover); }
+.tasks-new-btn:disabled { color: var(--faint); cursor: default; }

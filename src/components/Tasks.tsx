@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { fetchTasks, fetchTasksOverview, type TasksListResponse, type TasksOverview as TasksOverviewData } from "../lib/sidecar";
+import { createTask, fetchTasks, fetchTasksOverview, type TasksListResponse, type TasksOverview as TasksOverviewData } from "../lib/sidecar";
 import { TasksList } from "./TasksList";
 import { TasksOverview } from "./TasksOverview";
 import "./Tasks.css";
@@ -27,6 +27,12 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
 
   const select = useCallback((path: string) => { setList(null); setSelected(path); }, []);
   const back = useCallback(() => { setSelected(null); }, []);
+  // 建完重讀整份清單：新票的編號由 sidecar 配（最大號 +1），前端不自己算
+  const create = useCallback(async (title: string) => {
+    if (port == null || selected == null) return;
+    await createTask(port, selected, title);
+    setReloadKey((k) => k + 1);
+  }, [port, selected]);
 
   useEffect(() => {
     if (port == null || !isActive) return;
@@ -44,7 +50,7 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
       <div className="tasks-head"><h1>{t("tabTitle")}</h1></div>
       {selected == null
         ? <TasksOverview data={overview} failed={failed} onSelect={select} t={t} />
-        : <TasksList data={list} failed={failed} onBack={back} t={t} />}
+        : <TasksList data={list} failed={failed} onBack={back} onCreate={create} t={t} />}
     </div>
   );
 }

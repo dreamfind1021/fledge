@@ -100,3 +100,52 @@ def test_duplicate_key_takes_the_last_one_without_raising():
     t = P.parse_task("01-x.md", "---\nstatus: todo\nstatus: done\nsource: me\ncreated: 2026-08-29\n---\n\n# x\n")
     assert t.status == "done"
     assert t.anomalies == ()
+
+
+# ── 寫：短名 allowlist ＋ 檔案格式（design §7.1、§2.2）──────────────
+
+def test_short_name_keeps_cjk_and_alnum():
+    assert P.make_short_name("匯出的檔名要能自訂") == "匯出的檔名要能自訂"
+    assert P.make_short_name("fix Bug_123") == "fix-Bug_123"
+    assert P.make_short_name("ひらがな カタカナ 한글") == "ひらがな-カタカナ-한글"
+
+
+def test_short_name_normalises_instead_of_rejecting():
+    """`A/B` 是合法的使用者標題，應該正規化成 `A-B` 而不是被擋下來（design §7.1）。"""
+    assert P.make_short_name("A/B") == "A-B"
+    assert P.make_short_name("../../etc/passwd") == "etc-passwd"
+    assert P.make_short_name("a\x00b") == "a-b"
+    assert "/" not in P.make_short_name("///")
+
+
+def test_short_name_falls_back_to_untitled():
+    """正規化後為空時用 `untitled`，**不拒絕建票**（design §7.1）。"""
+    for title in ("///", "。。。", "!!!", "   "):
+        assert P.make_short_name(title) == P.SHORT_NAME_FALLBACK
+
+
+def test_short_name_is_truncated():
+    assert len(P.make_short_name("字" * 200)) == P.SHORT_NAME_MAX
+
+
+def test_is_plain_name_rejects_traversal():
+    """T1（design §7.1）：不含 `/`、不是 `.` 或 `..`。**與 allowlist 是兩道，不是二選一。**"""
+    for bad in ("", ".", "..", "a/b", "/abs", "../x", "a\x00b"):
+        assert not P.is_plain_name(bad)
+    for ok in ("01-a.md", "沒有編號.md", "a-b_c.md"):
+        assert P.is_plain_name(ok)
+
+
+def test_rendered_ticket_reads_back_identically():
+    """design §9：產生的檔案能被自己讀回，且沒有異常。"""
+    text = P.render_task("匯出的檔名要能自訂", created="2026-08-29")
+    t = P.parse_task("07-匯出的檔名要能自訂.md", text)
+    assert t.title == "匯出的檔名要能自訂"
+    assert (t.status, t.source, t.created, t.number) == ("todo", "me", "2026-08-29", 7)
+    assert t.anomalies == ()
+
+
+def test_rendered_title_is_flattened_to_one_line():
+    """多行標題會讓 `# ` 之後的內容被當成內文，存回去再讀出來就不是原本那張票。"""
+    text = P.render_task("第一行\n第二行", created="2026-08-29")
+    assert P.parse_task("01-x.md", text).title == "第一行 第二行"

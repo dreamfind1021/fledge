@@ -15,6 +15,7 @@ import {
   fetchConfig,
   fetchTasksOverview,
   fetchTasks,
+  createTask,
 } from "./sidecar";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -593,5 +594,25 @@ describe("fetchTasks", () => {
   it("非 2xx 時 throw", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 400 }) as unknown as Response));
     await expect(fetchTasks(4321, "/x")).rejects.toThrow();
+  });
+});
+
+describe("createTask", () => {
+  it("POST 到 /tasks、帶 project/title payload 與 auth header", async () => {
+    setAuthToken("tok-new");
+    const spy = vi.fn(async () => ({ ok: true, json: async () => ({ name: "01-a.md" }) }) as unknown as Response);
+    vi.stubGlobal("fetch", spy);
+    await createTask(4321, "/p/a", "第一件事");
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4321/tasks");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "Content-Type": "application/json", "X-Fledge-Token": "tok-new" });
+    expect(JSON.parse(init.body as string)).toEqual({ project: "/p/a", title: "第一件事" });
+    setAuthToken(null);
+  });
+
+  it("非 2xx 時 throw（前端據此顯示建立失敗）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 400 }) as unknown as Response));
+    await expect(createTask(4321, "/p/a", "x")).rejects.toThrow();
   });
 });

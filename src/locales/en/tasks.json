@@ -16,7 +16,10 @@
     "done": "Done",
     "empty": "No tasks in this project yet",
     "unavailable": "This project's tasks folder cannot be read",
-    "noNumber": "—"
+    "noNumber": "—",
+    "newPlaceholder": "Add a task and press Enter",
+    "add": "Add",
+    "createError": "Could not create the task"
   },
   "status": {
     "todo": "To do",

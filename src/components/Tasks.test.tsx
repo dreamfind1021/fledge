@@ -8,11 +8,13 @@ import { Tasks } from "./Tasks";
 
 const fetchTasksOverview = vi.fn<(port: number) => Promise<TasksOverview>>();
 const fetchTasks = vi.fn<(port: number, project: string) => Promise<TasksListResponse>>();
+const createTask = vi.fn<(port: number, project: string, title: string) => Promise<TaskRow>>();
 
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   fetchTasksOverview: (port: number) => fetchTasksOverview(port),
   fetchTasks: (port: number, project: string) => fetchTasks(port, project),
+  createTask: (port: number, project: string, title: string) => createTask(port, project, title),
 }));
 
 const proj = (over: Partial<TasksOverview["projects"][number]> = {}) => ({
@@ -30,6 +32,7 @@ describe("Tasks 面板", () => {
     vi.clearAllMocks();
     fetchTasksOverview.mockResolvedValue({ projects: [proj()], permission_error: false });
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "" });
+    createTask.mockResolvedValue(ticket({ name: "02-b.md", number: 2, title: "新的" }));
   });
   afterEach(cleanup);   // vitest 未開 globals → testing-library 不會自動 cleanup
 
@@ -98,5 +101,38 @@ describe("Tasks 面板", () => {
     expect(screen.getByText("壞的.md")).toBeTruthy();
     expect(screen.getByText(en.anomaly.number_missing)).toBeTruthy();
     expect(screen.getByText(en.anomaly.status_invalid)).toBeTruthy();
+  });
+
+  // design §5.2：一行輸入建票。source/status/created 都由 sidecar 決定，前端只送標題。
+  it("打字送出會建票並重讀清單", async () => {
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByTitle("/p/a"));
+    const input = await screen.findByLabelText(en.list.newPlaceholder);
+    fireEvent.change(input, { target: { value: "  新的一件事  " } });
+    fireEvent.click(screen.getByText(en.list.add));
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledWith(1234, "/p/a", "新的一件事"));
+    await waitFor(() => expect(fetchTasks).toHaveBeenCalledTimes(2));   // 建完重讀
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe(""));
+  });
+
+  it("空白標題不送出", async () => {
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByTitle("/p/a"));
+    const input = await screen.findByLabelText(en.list.newPlaceholder);
+    fireEvent.change(input, { target: { value: "   " } });
+    fireEvent.submit(input.closest("form")!);
+    expect(createTask).not.toHaveBeenCalled();
+  });
+
+  it("建票失敗顯示錯誤，不清空使用者打的字", async () => {
+    createTask.mockRejectedValue(new Error("400"));
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByTitle("/p/a"));
+    const input = await screen.findByLabelText(en.list.newPlaceholder);
+    fireEvent.change(input, { target: { value: "會失敗的" } });
+    fireEvent.click(screen.getByText(en.list.add));
+    await waitFor(() => expect(screen.getByText(en.list.createError)).toBeTruthy());
+    expect((input as HTMLInputElement).value).toBe("會失敗的");
   });
 });
