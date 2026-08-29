@@ -201,3 +201,28 @@ def render_task(title: str, *, created: str, status: str = DEFAULT_STATUS, sourc
     存回去再讀出來就不是原本那張票了（§9 要求「產生的檔案能被自己讀回」）。"""
     one_line = " ".join(title.split()) or SHORT_NAME_FALLBACK
     return f"---\nstatus: {status}\nsource: {source}\ncreated: {created}\n---\n\n# {one_line}\n"
+
+
+_STATUS_LINE = re.compile(r"^([ \t]*status[ \t]*:).*$", re.MULTILINE)
+
+
+def replace_status(text: str, status: str) -> str:
+    """把票檔的 `status` 換成新值，**其餘位元組一字不動**（plan T4）。
+
+    **刻意不重新產生整個檔案**：改狀態時把使用者寫在內文的東西弄丟，狀態會顯示正確、
+    409 測試也全綠，而 `.fledge/` 不進 git，那些內容不可回復。這是 plan 標為
+    「最危險的缺口」的那一條。
+
+    只在 frontmatter 圍籬內替換——內文裡若有一行 `status: x` 不該被動到。
+    """
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            head, rest = text[:end], text[end:]
+            new_head, hit = _STATUS_LINE.subn(lambda m: f"{m.group(1)} {status}", head, count=1)
+            if hit:
+                return new_head + rest
+            # 有 frontmatter 但沒有 status 行：插在圍籬內最前面，其餘原樣接上
+            return f"---\nstatus: {status}" + text[3:]
+    # 整段沒有 frontmatter（或圍籬不完整）：補一個，原文一字不動接在後面
+    return f"---\nstatus: {status}\n---\n\n" + text

@@ -19,7 +19,12 @@
     "noNumber": "—",
     "newPlaceholder": "打一行字，按 Enter 新增",
     "add": "新增",
-    "createError": "建立待辦失敗"
+    "createError": "建立待辦失敗",
+    "delete": "刪除",
+    "cancel": "取消",
+    "confirmDelete": "確定刪除這張票？檔案會直接消失，救不回來。",
+    "conflict": "這張票已被改過，正在重新載入。",
+    "actionError": "沒有成功，再試一次。"
   },
   "status": {
     "todo": "待辦",
@@ -43,6 +48,8 @@
   },
   "a11y": {
     "expandDone": "展開已完成",
-    "collapseDone": "收起已完成"
+    "collapseDone": "收起已完成",
+    "cycleStatus": "切換狀態",
+    "openInEditor": "用編輯器打開檔案"
   }
 }

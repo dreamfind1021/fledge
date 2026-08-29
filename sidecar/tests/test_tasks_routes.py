@@ -273,3 +273,147 @@ def test_post_punctuation_only_title_falls_back_to_untitled(tmp_path, monkeypatc
     assert r.status_code == 201
     assert r.json()["name"] == "01-untitled.md"
     assert r.json()["title"] == "。。。！！！"    # 標題本身保留原文，只有檔名被正規化
+
+
+# ── PATCH / DELETE（T4）───────────────────────────────────────
+
+BODY = "---\nstatus: todo\nsource: me\ncreated: 2026-08-29\n---\n\n# 標題不該被動到\n\n第一行內文\n第二行內文\n\n- 條列\n"
+
+
+def _with_ticket(tmp_path, monkeypatch, *, text=BODY, name="01-a.md"):
+    """造一個含票的專案，回 (client, proj, tasks 目錄, 該票的 fingerprint)。"""
+    root = _project_root(tmp_path)
+    proj = root / "p1"
+    tasks = proj / ".fledge" / "tasks"
+    tasks.mkdir(parents=True)
+    (tasks / name).write_text(text, encoding="utf-8")
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    row = next(t for t in c.get("/tasks", params={"project": str(proj)}).json()["tasks"] if t["name"] == name)
+    return c, proj, tasks, row["fingerprint"]
+
+
+def test_patch_changes_only_status_and_leaves_body_byte_identical(tmp_path, monkeypatch):
+    """**plan 標為「最危險的缺口」的那條。**
+
+    實作若為了改 status 而重建檔案、漏寫內文，狀態會顯示正確、409 測試也全綠，
+    而使用者不進 git 的內容已經不可回復地消失。"""
+    c, proj, tasks, fp = _with_ticket(tmp_path, monkeypatch)
+    before = (tasks / "01-a.md").read_text(encoding="utf-8")
+    r = c.patch("/tasks", json={"project": str(proj), "name": "01-a.md",
+                                "status": "doing", "fingerprint": fp})
+    assert r.status_code == 200
+    after = (tasks / "01-a.md").read_text(encoding="utf-8")
+    assert after == before.replace("status: todo", "status: doing")   # 逐字，只有那一行變
+    assert r.json()["status"] == "doing"
+    assert r.json()["fingerprint"] != fp                             # 回新的 fingerprint
+    assert r.json()["title"] == "標題不該被動到"
+
+
+def test_patch_with_stale_fingerprint_is_409_and_file_untouched(tmp_path, monkeypatch):
+    c, proj, tasks, _ = _with_ticket(tmp_path, monkeypatch)
+    before = (tasks / "01-a.md").read_bytes()
+    r = c.patch("/tasks", json={"project": str(proj), "name": "01-a.md",
+                                "status": "done", "fingerprint": "0" * 64})
+    assert r.status_code == 409 and r.json()["error"] == "stale"
+    assert (tasks / "01-a.md").read_bytes() == before                # 完全沒被動過
+
+
+def test_delete_with_stale_fingerprint_is_409_and_file_untouched(tmp_path, monkeypatch):
+    c, proj, tasks, _ = _with_ticket(tmp_path, monkeypatch)
+    before = (tasks / "01-a.md").read_bytes()
+    r = c.request("DELETE", "/tasks", params={"project": str(proj), "name": "01-a.md",
+                                              "fingerprint": "0" * 64})
+    assert r.status_code == 409 and r.json()["error"] == "stale"
+    assert (tasks / "01-a.md").read_bytes() == before
+
+
+def test_delete_removes_only_the_named_file(tmp_path, monkeypatch):
+    c, proj, tasks, fp = _with_ticket(tmp_path, monkeypatch)
+    (tasks / "02-b.md").write_text(BODY, encoding="utf-8")
+    r = c.request("DELETE", "/tasks", params={"project": str(proj), "name": "01-a.md", "fingerprint": fp})
+    assert r.status_code == 200
+    assert not (tasks / "01-a.md").exists()
+    assert (tasks / "02-b.md").exists()                              # 同資料夾其他檔案不受影響
+
+
+def test_two_patches_in_a_row_both_succeed(tmp_path, monkeypatch):
+    """單次 PATCH 的測試抓不到這個：成功回應若沒帶回新 fingerprint、或前端沒拿它取代
+    本地狀態，第二次會被錯誤地判成 409（design §7.2）。"""
+    c, proj, _, fp = _with_ticket(tmp_path, monkeypatch)
+    r1 = c.patch("/tasks", json={"project": str(proj), "name": "01-a.md", "status": "doing", "fingerprint": fp})
+    assert r1.status_code == 200
+    r2 = c.patch("/tasks", json={"project": str(proj), "name": "01-a.md",
+                                 "status": "done", "fingerprint": r1.json()["fingerprint"]})
+    assert r2.status_code == 200 and r2.json()["status"] == "done"
+
+
+def test_patch_then_delete_succeeds(tmp_path, monkeypatch):
+    c, proj, tasks, fp = _with_ticket(tmp_path, monkeypatch)
+    r1 = c.patch("/tasks", json={"project": str(proj), "name": "01-a.md", "status": "doing", "fingerprint": fp})
+    r2 = c.request("DELETE", "/tasks", params={"project": str(proj), "name": "01-a.md",
+                                               "fingerprint": r1.json()["fingerprint"]})
+    assert r2.status_code == 200 and not (tasks / "01-a.md").exists()
+
+
+def test_patch_rejects_bad_input(tmp_path, monkeypatch):
+    c, proj, _, fp = _with_ticket(tmp_path, monkeypatch)
+    base = {"project": str(proj), "name": "01-a.md", "status": "doing", "fingerprint": fp}
+    assert c.patch("/tasks", json={**base, "name": ""}).status_code == 400
+    assert c.patch("/tasks", json={**base, "fingerprint": ""}).status_code == 400
+    assert c.patch("/tasks", json={**base, "status": "亂寫"}).status_code == 400
+    assert c.patch("/tasks", json={**base, "name": "沒這張.md"}).status_code == 404
+    assert c.patch("/tasks", json={**base, "project": str(tmp_path / "outside")}).status_code == 400
+
+
+def test_delete_rejects_bad_input(tmp_path, monkeypatch):
+    c, proj, _, fp = _with_ticket(tmp_path, monkeypatch)
+    base = {"project": str(proj), "name": "01-a.md", "fingerprint": fp}
+    for over, code in (({"name": ""}, 400), ({"fingerprint": ""}, 400),
+                       ({"name": "沒這張.md"}, 404), ({"project": str(tmp_path / "outside")}, 400)):
+        assert c.request("DELETE", "/tasks", params={**base, **over}).status_code == code
+
+
+def test_write_endpoints_require_token_when_auth_enforced(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "accounts": {}, "roots": [], "kms_root": ""}), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.delenv("FLEDGE_TEST_UNAUTH", raising=False)
+    monkeypatch.setenv("FLEDGE_TOKEN", "secret")
+    c = TestClient(create_app())
+    assert c.patch("/tasks", json={"project": "/x", "name": "a.md", "status": "todo", "fingerprint": "f"}).status_code == 401
+    assert c.request("DELETE", "/tasks", params={"project": "/x", "name": "a.md", "fingerprint": "f"}).status_code == 401
+
+
+# 路徑邊界 T2／T3（design §7.1）——這三條要有收 `name` 的端點才驗得到，故排在 T4
+def test_target_must_not_be_a_directory(tmp_path, monkeypatch):
+    c, proj, tasks, fp = _with_ticket(tmp_path, monkeypatch)
+    (tasks / "02-dir.md").mkdir()
+    for method, kwargs in (("patch", {"json": {"project": str(proj), "name": "02-dir.md", "status": "done", "fingerprint": fp}}),
+                           ("delete", {"params": {"project": str(proj), "name": "02-dir.md", "fingerprint": fp}})):
+        r = c.request(method.upper(), "/tasks", **kwargs)
+        assert r.status_code == 400, method
+    assert (tasks / "02-dir.md").is_dir()          # 沒被刪掉
+
+
+def test_target_must_end_with_md(tmp_path, monkeypatch):
+    c, proj, tasks, fp = _with_ticket(tmp_path, monkeypatch)
+    (tasks / "note.txt").write_text("x", encoding="utf-8")
+    r = c.request("DELETE", "/tasks", params={"project": str(proj), "name": "note.txt", "fingerprint": fp})
+    assert r.status_code == 400 and (tasks / "note.txt").exists()
+
+
+def test_target_must_not_be_a_symlink(tmp_path, monkeypatch):
+    c, proj, tasks, fp = _with_ticket(tmp_path, monkeypatch)
+    outside = tmp_path / "secret.md"
+    outside.write_text("機密", encoding="utf-8")
+    (tasks / "09-link.md").symlink_to(outside)
+    r = c.request("DELETE", "/tasks", params={"project": str(proj), "name": "09-link.md", "fingerprint": fp})
+    assert r.status_code == 400
+    assert outside.exists()                        # symlink 指向的檔案沒被碰到
+
+
+def test_target_name_must_be_plain(tmp_path, monkeypatch):
+    c, proj, _, fp = _with_ticket(tmp_path, monkeypatch)
+    for bad in ("../01-a.md", "..", ".", "sub/01-a.md"):
+        r = c.request("DELETE", "/tasks", params={"project": str(proj), "name": bad, "fingerprint": fp})
+        assert r.status_code == 400, bad

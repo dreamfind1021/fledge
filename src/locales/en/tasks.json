@@ -19,7 +19,12 @@
     "noNumber": "—",
     "newPlaceholder": "Add a task and press Enter",
     "add": "Add",
-    "createError": "Could not create the task"
+    "createError": "Could not create the task",
+    "delete": "Delete",
+    "cancel": "Cancel",
+    "confirmDelete": "Delete this task? The file is removed and cannot be restored.",
+    "conflict": "This task was changed elsewhere. Reloading.",
+    "actionError": "That did not work. Try again."
   },
   "status": {
     "todo": "To do",
@@ -43,6 +48,8 @@
   },
   "a11y": {
     "expandDone": "Show done",
-    "collapseDone": "Hide done"
+    "collapseDone": "Hide done",
+    "cycleStatus": "Change status",
+    "openInEditor": "Open the file in your editor"
   }
 }

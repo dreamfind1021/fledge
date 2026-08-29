@@ -1070,6 +1070,8 @@ export interface TaskRow {
   /** 異常代碼（英文），由前端 i18n 映射成畫面文字。有值不代表要隱藏這張票 */
   anomalies: string[];
   fingerprint: string;
+  /** 票檔的絕對路徑，給「用編輯器打開」用。由 sidecar 組，前端不拼路徑 */
+  path: string;
 }
 
 export interface TasksListResponse {
@@ -1108,4 +1110,36 @@ export async function createTask(port: number, project: string, title: string): 
   });
   if (!resp.ok) throw new Error(`createTask failed: ${resp.status}`);
   return (await resp.json()) as TaskRow;
+}
+
+/** 票檔已被別人改過（PATCH／DELETE 收到 409）。best-effort stale detection，不是併發保證。 */
+export class TaskConflictError extends Error {
+  constructor() {
+    super("task changed elsewhere");
+    this.name = "TaskConflictError";
+  }
+}
+
+/** 改狀態。成功回傳更新後的票（含新 fingerprint），呼叫端必須用它取代本地狀態。 */
+export async function updateTask(
+  port: number, project: string, name: string, status: string, fingerprint: string,
+): Promise<TaskRow> {
+  const resp = await fetch(`${base(port)}/tasks`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ project, name, status, fingerprint }),
+  });
+  if (resp.status === 409) throw new TaskConflictError();
+  if (!resp.ok) throw new Error(`updateTask failed: ${resp.status}`);
+  return (await resp.json()) as TaskRow;
+}
+
+/** 刪票。檔案直接消失且 .fledge/ 不進 git——呼叫端必須先跳確認（design §5.2）。 */
+export async function deleteTask(
+  port: number, project: string, name: string, fingerprint: string,
+): Promise<void> {
+  const q = new URLSearchParams({ project, name, fingerprint });
+  const resp = await fetch(`${base(port)}/tasks?${q}`, { method: "DELETE", headers: authHeaders() });
+  if (resp.status === 409) throw new TaskConflictError();
+  if (!resp.ok) throw new Error(`deleteTask failed: ${resp.status}`);
 }

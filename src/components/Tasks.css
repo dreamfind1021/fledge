@@ -53,3 +53,17 @@ button.tov-row:hover { background: var(--surface); }
 .tasks-new-btn { flex-shrink: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 0 13px; color: var(--text); font-size: 12px; font-weight: 600; font-family: var(--font-ui); cursor: pointer; }
 .tasks-new-btn:hover:not(:disabled) { background: var(--hover); }
 .tasks-new-btn:disabled { color: var(--faint); cursor: default; }
+
+/* 票上的動作：切狀態（狀態 chip 本身可點）、開編輯器、刪除 */
+button.tk-status { border: none; font-family: var(--font-ui); cursor: pointer; }
+button.tk-status:hover { filter: brightness(1.25); }
+.tk-act { flex-shrink: 0; display: inline-flex; align-items: center; padding: 3px; background: transparent; border: none; color: var(--faint); cursor: pointer; border-radius: 4px; }
+.tk-act:hover { color: var(--text); background: var(--hover); }
+.tk-act.is-danger:hover { color: var(--error); background: color-mix(in srgb, var(--error) 15%, transparent); }
+/* 行內刪除確認：兩次刻意點擊，不動用原生對話框（webview 的 window.confirm 失效） */
+.tk-confirm { display: flex; align-items: center; gap: 8px; margin: 0 9px 6px 35px; padding: 7px 10px; border-radius: 8px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border)); font-size: 11.5px; color: var(--dim); }
+.tk-confirm span { flex: 1; min-width: 0; }
+.tk-confirm button { flex-shrink: 0; border: 1px solid var(--border); border-radius: 6px; padding: 2px 9px; font-size: 11px; font-weight: 600; font-family: var(--font-ui); background: transparent; color: var(--text); cursor: pointer; }
+.tk-confirm-yes { color: var(--error) !important; border-color: color-mix(in srgb, var(--error) 45%, var(--border)) !important; }
+.tk-confirm-yes:hover { background: color-mix(in srgb, var(--error) 15%, transparent); }
+.tk-confirm-no:hover { background: var(--hover); }

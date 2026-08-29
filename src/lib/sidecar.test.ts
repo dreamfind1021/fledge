@@ -16,6 +16,9 @@ import {
   fetchTasksOverview,
   fetchTasks,
   createTask,
+  updateTask,
+  deleteTask,
+  TaskConflictError,
 } from "./sidecar";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -614,5 +617,37 @@ describe("createTask", () => {
   it("非 2xx 時 throw（前端據此顯示建立失敗）", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 400 }) as unknown as Response));
     await expect(createTask(4321, "/p/a", "x")).rejects.toThrow();
+  });
+});
+
+describe("updateTask / deleteTask", () => {
+  it("updateTask 用 PATCH、帶 fingerprint payload", async () => {
+    setAuthToken("tok-p");
+    const spy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ name: "01-a.md" }) }) as unknown as Response);
+    vi.stubGlobal("fetch", spy);
+    await updateTask(4321, "/p/a", "01-a.md", "doing", "abc");
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4321/tasks");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({ project: "/p/a", name: "01-a.md", status: "doing", fingerprint: "abc" });
+    setAuthToken(null);
+  });
+
+  it("deleteTask 用 DELETE、參數走 query string", async () => {
+    const spy = vi.fn(async () => ({ ok: true, status: 200 }) as unknown as Response);
+    vi.stubGlobal("fetch", spy);
+    await deleteTask(4321, "/p/a", "01-a.md", "abc");
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4321/tasks?project=%2Fp%2Fa&name=01-a.md&fingerprint=abc");
+    expect(init.method).toBe("DELETE");
+  });
+
+  // 409 要能與「一般失敗」分開：前端據此顯示「已被改過」而不是通用錯誤
+  it("409 兩支都丟 TaskConflictError，其他錯誤丟一般 Error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 409 }) as unknown as Response));
+    await expect(updateTask(1, "/p", "a.md", "todo", "f")).rejects.toBeInstanceOf(TaskConflictError);
+    await expect(deleteTask(1, "/p", "a.md", "f")).rejects.toBeInstanceOf(TaskConflictError);
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 500 }) as unknown as Response));
+    await expect(updateTask(1, "/p", "a.md", "todo", "f")).rejects.not.toBeInstanceOf(TaskConflictError);
   });
 });

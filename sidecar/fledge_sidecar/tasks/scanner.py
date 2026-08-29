@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import stat as stat_module
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator
@@ -19,7 +20,7 @@ from fledge_sidecar.paths import canonicalize, same_dir
 from fledge_sidecar.project_scanner import scan_all
 from fledge_sidecar.tasks.parser import (
     ANOMALY_NUMBER_DUPLICATE, ANOMALY_UNREADABLE, Task,
-    is_plain_name, make_short_name, parse_task, render_task,
+    VALID_STATUS, is_plain_name, make_short_name, parse_task, render_task, replace_status,
 )
 
 FLEDGE_DIRNAME = ".fledge"
@@ -303,3 +304,90 @@ def create_task(tasks_fd: int, title: str, *, created: str, max_attempts: int = 
             fh.write(raw)
         return _row(parse_task(name, raw.decode("utf-8")), fingerprint(raw))
     raise OSError("too many number collisions")
+
+
+def task_path(project: str, name: str) -> str:
+    """票檔的絕對路徑，給前端「用編輯器打開」用（design §5.2）。
+
+    由 sidecar 組而不是前端拼：`.fledge/tasks` 這個佈局是本檔的常數，
+    寫兩份必然漂移。**這是唯讀資訊，寫入端點仍然只收 `project` ＋ `name`。**"""
+    return os.path.join(project, FLEDGE_DIRNAME, TASKS_DIRNAME, name)
+
+
+def _open_existing(tasks_fd: int, name: str, *, write: bool = False) -> int:
+    """開一張既有票，套用 design §7.1 的 T1–T3。不合條件一律 raise ValueError／OSError。
+
+    - **T1**：純檔名——不含 `/`、不是 `.` 或 `..`
+    - **T2**：必須是一般檔案且副檔名 `.md`——目錄、FIFO、裝置檔一律拒絕
+    - **T3**：`O_NOFOLLOW`，是 symlink 就拒絕
+
+    `O_NONBLOCK`：FIFO 用 `O_RDONLY` 開會**阻塞到有寫入端出現**，那會把整個 sidecar 卡住。
+    先用非阻塞開起來，再靠 `fstat` 把非一般檔擋掉。"""
+    if not is_plain_name(name) or not name.endswith(".md"):
+        raise ValueError("invalid task name")
+    flags = (os.O_RDWR if write else os.O_RDONLY) | os.O_NOFOLLOW | os.O_NONBLOCK
+    fd = os.open(name, flags, dir_fd=tasks_fd)
+    try:
+        if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("not a regular file")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_all(fd: int) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        block = os.read(fd, 65536)
+        if not block:
+            return b"".join(chunks)
+        chunks.append(block)
+
+
+def update_status(
+    tasks_fd: int, name: str, *, status: str, expected_fingerprint: str
+) -> dict[str, Any] | None:
+    """改狀態（design §5.2、§7.2）。fingerprint 不符回 `None`（路由轉 409）並**拒絕寫入**。
+
+    **保證等級：best-effort stale detection。就這樣，不多。** 它擋得住的是已經發生完畢的
+    外部改動——你在編輯器改完存檔了，之後在面板點狀態，會拿到 409 而不是覆蓋。
+    重算到實際寫入之間仍有窗口（design §10.4 的 K1），**這裡刻意不試圖關閉它**。
+
+    寫回是「先寫新內容、再 `ftruncate` 到新長度」而不是先 truncate：硬中斷落在兩者之間時，
+    檔案是「新內容 ＋ 可能的舊尾巴」而不是空檔——後者會直接把票的內文洗掉。
+    """
+    if status not in VALID_STATUS:
+        raise ValueError("invalid status")
+    fd = _open_existing(tasks_fd, name, write=True)
+    try:
+        raw = _read_all(fd)
+        if fingerprint(raw) != expected_fingerprint:
+            return None
+        new_raw = replace_status(_decode(raw), status).encode("utf-8")
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, new_raw)
+        os.ftruncate(fd, len(new_raw))
+    finally:
+        os.close(fd)
+    # 回傳更新後的票（含新 fingerprint）。沒有這個，使用者改一次狀態之後本地的
+    # fingerprint 就過期了，**下一次改狀態或刪除會被錯誤地判成 409**（design §7.2）。
+    return _row(parse_task(name, _decode(new_raw)), fingerprint(new_raw))
+
+
+def delete_task(tasks_fd: int, name: str, *, expected_fingerprint: str) -> bool:
+    """刪票（design §5.2）。fingerprint 不符回 `False`（路由轉 409）。
+
+    **TOCTOU 窗口沒有關閉，這裡照實說**（design §7.1 末、§10.4 的 K1）：POSIX 的 `unlink`
+    必須指定目錄項名稱，無法對已開啟的 fd 執行。所以重算 fingerprint 與 `unlink` 之間有窗口
+    ——外部編輯器若剛好在窗口內存檔，`DELETE` **仍會刪掉那個新版本並回成功，不會有 409**。
+    `dir_fd` ＋ `O_NOFOLLOW` ＋ fingerprint 是把窗口縮到最小，**不是關閉它**。
+    """
+    fd = _open_existing(tasks_fd, name)
+    try:
+        if fingerprint(_read_all(fd)) != expected_fingerprint:
+            return False
+    finally:
+        os.close(fd)
+    os.unlink(name, dir_fd=tasks_fd)
+    return True
