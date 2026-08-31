@@ -23,6 +23,7 @@ sidecar/*.egg-info/
 # Tooling（本機）
 .codegraph/
 .scratch/
+.fledge/
 
 # Secrets 安全網（目前無 .env 被追蹤；保留範本）
 .env

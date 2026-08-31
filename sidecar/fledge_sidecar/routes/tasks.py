@@ -1,0 +1,150 @@
+"""待辦面板路由（design §7）。五個端點。
+
+錯誤一律回 error code，不回 user-facing 中文 prose（`CLAUDE.md` §4.6.13）。
+路徑邊界一律經 `tasks/scanner.py` 的 resolver，本檔不自己組路徑（design §7.1）。
+"""
+from __future__ import annotations
+
+from datetime import date
+
+from fastapi import APIRouter, Body
+from fastapi.responses import JSONResponse
+
+from fledge_sidecar.app_config import AppConfig
+from fledge_sidecar.tasks import scanner
+
+router = APIRouter(prefix="/tasks")
+
+
+def _with_path(rows: list[dict], project: str) -> list[dict]:
+    """替每張票補上絕對路徑，給前端「用編輯器打開」用（design §5.2）。
+
+    **這是唯讀資訊**——寫入端點仍然只收 `project` ＋ `name`（design §7.1）。"""
+    for row in rows:
+        row["path"] = scanner.task_path(project, row["name"])
+    return rows
+
+
+def _target(td: scanner.TasksDir) -> JSONResponse | None:
+    """寫入端點共用的前置檢查。回 `None` 代表可以動手。
+
+    `absent`／`unavailable` 一律硬拒——`unavailable` 是給唯讀端點表達「讀不到」用的，
+    不是讓寫入降級（design §7.1 末）。"""
+    if td.status == scanner.STATUS_UNKNOWN_PROJECT:
+        return JSONResponse({"error": "unknown_project"}, status_code=400)
+    if td.status != scanner.STATUS_OK or td.fd is None:
+        return JSONResponse({"error": "tasks_dir_" + td.status}, status_code=400)
+    return None
+
+
+@router.get("/overview")
+def overview() -> JSONResponse:
+    """第一層：每個已知專案的未完成條數、`tasks_status` 與「下一步」（design §5.1、§6.3）。"""
+    return JSONResponse(scanner.build_overview(AppConfig.load()))
+
+
+@router.get("")
+def list_tasks(project: str = "") -> JSONResponse:
+    """第二層：單一專案的票列表（含異常標記與 fingerprint）。
+
+    `tasks` 在讀不到時是 `null` 而不是空清單（design §6.3）：點進一個讀不到的專案，
+    若只顯示空清單，使用者分不出「這個專案沒待辦」與「讀不到」——與第一層是同一個問題。
+    用 `null` 讓前端在結構上不可能把它畫成「沒有待辦」。
+    """
+    config = AppConfig.load()
+    with scanner.open_tasks_dir(project, config) as td:
+        if td.status == scanner.STATUS_UNKNOWN_PROJECT:
+            return JSONResponse({"error": "unknown_project"}, status_code=400)
+        if td.status == scanner.STATUS_OK and td.fd is not None:
+            tasks: list | None = _with_path(scanner.scan_tasks(td.fd), td.project)
+        elif td.status == scanner.STATUS_ABSENT:
+            tasks = []
+        else:
+            tasks = None
+        return JSONResponse({
+            "project": td.project,
+            "tasks_status": td.status,
+            "tasks": tasks,
+            "next_step": scanner.read_next_step(td.fledge_fd),
+        })
+
+
+@router.post("")
+def create_task(project: str = Body(""), title: str = Body("")) -> JSONResponse:
+    """建票（design §5.2）。`source: me`、`status: todo`、`created` 為當天。
+
+    **寫入端點不收絕對路徑，收 `project` ＋ `title`。** 目標檔名只能由 resolver ＋
+    短名 allowlist 算出，語意上不可能指到 tasks 目錄以外（design §7.1）。
+
+    `absent`／`unavailable` 一律硬拒回 error code——`unavailable` 是給唯讀端點表達
+    「讀不到」用的，不是讓寫入降級（design §7.1 末）。`create=True` 會把 `absent`
+    變成 `ok`（逐層 mkdir），所以走到這裡還是 `absent` 就代表建立失敗。
+    """
+    clean = " ".join(title.split())
+    if not clean:
+        return JSONResponse({"error": "title_required"}, status_code=400)
+    with scanner.open_tasks_dir(project, AppConfig.load(), create=True) as td:
+        rejected = _target(td)
+        if rejected is not None:
+            return rejected
+        try:
+            row = scanner.create_task(td.fd, clean, created=date.today().isoformat())
+            _with_path([row], td.project)
+        except OSError:
+            return JSONResponse({"error": "create_failed"}, status_code=500)
+        return JSONResponse(row, status_code=201)
+
+
+@router.patch("")
+def update_task(
+    project: str = Body(""), name: str = Body(""),
+    status: str = Body(""), fingerprint: str = Body(""),
+) -> JSONResponse:
+    """改狀態（design §5.2、§7.2）。必須帶 `fingerprint`，不符回 409 並拒絕寫入。
+
+    成功時**回傳更新後的票（含新 fingerprint）**，前端用它取代本地狀態。沒有這條的話，
+    使用者改一次狀態之後本地的 fingerprint 就過期了，下一次操作會被錯誤地判成 409。
+    """
+    if not name:
+        return JSONResponse({"error": "name_required"}, status_code=400)
+    if not fingerprint:
+        return JSONResponse({"error": "fingerprint_required"}, status_code=400)
+    with scanner.open_tasks_dir(project, AppConfig.load()) as td:
+        rejected = _target(td)
+        if rejected is not None:
+            return rejected
+        try:
+            row = scanner.update_status(td.fd, name, status=status, expected_fingerprint=fingerprint)
+        except ValueError:
+            return JSONResponse({"error": "invalid_target"}, status_code=400)
+        except FileNotFoundError:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        except OSError:
+            return JSONResponse({"error": "invalid_target"}, status_code=400)
+        if row is None:
+            return JSONResponse({"error": "stale"}, status_code=409)
+        return JSONResponse(_with_path([row], td.project)[0])
+
+
+@router.delete("")
+def remove_task(project: str = "", name: str = "", fingerprint: str = "") -> JSONResponse:
+    """刪票（design §5.2）。檔案直接消失且 `.fledge/` 不進 git——確認由前端負責。"""
+    if not name:
+        return JSONResponse({"error": "name_required"}, status_code=400)
+    if not fingerprint:
+        return JSONResponse({"error": "fingerprint_required"}, status_code=400)
+    with scanner.open_tasks_dir(project, AppConfig.load()) as td:
+        rejected = _target(td)
+        if rejected is not None:
+            return rejected
+        try:
+            ok = scanner.delete_task(td.fd, name, expected_fingerprint=fingerprint)
+        except ValueError:
+            return JSONResponse({"error": "invalid_target"}, status_code=400)
+        except FileNotFoundError:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        except OSError:
+            return JSONResponse({"error": "invalid_target"}, status_code=400)
+        if not ok:
+            return JSONResponse({"error": "stale"}, status_code=409)
+        return JSONResponse({"deleted": name})

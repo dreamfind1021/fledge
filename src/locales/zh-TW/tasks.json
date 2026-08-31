@@ -1,0 +1,55 @@
+{
+  "tabTitle": "待辦",
+  "entry": "待辦",
+  "overview": {
+    "colProject": "專案",
+    "colUnfinished": "未完成",
+    "colNextStep": "下一步",
+    "empty": "尚無專案",
+    "unavailable": "讀不到",
+    "loading": "載入中…",
+    "loadError": "待辦讀取失敗"
+  },
+  "list": {
+    "back": "所有專案",
+    "unfinished": "未完成",
+    "done": "已完成",
+    "empty": "這個專案還沒有待辦",
+    "unavailable": "這個專案的待辦資料夾讀不到",
+    "noNumber": "—",
+    "newPlaceholder": "打一行字，按 Enter 新增",
+    "add": "新增",
+    "createError": "建立待辦失敗",
+    "delete": "刪除",
+    "cancel": "取消",
+    "confirmDelete": "確定刪除這張票？檔案會直接消失，救不回來。",
+    "conflict": "這張票已被改過，正在重新載入。",
+    "actionError": "沒有成功，再試一次。"
+  },
+  "status": {
+    "todo": "待辦",
+    "doing": "進行中",
+    "done": "已完成"
+  },
+  "source": {
+    "me": "我",
+    "ai": "AI"
+  },
+  "anomaly": {
+    "label": "這個檔案有地方不對",
+    "frontmatter_missing": "沒有 frontmatter 區塊，欄位用預設值",
+    "status_invalid": "status 值認不得，當成待辦",
+    "source_invalid": "source 值認不得",
+    "created_invalid": "created 日期認不得",
+    "title_missing": "沒有標題行，用檔名當標題",
+    "number_missing": "檔名沒有數字前綴",
+    "number_duplicate": "有另一個檔案用同一個編號，請改名一個",
+    "unreadable": "這個檔案讀不到"
+  },
+  "a11y": {
+    "expandDone": "展開已完成",
+    "collapseDone": "收起已完成",
+    "cycleStatus": "切換狀態",
+    "openInEditor": "用編輯器打開檔案"
+  }
+}

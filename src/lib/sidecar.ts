@@ -1043,3 +1043,103 @@ export const confirmSuggestion = (p: number, project: string, topic: string) => 
 export const dismissSuggestion = (p: number, project: string, topic: string) => memoryJson(p, "links/dismiss", "POST", { project, topic });
 export const addMemoryLink = (p: number, from: string, to: string, note = "") => memoryJson(p, "links", "POST", { from, to, note });
 export const removeMemoryLink = (p: number, from: string, to: string) => memoryJson(p, "links", "DELETE", { from, to });
+
+// ===== 待辦面板（tasks；design §7）=====
+
+export type TasksStatus = "ok" | "absent" | "unavailable";
+
+export interface TasksProjectRow {
+  path: string;
+  name: string;
+  account: string;
+  /** 未完成條數。tasks_status !== "ok" 時為 null——「讀不到」不可畫成 0（design §6.3） */
+  unfinished: number | null;
+  tasks_status: TasksStatus;
+  /** 該專案 .fledge/state.md 前 20 行抽出的「下一步」；沒有就是空字串 */
+  next_step: string;
+}
+
+export interface TaskRow {
+  name: string;
+  /** 檔名前綴的編號（唯一真相源）。沒有數字前綴時為 null，該票會帶 number_missing */
+  number: number | null;
+  title: string;
+  status: "todo" | "doing" | "done";
+  source: string;        // "me" | "ai"；判不出來為空字串
+  created: string;       // YYYY-MM-DD；判不出來為空字串
+  /** 異常代碼（英文），由前端 i18n 映射成畫面文字。有值不代表要隱藏這張票 */
+  anomalies: string[];
+  fingerprint: string;
+  /** 票檔的絕對路徑，給「用編輯器打開」用。由 sidecar 組，前端不拼路徑 */
+  path: string;
+}
+
+export interface TasksListResponse {
+  project: string;
+  tasks_status: TasksStatus;
+  /** 讀不到時是 null 而不是空清單：空清單與「這個專案沒待辦」在畫面上長得一樣（design §6.3） */
+  tasks: TaskRow[] | null;
+  next_step: string;
+}
+
+export interface TasksOverview {
+  projects: TasksProjectRow[];
+  permission_error: boolean;
+}
+
+/** 第一層總覽：每個已知專案的未完成條數 ＋ tasks_status。 */
+export async function fetchTasksOverview(port: number): Promise<TasksOverview> {
+  const resp = await fetch(`${base(port)}/tasks/overview`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`fetchTasksOverview failed: ${resp.status}`);
+  return (await resp.json()) as TasksOverview;
+}
+
+/** 第二層：單一專案的票列表（含異常標記與 fingerprint）。 */
+export async function fetchTasks(port: number, project: string): Promise<TasksListResponse> {
+  const resp = await fetch(`${base(port)}/tasks?project=${encodeURIComponent(project)}`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`fetchTasks failed: ${resp.status}`);
+  return (await resp.json()) as TasksListResponse;
+}
+
+/** 建票（design §5.2）：source: me、status: todo、created 為當天，皆由 sidecar 決定。 */
+export async function createTask(port: number, project: string, title: string): Promise<TaskRow> {
+  const resp = await fetch(`${base(port)}/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },   // token 在 headers 內
+    body: JSON.stringify({ project, title }),
+  });
+  if (!resp.ok) throw new Error(`createTask failed: ${resp.status}`);
+  return (await resp.json()) as TaskRow;
+}
+
+/** 票檔已被別人改過（PATCH／DELETE 收到 409）。best-effort stale detection，不是併發保證。 */
+export class TaskConflictError extends Error {
+  constructor() {
+    super("task changed elsewhere");
+    this.name = "TaskConflictError";
+  }
+}
+
+/** 改狀態。成功回傳更新後的票（含新 fingerprint），呼叫端必須用它取代本地狀態。 */
+export async function updateTask(
+  port: number, project: string, name: string, status: string, fingerprint: string,
+): Promise<TaskRow> {
+  const resp = await fetch(`${base(port)}/tasks`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ project, name, status, fingerprint }),
+  });
+  if (resp.status === 409) throw new TaskConflictError();
+  if (!resp.ok) throw new Error(`updateTask failed: ${resp.status}`);
+  return (await resp.json()) as TaskRow;
+}
+
+/** 刪票。檔案直接消失且 .fledge/ 不進 git——呼叫端必須先跳確認（design §5.2）。 */
+export async function deleteTask(
+  port: number, project: string, name: string, fingerprint: string,
+): Promise<void> {
+  const q = new URLSearchParams({ project, name, fingerprint });
+  const resp = await fetch(`${base(port)}/tasks?${q}`, { method: "DELETE", headers: authHeaders() });
+  if (resp.status === 409) throw new TaskConflictError();
+  if (!resp.ok) throw new Error(`deleteTask failed: ${resp.status}`);
+}

@@ -13,6 +13,12 @@ import {
   fetchDirTree,
   waitForSidecarPort,
   fetchConfig,
+  fetchTasksOverview,
+  fetchTasks,
+  createTask,
+  updateTask,
+  deleteTask,
+  TaskConflictError,
 } from "./sidecar";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -552,5 +558,96 @@ describe("專案路徑對應（票 04）", () => {
     const m = await import("./sidecar");
     await expect(m.fetchProjectPaths(1234, "/tmp/x"))
       .rejects.toMatchObject({ code: "source_not_a_bundle" });
+  });
+});
+
+describe("fetchTasksOverview", () => {
+  // plan §1.0：Tasks.tsx 一律經 wrapper。若它自己 fetch，接線測試仍會全綠，
+  // 但正式 sidecar 會因缺 token 回 401——dev 看似正常、打包版整個死掉。
+  it("打對 endpoint、用 GET、帶 auth header", async () => {
+    setAuthToken("tok-tasks");
+    const spy = vi.fn(async () => ({ ok: true, json: async () => ({ projects: [], permission_error: false }) }) as unknown as Response);
+    vi.stubGlobal("fetch", spy);
+    await fetchTasksOverview(4321);
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4321/tasks/overview");
+    expect(init.method ?? "GET").toBe("GET");
+    expect(init.headers).toEqual({ "X-Fledge-Token": "tok-tasks" });
+    setAuthToken(null);
+  });
+
+  it("非 2xx 時 throw", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 500 }) as unknown as Response));
+    await expect(fetchTasksOverview(4321)).rejects.toThrow();
+  });
+});
+
+describe("fetchTasks", () => {
+  it("打對 endpoint、帶 project query 與 auth header", async () => {
+    setAuthToken("tok-list");
+    const spy = vi.fn(async () => ({ ok: true, json: async () => ({ project: "/p", tasks_status: "ok", tasks: [], next_step: "" }) }) as unknown as Response);
+    vi.stubGlobal("fetch", spy);
+    await fetchTasks(4321, "/Users/tc/NAS/work/Meeting Agent");
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4321/tasks?project=%2FUsers%2Ftc%2FNAS%2Fwork%2FMeeting%20Agent");
+    expect(init.headers).toEqual({ "X-Fledge-Token": "tok-list" });
+    setAuthToken(null);
+  });
+
+  it("非 2xx 時 throw", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 400 }) as unknown as Response));
+    await expect(fetchTasks(4321, "/x")).rejects.toThrow();
+  });
+});
+
+describe("createTask", () => {
+  it("POST 到 /tasks、帶 project/title payload 與 auth header", async () => {
+    setAuthToken("tok-new");
+    const spy = vi.fn(async () => ({ ok: true, json: async () => ({ name: "01-a.md" }) }) as unknown as Response);
+    vi.stubGlobal("fetch", spy);
+    await createTask(4321, "/p/a", "第一件事");
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4321/tasks");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({ "Content-Type": "application/json", "X-Fledge-Token": "tok-new" });
+    expect(JSON.parse(init.body as string)).toEqual({ project: "/p/a", title: "第一件事" });
+    setAuthToken(null);
+  });
+
+  it("非 2xx 時 throw（前端據此顯示建立失敗）", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 400 }) as unknown as Response));
+    await expect(createTask(4321, "/p/a", "x")).rejects.toThrow();
+  });
+});
+
+describe("updateTask / deleteTask", () => {
+  it("updateTask 用 PATCH、帶 fingerprint payload", async () => {
+    setAuthToken("tok-p");
+    const spy = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ name: "01-a.md" }) }) as unknown as Response);
+    vi.stubGlobal("fetch", spy);
+    await updateTask(4321, "/p/a", "01-a.md", "doing", "abc");
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4321/tasks");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body as string)).toEqual({ project: "/p/a", name: "01-a.md", status: "doing", fingerprint: "abc" });
+    setAuthToken(null);
+  });
+
+  it("deleteTask 用 DELETE、參數走 query string", async () => {
+    const spy = vi.fn(async () => ({ ok: true, status: 200 }) as unknown as Response);
+    vi.stubGlobal("fetch", spy);
+    await deleteTask(4321, "/p/a", "01-a.md", "abc");
+    const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("http://127.0.0.1:4321/tasks?project=%2Fp%2Fa&name=01-a.md&fingerprint=abc");
+    expect(init.method).toBe("DELETE");
+  });
+
+  // 409 要能與「一般失敗」分開：前端據此顯示「已被改過」而不是通用錯誤
+  it("409 兩支都丟 TaskConflictError，其他錯誤丟一般 Error", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 409 }) as unknown as Response));
+    await expect(updateTask(1, "/p", "a.md", "todo", "f")).rejects.toBeInstanceOf(TaskConflictError);
+    await expect(deleteTask(1, "/p", "a.md", "f")).rejects.toBeInstanceOf(TaskConflictError);
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 500 }) as unknown as Response));
+    await expect(updateTask(1, "/p", "a.md", "todo", "f")).rejects.not.toBeInstanceOf(TaskConflictError);
   });
 });

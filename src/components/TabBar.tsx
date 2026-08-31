@@ -1,4 +1,4 @@
-import { X, SquareTerminal, ChartColumn, Brain } from "lucide-react";
+import { X, SquareTerminal, ChartColumn, Brain, ListTodo } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -16,6 +16,7 @@ function SortableTab({
   onClose,
   tDash,
   tMem,
+  tTasks,
   tSide,
 }: {
   t: ReturnType<typeof useAppStore.getState>["tabs"][number];
@@ -25,6 +26,7 @@ function SortableTab({
   onClose: () => void;
   tDash: (k: string) => string;
   tMem: (k: string) => string;
+  tTasks: (k: string) => string;
   tSide: (k: string) => string;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -51,11 +53,13 @@ function SortableTab({
         <span className="tabbar-term-ico" aria-label={tDash("tabTitle")}><ChartColumn size={13} strokeWidth={1.75} /></span>
       ) : t.kind === "memory" ? (
         <span className="tabbar-term-ico" aria-label={tMem("tabTitle")}><Brain size={13} strokeWidth={1.75} /></span>
+      ) : t.kind === "tasks" ? (
+        <span className="tabbar-term-ico" aria-label={tTasks("tabTitle")}><ListTodo size={13} strokeWidth={1.75} /></span>
       ) : (
         <span className={`tab-dot is-${tabDotState(t)}`} />
       )}
       <span className="tabbar-tab-title">
-        {t.kind === "dashboard" ? tDash("tabTitle") : t.kind === "memory" ? tMem("tabTitle") : title}
+        {t.kind === "dashboard" ? tDash("tabTitle") : t.kind === "memory" ? tMem("tabTitle") : t.kind === "tasks" ? tTasks("tabTitle") : title}
       </span>
       {t.account && (
         <span className="tabbar-chip" style={{ background: accountColor(t.account) }}>{t.account}</span>
@@ -78,6 +82,7 @@ function SortableTab({
 export function TabBar() {
   const { t: tDash } = useTranslation("dashboard");
   const { t: tMem } = useTranslation("memory");
+  const { t: tTasks } = useTranslation("tasks");
   const { t: tSide } = useTranslation("sidebar");
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
@@ -97,6 +102,7 @@ export function TabBar() {
             onClose={() => requestCloseTab(t.id)}
             tDash={tDash}
             tMem={tMem}
+            tTasks={tTasks}
             tSide={tSide}
           />
         ))}
