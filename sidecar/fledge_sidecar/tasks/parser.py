@@ -203,26 +203,33 @@ def render_task(title: str, *, created: str, status: str = DEFAULT_STATUS, sourc
     return f"---\nstatus: {status}\nsource: {source}\ncreated: {created}\n---\n\n# {one_line}\n"
 
 
-_STATUS_LINE = re.compile(r"^([ \t]*status[ \t]*:).*$", re.MULTILINE)
+_STATUS_LINE = re.compile(rb"^([ \t]*status[ \t]*:).*$", re.MULTILINE)
 
 
-def replace_status(text: str, status: str) -> str:
+def replace_status(raw: bytes, status: str) -> bytes:
     """把票檔的 `status` 換成新值，**其餘位元組一字不動**（plan T4）。
 
     **刻意不重新產生整個檔案**：改狀態時把使用者寫在內文的東西弄丟，狀態會顯示正確、
     409 測試也全綠，而 `.fledge/` 不進 git，那些內容不可回復。這是 plan 標為
     「最危險的缺口」的那一條。
 
+    **在位元組上做，不先解碼**：初版收 `str`，呼叫端用 `errors="replace"` 解碼再編碼回去
+    ——無效 UTF-8 會被永久換成 U+FFFD。而 §6.1 的契約明說那種檔案要照常顯示，
+    「改個狀態就把它毀掉」是實作偷偷違背契約，而且註解上還寫著「一字不動」
+    （2026-08-31 Codex 實作階段審查抓到）。frontmatter 的圍籬與欄位名都是 ASCII，
+    在位元組上比對不需要解碼。
+
     只在 frontmatter 圍籬內替換——內文裡若有一行 `status: x` 不該被動到。
     """
-    if text.startswith("---"):
-        end = text.find("\n---", 3)
+    st = status.encode("utf-8")
+    if raw.startswith(b"---"):
+        end = raw.find(b"\n---", 3)
         if end != -1:
-            head, rest = text[:end], text[end:]
-            new_head, hit = _STATUS_LINE.subn(lambda m: f"{m.group(1)} {status}", head, count=1)
+            head, rest = raw[:end], raw[end:]
+            new_head, hit = _STATUS_LINE.subn(lambda m: m.group(1) + b" " + st, head, count=1)
             if hit:
                 return new_head + rest
             # 有 frontmatter 但沒有 status 行：插在圍籬內最前面，其餘原樣接上
-            return f"---\nstatus: {status}" + text[3:]
+            return b"---\nstatus: " + st + raw[3:]
     # 整段沒有 frontmatter（或圍籬不完整）：補一個，原文一字不動接在後面
-    return f"---\nstatus: {status}\n---\n\n" + text
+    return b"---\nstatus: " + st + b"\n---\n\n" + raw

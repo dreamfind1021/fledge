@@ -149,14 +149,22 @@ def read_task_bytes(tasks_fd: int, name: str) -> bytes | None:
     回位元組而不是字串：fingerprint 必須算在原始內容上，解碼過的字串會把無效 UTF-8
     換成替代字元，兩個不同的檔案可能算出同一個雜湊。"""
     try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=tasks_fd)
+        # `O_NONBLOCK`：列目錄與這裡開檔之間有窗口，外部若把某個 `.md` 換成 FIFO，
+        # 少了它就會**阻塞到有寫入端出現**——整個 `/tasks` 掃描掛在這一行，
+        # 而契約 2 要求的是「隔離那一個檔案」不是「拖垮整個專案」。
+        # （`_open_existing` 原本就防了這個，這裡漏掉；2026-08-31 Codex 審查抓到。）
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=tasks_fd)
     except OSError:
         return None
     try:
-        with os.fdopen(fd, "rb") as fh:
+        if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+            return None                      # 目錄、FIFO、裝置檔一律不是票
+        with os.fdopen(fd, "rb", closefd=False) as fh:
             return fh.read()
     except OSError:
         return None
+    finally:
+        os.close(fd)
 
 
 def fingerprint(raw: bytes) -> str:
@@ -328,12 +336,37 @@ def _open_existing(tasks_fd: int, name: str, *, write: bool = False) -> int:
     flags = (os.O_RDWR if write else os.O_RDONLY) | os.O_NOFOLLOW | os.O_NONBLOCK
     fd = os.open(name, flags, dir_fd=tasks_fd)
     try:
-        if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+        info = os.fstat(fd)
+        if not stat_module.S_ISREG(info.st_mode):
             raise ValueError("not a regular file")
+        # **T4（寫入專用）：hard link 不是 symlink，`O_NOFOLLOW` 擋不住它。**
+        # 在 tasks 目錄裡放一個指向專案外檔案的 hard link，T1–T3 全部會過，
+        # 而寫入是寫到共用的那個 inode 上——實測會改寫專案外的檔案，
+        # 直接推翻 design §7.1「目標語意上不可能指到 tasks 目錄以外」那句話
+        # （2026-08-31 Codex 實作階段審查抓到）。
+        # 只擋寫入：讀取只是顯示使用者自己連進來的內容，而 `unlink` 移除的是
+        # 這個目錄項、動不到連結指向的那個檔案。
+        if write and info.st_nlink != 1:
+            raise ValueError("hard-linked target")
     except BaseException:
         os.close(fd)
         raise
     return fd
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """把 `data` 全部寫進 fd。**`os.write` 允許短寫，回傳值不能忽略**。
+
+    初版只呼叫一次 `os.write` 就接著 `ftruncate`：短寫（磁碟滿、被訊號打斷）時
+    檔案會變成「新內容的前半 ＋ 舊內容的尾巴」，而端點照樣回報成功、還回傳
+    一個與磁碟內容不符的 fingerprint（2026-08-31 Codex 實作階段審查抓到）。"""
+    view = memoryview(data)
+    written = 0
+    while written < len(data):
+        n = os.write(fd, view[written:])
+        if n <= 0:
+            raise OSError("short write: 寫入未完成")
+        written += n
 
 
 def _read_all(fd: int) -> bytes:
@@ -364,9 +397,9 @@ def update_status(
         raw = _read_all(fd)
         if fingerprint(raw) != expected_fingerprint:
             return None
-        new_raw = replace_status(_decode(raw), status).encode("utf-8")
+        new_raw = replace_status(raw, status)   # 在位元組上改，不解碼（見 parser.replace_status）
         os.lseek(fd, 0, os.SEEK_SET)
-        os.write(fd, new_raw)
+        _write_all(fd, new_raw)                 # 全部寫完才 ftruncate
         os.ftruncate(fd, len(new_raw))
     finally:
         os.close(fd)

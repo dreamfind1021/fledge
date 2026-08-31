@@ -302,3 +302,119 @@ def test_create_task_actually_calls_the_plain_name_check(tmp_path, monkeypatch):
             scanner.create_task(td.fd, "任何標題", created="2026-08-29")
     assert not (tmp_path / "escaped.md").exists()
     assert not (proj / "escaped.md").exists()
+
+
+# ── 2026-08-31 Codex 實作階段審查的回歸測試 ────────────────────
+
+def test_patch_refuses_hard_linked_target(tmp_path):
+    """**F1**：hard link 不是 symlink，`O_NOFOLLOW` 擋不住它（design §7.1）。
+
+    在 tasks 目錄裡放一個指向專案外檔案的 hard link，T1–T3 全會通過，而寫入是寫到
+    共用的那個 inode 上。修法前實測會改寫專案外的檔案並回報成功。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    outside = tmp_path / "outside.md"
+    outside.write_text("---\nstatus: todo\n---\n\n# 專案外的檔案\n機密\n", encoding="utf-8")
+    before = outside.read_bytes()
+    os.link(outside, tasks / "01-看似正常.md")
+
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        row = scanner.scan_tasks(td.fd)[0]           # 讀得到（不隱藏），但寫不得
+        with pytest.raises(ValueError):
+            scanner.update_status(td.fd, "01-看似正常.md", status="done",
+                                  expected_fingerprint=row["fingerprint"])
+    assert outside.read_bytes() == before            # 專案外的檔案一個位元組都沒動
+
+
+def test_delete_of_hard_link_does_not_touch_the_target(tmp_path):
+    """刪除刻意**不**擋 hard link：`unlink` 移除的是這個目錄項，不動連結指向的檔案。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    outside = tmp_path / "outside.md"
+    outside.write_text(TICKET.format(status="todo", title="外面"), encoding="utf-8")
+    os.link(outside, tasks / "01-連結.md")
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        row = scanner.scan_tasks(td.fd)[0]
+        assert scanner.delete_task(td.fd, "01-連結.md", expected_fingerprint=row["fingerprint"])
+    assert not (tasks / "01-連結.md").exists()
+    assert outside.exists()                          # 連結目標還在
+
+
+def test_patch_preserves_invalid_utf8_bytes(tmp_path):
+    """**F2**：改狀態不得把無效 UTF-8 換成 U+FFFD。
+
+    §6.1 的契約說那種檔案要照常顯示；「改個狀態就把它毀掉」是實作偷偷違背契約，
+    而且 `replace_status` 的註解上還寫著「其餘位元組一字不動」。
+    修法前 `_decode(errors="replace")` → 再 encode 會讓那些位元組永久消失。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    raw = b"---\nstatus: todo\nsource: me\ncreated: 2026-08-31\n---\n\n# \xff\xfe \xc3\x28 \xed\xa0\x80\n"
+    (tasks / "01-壞編碼.md").write_bytes(raw)
+
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        row = scanner.scan_tasks(td.fd)[0]
+        scanner.update_status(td.fd, "01-壞編碼.md", status="doing",
+                              expected_fingerprint=row["fingerprint"])
+    after = (tasks / "01-壞編碼.md").read_bytes()
+    assert after == raw.replace(b"status: todo", b"status: doing")   # 逐位元組
+    assert b"\xff\xfe" in after and b"\xed\xa0\x80" in after         # 沒有被換成替代字元
+    assert "�".encode() not in after
+
+
+def test_short_write_is_not_reported_as_success(tmp_path, monkeypatch):
+    """**F3**：`os.write` 允許短寫，回傳值不能忽略。
+
+    初版只呼叫一次就 `ftruncate`：短寫時檔案變成「新內容前半 ＋ 舊內容尾巴」，
+    而端點照樣回成功、還回一個與磁碟不符的 fingerprint。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    body = "---\nstatus: todo\nsource: me\ncreated: 2026-08-31\n---\n\n# 標題\n\n很長的內文" + "x" * 500 + "\n"
+    (tasks / "01-a.md").write_text(body, encoding="utf-8")
+
+    real_write = os.write
+    # 只對票檔內容短寫（以 `---` 開頭），不干擾 pytest 自己的輸出
+    def one_byte_at_a_time(fd, data):
+        payload = bytes(data)
+        if payload.startswith(b"---") and len(payload) > 1:
+            return real_write(fd, payload[:1])
+        return real_write(fd, payload)
+    monkeypatch.setattr(os, "write", one_byte_at_a_time)
+
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        row = scanner.scan_tasks(td.fd)[0]
+        out = scanner.update_status(td.fd, "01-a.md", status="done",
+                                    expected_fingerprint=row["fingerprint"])
+    monkeypatch.undo()
+    on_disk = (tasks / "01-a.md").read_bytes()
+    assert on_disk == body.replace("status: todo", "status: done").encode("utf-8")
+    assert out is not None and out["fingerprint"] == scanner.fingerprint(on_disk)   # 名實相符
+
+
+def test_write_all_raises_when_no_progress(tmp_path, monkeypatch):
+    """寫不進去（回 0）時必須拋例外，不能無限迴圈也不能假裝成功。"""
+    monkeypatch.setattr(os, "write", lambda fd, data: 0)
+    target = tmp_path / "x"
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT, 0o644)
+    try:
+        with pytest.raises(OSError):
+            scanner._write_all(fd, b"---\nstatus: done\n")
+    finally:
+        monkeypatch.undo()
+        os.close(fd)
+
+
+def test_reading_a_fifo_does_not_block(tmp_path):
+    """**F4**：列目錄與開檔之間有窗口，外部把 `.md` 換成 FIFO 時不得阻塞。
+
+    少了 `O_NONBLOCK`，`O_RDONLY` 開 FIFO 會等到有寫入端出現——整個 `/tasks`
+    掃描掛在那一行，而契約 2 要求的是隔離那一個檔案、不是拖垮整個專案。
+    這裡直接對 FIFO 呼叫讀取函式；沒修的話這條會逾時而不是失敗。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    (tasks / "02-正常.md").write_text(TICKET.format(status="todo", title="正常"), encoding="utf-8")
+    os.mkfifo(tasks / "01-管道.md")
+
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.read_task_bytes(td.fd, "01-管道.md") is None   # 立刻回，不卡住
+        assert scanner.list_task_files(td.fd) == ["02-正常.md"]       # FIFO 本來就不算票
+        assert scanner.count_unfinished(td.fd) == 1                   # 其他票不受影響
