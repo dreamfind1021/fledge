@@ -75,6 +75,7 @@ Fledge folds the day-to-day chores of working with AI into the interface:
 - **Multiple accounts, switch freely** — create several accounts, each with its own Claude config directory and quota; every project remembers its default account, and you can also temporarily "open this one with a different account" without touching any settings.
 - **Runs the real Claude Code in a GUI** — the embedded terminal (xterm.js + a PTY bridge) runs the actual `claude`, not a simulation; conversations, skills, MCP, and permission prompts are exactly what you'd see in a terminal.
 - **Session tabs + activity indicator** — each "project × account" opens as a tab so you can run several sessions at once; a pulsing dot on each tab shows in real time whether the AI is working or idle.
+- **Cross-project task panel** — each project's tasks live in its own `.fledge/tasks/`; the panel puts every project's open count and next step on one screen, and you can add, cycle, delete, or open tasks in your editor from there. A bundled skill (see [`skills/`](skills/)) lets Claude Code read and write the same files.
 - **Minimal dark interface** — the Nightfall theme: restrained and AI-first.
 - **Native and fast to launch** — packaged as a macOS `.app`; the backend uses an onedir layout (no re-extraction on every launch) for a fast cold start; install via a terminal command or `.dmg`.
 
