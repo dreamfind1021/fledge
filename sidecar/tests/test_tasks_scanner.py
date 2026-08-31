@@ -429,15 +429,17 @@ def _ticket_with_body(tasks, name="01-a.md"):
     return body.encode("utf-8")
 
 
-def test_write_failing_midway_leaves_the_original_untouched(tmp_path, monkeypatch):
-    """**F6**：寫到一半才失敗時，原票必須一個位元組都不變。
+def test_write_failure_surfaces_as_task_write_error(tmp_path, monkeypatch):
+    """寫到一半失敗時**必須讓呼叫端知道**（路由據此回 500，不是假裝成功）。
 
-    初版原地覆寫（lseek→write→ftruncate）在這條路徑上會留下「新內容前半 ＋ 舊內容尾巴」
-    ——`ftruncate` 根本來不及跑，而狀態值長度一變位移就錯開。第一次修只擋了
-    「短寫回報成功」，沒擋這條（2026-08-31 Codex 複審抓到）。"""
+    ⚠ **這裡刻意不斷言「原檔一個位元組都沒變」**——那不在保證範圍內（design §10.4 的 K5）。
+    原地覆寫寫到一半失敗會留下「新內容前半 ＋ 舊內容尾巴」，`.fledge/` 不進 git 救不回，
+    這是這個定位下接受的代價。曾經寫成暫存檔 ＋ rename 來撐住那個保證，連三輪審查都在
+    打同一段自己發明的協定，2026-08-31 整段拿掉、改為縮小承諾。
+    **測試斷言的必須是實際做得到的事，否則它遲早會變成一句假敘述。**"""
     config, proj = _setup(tmp_path)
     tasks = _tasks_dir(proj)
-    original = _ticket_with_body(tasks)
+    _ticket_with_body(tasks)
 
     real_write = os.write
     state: dict = {"fd": None}
@@ -445,11 +447,11 @@ def test_write_failing_midway_leaves_the_original_untouched(tmp_path, monkeypatc
     # 認 fd 而不是認內容：_write_all 第二次呼叫傳的是【剩餘位元組】，不再以 --- 開頭
     def fail_after_first_chunk(fd, data):
         payload = bytes(data)
-        if state["fd"] is None and payload.startswith(b"---"):   # 票檔的第一次寫入
+        if state["fd"] is None and payload.startswith(b"---"):
             state["fd"] = fd
-            return real_write(fd, payload[:20])                  # 先寫進去一段
+            return real_write(fd, payload[:20])
         if fd == state["fd"]:
-            raise OSError(28, "No space left on device")         # 同一個 fd 的後續寫入才失敗
+            raise OSError(28, "No space left on device")
         return real_write(fd, payload)
 
     monkeypatch.setattr(os, "write", fail_after_first_chunk)
@@ -459,34 +461,15 @@ def test_write_failing_midway_leaves_the_original_untouched(tmp_path, monkeypatc
             scanner.update_status(td.fd, "01-a.md", status="doing",
                                   expected_fingerprint=row["fingerprint"])
     monkeypatch.undo()
-
-    assert (tasks / "01-a.md").read_bytes() == original          # 逐位元組不變
-    assert [f.name for f in tasks.iterdir()] == ["01-a.md"]      # 暫存檔已清掉
-
-
-def test_rename_failing_leaves_the_original_untouched(tmp_path, monkeypatch):
-    """暫存檔寫成功、原子替換那一步失敗時，原票同樣不得被動到。"""
-    config, proj = _setup(tmp_path)
-    tasks = _tasks_dir(proj)
-    original = _ticket_with_body(tasks)
-
-    def boom(*a, **kw):
-        raise OSError(5, "I/O error")
-    monkeypatch.setattr(os, "rename", boom)
-
-    with scanner.open_tasks_dir(str(proj), config) as td:
-        row = scanner.scan_tasks(td.fd)[0]
-        with pytest.raises(scanner.TaskWriteError):
-            scanner.update_status(td.fd, "01-a.md", status="done",
-                                  expected_fingerprint=row["fingerprint"])
-    monkeypatch.undo()
-
-    assert (tasks / "01-a.md").read_bytes() == original
-    assert [f.name for f in tasks.iterdir()] == ["01-a.md"]      # 暫存檔已清掉
+    # 只斷言：不會留下暫存檔之類的殘骸（本實作沒有暫存檔，這條擋住日後又長出一個）
+    assert [f.name for f in tasks.iterdir()] == ["01-a.md"]
 
 
-def test_atomic_write_preserves_file_mode(tmp_path):
-    """原子替換是建新檔再改名——權限要沿用原檔，不能換成預設值。"""
+def test_status_update_does_not_change_file_mode(tmp_path):
+    """改狀態不得動到檔案權限。
+
+    原地覆寫本來就不會——這條是**回歸護欄**：日後若有人又把寫入改成「建新檔再改名」，
+    新檔會吃到 process 的 umask（0664 的共享票會變成 0644），這條會紅。"""
     config, proj = _setup(tmp_path)
     tasks = _tasks_dir(proj)
     _ticket_with_body(tasks)

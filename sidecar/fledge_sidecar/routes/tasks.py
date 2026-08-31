@@ -115,8 +115,10 @@ def update_task(
             return rejected
         try:
             row = scanner.update_status(td.fd, name, status=status, expected_fingerprint=fingerprint)
-        except scanner.TaskWriteError:
-            # I/O 失敗要與「目標不合法」分開回報，否則磁碟滿會被報成參數錯誤
+        except (scanner.TaskWriteError, PermissionError):
+            # I/O 失敗要與「目標不合法」分開回報，否則磁碟滿或唯讀檔案系統
+            # 會被報成參數錯誤，讓人往查錯的方向找。PermissionError 也歸這裡：
+            # 檔案存在、名字合法、型別正確，只是開不起來——那不是「目標不合法」
             return JSONResponse({"error": "write_failed"}, status_code=500)
         except ValueError:
             return JSONResponse({"error": "invalid_target"}, status_code=400)

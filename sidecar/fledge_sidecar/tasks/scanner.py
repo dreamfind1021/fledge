@@ -374,48 +374,6 @@ def _write_all(fd: int, data: bytes) -> None:
         written += n
 
 
-def _unlink_quietly(tasks_fd: int, name: str) -> None:
-    try:
-        os.unlink(name, dir_fd=tasks_fd)
-    except OSError:
-        pass
-
-
-def _write_ticket_atomically(tasks_fd: int, name: str, data: bytes, mode: int) -> None:
-    """寫 `name`：**要嘛完整成功，要嘛原檔一個位元組都不變。**
-
-    初版是原地覆寫（`lseek` → `write` → `ftruncate`）。那個寫法在「已經寫進去一部分、
-    下一次 write 才失敗」時會留下「新內容前半 ＋ 舊內容尾巴」——`ftruncate` 根本來不及跑，
-    而狀態值長度一變位移就錯開，內容會重複或缺一段。`.fledge/` 不進 git，救不回
-    （2026-08-31 Codex 複審抓到：第一次修只擋了「短寫回報成功」，沒擋「短寫之後才失敗」）。
-
-    暫存檔用 `O_EXCL` 建在**同一個已 pin 的 tasks 目錄**裡：跨目錄 rename 不保證原子，
-    而且會離開 resolver 的邊界。檔名不以 `.md` 結尾，所以掃描不會把它當成票。
-
-    **代價講明**：`rename` 會換掉 inode，外部編輯器開著同一個檔案時它手上的是舊 inode。
-    這比原地覆寫差一點，但換到的是「不會毀損」——毀損不可回復，而外部編輯的併發
-    本來就只有 best-effort 保證（design §7.2、§10.4 的 K1）。
-    """
-    tmp = f".{name}.writing"
-    if not is_plain_name(tmp):
-        raise ValueError("temp name is not a plain filename")
-    _unlink_quietly(tasks_fd, tmp)      # 上次崩在中途留下的殘骸
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=tasks_fd)
-    try:
-        _write_all(fd, data)
-        os.fsync(fd)                    # 先落地再發布，否則 rename 可能公開一個內容還沒寫進去的檔案
-    except BaseException as exc:
-        os.close(fd)
-        _unlink_quietly(tasks_fd, tmp)
-        raise TaskWriteError(str(exc)) from exc
-    os.close(fd)
-    try:
-        os.rename(tmp, name, src_dir_fd=tasks_fd, dst_dir_fd=tasks_fd)
-    except BaseException as exc:
-        _unlink_quietly(tasks_fd, tmp)
-        raise TaskWriteError(str(exc)) from exc
-
-
 def _read_all(fd: int) -> bytes:
     chunks: list[bytes] = []
     while True:
@@ -434,22 +392,36 @@ def update_status(
     外部改動——你在編輯器改完存檔了，之後在面板點狀態，會拿到 409 而不是覆蓋。
     重算到實際寫入之間仍有窗口（design §10.4 的 K1），**這裡刻意不試圖關閉它**。
 
-    寫回是「先寫新內容、再 `ftruncate` 到新長度」而不是先 truncate：硬中斷落在兩者之間時，
-    檔案是「新內容 ＋ 可能的舊尾巴」而不是空檔——後者會直接把票的內文洗掉。
+    **寫入不是原子的，這裡照實說（design §10.4 的 K5）**：在已 pin 的 fd 上原地覆寫。
+    寫到一半失敗（磁碟滿、I/O 錯誤、斷電）會留下「新內容前半 ＋ 舊內容尾巴」的壞檔，
+    而 `.fledge/` 不進 git，**不可回復**。與 §2.4.1 對建票的處置一致：這個定位是
+    單人、本機、純文字筆記，不撐交易語意。
+
+    > **2026-08-31：這段曾經寫成「暫存檔 ＋ `os.rename` 原子替換」，之後整段拿掉。**
+    > 連續三輪 Codex 審查都落在同一段自己發明的寫入協定上，每補一塊就長出新的邊界
+    > （固定暫存檔在併發下互相 unlink、rename 讓覆蓋外部存檔的窗口比原地寫更寬、
+    > umask 吃掉檔案 mode、目錄沒 fsync）。依本 repo 既有教訓——**連三輪打同一段
+    > 自己寫的邏輯，訊號是那段不該自己寫**——處置是縮小承諾，不是寫第四個版本。
+    > 拿掉之後那四條 finding 是「消失」而不是「修好」。
     """
     if status not in VALID_STATUS:
         raise ValueError("invalid status")
-    # 仍用 write=True 開：它同時是權限檢查（唯讀檔在這裡就擋下）與 hard link 的 T4 檢查
     fd = _open_existing(tasks_fd, name, write=True)
     try:
         raw = _read_all(fd)
         if fingerprint(raw) != expected_fingerprint:
             return None
-        mode = stat_module.S_IMODE(os.fstat(fd).st_mode)   # 保留原檔權限，不要換成預設值
+        new_raw = replace_status(raw, status)   # 在位元組上改，不解碼（見 parser.replace_status）
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            _write_all(fd, new_raw)             # os.write 允許短寫，回傳值不能忽略
+            os.ftruncate(fd, len(new_raw))
+        except OSError as exc:
+            # I/O 失敗與「目標不合法」分開回報（路由：500 vs 400）。
+            # **這裡不做復原**——見本函式 docstring 的保證等級宣告。
+            raise TaskWriteError(str(exc)) from exc
     finally:
         os.close(fd)
-    new_raw = replace_status(raw, status)   # 在位元組上改，不解碼（見 parser.replace_status）
-    _write_ticket_atomically(tasks_fd, name, new_raw, mode)
     # 回傳更新後的票（含新 fingerprint）。沒有這個，使用者改一次狀態之後本地的
     # fingerprint 就過期了，**下一次改狀態或刪除會被錯誤地判成 409**（design §7.2）。
     return _row(parse_task(name, _decode(new_raw)), fingerprint(new_raw))
