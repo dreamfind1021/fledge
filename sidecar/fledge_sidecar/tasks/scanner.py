@@ -40,6 +40,11 @@ STATUS_UNKNOWN_PROJECT = "unknown_project"
 _NEXT_STEP = re.compile(r"^\*\*(?:下一步|Next)\*\*[:：]\s*(.+)$")
 
 
+class TaskWriteError(OSError):
+    """寫票檔時的 I/O 失敗。**與「目標不合法」分開**——後者是使用者送錯東西（400），
+    這個是磁碟／檔案系統出問題（500）。混在一起會讓真正的 I/O 故障被報成參數錯誤。"""
+
+
 @dataclass(frozen=True)
 class TasksDir:
     """resolver 的結果。fd 的生命週期綁在 with 區塊內，離開就關閉。
@@ -369,6 +374,48 @@ def _write_all(fd: int, data: bytes) -> None:
         written += n
 
 
+def _unlink_quietly(tasks_fd: int, name: str) -> None:
+    try:
+        os.unlink(name, dir_fd=tasks_fd)
+    except OSError:
+        pass
+
+
+def _write_ticket_atomically(tasks_fd: int, name: str, data: bytes, mode: int) -> None:
+    """寫 `name`：**要嘛完整成功，要嘛原檔一個位元組都不變。**
+
+    初版是原地覆寫（`lseek` → `write` → `ftruncate`）。那個寫法在「已經寫進去一部分、
+    下一次 write 才失敗」時會留下「新內容前半 ＋ 舊內容尾巴」——`ftruncate` 根本來不及跑，
+    而狀態值長度一變位移就錯開，內容會重複或缺一段。`.fledge/` 不進 git，救不回
+    （2026-08-31 Codex 複審抓到：第一次修只擋了「短寫回報成功」，沒擋「短寫之後才失敗」）。
+
+    暫存檔用 `O_EXCL` 建在**同一個已 pin 的 tasks 目錄**裡：跨目錄 rename 不保證原子，
+    而且會離開 resolver 的邊界。檔名不以 `.md` 結尾，所以掃描不會把它當成票。
+
+    **代價講明**：`rename` 會換掉 inode，外部編輯器開著同一個檔案時它手上的是舊 inode。
+    這比原地覆寫差一點，但換到的是「不會毀損」——毀損不可回復，而外部編輯的併發
+    本來就只有 best-effort 保證（design §7.2、§10.4 的 K1）。
+    """
+    tmp = f".{name}.writing"
+    if not is_plain_name(tmp):
+        raise ValueError("temp name is not a plain filename")
+    _unlink_quietly(tasks_fd, tmp)      # 上次崩在中途留下的殘骸
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=tasks_fd)
+    try:
+        _write_all(fd, data)
+        os.fsync(fd)                    # 先落地再發布，否則 rename 可能公開一個內容還沒寫進去的檔案
+    except BaseException as exc:
+        os.close(fd)
+        _unlink_quietly(tasks_fd, tmp)
+        raise TaskWriteError(str(exc)) from exc
+    os.close(fd)
+    try:
+        os.rename(tmp, name, src_dir_fd=tasks_fd, dst_dir_fd=tasks_fd)
+    except BaseException as exc:
+        _unlink_quietly(tasks_fd, tmp)
+        raise TaskWriteError(str(exc)) from exc
+
+
 def _read_all(fd: int) -> bytes:
     chunks: list[bytes] = []
     while True:
@@ -392,17 +439,17 @@ def update_status(
     """
     if status not in VALID_STATUS:
         raise ValueError("invalid status")
+    # 仍用 write=True 開：它同時是權限檢查（唯讀檔在這裡就擋下）與 hard link 的 T4 檢查
     fd = _open_existing(tasks_fd, name, write=True)
     try:
         raw = _read_all(fd)
         if fingerprint(raw) != expected_fingerprint:
             return None
-        new_raw = replace_status(raw, status)   # 在位元組上改，不解碼（見 parser.replace_status）
-        os.lseek(fd, 0, os.SEEK_SET)
-        _write_all(fd, new_raw)                 # 全部寫完才 ftruncate
-        os.ftruncate(fd, len(new_raw))
+        mode = stat_module.S_IMODE(os.fstat(fd).st_mode)   # 保留原檔權限，不要換成預設值
     finally:
         os.close(fd)
+    new_raw = replace_status(raw, status)   # 在位元組上改，不解碼（見 parser.replace_status）
+    _write_ticket_atomically(tasks_fd, name, new_raw, mode)
     # 回傳更新後的票（含新 fingerprint）。沒有這個，使用者改一次狀態之後本地的
     # fingerprint 就過期了，**下一次改狀態或刪除會被錯誤地判成 409**（design §7.2）。
     return _row(parse_task(name, _decode(new_raw)), fingerprint(new_raw))

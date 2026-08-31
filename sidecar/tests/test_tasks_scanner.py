@@ -5,6 +5,7 @@ resolver 是**所有端點共用的唯一入口**，所以它的拒絕條件在 
 """
 import json
 import os
+import stat
 
 import pytest
 
@@ -332,12 +333,13 @@ def test_delete_of_hard_link_does_not_touch_the_target(tmp_path):
     tasks = _tasks_dir(proj)
     outside = tmp_path / "outside.md"
     outside.write_text(TICKET.format(status="todo", title="外面"), encoding="utf-8")
+    before = outside.read_bytes()
     os.link(outside, tasks / "01-連結.md")
     with scanner.open_tasks_dir(str(proj), config) as td:
         row = scanner.scan_tasks(td.fd)[0]
         assert scanner.delete_task(td.fd, "01-連結.md", expected_fingerprint=row["fingerprint"])
     assert not (tasks / "01-連結.md").exists()
-    assert outside.exists()                          # 連結目標還在
+    assert outside.read_bytes() == before            # 連結目標逐位元組不變（不只是「還在」）
 
 
 def test_patch_preserves_invalid_utf8_bytes(tmp_path):
@@ -418,3 +420,79 @@ def test_reading_a_fifo_does_not_block(tmp_path):
         assert scanner.read_task_bytes(td.fd, "01-管道.md") is None   # 立刻回，不卡住
         assert scanner.list_task_files(td.fd) == ["02-正常.md"]       # FIFO 本來就不算票
         assert scanner.count_unfinished(td.fd) == 1                   # 其他票不受影響
+
+
+def _ticket_with_body(tasks, name="01-a.md"):
+    body = ("---\nstatus: todo\nsource: me\ncreated: 2026-08-31\n---\n\n"
+            "# 標題\n\n第一行內文\n第二行內文\n" + "尾巴" * 200 + "\n")
+    (tasks / name).write_text(body, encoding="utf-8")
+    return body.encode("utf-8")
+
+
+def test_write_failing_midway_leaves_the_original_untouched(tmp_path, monkeypatch):
+    """**F6**：寫到一半才失敗時，原票必須一個位元組都不變。
+
+    初版原地覆寫（lseek→write→ftruncate）在這條路徑上會留下「新內容前半 ＋ 舊內容尾巴」
+    ——`ftruncate` 根本來不及跑，而狀態值長度一變位移就錯開。第一次修只擋了
+    「短寫回報成功」，沒擋這條（2026-08-31 Codex 複審抓到）。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    original = _ticket_with_body(tasks)
+
+    real_write = os.write
+    state: dict = {"fd": None}
+
+    # 認 fd 而不是認內容：_write_all 第二次呼叫傳的是【剩餘位元組】，不再以 --- 開頭
+    def fail_after_first_chunk(fd, data):
+        payload = bytes(data)
+        if state["fd"] is None and payload.startswith(b"---"):   # 票檔的第一次寫入
+            state["fd"] = fd
+            return real_write(fd, payload[:20])                  # 先寫進去一段
+        if fd == state["fd"]:
+            raise OSError(28, "No space left on device")         # 同一個 fd 的後續寫入才失敗
+        return real_write(fd, payload)
+
+    monkeypatch.setattr(os, "write", fail_after_first_chunk)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        row = scanner.scan_tasks(td.fd)[0]
+        with pytest.raises(scanner.TaskWriteError):
+            scanner.update_status(td.fd, "01-a.md", status="doing",
+                                  expected_fingerprint=row["fingerprint"])
+    monkeypatch.undo()
+
+    assert (tasks / "01-a.md").read_bytes() == original          # 逐位元組不變
+    assert [f.name for f in tasks.iterdir()] == ["01-a.md"]      # 暫存檔已清掉
+
+
+def test_rename_failing_leaves_the_original_untouched(tmp_path, monkeypatch):
+    """暫存檔寫成功、原子替換那一步失敗時，原票同樣不得被動到。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    original = _ticket_with_body(tasks)
+
+    def boom(*a, **kw):
+        raise OSError(5, "I/O error")
+    monkeypatch.setattr(os, "rename", boom)
+
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        row = scanner.scan_tasks(td.fd)[0]
+        with pytest.raises(scanner.TaskWriteError):
+            scanner.update_status(td.fd, "01-a.md", status="done",
+                                  expected_fingerprint=row["fingerprint"])
+    monkeypatch.undo()
+
+    assert (tasks / "01-a.md").read_bytes() == original
+    assert [f.name for f in tasks.iterdir()] == ["01-a.md"]      # 暫存檔已清掉
+
+
+def test_atomic_write_preserves_file_mode(tmp_path):
+    """原子替換是建新檔再改名——權限要沿用原檔，不能換成預設值。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    _ticket_with_body(tasks)
+    os.chmod(tasks / "01-a.md", 0o600)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        row = scanner.scan_tasks(td.fd)[0]
+        scanner.update_status(td.fd, "01-a.md", status="doing",
+                              expected_fingerprint=row["fingerprint"])
+    assert stat.S_IMODE(os.stat(tasks / "01-a.md").st_mode) == 0o600

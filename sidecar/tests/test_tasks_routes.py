@@ -417,3 +417,17 @@ def test_target_name_must_be_plain(tmp_path, monkeypatch):
     for bad in ("../01-a.md", "..", ".", "sub/01-a.md"):
         r = c.request("DELETE", "/tasks", params={"project": str(proj), "name": bad, "fingerprint": fp})
         assert r.status_code == 400, bad
+
+
+def test_patch_reports_io_failure_as_500_not_400(tmp_path, monkeypatch):
+    """I/O 失敗要與「目標不合法」分開回報——磁碟滿被報成參數錯誤會讓人查錯方向。"""
+    import fledge_sidecar.tasks.scanner as sc
+
+    c, proj, tasks, fp = _with_ticket(tmp_path, monkeypatch)
+    monkeypatch.setattr(sc, "_write_ticket_atomically",
+                        lambda *a, **kw: (_ for _ in ()).throw(sc.TaskWriteError("disk full")))
+    before = (tasks / "01-a.md").read_bytes()
+    r = c.patch("/tasks", json={"project": str(proj), "name": "01-a.md",
+                                "status": "doing", "fingerprint": fp})
+    assert r.status_code == 500 and r.json()["error"] == "write_failed"
+    assert (tasks / "01-a.md").read_bytes() == before
