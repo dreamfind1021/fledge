@@ -417,3 +417,40 @@ def test_target_name_must_be_plain(tmp_path, monkeypatch):
     for bad in ("../01-a.md", "..", ".", "sub/01-a.md"):
         r = c.request("DELETE", "/tasks", params={"project": str(proj), "name": bad, "fingerprint": fp})
         assert r.status_code == 400, bad
+
+
+def test_patch_reports_io_failure_as_500_not_400(tmp_path, monkeypatch):
+    """I/O 失敗要與「目標不合法」分開回報——磁碟滿被報成參數錯誤會讓人查錯方向。"""
+    import fledge_sidecar.tasks.scanner as sc
+
+    c, proj, tasks, fp = _with_ticket(tmp_path, monkeypatch)
+    # 注入真實的 I/O 失敗來源（不是直接丟 TaskWriteError）——要驗的是
+    # scanner 有把 OSError 包成 TaskWriteError，而不只是 except 的排序
+    monkeypatch.setattr(sc, "_write_all",
+                        lambda fd, data: (_ for _ in ()).throw(OSError(28, "No space left on device")))
+    before = (tasks / "01-a.md").read_bytes()
+    r = c.patch("/tasks", json={"project": str(proj), "name": "01-a.md",
+                                "status": "doing", "fingerprint": fp})
+    assert r.status_code == 500 and r.json()["error"] == "write_failed"
+    assert (tasks / "01-a.md").read_bytes() == before
+
+
+def test_patch_reports_permission_error_as_500_not_400(tmp_path, monkeypatch):
+    """唯讀檔／唯讀檔案系統是 I/O 問題，不是「目標不合法」。
+
+    檔案存在、名字合法、型別正確，只是開不起來——回 400 invalid_target 會讓人
+    往「參數寫錯」的方向查（2026-08-31 第三輪 Codex 複審抓到）。"""
+    import os
+
+    import pytest
+
+    if os.geteuid() == 0:
+        pytest.skip("root 無視檔案權限")
+    c, proj, tasks, fp = _with_ticket(tmp_path, monkeypatch)
+    os.chmod(tasks / "01-a.md", 0o444)          # 唯讀 → O_RDWR 會拿到 EACCES
+    try:
+        r = c.patch("/tasks", json={"project": str(proj), "name": "01-a.md",
+                                    "status": "doing", "fingerprint": fp})
+        assert r.status_code == 500 and r.json()["error"] == "write_failed"
+    finally:
+        os.chmod(tasks / "01-a.md", 0o644)

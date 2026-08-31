@@ -40,6 +40,11 @@ STATUS_UNKNOWN_PROJECT = "unknown_project"
 _NEXT_STEP = re.compile(r"^\*\*(?:下一步|Next)\*\*[:：]\s*(.+)$")
 
 
+class TaskWriteError(OSError):
+    """寫票檔時的 I/O 失敗。**與「目標不合法」分開**——後者是使用者送錯東西（400），
+    這個是磁碟／檔案系統出問題（500）。混在一起會讓真正的 I/O 故障被報成參數錯誤。"""
+
+
 @dataclass(frozen=True)
 class TasksDir:
     """resolver 的結果。fd 的生命週期綁在 with 區塊內，離開就關閉。
@@ -149,14 +154,22 @@ def read_task_bytes(tasks_fd: int, name: str) -> bytes | None:
     回位元組而不是字串：fingerprint 必須算在原始內容上，解碼過的字串會把無效 UTF-8
     換成替代字元，兩個不同的檔案可能算出同一個雜湊。"""
     try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=tasks_fd)
+        # `O_NONBLOCK`：列目錄與這裡開檔之間有窗口，外部若把某個 `.md` 換成 FIFO，
+        # 少了它就會**阻塞到有寫入端出現**——整個 `/tasks` 掃描掛在這一行，
+        # 而契約 2 要求的是「隔離那一個檔案」不是「拖垮整個專案」。
+        # （`_open_existing` 原本就防了這個，這裡漏掉；2026-08-31 Codex 審查抓到。）
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=tasks_fd)
     except OSError:
         return None
     try:
-        with os.fdopen(fd, "rb") as fh:
+        if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+            return None                      # 目錄、FIFO、裝置檔一律不是票
+        with os.fdopen(fd, "rb", closefd=False) as fh:
             return fh.read()
     except OSError:
         return None
+    finally:
+        os.close(fd)
 
 
 def fingerprint(raw: bytes) -> str:
@@ -328,12 +341,37 @@ def _open_existing(tasks_fd: int, name: str, *, write: bool = False) -> int:
     flags = (os.O_RDWR if write else os.O_RDONLY) | os.O_NOFOLLOW | os.O_NONBLOCK
     fd = os.open(name, flags, dir_fd=tasks_fd)
     try:
-        if not stat_module.S_ISREG(os.fstat(fd).st_mode):
+        info = os.fstat(fd)
+        if not stat_module.S_ISREG(info.st_mode):
             raise ValueError("not a regular file")
+        # **T4（寫入專用）：hard link 不是 symlink，`O_NOFOLLOW` 擋不住它。**
+        # 在 tasks 目錄裡放一個指向專案外檔案的 hard link，T1–T3 全部會過，
+        # 而寫入是寫到共用的那個 inode 上——實測會改寫專案外的檔案，
+        # 直接推翻 design §7.1「目標語意上不可能指到 tasks 目錄以外」那句話
+        # （2026-08-31 Codex 實作階段審查抓到）。
+        # 只擋寫入：讀取只是顯示使用者自己連進來的內容，而 `unlink` 移除的是
+        # 這個目錄項、動不到連結指向的那個檔案。
+        if write and info.st_nlink != 1:
+            raise ValueError("hard-linked target")
     except BaseException:
         os.close(fd)
         raise
     return fd
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """把 `data` 全部寫進 fd。**`os.write` 允許短寫，回傳值不能忽略**。
+
+    初版只呼叫一次 `os.write` 就接著 `ftruncate`：短寫（磁碟滿、被訊號打斷）時
+    檔案會變成「新內容的前半 ＋ 舊內容的尾巴」，而端點照樣回報成功、還回傳
+    一個與磁碟內容不符的 fingerprint（2026-08-31 Codex 實作階段審查抓到）。"""
+    view = memoryview(data)
+    written = 0
+    while written < len(data):
+        n = os.write(fd, view[written:])
+        if n <= 0:
+            raise OSError("short write: 寫入未完成")
+        written += n
 
 
 def _read_all(fd: int) -> bytes:
@@ -354,8 +392,17 @@ def update_status(
     外部改動——你在編輯器改完存檔了，之後在面板點狀態，會拿到 409 而不是覆蓋。
     重算到實際寫入之間仍有窗口（design §10.4 的 K1），**這裡刻意不試圖關閉它**。
 
-    寫回是「先寫新內容、再 `ftruncate` 到新長度」而不是先 truncate：硬中斷落在兩者之間時，
-    檔案是「新內容 ＋ 可能的舊尾巴」而不是空檔——後者會直接把票的內文洗掉。
+    **寫入不是原子的，這裡照實說（design §10.4 的 K5）**：在已 pin 的 fd 上原地覆寫。
+    寫到一半失敗（磁碟滿、I/O 錯誤、斷電）會留下「新內容前半 ＋ 舊內容尾巴」的壞檔，
+    而 `.fledge/` 不進 git，**不可回復**。與 §2.4.1 對建票的處置一致：這個定位是
+    單人、本機、純文字筆記，不撐交易語意。
+
+    > **2026-08-31：這段曾經寫成「暫存檔 ＋ `os.rename` 原子替換」，之後整段拿掉。**
+    > 連續三輪 Codex 審查都落在同一段自己發明的寫入協定上，每補一塊就長出新的邊界
+    > （固定暫存檔在併發下互相 unlink、rename 讓覆蓋外部存檔的窗口比原地寫更寬、
+    > umask 吃掉檔案 mode、目錄沒 fsync）。依本 repo 既有教訓——**連三輪打同一段
+    > 自己寫的邏輯，訊號是那段不該自己寫**——處置是縮小承諾，不是寫第四個版本。
+    > 拿掉之後那四條 finding 是「消失」而不是「修好」。
     """
     if status not in VALID_STATUS:
         raise ValueError("invalid status")
@@ -364,10 +411,15 @@ def update_status(
         raw = _read_all(fd)
         if fingerprint(raw) != expected_fingerprint:
             return None
-        new_raw = replace_status(_decode(raw), status).encode("utf-8")
-        os.lseek(fd, 0, os.SEEK_SET)
-        os.write(fd, new_raw)
-        os.ftruncate(fd, len(new_raw))
+        new_raw = replace_status(raw, status)   # 在位元組上改，不解碼（見 parser.replace_status）
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            _write_all(fd, new_raw)             # os.write 允許短寫，回傳值不能忽略
+            os.ftruncate(fd, len(new_raw))
+        except OSError as exc:
+            # I/O 失敗與「目標不合法」分開回報（路由：500 vs 400）。
+            # **這裡不做復原**——見本函式 docstring 的保證等級宣告。
+            raise TaskWriteError(str(exc)) from exc
     finally:
         os.close(fd)
     # 回傳更新後的票（含新 fingerprint）。沒有這個，使用者改一次狀態之後本地的
