@@ -52,13 +52,15 @@ describe("Tasks 面板", () => {
   // design §5.5：切到本面板時重讀 ＋ 視窗重新取得焦點時重讀。
   // T6 的「叫 AI 開票後切回面板看到它」全靠這條——後端全綠也證明不了它。
   it("視窗重新取得焦點時 refetch，且畫面跟著更新", async () => {
-    render(<Tasks port={1234} isActive />);
-    await waitFor(() => expect(screen.getByText("1")).toBeTruthy());
+    const { container } = render(<Tasks port={1234} isActive />);
+    // 只認列上的未完成數。分組標頭的計數也是數字，用 getByText 會兩邊都命中而炸掉
+    const n = () => container.querySelector(".tov-row .tov-n")?.textContent;
+    await waitFor(() => expect(n()).toBe("1"));
 
     fetchTasksOverview.mockResolvedValue({ projects: [proj({ unfinished: 3 })], permission_error: false });
     fireEvent(window, new Event("focus"));
 
-    await waitFor(() => expect(screen.getByText("3")).toBeTruthy());
+    await waitFor(() => expect(n()).toBe("3"));
     expect(fetchTasksOverview).toHaveBeenCalledTimes(2);
   });
 
@@ -77,6 +79,105 @@ describe("Tasks 面板", () => {
     render(<Tasks port={1234} isActive />);
     await waitFor(() => expect(screen.getByText(en.overview.unavailable)).toBeTruthy());
     expect(screen.queryByText("0")).toBeNull();
+  });
+
+  // 分組判準是「這個專案有沒有話要說」。absent 但帶著 state.md 的下一步時那句話必須留著
+  it("總覽分兩層：有話要說的展開，只有名字的收成 chip", async () => {
+    fetchTasksOverview.mockResolvedValue({
+      projects: [
+        proj({ path: "/p/a", name: "有票", unfinished: 3, tasks_status: "ok", next_step: "先修這個" }),
+        proj({ path: "/p/b", name: "做完了", unfinished: 0, tasks_status: "ok" }),
+        proj({ path: "/p/c", name: "沒用過", unfinished: 0, tasks_status: "absent" }),
+        proj({ path: "/p/d", name: "壞掉的", unfinished: null, tasks_status: "unavailable" }),
+      ],
+      permission_error: false,
+    });
+    const { container } = render(<Tasks port={1234} isActive />);
+    await waitFor(() => expect(screen.getByText("有票")).toBeTruthy());
+
+    expect([...container.querySelectorAll(".tov-row .tov-name")].map((n) => n.textContent))
+      .toEqual(["有票", "做完了", "壞掉的"]);
+    expect([...container.querySelectorAll(".tov-chip")].map((n) => n.textContent))
+      .toEqual(["沒用過"]);
+    expect(container.querySelector('.tov-chip[title="/p/d"]')).toBeNull();   // 警告不可被降級
+  });
+
+  // absent 也可能帶 next_step（state.md 住在 .fledge/ 不是 tasks/）。
+  // 同一份 fixture 一定要放一個 absent-但沒有下一步的兄弟，否則「全部都畫成列」
+  // 的現況也會通過這條測試（R2 抓到的假綠）
+  it("absent 但有下一步的展開，absent 且沒有下一步的收成 chip", async () => {
+    fetchTasksOverview.mockResolvedValue({
+      projects: [
+        proj({ path: "/p/e", name: "只有下一步", unfinished: 0, tasks_status: "absent",
+               next_step: "先把環境裝起來" }),
+        proj({ path: "/p/f", name: "什麼都沒有", unfinished: 0, tasks_status: "absent" }),
+      ],
+      permission_error: false,
+    });
+    const { container } = render(<Tasks port={1234} isActive />);
+    await waitFor(() => expect(screen.getByText("先把環境裝起來")).toBeTruthy());
+    expect(container.querySelector('.tov-row[title="/p/e"]')).toBeTruthy();
+    expect(container.querySelector('.tov-chip[title="/p/e"]')).toBeNull();
+    expect(container.querySelector('.tov-chip[title="/p/f"]')).toBeTruthy();   // 這行讓現況變紅
+    expect(container.querySelector('.tov-row[title="/p/f"]')).toBeNull();
+  });
+
+  // runtime JSON 沒有驗證。fail-safe 必須落在警告那一側，而且頁首計數也要跟著
+  it("認不得的 tasks_status 畫成警告，不算進未完成總數", async () => {
+    fetchTasksOverview.mockResolvedValue({
+      projects: [
+        proj({ path: "/p/a", name: "正常", unfinished: 2, tasks_status: "ok" }),
+        proj({ path: "/p/x", name: "未來狀態", unfinished: null, tasks_status: "brand-new" as never }),
+      ],
+      permission_error: false,
+    });
+    const { container } = render(<Tasks port={1234} isActive />);
+    await waitFor(() => expect(screen.getByText("未來狀態")).toBeTruthy());
+    expect(container.querySelector('.tov-row[title="/p/x"] .tov-n')).toBeNull();   // 沒有數字
+    // 頁首摘要也要正確——只修列不修 reducer 的實作必須被擋下來
+    const sum = container.querySelector(".tasks-sum")!.textContent!;
+    expect(sum).toContain("2");                                  // 總數只算 ok
+    expect(sum).toContain(en.overview.summaryUnreadable.replace("{{n}}", "1"));
+  });
+
+  // 同一個 fail-safe 用在 unfinished 上：ok 但數字是壞的，不可被壓成 0
+  it("ok 但 unfinished 不是非負整數時當成警告，不畫成 0", async () => {
+    fetchTasksOverview.mockResolvedValue({
+      projects: [proj({ path: "/p/y", name: "壞數字", unfinished: null, tasks_status: "ok" })],
+      permission_error: false,
+    });
+    const { container } = render(<Tasks port={1234} isActive />);
+    await waitFor(() => expect(screen.getByText("壞數字")).toBeTruthy());
+    expect(container.querySelector('.tov-row[title="/p/y"] .tov-n')).toBeNull();
+    expect(screen.getByText(en.overview.unavailable)).toBeTruthy();
+  });
+
+  it("下一步是空字串時顯示提示，不是留白", async () => {
+    fetchTasksOverview.mockResolvedValue({
+      projects: [proj({ path: "/p/g", name: "沒設下一步", unfinished: 1, tasks_status: "ok", next_step: "" })],
+      permission_error: false,
+    });
+    const { container } = render(<Tasks port={1234} isActive />);
+    await waitFor(() => expect(screen.getByText("沒設下一步")).toBeTruthy());
+    const cell = container.querySelector('.tov-row[title="/p/g"] .tov-next.is-none');
+    expect(cell).toBeTruthy();                        // 先確認節點存在，不要讓 undefined 比 undefined
+    expect(cell!.textContent).toBe(en.overview.noNextStep);
+  });
+
+  it("點 chip 只進入該專案，不建立任何東西", async () => {
+    fetchTasksOverview.mockResolvedValue({
+      projects: [proj({ path: "/p/c", name: "沒用過", unfinished: 0, tasks_status: "absent" })],
+      permission_error: false,
+    });
+    fetchTasks.mockResolvedValue({ project: "/p/c", tasks_status: "absent", tasks: [], next_step: "" });
+    const { container } = render(<Tasks port={1234} isActive />);
+    await waitFor(() => expect(container.querySelector('.tov-chip[title="/p/c"]')).toBeTruthy());
+    expect(container.querySelector('.tov-row[title="/p/c"]')).toBeNull();
+
+    fireEvent.click(container.querySelector('.tov-chip[title="/p/c"]')!);
+    await waitFor(() => expect(fetchTasks).toHaveBeenCalledWith(1234, "/p/c"));
+    expect(createTask).not.toHaveBeenCalled();
+    expect(screen.getByText(en.list.empty)).toBeTruthy();   // 空清單，不是錯誤態
   });
 
   it("單一專案收到 unavailable 時畫成錯誤態，不是空清單", async () => {

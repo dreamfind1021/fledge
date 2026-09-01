@@ -18,7 +18,6 @@
 
 /* ── 第一層總覽 ── */
 .tasks-overview { display: flex; flex-direction: column; gap: 1px; }
-.tov-head { display: flex; align-items: center; gap: 12px; padding: 0 10px 7px; font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); border-bottom: 1px solid var(--divider); margin-bottom: 4px; }
 .tov-row { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 10px; border: none; background: transparent; border-radius: var(--row-radius); font-size: 13px; font-family: var(--font-ui); text-align: left; color: var(--text); cursor: pointer; }
 .tov-row:hover { background: var(--surface); }
 /* 左緣細條：暗示這一列點下去會進到下一層 */
@@ -33,7 +32,23 @@
 /* 讀不到：用 warning 色與文字，與「0 條」在視覺上就分得開 */
 .tov-una { font-size: 11.5px; font-weight: 600; color: var(--warning); }
 .tov-next { flex: 1; min-width: 0; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tov-head .tov-next { color: inherit; font-size: inherit; }
+/* 分組標頭。與第二層的 .tasks-sec 同一套視覺語言，兩層看起來才是同一個面板。
+   標籤用 --dim（7.13:1）不用 --faint（3.43:1）——它們是文字，門檻是 4.5:1 */
+.tov-sec { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; padding: 0 2px; }
+.tov-sec-lab { font-size: 10.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
+.tov-sec-line { flex: 1; height: 1px; background: var(--divider); }
+.tov-sec-n { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--dim); }
+/* 沒有 tasks/ 資料夾：用文字不用數字，跟「有資料夾但 0 條」在視覺上就分得開 */
+.tov-unused { font-size: 11.5px; color: var(--dim); }
+.tov-next.is-none { color: var(--dim); font-style: italic; }
+/* 收成 chip 是為了不佔 19 行，**不是隱藏**——照樣看得到、點得到 */
+.tov-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 2px 0; }
+/* 專案名是檔案系統的目錄名，長度沒有上限（實測有 uploads_RESCUE_meeting_20260609_224349）。
+   沒有 max-width 的 nowrap chip 會把面板撐出水平捲軸——既有的 .tov-row 有 180px 限寬，chip 也要有 */
+.tov-chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11.5px; font-family: var(--font-ui); color: var(--dim); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 14px; padding: 4px 11px; cursor: pointer; }
+.tov-chip:hover { color: var(--text); background: var(--hover); }
 
 /* ── 第二層 ── */
 .tasks-pane { display: flex; flex-direction: column; }

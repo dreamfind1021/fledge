@@ -2,9 +2,10 @@
   "tabTitle": "待辦",
   "entry": "待辦",
   "overview": {
-    "colProject": "專案",
-    "colUnfinished": "未完成",
-    "colNextStep": "下一步",
+    "nextStep": "下一步",
+    "noNextStep": "下一步未設定",
+    "groupInUse": "使用中",
+    "notUsing": "還沒開始用",
     "summary": "{{n}} 張未完成",
     "summaryUnreadable": "{{n}} 個讀不到",
     "empty": "尚無專案",

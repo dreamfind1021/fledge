@@ -155,7 +155,7 @@ export function TasksList({ data, projectName, failed, notice, onBack, onCreate,
       {head(t("list.summary", { doing: doing.length, todo: todo.length, done: done.length }))}
       {data.next_step ? (
         <div className="tasks-next">
-          <div className="tasks-next-lab">{t("overview.colNextStep")}</div>
+          <div className="tasks-next-lab">{t("overview.nextStep")}</div>
           <div className="tasks-next-tx">{data.next_step}</div>
         </div>
       ) : null}
