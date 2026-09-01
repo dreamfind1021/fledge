@@ -86,6 +86,14 @@ describe("待辦面板的顏色對比", () => {
     ["已完成的標題", ".tk.is-done .tk-title", "color"],
     ["來源 AI", ".tk-src.is-ai", "color"],
     ["來源 我", ".tk-src.is-me", "color"],
+    ["總覽的下一步", ".tov-next", "color"],
+    ["沒設下一步的提示", ".tov-next.is-none", "color"],
+    ["chip 文字", ".tov-chip", "color"],
+    ["還沒開始用", ".tov-unused", "color"],
+    ["總覽分區標籤", ".tov-sec-lab", "color"],
+    ["總覽分區計數", ".tov-sec-n", "color"],
+    ["第二層分區標籤", ".tasks-sec-lab", "color"],
+    ["第二層分區計數", ".tasks-sec-n", "color"],
   ])("%s 對背景至少 4.5:1", (_label, selector, prop) => {
     expect(contrast(token(paintToken(selector, prop)), bg)).toBeGreaterThanOrEqual(4.5);
   });
