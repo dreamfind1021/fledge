@@ -98,6 +98,15 @@ describe("待辦面板的顏色對比", () => {
     expect(contrast(token(paintToken(selector, prop)), bg)).toBeGreaterThanOrEqual(4.5);
   });
 
+  // 完成區的展開箭頭是 lucide 的 svg，用 currentColor 吃 .tasks-sec 的 color；
+  // 標籤與計數各有自己的 color。分開設就會漂移——2026-09-01 就是標籤改成 --dim
+  // 而容器留在 --faint，箭頭比旁邊的字淡一截。
+  // 這裡不驗絕對門檻：--faint 是 3.43:1，本來就過得了非文字的 3:1，那樣的斷言
+  // 在缺陷還在的時候也是綠的。要驗的是「箭頭不可以比標籤淡」這個關係本身。
+  it("完成區展開箭頭與分區標籤用同一個顏色 token", () => {
+    expect(paintToken(".tasks-sec", "color")).toBe(paintToken(".tasks-sec-lab", "color"));
+  });
+
   // opacity 禁令。上面那組是從 token 值算的，算不到 opacity 疊出來的實際顏色，
   // 所以「不准用 opacity」本身要是一條規則，否則上面那組會給出安心的假象。
   it("狀態記號與已完成列不得用 opacity 淡化", () => {
