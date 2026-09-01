@@ -250,6 +250,29 @@ describe("Tasks 面板", () => {
     expect(glyph("is-doing")).toBeNull();
   });
 
+  // Codex 第三輪 medium（main 上就有的既有缺陷）：沒有 in-flight 鎖時，連點兩下會用
+  // **同一個 fingerprint** 送兩次 PATCH，第二次必然被判 stale → 使用者什麼都沒做錯卻
+  // 看到「這張票已被改過」。上面那條「連續兩次」測試是等第一次回應才點，照不到這個。
+  it("第一次改狀態還在路上時，再點不會送出第二個請求", async () => {
+    let release!: (t: TaskRow) => void;
+    updateTask.mockImplementation(() => new Promise<TaskRow>((res) => { release = res; }));
+    await openList();
+
+    const btn = screen.getByLabelText(statusLabel(en.status.todo, en.status.doing));
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    expect(updateTask).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(en.list.conflict)).toBeNull();   // 不該冒出衝突訊息
+
+    // 回應到了就要放行，鎖不能卡住後續操作
+    release(ticket({ status: "doing", fingerprint: "f2" }));
+    await waitFor(() => expect(screen.getByTitle(en.status.doing)).toBeTruthy());
+    updateTask.mockResolvedValue(ticket({ status: "done", fingerprint: "f3" }));
+    fireEvent.click(screen.getByLabelText(statusLabel(en.status.doing, en.status.done)));
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(2));
+  });
+
   it("收到 409 顯示已被改過並重新載入", async () => {
     updateTask.mockRejectedValue(new TaskConflictError());
     await openList();
