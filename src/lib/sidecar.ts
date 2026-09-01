@@ -1052,7 +1052,12 @@ export interface TasksProjectRow {
   path: string;
   name: string;
   account: string;
-  /** 未完成條數。tasks_status !== "ok" 時為 null——「讀不到」不可畫成 0（design §6.3） */
+  /**
+   * 未完成條數。`ok` 是實際條數、`absent` 是 0（沒有 tasks/ 資料夾）、
+   * `unavailable` 才是 null——「讀不到」不可畫成 0（design §6.3）。
+   * **不要拿這個欄位反推狀態**：`absent` 與「有資料夾但 0 條」在這裡是同一個 0，
+   * 分得開的是 `tasks_status`（見 `TasksOverview.tsx` 的 `okCount`）
+   */
   unfinished: number | null;
   tasks_status: TasksStatus;
   /** 該專案 .fledge/state.md 前 20 行抽出的「下一步」；沒有就是空字串 */
