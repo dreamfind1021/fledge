@@ -1,20 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { openPath } from "@tauri-apps/plugin-opener";
 import {
   TaskConflictError, createTask, deleteTask, fetchTasks, fetchTasksOverview, updateTask,
   type TaskRow, type TasksListResponse, type TasksOverview as TasksOverviewData,
 } from "../lib/sidecar";
-import { TasksList } from "./TasksList";
+import { NEXT_STATUS, TasksList } from "./TasksList";
 import { TasksOverview } from "./TasksOverview";
 import "./Tasks.css";
 
 // 待辦面板（design §5）。兩層導覽：總覽 → 單一專案。
 // 所有 HTTP 一律經 src/lib/sidecar.ts 的 wrapper（plan §1.0）：直接 fetch 會漏掉
 // X-Fledge-Token，dev 看似正常、打包版整個死掉。
-// 點一下的循環（design §5.2）。三種狀態少到不需要下拉選單。
-const NEXT_STATUS: Record<string, string> = { todo: "doing", doing: "done", done: "todo" };
-
 export function Tasks({ port, isActive }: { port: number | null; isActive: boolean }) {
   const { t } = useTranslation("tasks");
   const [selected, setSelected] = useState<string | null>(null);
@@ -23,6 +20,9 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   const [failed, setFailed] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [notice, setNotice] = useState("");   // i18n key，空字串＝不顯示
+  // 在途的改狀態請求（鍵＝專案路徑＋票檔名）。用 ref 不用 state：它只擋重複送出，
+  // 不影響畫面，進 state 會多一輪不必要的 re-render。
+  const inFlight = useRef(new Set<string>());
 
   // design §5.5：切到本面板時重讀（isActive 進到依賴陣列）＋ 視窗重新取得焦點時重讀。
   // 不做即時檔案監看——使用者的節奏是「叫 AI 開票 → 之後才去看」，中間必然經過切換面板。
@@ -50,6 +50,13 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
 
   const cycle = useCallback((task: TaskRow) => {
     if (port == null || selected == null) return;
+    // 同一張票同時只讓一個改狀態的請求在路上。少了這道鎖，快速連點會用**同一個
+    // fingerprint** 送出兩次 PATCH：第一次成功後檔案的 fingerprint 就變了，第二次必然
+    // 被判成 stale 而彈出「這張票已被改過」——使用者什麼都沒做錯卻看到錯誤訊息。
+    // 鍵帶上專案路徑：切到別的專案時，同名票不該被上一個專案的在途請求擋住。
+    const key = `${selected}\n${task.name}`;
+    if (inFlight.current.has(key)) return;
+    inFlight.current.add(key);
     setNotice("");
     updateTask(port, selected, task.name, NEXT_STATUS[task.status] ?? "todo", task.fingerprint)
       // 用回傳的票取代本地狀態（含新 fingerprint）。少了這步，改一次之後本地的 fingerprint
@@ -57,7 +64,8 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
       .then((updated) => setList((cur) => (cur && cur.tasks
         ? { ...cur, tasks: cur.tasks.map((x) => (x.name === updated.name ? updated : x)) }
         : cur)))
-      .catch(onActionError);
+      .catch(onActionError)
+      .finally(() => inFlight.current.delete(key));
   }, [port, selected, onActionError]);
 
   const remove = useCallback((task: TaskRow) => {
@@ -91,12 +99,16 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     return () => { cancelled = true; };
   }, [port, isActive, selected, reloadKey]);
 
+  // 第二層的標題是專案名。名字從已載入的總覽推導，不另存一份 state——
+  // 存兩份就會有一份過期，而且進到第二層的唯一入口就是總覽那一列。
+  const projectName = overview?.projects.find((p) => p.path === selected)?.name ?? t("tabTitle");
+
   return (
     <div className="tasks-root" data-testid="tasks-panel">
-      <div className="tasks-head"><h1>{t("tabTitle")}</h1></div>
       {selected == null
         ? <TasksOverview data={overview} failed={failed} onSelect={select} t={t} />
-        : <TasksList data={list} failed={failed} notice={notice} onBack={back} onCreate={create}
+        : <TasksList data={list} projectName={projectName} failed={failed} notice={notice}
+            onBack={back} onCreate={create}
             onCycle={cycle} onDelete={remove} onOpen={openInEditor} t={t} />}
     </div>
   );

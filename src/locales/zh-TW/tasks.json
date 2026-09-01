@@ -5,6 +5,8 @@
     "colProject": "專案",
     "colUnfinished": "未完成",
     "colNextStep": "下一步",
+    "summary": "{{n}} 張未完成",
+    "summaryUnreadable": "{{n}} 個讀不到",
     "empty": "尚無專案",
     "unavailable": "讀不到",
     "loading": "載入中…",
@@ -12,7 +14,9 @@
   },
   "list": {
     "back": "所有專案",
-    "unfinished": "未完成",
+    "summary": "{{doing}} 進行中 · {{todo}} 待辦 · {{done}} 已完成",
+    "doing": "進行中",
+    "todo": "待辦",
     "done": "已完成",
     "empty": "這個專案還沒有待辦",
     "unavailable": "這個專案的待辦資料夾讀不到",
@@ -49,7 +53,7 @@
   "a11y": {
     "expandDone": "展開已完成",
     "collapseDone": "收起已完成",
-    "cycleStatus": "切換狀態",
-    "openInEditor": "用編輯器打開檔案"
+    "openInEditor": "用編輯器打開檔案",
+    "statusCycle": "{{current}}，點一下切換成 {{next}}"
   }
 }

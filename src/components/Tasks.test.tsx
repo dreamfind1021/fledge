@@ -28,6 +28,9 @@ const proj = (over: Partial<TasksOverview["projects"][number]> = {}) => ({
   path: "/p/a", name: "a", account: "work", unfinished: 1,
   tasks_status: "ok" as const, next_step: "", ...over,
 });
+// 狀態按鈕的可及名稱是組出來的：「現在是什麼，點下去變什麼」
+const statusLabel = (current: string, next: string) =>
+  en.a11y.statusCycle.replace("{{current}}", current).replace("{{next}}", next);
 const ticket = (over: Partial<TaskRow> = {}): TaskRow => ({
   name: "01-a.md", number: 1, title: "第一件", status: "todo", source: "me",
   created: "2026-08-29", anomalies: [], fingerprint: "f", path: "/p/a/.fledge/tasks/01-a.md", ...over,
@@ -98,6 +101,49 @@ describe("Tasks 面板", () => {
     expect(screen.getByText(en.source.ai)).toBeTruthy();             // 來源標記
   });
 
+  // A1：未完成拆成「進行中／待辦」兩區，進行中永遠浮在最上面；空的區整段不畫
+  it("三區分組：進行中在待辦之上，沒有進行中時不留空標頭", async () => {
+    fetchTasks.mockResolvedValue({
+      project: "/p/a", tasks_status: "ok", next_step: "",
+      tasks: [
+        ticket({ name: "01-a.md", number: 1, title: "待做的", status: "todo" }),
+        ticket({ name: "02-b.md", number: 2, title: "在做的", status: "doing" }),
+      ],
+    });
+    const { container, rerender } = render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByTitle("/p/a"));
+    await waitFor(() => expect(screen.getByText("在做的")).toBeTruthy());
+    // 後端給的順序是 01 在前，畫面上必須是「在做的」先出現——分組有真的改變排序
+    const titles = [...container.querySelectorAll(".tk-title")].map((n) => n.textContent);
+    expect(titles).toEqual(["在做的", "待做的"]);
+    expect(screen.getByText(en.list.doing)).toBeTruthy();
+
+    // 沒有 doing 的票時，「進行中」整段不該出現（留一個 0 的標頭只是噪音）
+    fetchTasks.mockResolvedValue({
+      project: "/p/a", tasks_status: "ok", next_step: "",
+      tasks: [ticket({ title: "只有待辦", status: "todo" })],
+    });
+    rerender(<Tasks port={1234} isActive={false} />);
+    rerender(<Tasks port={1234} isActive />);
+    await waitFor(() => expect(screen.getByText("只有待辦")).toBeTruthy());
+    expect(screen.queryByText(en.list.doing)).toBeNull();
+  });
+
+  // B1：created 後端本來就回，畫成月-日。認不得的格式一律不畫，不做猜測性切字
+  it("日期畫成月-日；認不得的 created 不畫", async () => {
+    fetchTasks.mockResolvedValue({
+      project: "/p/a", tasks_status: "ok", next_step: "",
+      tasks: [
+        ticket({ name: "01-a.md", title: "有日期", created: "2026-08-29" }),
+        ticket({ name: "02-b.md", number: 2, title: "壞日期", created: "2026/08/29" }),
+      ],
+    });
+    const { container } = render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByTitle("/p/a"));
+    await waitFor(() => expect(screen.getByText("有日期")).toBeTruthy());
+    expect([...container.querySelectorAll(".tk-date")].map((n) => n.textContent)).toEqual(["08-29"]);
+  });
+
   // design §6.2：「異常」不是「隱藏」——票照常出現，點記號才說明哪裡不對
   it("異常票照常顯示，點記號展開檔名與原因", async () => {
     fetchTasks.mockResolvedValue({
@@ -156,27 +202,81 @@ describe("Tasks 面板", () => {
 
   it("點狀態循環到下一個狀態，並帶該票的 fingerprint", async () => {
     await openList();
-    fireEvent.click(screen.getByLabelText(en.a11y.cycleStatus));
+    fireEvent.click(screen.getByLabelText(statusLabel(en.status.todo, en.status.doing)));
     await waitFor(() => expect(updateTask).toHaveBeenCalledWith(1234, "/p/a", "01-a.md", "doing", "f"));
-    await waitFor(() => expect(screen.getByText(en.status.doing)).toBeTruthy());
+    // 斷言記號按鈕本身的 title，不是 getByText——後者會命中「進行中」分區標頭而不是這張票
+    await waitFor(() => expect(screen.getByTitle(en.status.doing)).toBeTruthy());
   });
 
   // design §7.2：成功回應要帶回新 fingerprint、前端要用它取代本地狀態，
   // 否則第二次操作會被錯誤地判成 409。單次點擊的測試抓不到這個。
   it("連續兩次切狀態，第二次用的是回傳的新 fingerprint", async () => {
     await openList();
-    fireEvent.click(screen.getByLabelText(en.a11y.cycleStatus));
-    await waitFor(() => expect(screen.getByText(en.status.doing)).toBeTruthy());
+    fireEvent.click(screen.getByLabelText(statusLabel(en.status.todo, en.status.doing)));
+    await waitFor(() => expect(screen.getByTitle(en.status.doing)).toBeTruthy());
 
     updateTask.mockResolvedValue(ticket({ status: "done", fingerprint: "f3" }));
-    fireEvent.click(screen.getByLabelText(en.a11y.cycleStatus));
+    // 這時票已經是 doing，按鈕的可及名稱跟著變成「進行中，切換成已完成」
+    fireEvent.click(screen.getByLabelText(statusLabel(en.status.doing, en.status.done)));
     await waitFor(() => expect(updateTask).toHaveBeenLastCalledWith(1234, "/p/a", "01-a.md", "done", "f2"));
+  });
+
+  // Codex 審查 medium：aria-label 會蓋掉 title 與按鈕內文，只寫「切換狀態」
+  // 等於報讀使用者完全聽不出這張票的狀態。名稱必須帶現在的狀態與按下去的結果。
+  it("狀態按鈕的可及名稱帶得出目前狀態與下一個狀態", async () => {
+    fetchTasks.mockResolvedValue({
+      project: "/p/a", tasks_status: "ok", next_step: "",
+      tasks: [
+        ticket({ name: "01-a.md", title: "待辦的", status: "todo" }),
+        ticket({ name: "02-b.md", number: 2, title: "在做的", status: "doing" }),
+        ticket({ name: "03-c.md", number: 3, title: "做完的", status: "done" }),
+      ],
+    });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByTitle("/p/a"));
+    await waitFor(() => expect(screen.getByText("在做的")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText(en.a11y.expandDone));
+
+    expect(screen.getByLabelText(statusLabel(en.status.todo, en.status.doing))).toBeTruthy();
+    expect(screen.getByLabelText(statusLabel(en.status.doing, en.status.done))).toBeTruthy();
+    expect(screen.getByLabelText(statusLabel(en.status.done, en.status.todo))).toBeTruthy();
+
+    // 同一條 finding 的另一半：三態不能只差顏色。done 畫勾（有 svg），
+    // todo 與 doing 是 CSS 方框（沒有 svg）——輪廓不同，單色顯示下也分得開。
+    const glyph = (cls: string) =>
+      document.querySelector(`.tk-mark.${cls}`)!.querySelector("svg");
+    expect(glyph("is-done")).toBeTruthy();
+    expect(glyph("is-todo")).toBeNull();
+    expect(glyph("is-doing")).toBeNull();
+  });
+
+  // Codex 第三輪 medium（main 上就有的既有缺陷）：沒有 in-flight 鎖時，連點兩下會用
+  // **同一個 fingerprint** 送兩次 PATCH，第二次必然被判 stale → 使用者什麼都沒做錯卻
+  // 看到「這張票已被改過」。上面那條「連續兩次」測試是等第一次回應才點，照不到這個。
+  it("第一次改狀態還在路上時，再點不會送出第二個請求", async () => {
+    let release!: (t: TaskRow) => void;
+    updateTask.mockImplementation(() => new Promise<TaskRow>((res) => { release = res; }));
+    await openList();
+
+    const btn = screen.getByLabelText(statusLabel(en.status.todo, en.status.doing));
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    expect(updateTask).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(en.list.conflict)).toBeNull();   // 不該冒出衝突訊息
+
+    // 回應到了就要放行，鎖不能卡住後續操作
+    release(ticket({ status: "doing", fingerprint: "f2" }));
+    await waitFor(() => expect(screen.getByTitle(en.status.doing)).toBeTruthy());
+    updateTask.mockResolvedValue(ticket({ status: "done", fingerprint: "f3" }));
+    fireEvent.click(screen.getByLabelText(statusLabel(en.status.doing, en.status.done)));
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(2));
   });
 
   it("收到 409 顯示已被改過並重新載入", async () => {
     updateTask.mockRejectedValue(new TaskConflictError());
     await openList();
-    fireEvent.click(screen.getByLabelText(en.a11y.cycleStatus));
+    fireEvent.click(screen.getByLabelText(statusLabel(en.status.todo, en.status.doing)));
     await waitFor(() => expect(screen.getByText(en.list.conflict)).toBeTruthy());
     await waitFor(() => expect(fetchTasks).toHaveBeenCalledTimes(2));
   });
