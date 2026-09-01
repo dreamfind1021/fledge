@@ -86,8 +86,25 @@ describe("待辦面板的顏色對比", () => {
     ["已完成的標題", ".tk.is-done .tk-title", "color"],
     ["來源 AI", ".tk-src.is-ai", "color"],
     ["來源 我", ".tk-src.is-me", "color"],
+    ["總覽的下一步", ".tov-next", "color"],
+    ["沒設下一步的提示", ".tov-next.is-none", "color"],
+    ["chip 文字", ".tov-chip", "color"],
+    ["還沒開始用", ".tov-unused", "color"],
+    ["總覽分區標籤", ".tov-sec-lab", "color"],
+    ["總覽分區計數", ".tov-sec-n", "color"],
+    ["第二層分區標籤", ".tasks-sec-lab", "color"],
+    ["第二層分區計數", ".tasks-sec-n", "color"],
   ])("%s 對背景至少 4.5:1", (_label, selector, prop) => {
     expect(contrast(token(paintToken(selector, prop)), bg)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // 完成區的展開箭頭是 lucide 的 svg，用 currentColor 吃 .tasks-sec 的 color；
+  // 標籤與計數各有自己的 color。分開設就會漂移——2026-09-01 就是標籤改成 --dim
+  // 而容器留在 --faint，箭頭比旁邊的字淡一截。
+  // 這裡不驗絕對門檻：--faint 是 3.43:1，本來就過得了非文字的 3:1，那樣的斷言
+  // 在缺陷還在的時候也是綠的。要驗的是「箭頭不可以比標籤淡」這個關係本身。
+  it("完成區展開箭頭與分區標籤用同一個顏色 token", () => {
+    expect(paintToken(".tasks-sec", "color")).toBe(paintToken(".tasks-sec-lab", "color"));
   });
 
   // opacity 禁令。上面那組是從 token 值算的，算不到 opacity 疊出來的實際顏色，

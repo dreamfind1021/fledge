@@ -2,9 +2,10 @@
   "tabTitle": "Tasks",
   "entry": "Tasks",
   "overview": {
-    "colProject": "Project",
-    "colUnfinished": "Unfinished",
-    "colNextStep": "Next step",
+    "nextStep": "Next step",
+    "noNextStep": "No next step set",
+    "groupInUse": "In use",
+    "notUsing": "Not using tasks yet",
     "summary": "{{n}} unfinished",
     "summaryUnreadable": "{{n}} unreadable",
     "empty": "No projects yet",

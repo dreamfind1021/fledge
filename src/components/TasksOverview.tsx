@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { TasksOverview as TasksOverviewData } from "../lib/sidecar";
+import type { TasksOverview as TasksOverviewData, TasksProjectRow } from "../lib/sidecar";
 
 type T = (k: string, o?: Record<string, unknown>) => string;
 
@@ -14,6 +14,52 @@ function Tally({ n }: { n: number }) {
     <span className="tov-marks" aria-hidden="true">
       {Array.from({ length: Math.min(n, TALLY_CAP) }, (_, i) => <i key={i} />)}
     </span>
+  );
+}
+
+// 只有非負整數才是真的條數。runtime JSON 沒有驗證，壞值不可被 ?? 0 壓成「沒有待辦」
+const okCount = (p: TasksProjectRow) =>
+  p.tasks_status === "ok" && Number.isInteger(p.unfinished) && (p.unfinished as number) >= 0
+    ? (p.unfinished as number)
+    : null;
+
+function ProjectRow({ p, onSelect, t }: {
+  p: TasksProjectRow; onSelect: (path: string) => void; t: T;
+}) {
+  const n = okCount(p);
+  return (
+    <button className="tov-row" title={p.path} onClick={() => onSelect(p.path)}>
+      <span className="tov-name">{p.name}</span>
+      <span className="tov-count">
+        {n !== null ? (
+          <><Tally n={n} /><span className={n ? "tov-n" : "tov-n is-zero"}>{n}</span></>
+        ) : p.tasks_status === "absent" ? (
+          // 沒有 tasks/ 資料夾。**不是 0**——payload 分得開，不該被 UI 壓平成同一個數字
+          <span className="tov-unused">{t("overview.notUsing")}</span>
+        ) : (
+          // unavailable、認不得的狀態、以及 ok 但數字是壞的，全部走這一支。
+          // 刻意不寫 === "unavailable"：fail-safe 要落在警告這一側，否則異常會被說成「沒有待辦」
+          <span className="tov-una">{t("overview.unavailable")}</span>
+        )}
+      </span>
+      {/* 空白會讓人以為壞了。明講「沒設定」，也讓使用者知道這個欄位存在、可以設 */}
+      <span className={p.next_step ? "tov-next" : "tov-next is-none"}>
+        {p.next_step || t("overview.noNextStep")}
+      </span>
+    </button>
+  );
+}
+
+function Group({ label, n, children }: { label: string; n: number; children: ReactNode }) {
+  return (
+    <>
+      <div className="tov-sec">
+        <span className="tov-sec-lab">{label}</span>
+        <span className="tov-sec-line" />
+        <span className="tov-sec-n">{n}</span>
+      </div>
+      {children}
+    </>
   );
 }
 
@@ -33,10 +79,18 @@ export function TasksOverview({ data, failed, onSelect, t }: {
   if (data == null) return <>{head()}<div className="tasks-note">{t("overview.loading")}</div></>;
   if (data.projects.length === 0) return <>{head()}<div className="tasks-note">{t("overview.empty")}</div></>;
 
-  // 讀不到的專案 unfinished 是 null，不併進總數也不當成 0（design §6.3）：
-  // 它們單獨報「N 個讀不到」，否則整份摘要會把不可讀說成沒有。
-  const total = data.projects.reduce((s, p) => s + (p.unfinished ?? 0), 0);
-  const unreadable = data.projects.filter((p) => p.tasks_status === "unavailable").length;
+  // 「這個專案在總覽上有沒有話要說」。absent 但帶著 state.md 的下一步時仍然展開——
+  // scanner.py:52-54 刻意讓 absent 也抽得到 next_step，只看 tasks_status 會把那句話丟掉。
+  // 注意反面不成立：next_step 為空**不代表**這個專案沒動靜（read_next_step 讀不到、
+  // 沒有標記、標記落在前 20 行之外時都回空字串）。
+  const speaks = (p: TasksProjectRow) => p.tasks_status !== "absent" || Boolean(p.next_step);
+  const rows = data.projects.filter(speaks);
+  const chips = data.projects.filter((p) => !speaks(p));
+
+  // 讀不到的專案不併進總數也不當成 0（design §6.3）：它們單獨報「N 個讀不到」，
+  // 否則整份摘要會把不可讀說成沒有。兩個計數都走 okCount，壞值算進「需要注意」而不是「沒有待辦」
+  const total = data.projects.reduce((s, p) => s + (okCount(p) ?? 0), 0);
+  const unreadable = data.projects.filter((p) => okCount(p) === null && p.tasks_status !== "absent").length;
 
   return (
     <>
@@ -48,30 +102,26 @@ export function TasksOverview({ data, failed, onSelect, t }: {
           )}
         </span>,
       )}
-      <div className="tasks-overview">
-        <div className="tov-head">
-          <span className="tov-name">{t("overview.colProject")}</span>
-          <span className="tov-count">{t("overview.colUnfinished")}</span>
-          <span className="tov-next">{t("overview.colNextStep")}</span>
-        </div>
-        {data.projects.map((p) => (
-          <button className="tov-row" key={p.path} title={p.path} onClick={() => onSelect(p.path)}>
-            <span className="tov-name">{p.name}</span>
-            <span className="tov-count">
-              {p.tasks_status === "unavailable" ? (
-                // 讀不到不可畫成 0（design §6.3）：把不可讀顯示成「沒有」，正是這個功能存在的理由的反面
-                <span className="tov-una">{t("overview.unavailable")}</span>
-              ) : (
-                <>
-                  <Tally n={p.unfinished ?? 0} />
-                  <span className={p.unfinished ? "tov-n" : "tov-n is-zero"}>{p.unfinished ?? 0}</span>
-                </>
-              )}
-            </span>
-            <span className="tov-next">{p.next_step}</span>
-          </button>
-        ))}
-      </div>
+      {rows.length > 0 && (
+        <Group label={t("overview.groupInUse")} n={rows.length}>
+          <div className="tasks-overview">
+            {rows.map((p) => <ProjectRow key={p.path} p={p} onSelect={onSelect} t={t} />)}
+          </div>
+        </Group>
+      )}
+      {chips.length > 0 && (
+        <Group label={t("overview.notUsing")} n={chips.length}>
+          <div className="tov-chips">
+            {chips.map((p) => (
+              // 只做導覽，沒有副作用。第二層顯示空清單＋輸入框，
+              // 資料夾要等使用者真的送出標題、sidecar 的 create_task 才逐層 mkdir
+              <button className="tov-chip" key={p.path} title={p.path} onClick={() => onSelect(p.path)}>
+                {p.name}
+              </button>
+            ))}
+          </div>
+        </Group>
+      )}
     </>
   );
 }
