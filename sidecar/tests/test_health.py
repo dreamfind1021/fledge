@@ -10,7 +10,7 @@ def test_health_returns_ok():
     # 用包含關係斷言，允許回應有額外 key（例如 claude_found）
     body = resp.json()
     assert body["ok"] is True
-    assert body["version"] == "1.1.0"
+    assert body["version"] == "1.2.0"
 
 
 def test_cors_headers_present():
