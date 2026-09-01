@@ -5,16 +5,13 @@ import {
   TaskConflictError, createTask, deleteTask, fetchTasks, fetchTasksOverview, updateTask,
   type TaskRow, type TasksListResponse, type TasksOverview as TasksOverviewData,
 } from "../lib/sidecar";
-import { TasksList } from "./TasksList";
+import { NEXT_STATUS, TasksList } from "./TasksList";
 import { TasksOverview } from "./TasksOverview";
 import "./Tasks.css";
 
 // 待辦面板（design §5）。兩層導覽：總覽 → 單一專案。
 // 所有 HTTP 一律經 src/lib/sidecar.ts 的 wrapper（plan §1.0）：直接 fetch 會漏掉
 // X-Fledge-Token，dev 看似正常、打包版整個死掉。
-// 點一下的循環（design §5.2）。三種狀態少到不需要下拉選單。
-const NEXT_STATUS: Record<string, string> = { todo: "doing", doing: "done", done: "todo" };
-
 export function Tasks({ port, isActive }: { port: number | null; isActive: boolean }) {
   const { t } = useTranslation("tasks");
   const [selected, setSelected] = useState<string | null>(null);
@@ -91,12 +88,16 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     return () => { cancelled = true; };
   }, [port, isActive, selected, reloadKey]);
 
+  // 第二層的標題是專案名。名字從已載入的總覽推導，不另存一份 state——
+  // 存兩份就會有一份過期，而且進到第二層的唯一入口就是總覽那一列。
+  const projectName = overview?.projects.find((p) => p.path === selected)?.name ?? t("tabTitle");
+
   return (
     <div className="tasks-root" data-testid="tasks-panel">
-      <div className="tasks-head"><h1>{t("tabTitle")}</h1></div>
       {selected == null
         ? <TasksOverview data={overview} failed={failed} onSelect={select} t={t} />
-        : <TasksList data={list} failed={failed} notice={notice} onBack={back} onCreate={create}
+        : <TasksList data={list} projectName={projectName} failed={failed} notice={notice}
+            onBack={back} onCreate={create}
             onCycle={cycle} onDelete={remove} onOpen={openInEditor} t={t} />}
     </div>
   );

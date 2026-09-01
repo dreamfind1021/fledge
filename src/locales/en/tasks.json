@@ -5,6 +5,8 @@
     "colProject": "Project",
     "colUnfinished": "Unfinished",
     "colNextStep": "Next step",
+    "summary": "{{n}} unfinished",
+    "summaryUnreadable": "{{n}} unreadable",
     "empty": "No projects yet",
     "unavailable": "Unreadable",
     "loading": "Loading…",
@@ -12,7 +14,9 @@
   },
   "list": {
     "back": "All projects",
-    "unfinished": "Unfinished",
+    "summary": "{{doing}} in progress · {{todo}} to do · {{done}} done",
+    "doing": "In progress",
+    "todo": "To do",
     "done": "Done",
     "empty": "No tasks in this project yet",
     "unavailable": "This project's tasks folder cannot be read",
@@ -49,7 +53,7 @@
   "a11y": {
     "expandDone": "Show done",
     "collapseDone": "Hide done",
-    "cycleStatus": "Change status",
-    "openInEditor": "Open the file in your editor"
+    "openInEditor": "Open the file in your editor",
+    "statusCycle": "{{current}}, change status to {{next}}"
   }
 }
