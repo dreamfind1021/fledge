@@ -3,7 +3,8 @@
    狀態記號同時就是切狀態的按鈕，三態用**輪廓**分（空心方／實心橘方／打勾），
    只有 doing 帶顏色——任何時刻進行中通常只有一兩張，讓它是清單上唯一亮起的東西。
    顏色只是加分，輪廓才是主要區別：只差顏色的話 doing 與 done 在色覺障礙或單色顯示下分不開。 */
-.tasks-root { height: 100%; overflow-y: auto; background: var(--bg); padding: 16px 24px 32px; }
+.tasks-root { height: 100%; overflow-y: auto; background: var(--bg); padding: 16px 24px 32px;
+  container-type: inline-size; container-name: tasks; }
 .tasks-note { color: var(--dim); font-size: 12.5px; padding: 18px 2px; }
 .tasks-note.is-error { color: var(--error); }
 /* C1：動作按鈕平常不顯形，鍵盤走到才亮——沒有這圈焦點框，Tab 使用者等於失去刪除與開檔 */
@@ -49,6 +50,23 @@
   font-size: 11.5px; font-family: var(--font-ui); color: var(--dim); background: var(--surface);
   border: 1px solid var(--border); border-radius: 14px; padding: 4px 11px; cursor: pointer; }
 .tov-chip:hover { color: var(--text); background: var(--hover); }
+
+/* ── 窄視窗的讓步 ──
+   實測（headless Chrome，2026-09-02，側邊欄展開 240px）：視窗 626px 時 .tov-next
+   縮到 0，**整欄文字無聲消失**；576px 時 .tasks-root 出現水平捲軸；520px 刻度被切掉。
+   .tov-name 180px 與 .tov-count 110px 都是 flex-shrink: 0，是捲軸的真正來源——
+   只把下一步移走只省下一個 gap 的 12px，所以名稱也要跟著讓。
+
+   用 container query 不用 media query：側邊欄可收合（240px → 56px），同一個視窗寬度
+   下主區會差 184px，viewport 的斷點會在錯的時機觸發。 */
+@container tasks (max-width: 440px) {
+  /* 下一步整條掉到第二行，資訊不再無聲消失 */
+  .tov-row { flex-wrap: wrap; row-gap: 3px; padding: 9px 12px; }
+  /* flex-basis 0 而不是 auto：auto 會讓長專案名索取自己的內容寬度，把計數擠到
+     下一行，計數的位置就隨名字長短跳動。基準 0 代表名稱只拿剩餘空間 */
+  .tov-name { width: auto; flex: 1 1 0; min-width: 80px; }
+  .tov-next { flex-basis: 100%; white-space: normal; }
+}
 
 /* ── 第二層 ── */
 .tasks-pane { display: flex; flex-direction: column; }
