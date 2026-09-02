@@ -29,7 +29,10 @@
   /* 表面/文字/結構 */
   --bg: #0C111B; --sidebar: #0F1623; --surface: #161F30; --surface-2: #1E2940;
   --hover: #1B2640; --active: #233152; --overlay: rgba(6,9,15,.62);
-  --text: #E7EAF0; --dim: #93A0B4; --faint: #5E6981;
+  --text: #E7EAF0; --dim: #93A0B4; --faint: #8590A6;   /* faint 2026-09-02 由 #5E6981 調亮：
+     舊值對 --bg 只有 3.43、對 --surface 3.00、對 --active 2.34，48 條文字規則全數低於
+     文字門檻 4.5:1，連 --active 上的圖示都不到非文字的 3:1。代價是與 --dim 的差距從
+     3.70 縮到 1.25，色階變平——這是知情的取捨，票 06。防線在 index.contrast.test.ts */
   --border: rgba(255,255,255,.08); --divider: rgba(255,255,255,.055);
   --win-radius: 12px; --row-radius: 8px; --tab-radius: 13px; --item-py: 7px;
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 46px rgba(0,0,0,.5);
