@@ -1,20 +1,22 @@
 import { ChevronRight, ChevronDown, Folder, File as FileIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useDraggable } from "@dnd-kit/core";
-import { openPath } from "@tauri-apps/plugin-opener";
-import type { DirEntry } from "../lib/sidecar";
+import { openFile, type DirEntry } from "../lib/sidecar";
 
 export function FileTreeNode({
   entry,
   depth,
   expanded,
   onToggle,
+  port,
   children,
 }: {
   entry: DirEntry;
   depth: number;
   expanded: boolean;
   onToggle: () => void;
+  // 開檔要經過 sidecar 驗 containment（票 01），所以這一層需要 port
+  port: number;
   children?: React.ReactNode;
 }) {
   const { t } = useTranslation("sidebar");
@@ -33,7 +35,7 @@ export function FileTreeNode({
         onClick={() => { if (entry.is_dir) onToggle(); }}
         onDoubleClick={() => {
           // 雙擊檔案用系統預設程式開啟；失敗 log 不靜默吞（CLAUDE.md §3.2）
-          if (!entry.is_dir) openPath(entry.path).catch((e) => console.error("[FileTree] 開啟失敗:", e));
+          if (!entry.is_dir) openFile(port, entry.path).catch((e) => console.error("[FileTree] 開啟失敗:", e));
         }}
       >
         {entry.is_dir ? (

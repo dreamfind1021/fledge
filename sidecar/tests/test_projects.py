@@ -272,3 +272,133 @@ def test_tree_kms_root_as_project_is_browsable(tree_setup):
     r = client.post("/api/projects/tree", json={"path": str(kms)})
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
+
+
+# ── 票 01：POST /api/open ─────────────────────────────────────────
+# 用編輯器打開的邊界從 Tauri capability 的 glob 移到這裡。
+# capability 的 `$HOME/**` 兩個方向都不對：放行整個家目錄（太寬），
+# 家目錄以外的 root 完全用不了（太窄）。這裡沿用檔案樹那套 is_within_any_root，
+# 兩個功能同一個邊界、單一來源。
+
+def _open_cfg(tmp_path: Path, monkeypatch, root: Path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        json.dumps({
+            "version": 1,
+            "roots": [{"path": str(root), "default_account": "work"}],
+            "accounts": {"work": {"config_dir": str(tmp_path / "cc"), "label": "工作"}},
+            "manual_projects": [], "project_overrides": {}, "ui": {"theme": "dark"},
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+
+
+def _spy(calls):
+    def run(argv, **kw):
+        calls.append(argv)
+        class R:
+            returncode = 0
+        return R()
+    return run
+
+
+def test_open_launches_file_inside_a_root(tmp_path: Path, monkeypatch):
+    from fledge_sidecar.routes import projects as route
+    root = tmp_path / "work"; (root / "proj").mkdir(parents=True)
+    target = root / "proj" / "note.md"; target.write_text("x", encoding="utf-8")
+    _open_cfg(tmp_path, monkeypatch, root)
+    calls: list = []
+    monkeypatch.setattr(route, "_run_open", _spy(calls))
+
+    resp = TestClient(create_app()).post("/api/open", json={"path": str(target)})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    # `--` 一定要在路徑前面：以 `-` 開頭的檔名否則會被 open 當成旗標
+    assert calls == [["open", "--", str(target.resolve())]]
+
+
+def test_open_refuses_a_path_outside_every_root(tmp_path: Path, monkeypatch):
+    """capability 的 `$HOME/**` 放行整個家目錄。這條就是它擋不住的東西。"""
+    from fledge_sidecar.routes import projects as route
+    root = tmp_path / "work"; root.mkdir()
+    outside = tmp_path / "elsewhere"; outside.mkdir()
+    target = outside / "secret.md"; target.write_text("x", encoding="utf-8")
+    _open_cfg(tmp_path, monkeypatch, root)
+    calls: list = []
+    monkeypatch.setattr(route, "_run_open", _spy(calls))
+
+    resp = TestClient(create_app()).post("/api/open", json={"path": str(target)})
+    assert resp.status_code == 403
+    assert calls == []                      # 擋下來就不可以 exec
+
+
+def test_open_resolves_symlink_before_checking_containment(tmp_path: Path, monkeypatch):
+    """先 resolve 再判 containment。順序反過來的話，root 裡的一條 symlink
+    就能指到外面，而檢查會過——這正是 capability 的 glob 擋不住的形狀。"""
+    from fledge_sidecar.routes import projects as route
+    root = tmp_path / "work"; root.mkdir()
+    outside = tmp_path / "elsewhere"; outside.mkdir()
+    real = outside / "secret.md"; real.write_text("x", encoding="utf-8")
+    link = root / "looks-innocent.md"; link.symlink_to(real)
+    _open_cfg(tmp_path, monkeypatch, root)
+    calls: list = []
+    monkeypatch.setattr(route, "_run_open", _spy(calls))
+
+    resp = TestClient(create_app()).post("/api/open", json={"path": str(link)})
+    assert resp.status_code == 403
+    assert calls == []
+
+
+def test_open_refuses_a_directory(tmp_path: Path, monkeypatch):
+    from fledge_sidecar.routes import projects as route
+    root = tmp_path / "work"; (root / "proj").mkdir(parents=True)
+    _open_cfg(tmp_path, monkeypatch, root)
+    calls: list = []
+    monkeypatch.setattr(route, "_run_open", _spy(calls))
+
+    resp = TestClient(create_app()).post("/api/open", json={"path": str(root / "proj")})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "not_file"
+    assert calls == []
+
+
+def test_open_reports_missing_without_execing(tmp_path: Path, monkeypatch):
+    from fledge_sidecar.routes import projects as route
+    root = tmp_path / "work"; root.mkdir()
+    _open_cfg(tmp_path, monkeypatch, root)
+    calls: list = []
+    monkeypatch.setattr(route, "_run_open", _spy(calls))
+
+    resp = TestClient(create_app()).post("/api/open", json={"path": str(root / "nope.md")})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "missing"
+    assert calls == []
+
+
+def test_open_rejects_a_relative_path(tmp_path: Path, monkeypatch):
+    from fledge_sidecar.routes import projects as route
+    root = tmp_path / "work"; root.mkdir()
+    _open_cfg(tmp_path, monkeypatch, root)
+    calls: list = []
+    monkeypatch.setattr(route, "_run_open", _spy(calls))
+
+    resp = TestClient(create_app()).post("/api/open", json={"path": "../../etc/passwd"})
+    assert resp.status_code == 400
+    assert calls == []
+
+
+def test_open_works_for_a_root_outside_home(tmp_path: Path, monkeypatch):
+    """capability 的 `$HOME/**` 讓家目錄以外的 root 完全用不了這個功能（票上的「太窄」）。
+    tmp_path 不在 $HOME 底下，這條就是那個缺口的回歸測試。"""
+    from fledge_sidecar.routes import projects as route
+    root = tmp_path / "external-disk"; (root / "p").mkdir(parents=True)
+    target = root / "p" / "a.md"; target.write_text("x", encoding="utf-8")
+    assert not str(root).startswith(str(Path.home()))
+    _open_cfg(tmp_path, monkeypatch, root)
+    calls: list = []
+    monkeypatch.setattr(route, "_run_open", _spy(calls))
+
+    resp = TestClient(create_app()).post("/api/open", json={"path": str(target)})
+    assert resp.status_code == 200
+    assert calls == [["open", "--", str(target.resolve())]]

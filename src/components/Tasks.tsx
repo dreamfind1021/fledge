@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { openPath } from "@tauri-apps/plugin-opener";
 import {
-  TaskConflictError, createTask, deleteTask, fetchTasks, fetchTasksOverview, updateTask,
+  TaskConflictError, createTask, deleteTask, fetchTasks, fetchTasksOverview, openFile, updateTask,
   type TaskRow, type TasksListResponse, type TasksOverview as TasksOverviewData,
 } from "../lib/sidecar";
 import { NEXT_STATUS, TasksList } from "./TasksList";
@@ -76,17 +75,21 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
       .catch(onActionError);
   }, [port, selected, onActionError]);
 
-  // 用編輯器打開（design §5.2）：走既有的 tauri-plugin-opener，FileTreeNode 已在用。
-  // path 由 sidecar 組，前端不拼 `.fledge/tasks` 這個佈局。
+  // 用編輯器打開（design §5.2）。path 由 sidecar 組，前端不拼 `.fledge/tasks` 這個佈局。
   //
-  // ⚠ 這條路徑需要 src-tauri/capabilities/default.json 裡那條**寫死 `.fledge` 字面值**的
-  // opener 白名單。Tauri 在 Unix 上 require_literal_leading_dot 預設為 true
-  // （tauri/src/scope/fs.rs:198-208，註解寫著 dotfiles are not supposed to be exposed
-  // by default on unix），所以既有的 `$HOME/**` **匹配不到** `.fledge/` 這種以點開頭的
-  // 路徑段。少了那條白名單，這裡會拋錯而畫面只顯示通用失敗訊息。
+  // 票 01 起改走 sidecar 的 POST /api/open，**不再用 Tauri 的 openPath**。
+  // capability 的白名單已一併移除，改回去會直接被拒。原因：glob 寫不出真正的邊界——
+  // `$HOME/**` 放行整個家目錄，又讓家目錄以外的 root 用不了；而且 Tauri 在 Unix 上
+  // require_literal_leading_dot 預設為 true，`$HOME/**` 連 `.fledge/` 都匹配不到，
+  // 當時得再補一條寫死點目錄的規則才會動。
   const openInEditor = useCallback((task: TaskRow) => {
-    openPath(task.path).catch(() => setNotice("list.actionError"));
-  }, []);
+    if (port == null) return;                    // sidecar 還沒起來，與其他三個 handler 同一套守衛
+    // 走 sidecar 而不是 Tauri 的 openPath：邊界要與檔案樹同一套（票 01）。
+    // status 非 ok（擋掉、檔案不見、平台不支援）也要報，否則使用者點了完全沒反應
+    openFile(port, task.path)
+      .then((r) => { if (r.status !== "ok") setNotice("list.actionError"); })
+      .catch(() => setNotice("list.actionError"));
+  }, [port]);
 
   useEffect(() => {
     if (port == null || !isActive) return;

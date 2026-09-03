@@ -9,13 +9,6 @@
     "core:default",
     "opener:default",
     "opener:allow-reveal-item-in-dir",
-    {
-      "identifier": "opener:allow-open-path",
-      "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$HOME/**/.fledge/tasks/*.md" }
-      ]
-    },
     "dialog:allow-open",
     "clipboard-manager:allow-read-text"
   ]

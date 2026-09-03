@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -82,3 +84,59 @@ def project_tree(body: TreeBody):
         return {"path": real, "entries": [], "status": "denied"}
     except OSError:
         return {"path": real, "entries": [], "status": "missing"}
+
+
+class OpenBody(BaseModel):
+    path: str
+
+
+def _run_open(argv: list[str]) -> subprocess.CompletedProcess:
+    """實際 exec。獨立成函式是為了讓測試能攔下來斷言「擋掉的路徑真的沒有 exec」——
+    只斷言 HTTP 回 403 證明不了那件事。"""
+    return subprocess.run(argv, check=False)
+
+
+@router.post("/api/open")
+def open_file(body: OpenBody):
+    """用系統預設程式打開一個檔案。**這是「用編輯器打開」的唯一入口**（票 01）。
+
+    為什麼在 sidecar 而不是前端直接呼叫 Tauri 的 opener：capability 只能寫靜態 glob，
+    寫出來的邊界與真正的邊界兩個方向都對不上——`$HOME/**` 放行整個家目錄（太寬），
+    又讓家目錄以外的 root 完全用不了（太窄）。containment 的真相住在 config，
+    只有 sidecar 讀得到，所以判斷要在這裡做。
+
+    邊界與檔案樹**共用同一套** `is_within_any_root`（見 `project_tree`）：
+    使用者自己的 roots ∪ manual。規則寫兩份必然漂移。
+
+    順序固定：expand → realpath → 限 allowed roots。**resolve 一定要在 containment 之前**——
+    反過來的話，root 裡的一條 symlink 就能指到外面而檢查照樣過。
+    """
+    try:
+        abs_ = expand_and_validate(body.path)
+    except ValueError:
+        raise HTTPException(status_code=400, detail={"status": "invalid"})
+
+    real = resolve_best_effort(abs_)
+    config = AppConfig.load()
+    roots = [resolve_best_effort(r["path"]) for r in config.roots]
+    roots += [resolve_best_effort(m["path"]) for m in config.manual_projects]
+    if not is_within_any_root(real, roots):
+        raise HTTPException(status_code=403, detail={"status": "forbidden"})
+
+    target = Path(real)
+    if not target.exists():
+        return {"path": real, "status": "missing"}
+    # 只開一般檔案。目錄、fifo、device 都不是這個功能的用途，
+    # 而 `open` 對它們的行為各不相同（目錄會開 Finder）
+    if not target.is_file():
+        return {"path": real, "status": "not_file"}
+
+    if sys.platform != "darwin":
+        # 目前只出貨 macOS。不猜其他平台的指令——猜錯會是靜默的錯誤行為
+        return {"path": real, "status": "unsupported_platform"}
+    # `--` 一定要在路徑前面：以 `-` 開頭的檔名否則會被 open 當成旗標。
+    # list 形式、不經 shell，路徑裡有空白或引號都不會被重新解析
+    proc = _run_open(["open", "--", real])
+    if proc.returncode != 0:
+        return {"path": real, "status": "failed"}
+    return {"path": real, "status": "ok"}

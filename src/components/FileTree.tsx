@@ -50,7 +50,7 @@ export function FileTree({ port, rootPath }: { port: number; rootPath: string })
       );
     }
     return node.entries.map((e) => (
-      <FileTreeNode key={e.path} entry={e} depth={depth} expanded={expanded.has(e.path)} onToggle={() => toggle(e.path)}>
+      <FileTreeNode key={e.path} entry={e} depth={depth} expanded={expanded.has(e.path)} onToggle={() => toggle(e.path)} port={port}>
         {e.is_dir && expanded.has(e.path) ? renderLevel(e.path, depth + 1) : null}
       </FileTreeNode>
     ));

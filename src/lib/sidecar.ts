@@ -1098,6 +1098,24 @@ export interface TasksOverview {
   permission_error: boolean;
 }
 
+/**
+ * 用系統預設程式打開一個檔案。**不要改回 Tauri 的 `openPath`**（票 01）：
+ * capability 只能寫靜態 glob，`$HOME/**` 放行整個家目錄又擋掉家目錄以外的 root，
+ * 兩個方向都與真正的邊界對不上。containment 的真相住在 config，只有 sidecar 讀得到。
+ *
+ * 回 `status`：ok／missing／not_file／failed／unsupported_platform；
+ * 403 是路徑不在使用者的 roots 底下、400 是路徑本身不合法。
+ */
+export async function openFile(port: number, path: string): Promise<{ status: string }> {
+  const resp = await fetch(`${base(port)}/api/open`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!resp.ok) throw new Error(`openFile failed: ${resp.status}`);
+  return (await resp.json()) as { status: string };
+}
+
 /** 第一層總覽：每個已知專案的未完成條數 ＋ tasks_status。 */
 export async function fetchTasksOverview(port: number): Promise<TasksOverview> {
   const resp = await fetch(`${base(port)}/tasks/overview`, { headers: authHeaders() });

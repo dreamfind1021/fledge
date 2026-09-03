@@ -11,9 +11,7 @@ const fetchTasks = vi.fn<(port: number, project: string) => Promise<TasksListRes
 const createTask = vi.fn<(port: number, project: string, title: string) => Promise<TaskRow>>();
 const updateTask = vi.fn<(p: number, proj: string, name: string, status: string, fp: string) => Promise<TaskRow>>();
 const deleteTask = vi.fn<(p: number, proj: string, name: string, fp: string) => Promise<void>>();
-const openPath = vi.fn<(p: string) => Promise<void>>();
-
-vi.mock("@tauri-apps/plugin-opener", () => ({ openPath: (p: string) => openPath(p) }));
+const openFile = vi.fn<(port: number, p: string) => Promise<{ status: string }>>();
 
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
@@ -22,6 +20,7 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   createTask: (port: number, project: string, title: string) => createTask(port, project, title),
   updateTask: (p: number, proj: string, n: string, st: string, fp: string) => updateTask(p, proj, n, st, fp),
   deleteTask: (p: number, proj: string, n: string, fp: string) => deleteTask(p, proj, n, fp),
+  openFile: (port: number, path: string) => openFile(port, path),
 }));
 
 const proj = (over: Partial<TasksOverview["projects"][number]> = {}) => ({
@@ -45,7 +44,7 @@ describe("Tasks 面板", () => {
     createTask.mockResolvedValue(ticket({ name: "02-b.md", number: 2, title: "新的" }));
     updateTask.mockResolvedValue(ticket({ status: "doing", fingerprint: "f2" }));
     deleteTask.mockResolvedValue(undefined);
-    openPath.mockResolvedValue(undefined);
+    openFile.mockResolvedValue({ status: "ok" });
   });
   afterEach(cleanup);   // vitest 未開 globals → testing-library 不會自動 cleanup
 
@@ -435,9 +434,20 @@ describe("Tasks 面板", () => {
     await waitFor(() => expect(fetchTasks).toHaveBeenCalledTimes(2));
   });
 
+  // 票 01 起走 sidecar 的 /api/open，不再用 Tauri 的 openPath——
+  // capability 的白名單已移除，改回去會被拒
   it("用編輯器打開走 sidecar 給的絕對路徑，前端不拼路徑", async () => {
     await openList();
     fireEvent.click(screen.getByLabelText(en.a11y.openInEditor));
-    await waitFor(() => expect(openPath).toHaveBeenCalledWith("/p/a/.fledge/tasks/01-a.md"));
+    await waitFor(() => expect(openFile).toHaveBeenCalledWith(1234, "/p/a/.fledge/tasks/01-a.md"));
+  });
+
+  // sidecar 擋下來（403）或檔案不見時 fetch 本身是成功的，只有 status 不是 ok。
+  // 不看 status 的話使用者點了完全沒反應，也不知道為什麼
+  it("sidecar 回非 ok 的 status 時顯示錯誤，不是靜靜沒反應", async () => {
+    openFile.mockResolvedValue({ status: "forbidden" });
+    await openList();
+    fireEvent.click(screen.getByLabelText(en.a11y.openInEditor));
+    await waitFor(() => expect(screen.getByText(en.list.actionError)).toBeTruthy());
   });
 });
