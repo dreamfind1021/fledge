@@ -110,6 +110,23 @@ def open_file(body: OpenBody):
 
     順序固定：expand → realpath → 限 allowed roots。**resolve 一定要在 containment 之前**——
     反過來的話，root 裡的一條 symlink 就能指到外面而檢查照樣過。
+
+    ## 已知的殘餘風險：TOCTOU（2026-09-03 Codex 審查 high，知情接受）
+
+    我們驗的是**路徑字串**，然後把同一個字串交給 `open`，由它自己重新解析一次。
+    驗完到 exec 之間，能寫入該目錄的人可以把目標換成指向 roots 外的 symlink，
+    `open` 會跟著走。**這個窗口關不掉**：`open` 只吃路徑、不吃 fd，
+    釘住的 fd 交不出去（`/dev/fd/N` 沒有副檔名，選不到正確的預設程式）。
+
+    為什麼接受：
+    1. **不是本次引入的**。改之前是 Tauri capability 的 scope 檢查，同樣是比對路徑字串
+       之後由 OS 開啟同一個路徑，同一個窗口一直都在。這次是把邊界搬到讀得到 config 的
+       地方，不是把它變差。
+    2. 前提是攻擊者**已經能寫入使用者自己的 roots**。到那個位置的人本來就能直接放一個
+       `.command` 在專案裡等使用者點——繞過 containment 換不到新的能力。
+
+    **不要在別處把這裡描述成「已擋住 symlink」**。擋住的是「檢查當下就是 symlink」那種，
+    擋不住「檢查之後才被換掉」那種。兩者的保證等級不同。
     """
     try:
         abs_ = expand_and_validate(body.path)

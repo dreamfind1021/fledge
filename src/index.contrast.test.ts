@@ -69,30 +69,80 @@ describe("nightfall 的文字色階", () => {
 
 // 上面那組從 token 值算對比，**算不出 opacity 疊出來的實際顏色**。
 // 2026-09-02 票 06 把 --faint 調到 5.88，但 .tk-date 與 .splash-ver 有 opacity: .75，
-// 實際只有 3.80——token 測試全綠、文字仍然不合格。所以「文字不得用 opacity 淡化」
-// 必須自己是一條規則，否則上面那組會給出安心的假象。
+// 實際只有 3.80——token 測試全綠、文字仍然不合格。
 //
-// 只擋 color：背景的半透明（.ob-glow、.splash-glow、.splash-dots）是刻意的柔光，
-// 不承載對比，一起擋會是誤判。Tasks.contrast.test.ts 另有一條擋 .tk-mark 的 background。
-describe("文字不得用 opacity 淡化", () => {
-  it("宣告了 color 的規則不得同時有 0 與 1 之間的 opacity", () => {
+// 這條的第一版只看「同一條規則裡同時宣告 color 與 opacity」，被 Codex 抓到漏洞：
+// **祖先的 opacity 會淡化整個子樹**，而祖先那條規則本身沒有 color。實例是
+// .b4-card.is-na（opacity .55）裡的 .b4-card-desc（--dim），實際對比 2.66。
+//
+// 所以改成白名單：**任何** 0 與 1 之間的 opacity 都要在下面列名，理由寫在旁邊。
+// 黑名單擋不住沒想到的形狀，白名單會逼新的用法來這裡登記。
+const KEYFRAMES = /@keyframes[^{]*\{/g;
+const stripKeyframes = (css: string) => {
+  let out = css;
+  for (;;) {
+    KEYFRAMES.lastIndex = 0;
+    const m = KEYFRAMES.exec(out);
+    if (!m) return out;
+    let depth = 1, i = m.index + m[0].length;
+    while (i < out.length && depth > 0) {
+      if (out[i] === "{") depth += 1;
+      else if (out[i] === "}") depth -= 1;
+      i += 1;
+    }
+    out = out.slice(0, m.index) + out.slice(i);   // 動畫步驟用 opacity 是正常的
+  }
+};
+
+// 明列允許用 opacity 淡化的選擇器。每一條都要有理由。
+const ALLOWED_OPACITY: Record<string, string> = {
+  // 純裝飾的背景光暈，不承載任何資訊
+  ".ob-glow": "裝飾光暈",
+  ".ob-glow-two": "裝飾光暈",
+  ".splash-glow--warm": "裝飾光暈",
+  ".splash-glow--cool": "裝飾光暈",
+  // 狀態指示點與刻度：非文字元件，門檻 3:1
+  ".tov-marks i": "總覽刻度，實際 3.30 過 3:1",
+  ".tab-dot.is-connecting": "分頁狀態點，實際 3.77 過 3:1",
+  ".tab-dot.is-offline": "分頁狀態點 opacity .85，過 3:1",
+  // ↓ 這兩條實際低於 3:1，已知且另開票 09 處理。列在這裡是為了不讓它們被誤認為安全
+  ".splash-dots i": "載入動畫的呼吸點，谷值 1.43 低於 3:1 —— 票 09",
+  ".tab-dot.is-ended": "分頁狀態點，實際 2.49 低於 3:1 —— 票 09",
+};
+// WCAG 1.4.3 明文豁免停用（inactive）的控制項，不必逐條登記
+const DISABLED = /:disabled|\.is-disabled/;
+
+describe("不得用 opacity 淡化", () => {
+  it("所有 0 與 1 之間的 opacity 都要在白名單裡", () => {
     const offenders: string[] = [];
     let scanned = 0;
     for (const [path, css] of Object.entries(RAW)) {
-      const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
+      const stripped = stripKeyframes(css.replace(/\/\*[\s\S]*?\*\//g, ""));
       for (const m of stripped.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
-        const body = m[2];
-        if (!/(?:^|;)\s*color\s*:/.test(body)) continue;
+        const op = m[2].match(/(?:^|;)\s*opacity\s*:\s*([\d.]+)/);
+        if (!op) continue;
+        const v = Number(op[1]);
+        if (v <= 0 || v >= 1) continue;          // 0 與 1 是顯示／隱藏，不是淡化
         scanned += 1;
-        const op = body.match(/(?:^|;)\s*opacity\s*:\s*([\d.]+)/);
-        // 0 與 1 是顯示／隱藏（.splash-wait 的淡入），不是淡化
-        if (op && Number(op[1]) > 0 && Number(op[1]) < 1) {
-          offenders.push(`${path} ${m[1].trim()} → opacity ${op[1]}`);
-        }
+        const sel = m[1].trim().replace(/\s+/g, " ");
+        if (DISABLED.test(sel) || sel in ALLOWED_OPACITY) continue;
+        offenders.push(`${path} ${sel} → opacity ${op[1]}`);
       }
     }
-    // 掃到 0 條規則會讓迴圈空轉而測試全綠——先確認真的掃到東西
-    expect(scanned).toBeGreaterThan(50);
+    // 掃到 0 條會讓迴圈空轉而測試全綠——先確認 regex 真的有命中
+    expect(scanned).toBeGreaterThan(20);
     expect(offenders).toEqual([]);
+  });
+
+  it("白名單本身不得有死條目", () => {
+    const all = Object.values(RAW)
+      .map((css) => stripKeyframes(css.replace(/\/\*[\s\S]*?\*\//g, "")))
+      .flatMap((css) => [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+        .filter((m) => /(?:^|;)\s*opacity\s*:\s*0?\.\d+/.test(m[2]))
+        .map((m) => m[1].trim().replace(/\s+/g, " ")));
+    // 選擇器改名或規則刪掉之後，白名單條目會變成沒人管的殘留而看起來還在保護什麼
+    for (const sel of Object.keys(ALLOWED_OPACITY)) {
+      expect(all, `白名單的 ${sel} 在 CSS 裡已經不存在`).toContain(sel);
+    }
   });
 });
