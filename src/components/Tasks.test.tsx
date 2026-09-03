@@ -25,7 +25,7 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
 }));
 
 const proj = (over: Partial<TasksOverview["projects"][number]> = {}) => ({
-  path: "/p/a", name: "a", account: "work", unfinished: 1,
+  path: "/p/a", name: "a", account: "work", unfinished: 1, doing: 0,
   tasks_status: "ok" as const, next_step: "", ...over,
 });
 // 狀態按鈕的可及名稱是組出來的：「現在是什麼，點下去變什麼」
@@ -162,6 +162,39 @@ describe("Tasks 面板", () => {
     const cell = container.querySelector('.tov-row[title="/p/g"] .tov-next.is-none');
     expect(cell).toBeTruthy();                        // 先確認節點存在，不要讓 undefined 比 undefined
     expect(cell!.textContent).toBe(en.overview.noNextStep);
+  });
+
+  // 票 02：刻度分狀態上色。doing 是 unfinished 的子集合，只決定前幾根上色
+  it("進行中的張數畫成上色刻度，其餘維持一般刻度", async () => {
+    fetchTasksOverview.mockResolvedValue({
+      projects: [proj({ path: "/p/a", name: "有進行中", unfinished: 5, doing: 2 })],
+      permission_error: false,
+    });
+    const { container } = render(<Tasks port={1234} isActive />);
+    await waitFor(() => expect(screen.getByText("有進行中")).toBeTruthy());
+    const marks = [...container.querySelectorAll(".tov-marks i")];
+    expect(marks).toHaveLength(5);
+    expect(marks.filter((m) => m.classList.contains("is-doing"))).toHaveLength(2);
+    // 上色的必須排在前面，否則兩色會交錯而看不出比例
+    expect(marks.slice(0, 2).every((m) => m.classList.contains("is-doing"))).toBe(true);
+  });
+
+  // runtime JSON 沒有驗證。doing 壞掉時退回「全部一般刻度」——
+  // 刻度總數來自 unfinished，仍然可信，只有拆分不可信，不必整列降級成警告
+  it.each([
+    ["null", null],
+    ["超過 unfinished", 9],
+    ["負數", -1],
+    ["不是整數", 1.5],
+  ])("doing 是 %s 時不上色，刻度總數不受影響", async (_label, doing) => {
+    fetchTasksOverview.mockResolvedValue({
+      projects: [proj({ path: "/p/a", name: "壞的 doing", unfinished: 3, doing: doing as number })],
+      permission_error: false,
+    });
+    const { container } = render(<Tasks port={1234} isActive />);
+    await waitFor(() => expect(screen.getByText("壞的 doing")).toBeTruthy());
+    expect(container.querySelectorAll(".tov-marks i")).toHaveLength(3);
+    expect(container.querySelectorAll(".tov-marks i.is-doing")).toHaveLength(0);
   });
 
   it("點 chip 只進入該專案，不建立任何東西", async () => {

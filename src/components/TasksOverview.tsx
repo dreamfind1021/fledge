@@ -8,14 +8,29 @@ type T = (k: string, o?: Record<string, unknown>) => string;
 // 同理刻度也不分狀態上色：payload 沒有 doing/todo 的拆分，上色等於畫一個後端沒說的事實。
 const TALLY_CAP = 12;
 
-function Tally({ n }: { n: number }) {
+function Tally({ n, doing }: { n: number; doing: number }) {
+  // n 超過 CAP 時刻度本來就是近似（封頂 12 根）。上色的根數要同比例縮，
+  // 否則 20 張裡 15 張進行中會畫成「12 根全上色」＝ 看起來 100%。
+  // doing 不是 0 就至少留 1 根：有進行中卻一根都沒上色，等於說「沒人在動」
+  const shown = Math.min(n, TALLY_CAP);
+  const lit = doing === 0 ? 0 : Math.max(1, Math.round((doing / n) * shown));
   // 純視覺編碼，語意由旁邊的數字承擔（螢幕報讀讀數字就好，不需要聽 12 根刻度）
   return (
     <span className="tov-marks" aria-hidden="true">
-      {Array.from({ length: Math.min(n, TALLY_CAP) }, (_, i) => <i key={i} />)}
+      {Array.from({ length: shown }, (_, i) => (
+        <i key={i} className={i < lit ? "is-doing" : undefined} />
+      ))}
     </span>
   );
 }
+
+// 進行中的張數。runtime JSON 沒有驗證，壞值一律退回 0＝不上色——
+// 刻度總數來自 unfinished 仍然可信，**只有拆分不可信**，不必把整列降級成警告
+// （那是 tasks_status 壞掉時才做的事）。doing 必須是 0 到 n 之間的整數
+const doingCount = (p: TasksProjectRow, n: number) =>
+  Number.isInteger(p.doing) && (p.doing as number) >= 0 && (p.doing as number) <= n
+    ? (p.doing as number)
+    : 0;
 
 // 只有非負整數才是真的條數。runtime JSON 沒有驗證，壞值不可被 ?? 0 壓成「沒有待辦」
 const okCount = (p: TasksProjectRow) =>
@@ -32,7 +47,7 @@ function ProjectRow({ p, onSelect, t }: {
       <span className="tov-name">{p.name}</span>
       <span className="tov-count">
         {n !== null ? (
-          <><Tally n={n} /><span className={n ? "tov-n" : "tov-n is-zero"}>{n}</span></>
+          <><Tally n={n} doing={doingCount(p, n)} /><span className={n ? "tov-n" : "tov-n is-zero"}>{n}</span></>
         ) : p.tasks_status === "absent" ? (
           // 沒有 tasks/ 資料夾。**不是 0**——payload 分得開，不該被 UI 壓平成同一個數字
           <span className="tov-unused">{t("overview.notUsing")}</span>

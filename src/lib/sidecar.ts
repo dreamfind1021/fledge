@@ -1059,6 +1059,12 @@ export interface TasksProjectRow {
    * 分得開的是 `tasks_status`（見 `TasksOverview.tsx` 的 `okCount`）
    */
   unfinished: number | null;
+  /**
+   * 其中「進行中」的張數，是 `unfinished` 的**子集合**（票 02，總覽刻度上色用）。
+   * 與 `unfinished` 同一套規則：`ok` 是實際張數、`absent` 是 0、`unavailable` 是 null。
+   * 讀不懂 status 的票 fallback 成 todo，**不計入這裡**——算進來等於宣稱有人在動它
+   */
+  doing: number | null;
   tasks_status: TasksStatus;
   /** 該專案 .fledge/state.md 前 20 行抽出的「下一步」；沒有就是空字串 */
   next_step: string;

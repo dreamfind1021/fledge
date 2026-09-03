@@ -221,12 +221,35 @@ def scan_tasks(tasks_fd: int) -> list[dict[str, Any]]:
     return rows
 
 
-def count_unfinished(tasks_fd: int) -> int:
+@dataclass(frozen=True)
+class OpenCounts:
+    """未完成票的計數。`doing` 是 `unfinished` 的**子集合**，不是另一個維度——
+    總覽的刻度總數仍然是 `unfinished`，`doing` 只決定其中幾根要上色。
+
+    分開回兩個數而不是回 `todo`：前端畫刻度需要的是「總共幾根」與「其中幾根進行中」。
+    多回一個 `todo` 會有三個數字互相牽制，而 runtime JSON 沒有驗證——
+    `doing + todo != unfinished` 時前端得決定要信哪個，多一組不一致換不到任何東西。"""
+
+    unfinished: int
+    doing: int
+
+
+def count_open(tasks_fd: int) -> OpenCounts:
     """未完成條數 ＝ effective status 為 `todo` 或 `doing` 的票數（design §5.1）。
 
     讀不到內容的票依 §6.1 的規則——`status` 本身判不出來 → fallback `todo` → 計入未完成。
-    票不會因為讀不懂就從計數裡消失（契約 3）。"""
-    return sum(1 for row in scan_tasks(tasks_fd) if row["status"] in ("todo", "doing"))
+    票不會因為讀不懂就從計數裡消失（契約 3）。
+
+    **fallback 的票只進 `unfinished`、不進 `doing`**：把它算成進行中，等於在畫面上宣稱
+    「有人在動這張票」，而我們連它的 status 都沒讀出來。同一次掃描數完兩個數，
+    不多跑一趟 I/O。"""
+    unfinished = doing = 0
+    for row in scan_tasks(tasks_fd):
+        if row["status"] in ("todo", "doing"):
+            unfinished += 1
+            if row["status"] == "doing":
+                doing += 1
+    return OpenCounts(unfinished=unfinished, doing=doing)
 
 
 def read_next_step(fledge_fd: int | None) -> str:
@@ -257,24 +280,31 @@ def build_overview(config: AppConfig) -> dict[str, Any]:
     不隱藏 0 條的專案——隱藏了使用者就不知道那個專案可以開票。
     單一專案 resolver 失敗只影響那一列的 `tasks_status`，整體不報錯（design §7.1）。
 
-    `unfinished` 在非 `ok` 時是 `None` 而不是 0：`unavailable` 與「真的沒有待辦」必須
-    分得開（design §6.3），回 0 會讓前端無從分辨。
+    `unfinished` 與 `doing` 在非 `ok` 時是 `None` 而不是 0：`unavailable` 與「真的沒有待辦」
+    必須分得開（design §6.3），回 0 會讓前端無從分辨。`absent` 兩者都是 0。
+
+    `doing` 是 `unfinished` 的子集合，給總覽的刻度上色用（票 02）。
     """
     projects, permission_error = scan_all(config)
     rows: list[dict[str, Any]] = []
     for entry in projects:
         with open_tasks_dir(entry["path"], config, projects=projects) as td:
             if td.status == STATUS_OK and td.fd is not None:
-                unfinished: int | None = count_unfinished(td.fd)
+                counts = count_open(td.fd)
+                unfinished: int | None = counts.unfinished
+                doing: int | None = counts.doing
             elif td.status == STATUS_ABSENT:
-                unfinished = 0
+                unfinished = doing = 0
             else:
-                unfinished = None
+                # 兩個欄位同一套規則：讀不到都是 None，不是 0（design §6.3）。
+                # 只讓其中一個回 None，前端就得為每個欄位各記一套判斷
+                unfinished = doing = None
             rows.append({
                 "path": entry["path"],
                 "name": entry.get("name", ""),
                 "account": entry.get("account", ""),
                 "unfinished": unfinished,
+                "doing": doing,
                 "tasks_status": td.status,
                 "next_step": read_next_step(td.fledge_fd),
             })

@@ -110,7 +110,8 @@ def test_counts_todo_and_doing_but_not_done(tmp_path):
     (tasks / "02-b.md").write_text(TICKET.format(status="doing", title="b"), encoding="utf-8")
     (tasks / "03-c.md").write_text(TICKET.format(status="done", title="c"), encoding="utf-8")
     with scanner.open_tasks_dir(str(proj), config) as td:
-        assert scanner.count_unfinished(td.fd) == 2
+        counts = scanner.count_open(td.fd)
+        assert (counts.unfinished, counts.doing) == (2, 1)
 
 
 def test_unparsable_ticket_still_counts(tmp_path):
@@ -122,7 +123,7 @@ def test_unparsable_ticket_still_counts(tmp_path):
     (tasks / "01-garbage.md").write_bytes(b"\x00\xff\xfe not markdown at all")
     (tasks / "02-done.md").write_text(TICKET.format(status="done", title="d"), encoding="utf-8")
     with scanner.open_tasks_dir(str(proj), config) as td:
-        assert scanner.count_unfinished(td.fd) == 1
+        assert scanner.count_open(td.fd).unfinished == 1
 
 
 def test_non_md_and_directories_are_not_tickets(tmp_path):
@@ -133,7 +134,7 @@ def test_non_md_and_directories_are_not_tickets(tmp_path):
     (tasks / "02-real.md").write_text(TICKET.format(status="todo", title="r"), encoding="utf-8")
     with scanner.open_tasks_dir(str(proj), config) as td:
         assert scanner.list_task_files(td.fd) == ["02-real.md"]
-        assert scanner.count_unfinished(td.fd) == 1
+        assert scanner.count_open(td.fd).unfinished == 1
 
 
 # ── T2：重複編號、下一步、逐檔隔離 ──────────────────────────────
@@ -419,7 +420,7 @@ def test_reading_a_fifo_does_not_block(tmp_path):
     with scanner.open_tasks_dir(str(proj), config) as td:
         assert scanner.read_task_bytes(td.fd, "01-管道.md") is None   # 立刻回，不卡住
         assert scanner.list_task_files(td.fd) == ["02-正常.md"]       # FIFO 本來就不算票
-        assert scanner.count_unfinished(td.fd) == 1                   # 其他票不受影響
+        assert scanner.count_open(td.fd).unfinished == 1              # 其他票不受影響
 
 
 def _ticket_with_body(tasks, name="01-a.md"):
@@ -479,3 +480,50 @@ def test_status_update_does_not_change_file_mode(tmp_path):
         scanner.update_status(td.fd, "01-a.md", status="doing",
                               expected_fingerprint=row["fingerprint"])
     assert stat.S_IMODE(os.stat(tasks / "01-a.md").st_mode) == 0o600
+
+
+# ── 票 02：doing / unfinished 分開計數（總覽刻度要能分狀態上色）────────────
+
+def test_count_open_separates_doing_from_unfinished(tmp_path):
+    """`doing` 是 `unfinished` 的子集合，不是另一個維度——刻度總數仍是 `unfinished`。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    for i, st in enumerate(["todo", "doing", "doing", "done", "todo"], start=1):
+        (tasks / f"{i:02d}-x.md").write_text(TICKET.format(status=st, title=f"t{i}"), encoding="utf-8")
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        counts = scanner.count_open(td.fd)
+        assert counts.unfinished == 4          # todo 2 ＋ doing 2，done 不算
+        assert counts.doing == 2
+        assert counts.doing <= counts.unfinished
+
+
+def test_unparsable_ticket_counts_as_todo_not_doing(tmp_path):
+    """讀不懂的票 fallback 成 todo（design §6.1）。**不可以進 doing**——
+    那會在畫面上宣稱「有人在動這張票」，而我們其實連它的 status 都沒讀出來。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    (tasks / "01-garbage.md").write_bytes(b"\x00\xff\xfe not markdown at all")
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        counts = scanner.count_open(td.fd)
+        assert counts.unfinished == 1
+        assert counts.doing == 0
+
+
+def test_overview_row_carries_doing(tmp_path):
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    (tasks / "01-a.md").write_text(TICKET.format(status="doing", title="a"), encoding="utf-8")
+    (tasks / "02-b.md").write_text(TICKET.format(status="todo", title="b"), encoding="utf-8")
+    row = next(r for r in scanner.build_overview(config)["projects"] if r["path"] == str(proj))
+    assert row["unfinished"] == 2
+    assert row["doing"] == 1
+
+
+def test_absent_project_reports_zero_doing(tmp_path):
+    """`absent` 的 `unfinished` 是 0，`doing` 也必須是 0——不是 None。
+    兩個欄位的規則要一致，否則前端得為每個欄位各記一套。"""
+    config, proj = _setup(tmp_path)          # 不建 .fledge/tasks/ ＝ absent
+    row = next(r for r in scanner.build_overview(config)["projects"] if r["path"] == str(proj))
+    assert row["tasks_status"] == scanner.STATUS_ABSENT
+    assert row["unfinished"] == 0
+    assert row["doing"] == 0

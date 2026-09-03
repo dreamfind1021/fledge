@@ -28,6 +28,11 @@
 /* 刻度：一根＝一張票。沒有分母就不畫進度條（payload 沒有總數，比例只能是編的） */
 .tov-marks { display: flex; align-items: center; gap: 2px; height: 11px; }
 .tov-marks i { display: block; width: 3px; height: 11px; border-radius: 1px; background: var(--dim); opacity: .6; }
+/* 進行中的刻度（票 02）。opacity 要蓋回 1——基準那條的 .6 會把橘色一起拉暗，
+   與一般刻度的分辨度從 2.68 再往下掉。**實測 2.68，低於非文字的 3:1**：
+   橘色配深底時兩排刻度不可能同時都過門檻（要互差 3 倍，其中一個就會低於對背景的 3 倍），
+   2.68 是橘色能做到的上限。使用者看過灰階模擬後決定接受 */
+.tov-marks i.is-doing { background: var(--primary); opacity: 1; }
 .tov-n { font-family: var(--font-mono); font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
 .tov-n.is-zero { color: var(--faint); }
 /* 讀不到：用 warning 色與文字，與「0 條」在視覺上就分得開 */
