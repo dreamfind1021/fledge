@@ -120,7 +120,7 @@
 .tk-src { flex-shrink: 0; min-width: 18px; text-align: right; font-size: 10px; font-weight: 700; letter-spacing: .03em; }
 .tk-src.is-ai { color: var(--ai); }
 .tk-src.is-me { color: var(--session); }
-.tk-date { flex-shrink: 0; font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); opacity: .75; font-variant-numeric: tabular-nums; }
+.tk-date { flex-shrink: 0; font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
 /* 面板變窄時日期先讓位——標題比「這條積多久了」重要 */
 @media (max-width: 900px) { .tk-date { display: none; } }
 

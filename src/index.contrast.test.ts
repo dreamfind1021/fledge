@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 //
 // 只涵蓋 nightfall。daylight 尚未出貨（`--faint: #AEB4BE` 對它的 --bg 只有 1.94，
 // 連非文字的 3:1 都不到），那套色階需要自己的一次視覺審查，見票 07。
-const RAW = import.meta.glob("/src/index.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+const RAW = import.meta.glob("/src/**/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 const indexCss = (() => {
   const t = RAW["/src/index.css"];
   if (typeof t !== "string") throw new Error("glob 沒讀到 index.css");   // 讀不到要炸，不能靜默跳過
@@ -64,5 +64,35 @@ describe("nightfall 的文字色階", () => {
     expect(text).toBeGreaterThan(dim);
     expect(dim).toBeGreaterThan(faint);
     expect(dim - faint).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// 上面那組從 token 值算對比，**算不出 opacity 疊出來的實際顏色**。
+// 2026-09-02 票 06 把 --faint 調到 5.88，但 .tk-date 與 .splash-ver 有 opacity: .75，
+// 實際只有 3.80——token 測試全綠、文字仍然不合格。所以「文字不得用 opacity 淡化」
+// 必須自己是一條規則，否則上面那組會給出安心的假象。
+//
+// 只擋 color：背景的半透明（.ob-glow、.splash-glow、.splash-dots）是刻意的柔光，
+// 不承載對比，一起擋會是誤判。Tasks.contrast.test.ts 另有一條擋 .tk-mark 的 background。
+describe("文字不得用 opacity 淡化", () => {
+  it("宣告了 color 的規則不得同時有 0 與 1 之間的 opacity", () => {
+    const offenders: string[] = [];
+    let scanned = 0;
+    for (const [path, css] of Object.entries(RAW)) {
+      const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
+      for (const m of stripped.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+        const body = m[2];
+        if (!/(?:^|;)\s*color\s*:/.test(body)) continue;
+        scanned += 1;
+        const op = body.match(/(?:^|;)\s*opacity\s*:\s*([\d.]+)/);
+        // 0 與 1 是顯示／隱藏（.splash-wait 的淡入），不是淡化
+        if (op && Number(op[1]) > 0 && Number(op[1]) < 1) {
+          offenders.push(`${path} ${m[1].trim()} → opacity ${op[1]}`);
+        }
+      }
+    }
+    // 掃到 0 條規則會讓迴圈空轉而測試全綠——先確認真的掃到東西
+    expect(scanned).toBeGreaterThan(50);
+    expect(offenders).toEqual([]);
   });
 });
