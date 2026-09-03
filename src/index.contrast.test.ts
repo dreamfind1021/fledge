@@ -105,9 +105,11 @@ const ALLOWED_OPACITY: Record<string, string> = {
   ".tov-marks i": "總覽刻度，實際 3.30 過 3:1",
   ".tab-dot.is-connecting": "分頁狀態點，實際 3.77 過 3:1",
   ".tab-dot.is-offline": "分頁狀態點 opacity .85，過 3:1",
-  // ↓ 這兩條實際低於 3:1，已知且另開票 09 處理。列在這裡是為了不讓它們被誤認為安全
-  ".splash-dots i": "載入動畫的呼吸點，谷值 1.43 低於 3:1 —— 票 09",
-  ".tab-dot.is-ended": "分頁狀態點，實際 2.49 低於 3:1 —— 票 09",
+  // ↓ 這兩條實際低於 3:1，2026-09-03 真機看過後**知情接受**（票 09 已關）。
+  //   列在這裡是為了不讓它們被誤認為已達標——判準同待辦刻度的 2.68，
+  //   見 repo 根 CONTEXT.md 的 ## Accessibility scope
+  ".splash-dots i": "載入動畫的呼吸點，谷值 1.43 低於 3:1，知情接受（會動，谷值不等於使用者看到的）",
+  ".tab-dot.is-ended": "分頁狀態點，實際 2.49 低於 3:1，知情接受",
 };
 // WCAG 1.4.3 明文豁免停用（inactive）的控制項，不必逐條登記
 const DISABLED = /:disabled|\.is-disabled/;
