@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-09-01
+- **最後更新：** 2026-09-06
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -183,7 +183,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `test_pty_bridge.py` | PTY round-trip、env override、env_remove 剔除、並發、`close()` 失敗時的 handle 去留（仍活著留、已死或問不出狀態丟）與 `on_close` 時序（被放回時不收尾 usage span、重試成功才收且只收一次） |
 | `test_sessions.py` | session 建立 + WS echo + resize + 模式 A + flow control（`_apply_flow_control` 單測 + pause 真閘住 PTY→WS/roundtrip/text 不入 PTY/壞 frame 不斷線/paused EOF→4001）+ kind=install/login（allowlist 命令/未知 install_id 400/不注入帳號 env/login 注入帳號 env/codex login/未知帳號 400/未知欄位 422） |
 | `test_usage_pricing.py` | 定價正規化（別名/後綴/synthetic/表外未知款不猜價）＋兩源計價公式 |
-| `test_sync_pricing.py` | `admin/sync_pricing.py` 的表建構與渲染（假上游 dict、不連外也不掃本機）：裸 key 過濾／日期版合併／同名不同價視為衝突／PINNED 保值／EXCLUDED 不入表／cached 缺失退回 input 價／渲染結果可 exec 回原表／版本隨內容變 |
+| `test_sync_pricing.py` | `admin/sync_pricing.py` 的表建構與渲染（假上游 dict、不連外也不掃本機）：裸 key 過濾／日期版合併／同名不同價視為衝突／PINNED 保值／EXCLUDED 不入表／cached 缺失退回 input 價／已知合理偏離不被防線換掉且仍擋得住二次漂移／新世代不被靜默略過且字首要有世代邊界／非文字產品依 mode 擋掉／查無定價的四種原因分得開（EXCLUDED 優先）／上游正數不論偏離多遠都照收而非改寫／非有限正數才推導並出聲／診斷與建表共用候選（同名多 key 不誤判）／渲染結果可 exec 回原表／版本隨內容變 |
 | `test_usage_parser.py` | 兩格式解析（容錯/cache precedence/差分 clamp/壞 ts/中文 cwd/rate_limits 末筆） |
 | `test_usage_scanner.py` | realpath 去重（symlink 帳號）＋codex canonical 三層 tier＋fallback |
 | `test_codex_usage.py` | Codex 實時額度（normalize_usage 欄位映射/缺鍵→bad_response、fetch no_auth/401→unauthorized/URLError→network/壞 JSON；opener 注入不打真網路、token 進 header） |
@@ -231,7 +231,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 ### admin/ — 維運腳本
 | 檔案 | 用途 |
 |------|------|
-| `sync_pricing.py` | 從 LiteLLM 的 `model_prices_and_context_window.json` 重生 `usage/pricing_table.py`（手動執行，不在 runtime 連外——理由見 ADR-0005）。只收第一方裸 key（濾掉 `vertex_ai/`、Bedrock `-v1:0` 等區域價）；表 key 用 pricing.py 自己的 normalize 產生；cache 價一律「上游真價優先，缺值或偏離標準倍率逾 2 倍（＝資料損壞）才推導並報告」，兩源共用同一條規則（Claude 三層 1.25/2/0.1、Codex cached 0.1）。**寫檔前的阻斷條件**（整檔覆蓋是破壞性的）：上游非空 mapping、同一正規化名不得對到不同價、每個價須為有限正數（缺 `output` 會變 0＝output 免費）、移除既有模型需 `--allow-removals`。寫檔後掃本機用量報「仍查無定價」的模型。`--dry-run`／`--from <json>`／`--no-check-local`／`--allow-removals` |
+| `sync_pricing.py` | 從 LiteLLM 的 `model_prices_and_context_window.json` 重生 `usage/pricing_table.py`（手動執行，不在 runtime 連外——理由見 ADR-0005）。只收第一方裸 key（濾掉 `vertex_ai/`、Bedrock `-v1:0` 等區域價）；Codex 側再過兩道：`_CODEX_KEY_RE`（`^gpt-[56](?:[.-]|$)`，世代號後必須接結尾／`.`／`-`，純字首會連 `gpt-60…`、`gpt-6a…` 一起收）＋ `_CODEX_MODES`（只收上游宣告 `mode` 為 chat／responses 的，擋非文字產品；**刻意不用名字 allowlist**——Codex CLI 記錄的是 `gpt-5.5`、`gpt-5.6-sol` 這種純模型名，名字分辨不出是不是 Codex 會跑的款，allowlist 得追不完的 tier，漏列＝使用者實際在用的款不計成本；**fail-closed**：`mode` 缺漏或不認得一律不收——放行未知等於讓上游 schema 漂移把非文字產品無聲收進表、日後以文字 token 三元組算出錯帳）；查無定價時由 `explain_missing()` 分四類據實說明（EXCLUDED 刻意排除／收錄條件沒涵蓋／上游缺價欄／上游真的沒有——**EXCLUDED 優先判**，否則刻意排除的款會被說成前綴漏收，把人導向錯的修法）；表 key 用 pricing.py 自己的 normalize 產生；cache 價一律存上游真價：**有限正數照收，不論偏離標準倍率多遠**；只有缺值才用倍率（Claude 三層 1.25/2/0.1、Codex cached 0.1）推導成估價，且每筆估價都會在輸出裡標明「估值，非官方價」；上游給了非有限正數才視同損壞、改估價並要人複核。**刻意不做「偏離倍率就視同損壞」的比例猜測**——那分不出資料錯誤與供應商合法調價（Fable 5.1 把 cache read 降到 0.025× 就被誤判成損壞、改寫成 4 倍估價還照常寫檔），其立案依據（claude-3-haiku 的 24×、claude-3-opus 的 0.4×）上游已修正，實測開關它對現行表零影響。刻意偏離上游的項目走 `PINNED`／`EXCLUDED`——人決定、寫得出理由。真正的阻斷交給 `invalid_prices()`。**寫檔前的阻斷條件**（整檔覆蓋是破壞性的）：上游非空 mapping、同一正規化名不得對到不同價、每個價須為有限正數（缺 `output` 會變 0＝output 免費）、移除既有模型需 `--allow-removals`。寫檔後掃本機用量報「仍查無定價」的模型。`--dry-run`／`--from <json>`／`--no-check-local`／`--allow-removals` |
 
 ### docs/agents/ — Agent skills 設定（mattpocock engineering skills 讀取）
 | 檔案 | 用途 |
