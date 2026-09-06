@@ -18,6 +18,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -34,21 +35,29 @@ UPSTREAM_URL = ("https://raw.githubusercontent.com/BerriAI/litellm/main/"
                 "model_prices_and_context_window.json")
 TABLE_PATH = _REPO / "sidecar" / "fledge_sidecar" / "usage" / "pricing_table.py"
 
-# Claude cache 三層存真價；上游沒給某層時才用這組倍率推導（現行世代皆吻合，
-# 舊款如 claude-3-haiku 實為 1.2×/0.12×，正是不能一律套倍率的原因）
+# Claude cache 三層一律存上游真價；**只有上游沒給某層時**才用這組倍率推導成估價
+# （目前 28 筆裡只有 2 筆缺 above_1hr）。倍率只是估值來源，不拿來反過來判斷
+# 上游給的值對不對——那條比例猜測已於 Codex 第二輪裁決後移除，見 _cache_layer_price。
 _CACHE_FALLBACK_MULTIPLIERS = (("cache_creation_input_token_cost", 1.25),
                                ("cache_creation_input_token_cost_above_1hr", 2.0),
                                ("cache_read_input_token_cost", 0.1))
-# 但「上游有給」不等於「上游是對的」：實際遇過 claude-3-haiku 的 1h write 是 input 的 24×、
-# claude-3-opus 是 0.4×（標準 2×），兩者都是上游對退役舊款的資料損壞。偏離標準倍率超過
-# 這個倍數就視同上游沒給、改用推導值並報告——否則會出現「缺席時信任自己的推導、
-# 存在時信任明顯錯誤的上游」這種自相矛盾。容忍 2× 是為了容納真實的小幅偏離
-# （claude-3-haiku 的 5m 1.2× 對 1.25×、read 0.12× 對 0.1× 都在範圍內）。
-_CACHE_RATIO_TOLERANCE = 2.0
 # Codex 的 cached input 標準折扣。實測上游 28 款裡 26 款精確等於 0.1×，是普遍規則；
 # 缺值的那兩款（gpt-5-pro 無欄位、gpt-5.2-pro 為 0）沒有理由自成一格——官方頁對四個 pro
 # 都標「—」，只因上游資料有沒有缺就給出相差 10 倍的待遇，是規則不一致而非定價差異。
 _CODEX_CACHED_MULTIPLIER = 0.1
+# Codex 側的收錄條件之一：世代。世代號寫死是刻意的——放寬成 `gpt-` 會把 gpt-4o、
+# 音訊／圖像／embedding 一起吃進來。世代號後面必須接結尾、`.` 或 `-`，否則
+# `gpt-60…`、`gpt-6a…` 這種不同世代也會被純字首收進來（Codex 第一輪 finding 3）。
+# 新世代發布要來加一筆；漏加時由 `explain_missing()` 指出是我們沒收、不是上游沒有。
+_CODEX_KEY_RE = re.compile(r"^gpt-[56](?:[.-]|$)")
+# 條件之二：必須是文字模型。名字分辨不出「是不是 Codex 會跑的款」——Codex CLI 記錄的是
+# gpt-5.5、gpt-5.6-sol 這種純模型名，沒有 -codex 字樣，所以名字 allowlist 得追 OpenAI
+# 每次出的 tier（sol/terra/luna 之後又有 spark），漏列＝使用者實際在用的款不計成本。
+# 上游自帶的 mode 是資料驅動的判準：新文字模型自動通過、新的非文字產品自動擋掉。
+# **fail-closed**：mode 缺漏或不認得一律不收（Codex 第二輪 finding 3）。放行未知等於
+# 讓上游 schema 漂移把非文字產品無聲收進表，日後以文字 token 三元組算出錯帳；
+# 擋下來則是看得見的失敗——面板警示 ＋ `explain_missing()` 說明原因。
+_CODEX_MODES = ("chat", "responses")
 
 
 def fetch_upstream(local: str | None) -> dict:
@@ -83,19 +92,26 @@ def _mtok(value: float | None) -> float:
 
 def _cache_layer_price(entry: dict, p_in: float, field: str, multiplier: float,
                        key: str) -> tuple[float, str | None]:
-    """單一 cache 層的價：上游真價優先，缺值或明顯偏離標準倍率則改用推導值並回報。
+    """單一 cache 層的價：上游給了有限正數就照收，缺值或壞值才用倍率推導並標明是估價。
 
-    兩源共用同一條規則。「缺值就推導、有值但離譜也推導」必須一致——否則會出現
-    「缺席時信任自己的推導、存在時信任壞掉的上游」的自相矛盾（Codex 審查 round 3/4）。
+    刻意**不**用「偏離標準倍率就視同損壞」的比例猜測（Codex 第二輪 high finding）：
+    那條規則分不出「上游資料壞掉」與「供應商合法調價」——Fable 5.1 把 cache read 降到
+    input 的 0.025×（官方 $0.25/MTok）就被它當成損壞、改寫成 4 倍的估價，還照常寫檔成功。
+    它的立案依據（claude-3-haiku 的 24×、claude-3-opus 的 0.4×）上游早已修正，
+    實測開關它對現行表零影響；今年唯一一次實際動作就是那個誤判。
+    刻意偏離上游的項目改走 `PINNED`／`EXCLUDED`——那是人決定的、寫得出理由的。
+
     推導而非留 0，是因為 0 會被當成「該層免費」造成低估。
     """
     raw = entry.get(field)
-    derived = p_in * multiplier
-    if raw and (1 / _CACHE_RATIO_TOLERANCE) <= (raw / derived) <= _CACHE_RATIO_TOLERANCE:
+    if raw and math.isfinite(raw) and raw > 0:
         return _mtok(raw), None
-    note = (f"{key}：{field} 是 input 的 {raw / p_in:.4g}×（標準 {multiplier}×），"
-            f"超出合理範圍 → 改用推導價 {_mtok(derived)}") if raw else None
-    return _mtok(derived), note
+    derived = p_in * multiplier
+    if raw:      # 有值卻不是有限正數＝真的壞掉，這不是猜的，要人去看上游
+        return _mtok(derived), (f"{key}：{field} 上游值 {raw!r} 非有限正數 → "
+                                f"以 {multiplier}× input 估價 {_mtok(derived)}，請複核上游")
+    return _mtok(derived), (f"{key}：上游未提供 {field} → 以 {multiplier}× input "
+                            f"估價 {_mtok(derived)}（估值，非官方價）")
 
 
 def _claude_cache_prices(entry: dict, p_in: float,
@@ -111,6 +127,49 @@ def _claude_cache_prices(entry: dict, p_in: float,
     return (prices[0], prices[1], prices[2]), notes
 
 
+def _normalized_name(key: str) -> str | None:
+    """上游裸 key → Fledge 查表用的名字。與 `build_tables` 用同一組 normalize。"""
+    if key.startswith("claude-"):
+        return pricing.normalize_claude_model(key)
+    return pricing.normalize_codex_model(key)
+
+
+def _table_candidates(raw: dict) -> dict[str, dict]:
+    """會被 `build_tables()` 納入考慮的上游 key → entry（裸 key、是 mapping、有 input 價）。
+
+    `explain_missing()` 必須用同一組候選，否則診斷會對著建表根本不看的 key 下結論：
+    同名的日期版若缺 input 價，會把 mode 判定推進「非預期」分支（Codex 第二輪 finding 2）。
+    """
+    return {k: e for k, e in raw.items()
+            if isinstance(e, dict) and _is_bare(k) and e.get("input_cost_per_token")}
+
+
+def explain_missing(name: str, raw: dict) -> str:
+    """本機用過、但表裡查無定價的款，說明它為什麼不在表裡。
+
+    原本這句訊息寫死「上游也還沒收錄」，那是沒查過的斷言。四種原因該做的事完全不同：
+    EXCLUDED 是刻意的安全決策（別去改前綴）、收錄條件沒涵蓋是我們的問題（改 `_CODEX_KEY_RE`）、
+    上游缺價欄則無從計價，只有最後一種才是等上游。**EXCLUDED 必須先判**，否則刻意排除的款
+    會被說成「前綴漏收」，把人導向錯的修法（Codex 審查 finding 2）。
+    """
+    if name in pricing.EXCLUDED:
+        return f"上游有此款但刻意排除（EXCLUDED）：{pricing.EXCLUDED[name]}"
+    candidates = {k: e for k, e in _table_candidates(raw).items()
+                  if _normalized_name(k) == name}
+    if not candidates:
+        # 分辨「上游完全沒有」與「上游有、但缺 input 價所以建表根本不看它」
+        seen = any(isinstance(e, dict) and _is_bare(k) and _normalized_name(k) == name
+                   for k, e in raw.items())
+        return "上游有此款，但缺 input 價，無從計價" if seen else "上游也還沒收錄"
+    if not any(k.startswith("claude-") or _CODEX_KEY_RE.match(k) for k in candidates):
+        return "上游有此款但不符收錄條件 → 可能是新世代，請複核 _CODEX_KEY_RE"
+    modes = {e.get("mode") for k, e in candidates.items() if not k.startswith("claude-")}
+    if modes and all(m not in _CODEX_MODES for m in modes):
+        return (f"上游有此款，但 mode={'／'.join(sorted(repr(m) for m in modes))} "
+                f"不在 _CODEX_MODES，刻意不收")
+    return "上游有此款且通過收錄條件，卻沒進表 → 非預期，請查 build_tables"
+
+
 def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str]]:
     """回 (claude_table, codex_table, notes, conflicts)。
 
@@ -123,12 +182,8 @@ def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str]]:
     notes: list[str] = []
     warnings: list[str] = []
 
-    for key, entry in sorted(raw.items()):
-        if not isinstance(entry, dict) or not _is_bare(key):
-            continue
-        p_in = entry.get("input_cost_per_token")
-        if not p_in:
-            continue
+    for key, entry in sorted(_table_candidates(raw).items()):
+        p_in = entry["input_cost_per_token"]
         if key.startswith("claude-"):
             norm = pricing.normalize_claude_model(key)
             if norm is None:
@@ -138,7 +193,13 @@ def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str]]:
             price: tuple = (_mtok(p_in), _mtok(entry.get("output_cost_per_token")),
                             *cache_prices)
             table = claude
-        elif key.startswith("gpt-5"):
+        elif _CODEX_KEY_RE.match(key):
+            mode = entry.get("mode")
+            if mode not in _CODEX_MODES:
+                notes.append(f"跳過 {key}（mode={mode!r}）：只收 {_CODEX_MODES} 這類文字模型。"
+                             f"未宣告或不認得的 mode 一律不收——放行未知會讓非文字產品"
+                             f"無聲進表、日後以文字 token 三元組算出錯帳")
+                continue
             norm = pricing.normalize_codex_model(key)
             cached, note = _cache_layer_price(entry, p_in, "cache_read_input_token_cost",
                                               _CODEX_CACHED_MULTIPLIER, key)
@@ -178,7 +239,6 @@ def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str]]:
     for key in pricing.PINNED:
         if key not in claude and key not in codex:
             warnings.append(f"PINNED 的 {key} 已不在上游 → 該例外可能已過期，請複核")
-
     return claude, codex, notes + warnings, conflicts
 
 
@@ -288,12 +348,17 @@ def main() -> int:
         sorted(set(codex) - set(current.CODEX_PRICING))
     removed = sorted(set(current.CLAUDE_PRICING) - set(claude)) + \
         sorted(set(current.CODEX_PRICING) - set(codex))
-    changed = [k for k, v in {**claude, **codex}.items()
-               if k in {**current.CLAUDE_PRICING, **current.CODEX_PRICING}
-               and {**current.CLAUDE_PRICING, **current.CODEX_PRICING}[k] != v]
-    for label, keys in (("新增", added), ("移除", removed), ("改價", changed)):
+    previous = {**current.CLAUDE_PRICING, **current.CODEX_PRICING}
+    latest = {**claude, **codex}
+    changed = [k for k, v in latest.items() if k in previous and previous[k] != v]
+    for label, keys in (("新增", added), ("移除", removed)):
         for k in keys:
             print(f"  {label} {k}")
+    # 改價印出舊值→新值。砍掉比例猜測後，擋「上游把價寫壞」的防線就是寫檔前的人工審查
+    # （下面那句「請審 git diff 後 commit」）；只印模型名的話，12 倍的錯價與四捨五入的
+    # 差異長得一模一樣，人審不出來。這不是新增護欄，是讓既有的人工關卡真的可用。
+    for k in changed:
+        print(f"  改價 {k}：{previous[k]} → {latest[k]}")
     print(f"  表：claude {len(claude)} 款、codex {len(codex)} 款")
 
     # 移除既有模型要顯式同意：上游殘缺／改 schema 時，表會整批縮水而 diff 看起來只是「少了幾行」
@@ -315,9 +380,9 @@ def main() -> int:
     local = scan_local_models()
     missing = sorted(m for m in local if m not in claude and m not in codex)
     if missing:
-        print("\n本機用量出現、但新表仍查無定價的模型（上游也還沒收錄）：", file=sys.stderr)
+        print("\n本機用量出現、但新表仍查無定價的模型：", file=sys.stderr)
         for m in missing:
-            print(f"  ⚠ {m}", file=sys.stderr)
+            print(f"  ⚠ {m}（{explain_missing(m, raw)}）", file=sys.stderr)
         return 1
     print(f"  本機用量出現過的 {len(local)} 款模型全數有價")
     return 0
