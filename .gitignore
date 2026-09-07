@@ -24,6 +24,8 @@ sidecar/*.egg-info/
 .codegraph/
 .scratch/
 .fledge/
+.codex/
+openspec/
 
 # Secrets 安全網（目前無 .env 被追蹤；保留範本）
 .env
