@@ -233,3 +233,33 @@ def replace_status(raw: bytes, status: str) -> bytes:
             return b"---\nstatus: " + st + raw[3:]
     # 整段沒有 frontmatter（或圍籬不完整）：補一個，原文一字不動接在後面
     return b"---\nstatus: " + st + b"\n---\n\n" + raw
+
+
+_FENCE_CLOSE = b"\n---\n"   # closing fence 必須獨占一行（spec §5.1）
+
+
+def replace_body(raw: bytes, title: str, body: str) -> bytes:
+    """把票檔圍籬之後的全部內容換成新的標題與內文，**frontmatter 位元組一字不動**（spec §5.1）。
+
+    **在位元組上定位 closing fence，且要求它獨占一行。** 不可以照抄 `split_frontmatter()`
+    的 `find("\\n---", 3)`——那個不要求獨占一行，`---suffix`、`----` 都會 match，
+    重寫範圍會落在錯的地方。
+
+    輸出形狀與 `render_task()` **完全相同**：空內文時 `\\n# 標題\\n`，非空時
+    `\\n# 標題\\n\\n內文\\n`。這是 `can_round_trip()` 成立的前提——Fledge 自己建的票
+    重組回去必須逐位元組相等。
+
+    找不到完整行 fence 或標題壓成單行後為空 → `ValueError`。呼叫端決定怎麼處理：
+    `can_round_trip()` 攔下回 False、`update_content()` 轉成 400。
+    """
+    if not raw.startswith(b"---"):
+        raise ValueError("no_frontmatter")
+    end = raw.find(_FENCE_CLOSE, 3)
+    if end == -1:
+        raise ValueError("no_closing_fence")
+    head = raw[: end + len(_FENCE_CLOSE)]
+    one_line = " ".join(title.split())
+    if not one_line:
+        raise ValueError("empty_title")
+    tail = f"\n# {one_line}\n" + (f"\n{body}\n" if body else "")
+    return head + tail.encode("utf-8")

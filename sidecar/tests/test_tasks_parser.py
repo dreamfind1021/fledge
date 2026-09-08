@@ -149,3 +149,55 @@ def test_rendered_title_is_flattened_to_one_line():
     """多行標題會讓 `# ` 之後的內容被當成內文，存回去再讀出來就不是原本那張票。"""
     text = P.render_task("第一行\n第二行", created="2026-08-29")
     assert P.parse_task("01-x.md", text).title == "第一行 第二行"
+
+
+# ── replace_body（spec §5.1）──────────────────────────────────────────────
+
+from fledge_sidecar.tasks.parser import replace_body
+
+FM = b"---\nstatus: doing\nsource: ai\ncreated: 2026-09-01\n---\n"
+
+
+def test_replace_body_keeps_frontmatter_bytes_and_rewrites_rest():
+    """frontmatter 位元組一字不動，圍籬之後整段換掉（spec §4 的契約）。"""
+    raw = FM + b"\n# old\n\nold body\n"
+    out = replace_body(raw, "new", "new body")
+    assert out == FM + b"\n# new\n\nnew body\n"
+    assert out[: len(FM)] == raw[: len(FM)]
+
+
+def test_replace_body_empty_body_matches_render_task_shape():
+    """空內文時沒有尾隨空行——要與 render_task() 產生的形狀相同，否則 Fledge 自己建的票
+    round-trip 會不過（Task 2）。"""
+    raw = FM + b"\n# t\n\nbody\n"
+    assert replace_body(raw, "t", "") == FM + b"\n# t\n"
+
+
+def test_replace_body_keeps_invalid_utf8_in_frontmatter():
+    """在位元組上做，frontmatter 裡的無效 UTF-8 不被換成 U+FFFD（spec §5.2）。"""
+    raw = b"---\nstatus: todo\nsource: \xff\xfe\ncreated: 2026-09-01\n---\n\n# t\n"
+    out = replace_body(raw, "t2", "")
+    assert b"source: \xff\xfe" in out
+
+
+def test_replace_body_collapses_title_to_one_line():
+    raw = FM + b"\n# t\n"
+    assert b"\n# a b\n" in replace_body(raw, "  a\n  b  ", "")
+
+
+def test_replace_body_rejects_incomplete_fence():
+    """closing fence 必須獨占一行。`---suffix`、`----`、沒有 fence、檔尾 fence 一律拒（spec §5.1）。"""
+    for bad in (
+        b"---\nstatus: todo\n---suffix\n# t\n",
+        b"---\nstatus: todo\n----\n# t\n",
+        b"no fence at all\n",
+        b"---\nstatus: todo\n---",
+        b"",
+    ):
+        with pytest.raises(ValueError):
+            replace_body(bad, "t", "")
+
+
+def test_replace_body_rejects_empty_title():
+    with pytest.raises(ValueError):
+        replace_body(FM + b"\n# t\n", "   \n  ", "")
