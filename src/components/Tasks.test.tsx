@@ -29,6 +29,10 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
     updateTaskContent(p, proj, n, ti, bo, fp, sig),
 }));
 
+// 孤兒草稿的複製走這支（回 boolean、不 throw），寫法沿用 TaskEditor.test.tsx 已驗證過的樣子。
+const writeClipboard = vi.fn<(text: string) => Promise<boolean>>();
+vi.mock("../lib/clipboard", () => ({ writeClipboard: (t: string) => writeClipboard(t) }));
+
 const proj = (over: Partial<TasksOverview["projects"][number]> = {}) => ({
   path: "/p/a", name: "a", account: "work", unfinished: 1, doing: 0,
   tasks_status: "ok" as const, next_step: "", ...over,
@@ -54,6 +58,7 @@ describe("Tasks 面板", () => {
     deleteTask.mockResolvedValue(undefined);
     openFile.mockResolvedValue({ status: "ok" });
     updateTaskContent.mockResolvedValue(ticket({ fingerprint: "f2" }));
+    writeClipboard.mockReset().mockResolvedValue(true);
   });
   afterEach(cleanup);   // vitest 未開 globals → testing-library 不會自動 cleanup
 
@@ -570,13 +575,67 @@ describe("Tasks 面板", () => {
     expect((screen.getByLabelText(en.list.editorBody) as HTMLTextAreaElement).value).toBe("打到一半");
   });
 
-  it("孤兒草稿：票不在清單裡時列在頂端，可複製與丟棄", async () => {
+  // 票檔名在專案之間會撞名（每個專案都有 01-*.md）：expandedName 是父層 state，
+  // 不隨 Ticket 重新 mount 而重置，切專案時要自己清掉，否則 B 的同名票會無端展開。
+  it("切專案後展開狀態重置，不會讓另一個專案撞名的票無端展開", async () => {
+    fetchTasksOverview.mockResolvedValue({
+      projects: [proj({ path: "/p/a", name: "a" }), proj({ path: "/p/b", name: "b" })],
+      permission_error: false,
+    });
+    fetchTasks.mockImplementation((_port: number, project: string) =>
+      Promise.resolve({ project, tasks_status: "ok" as const, next_step: "", tasks: [ticket({ name: "01-a.md" })] }));
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    const row = await screen.findByText("第一件");
+    fireEvent.click(row);                                       // 展開 A 的 01-a.md
+    await waitFor(() => expect(document.querySelector(".tk-body")).toBeTruthy());
+    fireEvent.click(screen.getByText(en.list.back));             // 返回總覽
+    fireEvent.click(await screen.findByText("b"));                // 進 B（同樣有 01-a.md）
+    await screen.findByText("第一件");
+    expect(document.querySelector(".tk-body")).toBeNull();
+  });
+
+  it("孤兒草稿：票不在清單裡時列在頂端，可丟棄", async () => {
     saveDraft("/p/a", "99-gone.md", { title: "消失的", body: "b", fingerprint: "f" });
     render(<Tasks port={1234} isActive />);
     fireEvent.click(await screen.findByText("a"));
     await screen.findByText(/消失的/);
     fireEvent.click(screen.getAllByText(en.list.draftDiscard)[0]);
     await waitFor(() => expect(loadDraft("/p/a", "99-gone.md")).toBeNull());
+  });
+
+  // 孤兒草稿旁邊就是不可回復的丟棄按鈕；writeClipboard 永不 throw，失敗只會 console.warn，
+  // 呼叫端不接回傳值就是「使用者以為存到剪貼簿了，其實沒有」——這兩條把兩個分支都釘住。
+  it("孤兒草稿：複製成功顯示已複製", async () => {
+    writeClipboard.mockResolvedValue(true);
+    saveDraft("/p/a", "99-gone.md", { title: "消失的", body: "b", fingerprint: "f" });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText(/消失的/);
+    fireEvent.click(screen.getAllByText(en.list.copyMine)[0]);
+    await waitFor(() => expect(writeClipboard).toHaveBeenCalledWith("# 消失的\n\nb"));
+    await waitFor(() => expect(screen.getByText(en.list.copied)).toBeTruthy());
+  });
+
+  it("孤兒草稿：複製失敗（writeClipboard 回 false）不顯示已複製", async () => {
+    writeClipboard.mockResolvedValue(false);
+    saveDraft("/p/a", "99-gone.md", { title: "消失的", body: "b", fingerprint: "f" });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText(/消失的/);
+    fireEvent.click(screen.getAllByText(en.list.copyMine)[0]);
+    await waitFor(() => expect(writeClipboard).toHaveBeenCalled());
+    expect(screen.queryByText(en.list.copied)).toBeNull();
+  });
+
+  // 那個 .filter(...) 才是孤兒草稿功能本體：草稿對應的票還活著的話不該被宣告成孤兒。
+  // 拿掉它這條測試會變紅（其餘七條的草稿都剛好已經是孤兒，擋不住這個回歸）。
+  it("草稿對應的票還在清單裡時不算孤兒，不顯示孤兒草稿列", async () => {
+    saveDraft("/p/a", "01-a.md", { title: "第一件", body: "改到一半", fingerprint: "f" });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    expect(document.querySelector(".tk-banner.is-draft")).toBeNull();
   });
 
   it("離開後重進再送：V1 的晚到 200 不干擾 V2 的 409 畫面（spec §10.2）", async () => {
@@ -605,7 +664,11 @@ describe("Tasks 面板", () => {
     expect(screen.getByText(en.list.conflictEditor)).toBeTruthy();
   });
 
-  it("換票時編輯器 remount，B 不承接 A 的狀態（plan R3 F2）", async () => {
+  // 這條原本叫「換票時編輯器 remount」，但重掛是型別切換（TaskEditor → TasksList → TaskEditor）
+  // 保證的，跟 TaskEditor 上那把 key 無關——本任務的紅證明已經驗過：拿掉 key 這條測試仍是綠的。
+  // 名字改成它真正驗的行為；三個斷言仍然都有價值：B 顯示 B 自己的內容、不誤讀 A 的草稿提示、
+  // A 的草稿仍留在 A 自己的鍵下（順帶驗證了上一個任務的「一般離開也要 flush」）。
+  it("換票後編輯器顯示 B 的內容與草稿提示，不承接 A 的（plan R3 F2）", async () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", tasks: [
       ticket({ name: "01-a.md", title: "A", body: "A 的內文" }),
       ticket({ name: "02-b.md", number: 2, title: "B", body: "B 的內文" }),

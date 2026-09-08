@@ -38,8 +38,10 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     return () => window.removeEventListener("focus", bump);
   }, [isActive, editing]);
 
-  const select = useCallback((path: string) => { setList(null); setSelected(path); }, []);
-  const back = useCallback(() => { setSelected(null); }, []);
+  // 切專案要重置展開狀態：票檔名在專案之間會撞名（每個專案都有 01-*.md），
+  // 不清的話 A 展開的那張票的檔名剛好也在 B 出現，B 進來就無端展開了一張票。
+  const select = useCallback((path: string) => { setList(null); setSelected(path); setExpandedName(null); }, []);
+  const back = useCallback(() => { setSelected(null); setExpandedName(null); }, []);
   // 建完重讀整份清單：新票的編號由 sidecar 配（最大號 +1），前端不自己算
   const create = useCallback(async (title: string) => {
     if (port == null || selected == null) return;
@@ -129,6 +131,8 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     // 它直接發出一次重讀，把 saved() 剛才本地更新好的新內容（新 fingerprint／新內文）蓋掉。
     // 真正該觸發重讀的時機（切分頁、切專案、reloadKey 被主動 bump）都已經在別的依賴裡了；
     // 「捨棄我的版本」也是靠 reloadKey 觸發，不靠 editing 本身。
+    // 編輯期間被擋下的那次重讀不會補跑，要等下一次切換或 focus——spec §6.2 只要求編輯中
+    // 不能被蓋掉，沒有要求那次被擋的重讀事後要補回來。
   }, [port, isActive, selected, reloadKey]);
 
   // 第二層的標題是專案名。名字從已載入的總覽推導，不另存一份 state——
@@ -145,9 +149,11 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   if (editing && selected != null && port != null) {
     return (
       <div className="tasks-root" data-testid="tasks-panel">
-        {/* key 強制換票時整個 remount：TaskEditor 的 state（title/body/baseFp/草稿）只在
-            mount 時從 props 初始化，沒有這把 key，返回後再進另一張票會沿用上一張的
-            instance，B 會承接 A 打到一半的內容與草稿提示（plan R3 F2） */}
+        {/* 目前兩個 return 讓返回必經型別切換（TaskEditor → TasksList），React 本來就會重掛，
+            所以這把 key 現在不是唯一防線。留著是為未來「編輯器內直接換票」（editing 由 A 直接
+            變 B、不經清單）預留——那條路徑一旦出現，草稿那半會自癒（unmount cleanup 的 deps 是
+            [project, task.name]），但 title／body／baseFp 只在 mount 初始化
+            （TaskEditor.tsx:44-48），沒有 key 就會讓 B 顯示 A 打的字（plan R3 F2）。 */}
         <TaskEditor key={`${selected}:${editing.name}`}
           port={port} project={selected} projectName={projectName} task={editing}
           onSaved={saved} onLeave={leaveEditor} t={t} />

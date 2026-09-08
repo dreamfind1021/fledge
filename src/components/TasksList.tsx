@@ -146,6 +146,10 @@ export function TasksList({
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [createFailed, setCreateFailed] = useState(false);
+  // 孤兒草稿的複製回饋。writeClipboard 永不 throw，失敗只在自己檔案裡 console.warn——
+  // 呼叫端不接回傳值就等於使用者按了複製、畫面完全沒反應，而正右邊就是不可回復的
+  // 「丟棄」，靜默失敗會讓使用者誤以為已經存到剪貼簿而放心丟棄，內容就真的救不回來了。
+  const [copiedDraft, setCopiedDraft] = useState<string | null>(null);
 
   // 一行輸入建票（design §5.2）。要寫內文得開檔案——刻意不做票詳情編輯表單。
   const submit = () => {
@@ -227,8 +231,12 @@ export function TasksList({
       {orphanDrafts.map(({ name, draft }) => (
         <div key={name} className="tk-banner is-draft">
           <span className="btext">{t("list.orphanDraft", { title: draft.title })}</span>
+          {copiedDraft === name && <span className="btext">{t("list.copied")}</span>}
           <span className="bacts">
-            <button className="bbtn" onClick={() => writeClipboard(`# ${draft.title}\n\n${draft.body}`)}>{t("list.copyMine")}</button>
+            <button className="bbtn"
+              onClick={() => writeClipboard(`# ${draft.title}\n\n${draft.body}`).then((ok) => ok && setCopiedDraft(name))}>
+              {t("list.copyMine")}
+            </button>
             <button className="bbtn" onClick={() => onOrphanDiscard(name)}>{t("list.draftDiscard")}</button>
           </span>
         </div>
