@@ -11,6 +11,7 @@ import hashlib
 import os
 import re
 import stat as stat_module
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator
@@ -20,7 +21,8 @@ from fledge_sidecar.paths import canonicalize, same_dir
 from fledge_sidecar.project_scanner import scan_all
 from fledge_sidecar.tasks.parser import (
     ANOMALY_NUMBER_DUPLICATE, ANOMALY_UNREADABLE, Task,
-    VALID_STATUS, is_plain_name, make_short_name, parse_task, render_task, replace_status,
+    VALID_STATUS, can_round_trip, is_plain_name, make_short_name, parse_task,
+    render_task, replace_body, replace_status,
 )
 
 FLEDGE_DIRNAME = ".fledge"
@@ -43,6 +45,17 @@ _NEXT_STEP = re.compile(r"^\*\*(?:下一步|Next)\*\*[:：]\s*(.+)$")
 class TaskWriteError(OSError):
     """寫票檔時的 I/O 失敗。**與「目標不合法」分開**——後者是使用者送錯東西（400），
     這個是磁碟／檔案系統出問題（500）。混在一起會讓真正的 I/O 故障被報成參數錯誤。"""
+
+
+# 所有票的寫入用一把全域鎖序列化（spec §5.4、K9）。
+#
+# 為什麼是全域一把而不是 per-name：per-name 需要「票的身分」當鍵，而本 repo 記錄過 APFS 上
+# realpath 字串比對判不出同一個目錄（大小寫別名），name 也一樣——鍵錯了就是兩把鎖，
+# 序列化形同虛設；per-name 還需要 registry 的回收規則。這些複雜度換來的只是「不同票之間
+# 不互等」，而互等的代價是毫秒：單人本機工具，寫入頻率是人手按按鈕。
+#
+# 用 `with` 不用手動 acquire：任何 return 或例外都由語法釋放，沒有「某條路徑忘了放」的問題。
+_WRITE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -188,12 +201,17 @@ def _unreadable_task(name: str) -> Task:
                 source="", created="", anomalies=(ANOMALY_UNREADABLE,))
 
 
-def _row(task: Task, fp: str) -> dict[str, Any]:
-    """一張票的 API 形狀。`scan_tasks` 與 `create_task` 共用，避免兩份必然漂移。"""
+def _row(task: Task, fp: str, raw: bytes) -> dict[str, Any]:
+    """一張票的 API 形狀。四個寫入／讀取點共用，避免多份必然漂移。
+
+    `raw` 是原始位元組：`editable` 的 round-trip 檢查要在原始位元組上做，`Task` 裡只有
+    解碼修剪過的字串（spec §3）。讀不到的票傳 `b""`，round-trip 自然 False。"""
     return {
         "name": task.name, "number": task.number, "title": task.title,
         "status": task.status, "source": task.source, "created": task.created,
         "anomalies": list(task.anomalies), "fingerprint": fp,
+        "body": task.body,
+        "editable": can_round_trip(raw),
     }
 
 
@@ -206,10 +224,10 @@ def scan_tasks(tasks_fd: int) -> list[dict[str, Any]]:
     for name in list_task_files(tasks_fd):
         raw = read_task_bytes(tasks_fd, name)
         if raw is None:
-            task, fp = _unreadable_task(name), ""
+            task, fp, raw = _unreadable_task(name), "", b""
         else:
             task, fp = parse_task(name, _decode(raw)), fingerprint(raw)
-        rows.append(_row(task, fp))
+        rows.append(_row(task, fp, raw))
 
     seen: dict[int, int] = {}
     for row in rows:
@@ -345,7 +363,7 @@ def create_task(tasks_fd: int, title: str, *, created: str, max_attempts: int = 
             continue
         with os.fdopen(fd, "wb") as fh:
             fh.write(raw)
-        return _row(parse_task(name, raw.decode("utf-8")), fingerprint(raw))
+        return _row(parse_task(name, raw.decode("utf-8")), fingerprint(raw), raw)
     raise OSError("too many number collisions")
 
 
@@ -436,25 +454,73 @@ def update_status(
     """
     if status not in VALID_STATUS:
         raise ValueError("invalid status")
-    fd = _open_existing(tasks_fd, name, write=True)
-    try:
-        raw = _read_all(fd)
-        if fingerprint(raw) != expected_fingerprint:
-            return None
-        new_raw = replace_status(raw, status)   # 在位元組上改，不解碼（見 parser.replace_status）
+    with _WRITE_LOCK:
+        fd = _open_existing(tasks_fd, name, write=True)
         try:
-            os.lseek(fd, 0, os.SEEK_SET)
-            _write_all(fd, new_raw)             # os.write 允許短寫，回傳值不能忽略
-            os.ftruncate(fd, len(new_raw))
-        except OSError as exc:
-            # I/O 失敗與「目標不合法」分開回報（路由：500 vs 400）。
-            # **這裡不做復原**——見本函式 docstring 的保證等級宣告。
-            raise TaskWriteError(str(exc)) from exc
-    finally:
-        os.close(fd)
+            raw = _read_all(fd)
+            if fingerprint(raw) != expected_fingerprint:
+                return None
+            new_raw = replace_status(raw, status)   # 在位元組上改，不解碼（見 parser.replace_status）
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                _write_all(fd, new_raw)             # os.write 允許短寫，回傳值不能忽略
+                os.ftruncate(fd, len(new_raw))
+            except OSError as exc:
+                # I/O 失敗與「目標不合法」分開回報（路由：500 vs 400）。
+                # **這裡不做復原**——見本函式 docstring 的保證等級宣告。
+                raise TaskWriteError(str(exc)) from exc
+        finally:
+            os.close(fd)
     # 回傳更新後的票（含新 fingerprint）。沒有這個，使用者改一次狀態之後本地的
     # fingerprint 就過期了，**下一次改狀態或刪除會被錯誤地判成 409**（design §7.2）。
-    return _row(parse_task(name, _decode(new_raw)), fingerprint(new_raw))
+    return _row(parse_task(name, _decode(new_raw)), fingerprint(new_raw), new_raw)
+
+
+def _validate_content_domain(title: str, body: str) -> None:
+    """§5.2.2 值域：sidecar 端再驗一次。UI 已正規化過，這一層是防前端漏掉。"""
+    if not title or title != " ".join(title.split()):
+        raise ValueError("invalid_content")
+    if body != body.replace("\r\n", "\n").replace("\r", "\n").strip("\n"):
+        raise ValueError("invalid_content")
+
+
+def update_content(
+    tasks_fd: int, name: str, *, title: str, body: str, expected_fingerprint: str
+) -> dict[str, Any] | None:
+    """改標題與內文（spec §5.4）。fingerprint 不符回 None（路由轉 409）並拒絕寫入。
+
+    流程固定：pin fd → round-trip 資格 → fingerprint → replace_body → 原地覆寫。
+    **檔案身分自始至終是同一個 fd，檔名完全不碰**（D3）。
+
+    保真範圍：**frontmatter 位元組一字不動**；圍籬之後由 `replace_body` 重組。
+    圍籬之後的內容經過前端往返已是解碼字串，所以只有 round-trip 過的票才准編輯（§5.2.1），
+    否則 parser 讀取時削掉的東西會在這裡永久消失。
+
+    寫入不是原子的（K5、K6）——與 `update_status` 同一個等級，刻意不重新發明寫入協定。
+    安全網是前端的草稿（§7.3）。
+
+    ValueError 的訊息是 error code，路由直接用：`not_editable`／`invalid_content`／
+    `_open_existing` 的既有訊息。
+    """
+    _validate_content_domain(title, body)
+    with _WRITE_LOCK:
+        fd = _open_existing(tasks_fd, name, write=True)
+        try:
+            raw = _read_all(fd)
+            if not can_round_trip(raw):
+                raise ValueError("not_editable")
+            if fingerprint(raw) != expected_fingerprint:
+                return None
+            new_raw = replace_body(raw, title, body)
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                _write_all(fd, new_raw)
+                os.ftruncate(fd, len(new_raw))
+            except OSError as exc:
+                raise TaskWriteError(str(exc)) from exc
+        finally:
+            os.close(fd)
+    return _row(parse_task(name, _decode(new_raw)), fingerprint(new_raw), new_raw)
 
 
 def delete_task(tasks_fd: int, name: str, *, expected_fingerprint: str) -> bool:
@@ -465,11 +531,12 @@ def delete_task(tasks_fd: int, name: str, *, expected_fingerprint: str) -> bool:
     ——外部編輯器若剛好在窗口內存檔，`DELETE` **仍會刪掉那個新版本並回成功，不會有 409**。
     `dir_fd` ＋ `O_NOFOLLOW` ＋ fingerprint 是把窗口縮到最小，**不是關閉它**。
     """
-    fd = _open_existing(tasks_fd, name)
-    try:
-        if fingerprint(_read_all(fd)) != expected_fingerprint:
-            return False
-    finally:
-        os.close(fd)
-    os.unlink(name, dir_fd=tasks_fd)
-    return True
+    with _WRITE_LOCK:
+        fd = _open_existing(tasks_fd, name)
+        try:
+            if fingerprint(_read_all(fd)) != expected_fingerprint:
+                return False
+        finally:
+            os.close(fd)
+        os.unlink(name, dir_fd=tasks_fd)
+        return True

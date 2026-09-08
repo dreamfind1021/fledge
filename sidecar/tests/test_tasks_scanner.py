@@ -527,3 +527,311 @@ def test_absent_project_reports_zero_doing(tmp_path):
     assert row["tasks_status"] == scanner.STATUS_ABSENT
     assert row["unfinished"] == 0
     assert row["doing"] == 0
+
+
+# ── update_content ＋ _row 加欄位（spec §3、§5.3、§5.4）────────────────────
+
+import threading
+
+STD = "---\nstatus: todo\nsource: me\ncreated: 2026-09-01\n---\n\n# old title\n\nold body\n"
+
+
+def _ticket(d, name="01-old.md", text=STD):
+    p = d / name
+    p.write_bytes(text.encode("utf-8") if isinstance(text, str) else text)
+    return p
+
+
+def _fd(d):
+    return os.open(str(d), os.O_RDONLY | os.O_DIRECTORY)
+
+
+def test_scan_tasks_returns_body_and_editable(tmp_path):
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    _ticket(d, name="01-good.md")
+    _ticket(d, name="02-bad.md", text=b"---\nstatus: todo\n---suffix\n# t\n")
+    fd = _fd(d)
+    try:
+        rows = {r["name"]: r for r in scanner.scan_tasks(fd)}
+    finally:
+        os.close(fd)
+    assert rows["01-good.md"]["body"] == "old body"
+    assert rows["01-good.md"]["editable"] is True
+    assert rows["02-bad.md"]["editable"] is False
+    assert len(rows) == 2                                    # 壞票不拖垮好票（spec §5.2.1）
+
+
+def test_unreadable_row_is_not_editable(tmp_path):
+    """讀不到的票 body 空字串、editable False，不拋例外。
+
+    用 mode 0o000 的一般檔而不是 FIFO：FIFO 連 list_task_files 的 is_file 過濾都過不了
+    （見 test_reading_a_fifo_does_not_block），根本進不到 scan_tasks 的逐檔迴圈，
+    那樣測到的不是「讀不到的票」而是「不存在的票」。"""
+    if os.geteuid() == 0:
+        pytest.skip("root 無視檔案權限，這條測不出來")
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p = _ticket(d, name="03-noperm.md")
+    os.chmod(p, 0o000)
+    fd = _fd(d)
+    try:
+        rows = {r["name"]: r for r in scanner.scan_tasks(fd)}
+    finally:
+        os.close(fd)
+        os.chmod(p, 0o600)          # 還原，否則 tmp_path 清理會失敗
+    assert rows["03-noperm.md"]["editable"] is False and rows["03-noperm.md"]["body"] == ""
+
+
+def test_create_and_update_status_rows_carry_editable(tmp_path):
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    fd = _fd(d)
+    try:
+        created = scanner.create_task(fd, "新票", created="2026-09-01")
+        assert created["editable"] is True and created["body"] == ""
+        updated = scanner.update_status(fd, created["name"], status="done", expected_fingerprint=created["fingerprint"])
+        assert updated["editable"] is True
+    finally:
+        os.close(fd)
+
+
+def test_update_content_rewrites_after_fence_only(tmp_path):
+    """frontmatter 位元組不動、其餘換掉、回新 fingerprint 與 body（spec §5.4）。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p = _ticket(d)
+    before = p.read_bytes()
+    fd = _fd(d)
+    try:
+        row = scanner.update_content(fd, "01-old.md", title="new title", body="new body",
+                                     expected_fingerprint=scanner.fingerprint(before))
+    finally:
+        os.close(fd)
+    after = p.read_bytes()
+    fence = before.find(b"\n---\n") + 5
+    assert after[:fence] == before[:fence]
+    assert after == before[:fence] + b"\n# new title\n\nnew body\n"
+    assert row["title"] == "new title" and row["body"] == "new body" and row["editable"] is True
+    assert row["fingerprint"] == scanner.fingerprint(after)
+
+
+def test_update_content_keeps_file_identity(tmp_path):
+    """D3、spec §10.1：目錄檔名集合、st_ino、st_nlink 全部不變。**只斷言回應的 name 不變是假綠**——
+    rename 替換檔案仍能保留同一個 name（plan R1 F6）。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p = _ticket(d)
+    before_st, before_names = p.stat(), set(os.listdir(d))
+    fd = _fd(d)
+    try:
+        scanner.update_content(fd, "01-old.md", title="完全不同的標題", body="b",
+                               expected_fingerprint=scanner.fingerprint(p.read_bytes()))
+    finally:
+        os.close(fd)
+    after_st = p.stat()
+    assert set(os.listdir(d)) == before_names
+    assert after_st.st_ino == before_st.st_ino
+    assert after_st.st_nlink == 1 == before_st.st_nlink
+
+
+def test_update_content_stale_fingerprint_does_not_write(tmp_path):
+    """409 的前提是檔案沒被動——只斷言回 None 不夠，要重讀比對（spec §10.1）。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p = _ticket(d)
+    before = p.read_bytes()
+    fd = _fd(d)
+    try:
+        assert scanner.update_content(fd, "01-old.md", title="x", body="", expected_fingerprint="wrong") is None
+    finally:
+        os.close(fd)
+    assert p.read_bytes() == before
+
+
+@pytest.mark.parametrize("bad", [
+    b"---\nstatus: todo\n---suffix\n# t\n",
+    b"---\nstatus: todo\n---\n\n\n# t\n",
+    b"---\nstatus: todo\n---\n\n# t\r\n",
+])
+def test_update_content_rejects_non_round_trippable_without_touching(tmp_path, bad):
+    """§5.3：round-trip 不過 → ValueError('not_editable') 且檔案未被動。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p = _ticket(d, text=bad)
+    fd = _fd(d)
+    try:
+        with pytest.raises(ValueError, match="not_editable"):
+            scanner.update_content(fd, "01-old.md", title="t", body="", expected_fingerprint=scanner.fingerprint(bad))
+    finally:
+        os.close(fd)
+    assert p.read_bytes() == bad
+
+
+@pytest.mark.parametrize("title,body", [
+    ("", ""), ("  a  ", ""), ("a\nb", ""),
+    ("t", "line\r\nline"), ("t", "\nbody"), ("t", "body\n"),
+])
+def test_update_content_rejects_out_of_domain_input(tmp_path, title, body):
+    """§5.2.2 值域：sidecar 端再驗，不符 ValueError('invalid_content') 且檔案未被動。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p = _ticket(d)
+    before = p.read_bytes()
+    fd = _fd(d)
+    try:
+        with pytest.raises(ValueError, match="invalid_content"):
+            scanner.update_content(fd, "01-old.md", title=title, body=body, expected_fingerprint=scanner.fingerprint(before))
+    finally:
+        os.close(fd)
+    assert p.read_bytes() == before
+
+
+def test_update_content_allows_number_missing(tmp_path):
+    """§5.3：anomaly 標記不是拒絕理由——要有測試釘住「可以」，否則之後有人順手加回拒絕清單沒有防線攔。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p_no_num = _ticket(d, name="nonum.md")
+    p_other = _ticket(d, name="01-other.md")
+    other_before = p_other.read_bytes()
+    fd = _fd(d)
+    try:
+        row = scanner.update_content(fd, "nonum.md", title="t", body="",
+                                     expected_fingerprint=scanner.fingerprint(p_no_num.read_bytes()))
+    finally:
+        os.close(fd)
+    assert row is not None
+    assert p_other.read_bytes() == other_before
+
+
+def test_update_content_allows_number_duplicate_and_touches_only_target(tmp_path):
+    """§5.3：number_duplicate 也可編輯，且只動指定那張（plan R1 F6）。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    _ticket(d, name="01-a.md"); p2 = _ticket(d, name="01-b.md")
+    p2_before = p2.read_bytes()
+    fd = _fd(d)
+    try:
+        rows = {r["name"]: r for r in scanner.scan_tasks(fd)}
+        assert "number_duplicate" in rows["01-a.md"]["anomalies"]
+        row = scanner.update_content(fd, "01-a.md", title="t", body="", expected_fingerprint=rows["01-a.md"]["fingerprint"])
+    finally:
+        os.close(fd)
+    assert row is not None
+    assert p2.read_bytes() == p2_before
+
+
+class _NoLock:
+    """無鎖的替身。**不是給實作用的**——只給「證明競態存在」的測試注入。"""
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def _gate_read_after(monkeypatch, barrier, *, strict):
+    """把同步點放在 _read_all **之後**（plan R1 F4）。放在 update_content 之前測不到鎖：
+    排程只要讓 A 完整跑完，B 自然讀到新 fp 回 None，拿掉鎖也照樣過。
+
+    strict=False（有鎖的測試）：A 持鎖進 _read_all，B 在 with 外等；barrier 只有 A 到達 → timeout
+      → 吞掉 → A 寫完釋放 → B 進來讀到新 fp → None。恰好一個成功。
+    strict=True（無鎖的測試）：兩個都必須到達 barrier，**任何 timeout 都讓測試失敗**——否則 B 慢一點
+      沒排到，A 先寫完，B 讀到新 fp 回 None，「恰好一個成功」照樣成立，無鎖也綠（plan R2 F1）。"""
+    real = scanner._read_all
+
+    def gated(fd):
+        raw = real(fd)
+        try:
+            barrier.wait(timeout=10)      # 寬鬆：這不是競態正確性的判準，只是抓「第二個 thread 根本沒排到」（plan R3 F3）
+        except threading.BrokenBarrierError:
+            if strict:
+                raise AssertionError("gate timeout: both threads must reach the gate; scheduling delay, not a race outcome")
+        return raw
+
+    monkeypatch.setattr(scanner, "_read_all", gated)
+
+
+def _race(d, ops):
+    """並行跑 ops（每個是 fd → result），回 results。join 有 timeout 抓死鎖；OSError／ValueError
+    算失敗（例如 delete 贏了之後 content 開檔遇到 FileNotFoundError）。"""
+    results = []
+
+    def go(op):
+        fd = _fd(d)
+        try: results.append(op(fd))
+        except AssertionError as e: results.append(e)
+        except (OSError, ValueError): results.append(None)
+        finally: os.close(fd)
+
+    ts = [threading.Thread(target=go, args=(op,)) for op in ops]
+    for t in ts: t.start()
+    # join 的 timeout 只負責抓真死鎖，必須明顯大於 gate 的 barrier timeout（10 秒）——
+    # 兩者相等時 assert 會在邊界上擲硬幣，變成與鎖正確性無關的假紅（plan R3 F3 只調了 barrier）。
+    for t in ts: t.join(timeout=30)
+    assert all(not t.is_alive() for t in ts), "deadlock"
+    errs = [r for r in results if isinstance(r, AssertionError)]
+    assert not errs, errs
+    return results
+
+
+def _content(fp, body):
+    return lambda fd: scanner.update_content(fd, "01-old.md", title="t", body=body, expected_fingerprint=fp)
+
+def _status(fp):
+    return lambda fd: scanner.update_status(fd, "01-old.md", status="done", expected_fingerprint=fp)
+
+def _delete(fp):
+    return lambda fd: scanner.delete_task(fd, "01-old.md", expected_fingerprint=fp)
+
+_PAIRS = {
+    "content/content": lambda fp: [_content(fp, "A"), _content(fp, "B")],
+    "content/status":  lambda fp: [_content(fp, "A"), _status(fp)],
+    "content/delete":  lambda fp: [_content(fp, "A"), _delete(fp)],
+}
+
+
+@pytest.mark.parametrize("pair", list(_PAIRS))
+def test_writes_are_serialized(tmp_path, monkeypatch, pair):
+    """§5.4 全域鎖：同一 fingerprint 的兩個寫入並行，**恰好一個成功**。三種組合都要（plan R2 F2：
+    漏掉 delete 的話 delete 可先驗舊 fp、content 寫新內容、delete 再 unlink 掉新版）。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p = _ticket(d)
+    fp = scanner.fingerprint(p.read_bytes())
+    _gate_read_after(monkeypatch, threading.Barrier(2), strict=False)
+    results = _race(d, _PAIRS[pair](fp))
+    ok = [r for r in results if r not in (None, False)]
+    assert len(ok) == 1, f"{pair}: expected exactly one success, got {len(ok)}"
+    if True in results:                                   # delete 贏：檔案不在
+        assert not p.exists()
+    else:
+        final = p.read_bytes()
+        assert final.startswith(b"---\nstatus: ") and b"\n---\n" in final   # 不是交錯的壞檔
+
+
+@pytest.mark.parametrize("pair", list(_PAIRS))
+def test_without_lock_both_succeed(tmp_path, monkeypatch, pair):
+    """**證明競態存在**：把鎖換成 _NoLock，strict gate 強制兩個都讀到舊 raw，兩個都會「成功」。
+    這條紅了代表上面那條在測的東西不存在（plan R2 F1：沒有這條，_NoLock 也可能綠）。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p = _ticket(d)
+    fp = scanner.fingerprint(p.read_bytes())
+    monkeypatch.setattr(scanner, "_WRITE_LOCK", _NoLock())
+    _gate_read_after(monkeypatch, threading.Barrier(2), strict=True)
+    results = _race(d, _PAIRS[pair](fp))
+    ok = [r for r in results if r not in (None, False)]
+    assert len(ok) == 2, f"{pair}: without the lock both should pass the stale check; got {len(ok)}"
+
+
+def test_lock_released_on_open_failure(tmp_path):
+    """§5.4：`with` 保證釋放。注入 _open_existing 失敗後，鎖不會卡死。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    _ticket(d)
+    fd = _fd(d)
+    try:
+        with pytest.raises(ValueError):
+            scanner.update_content(fd, "../evil.md", title="t", body="", expected_fingerprint="x")
+        assert scanner._WRITE_LOCK.acquire(timeout=1)       # 鎖若沒放，這行會等到 timeout 回 False
+        scanner._WRITE_LOCK.release()
+    finally:
+        os.close(fd)
