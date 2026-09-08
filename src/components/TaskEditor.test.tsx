@@ -345,7 +345,7 @@ describe("TaskEditor", () => {
     expect(titleBox().disabled).toBe(true);
     expect(bodyBox().disabled).toBe(true);
     expect(saveBtn().disabled).toBe(true);
-    for (const tl of ["Heading", "Bold", "Italic", "Inline code", "List", "Quote", "Code block", "Link"]) {
+    for (const tl of ["Heading", "Bold", "Inline code", "List", "Quote", "Code block"]) {
       expect((screen.getByLabelText(tl) as HTMLButtonElement).disabled).toBe(true);
     }
     const back = screen.getByText("p") as HTMLButtonElement;             // 返回列上的專案名
@@ -443,13 +443,47 @@ describe("TaskEditor", () => {
     spy.mockRestore();
   });
 
-  it("工具列：粗體把選取包起來", () => {
+  it("工具列：粗體把選取包起來，游標落在整段（含右邊記號）之後", () => {
     setup();
     const box = bodyBox();
     fireEvent.change(box, { target: { value: "hello world" } });
     box.setSelectionRange(0, 5);
     fireEvent.click(screen.getByLabelText(en.a11y.toolbarBold));
     expect(box.value).toBe("**hello** world");
+    expect(box.selectionStart).toBe(9);   // "**hello**".length
+    expect(box.selectionEnd).toBe(9);
+  });
+
+  it("工具列：粗體在沒有選取時，游標落在兩個記號中間，打字立刻是套了格式的內容（whole-branch review 三輪 FIX 4）", () => {
+    // 使用者回報：空選取按下去只會插入 **** 這種看得到、用不出來的字面符號，游標又落在
+    // 整串最後面，接著打字變成 ****text，格式完全沒套用，而且不知道要先選字才能用
+    setup();
+    const box = bodyBox();
+    fireEvent.change(box, { target: { value: "hello" } });
+    box.setSelectionRange(5, 5);          // 游標在最後面，沒有選取任何字
+    fireEvent.click(screen.getByLabelText(en.a11y.toolbarBold));
+    expect(box.value).toBe("hello****");
+    expect(box.selectionStart).toBe(7);   // "hello**" 之後，也就是兩個 * 中間
+    expect(box.selectionEnd).toBe(7);
+  });
+
+  it("工具列剩六顆按鈕：斜體與連結已拿掉（使用者驗收——斜體可用但用不到；連結插入 [選取](url) 後 safeHref(\"url\") 解析不出協定，按了預覽不會出現連結）", () => {
+    setup();
+    expect(document.querySelectorAll(".ed-bar .ed-btn")).toHaveLength(6);
+    expect(screen.queryByLabelText("Italic")).toBeNull();
+    expect(screen.queryByLabelText("Link")).toBeNull();
+  });
+
+  it("預覽按鈕文字反映按下去會做什麼：編輯中顯示「Preview」，預覽中顯示「Back to editing」（whole-branch review 三輪 FIX 1）", () => {
+    // 使用者回報：預覽中按鈕還是寫「預覽」，點下去卻是回編輯——文字與動作相反
+    setup({ body: "b" });
+    expect(screen.getByText(en.list.preview)).toBeTruthy();
+    fireEvent.click(screen.getByText(en.list.preview));
+    expect(screen.queryByText(en.list.preview)).toBeNull();
+    expect(screen.getByText(en.list.backToEdit)).toBeTruthy();
+    fireEvent.click(screen.getByText(en.list.backToEdit));
+    expect(screen.getByText(en.list.preview)).toBeTruthy();
+    expect(screen.queryByText(en.list.backToEdit)).toBeNull();
   });
 
   it("預覽切換顯示 render 後的內文", () => {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { writeClipboard } from "../lib/clipboard";
 import { TaskConflictError, TaskContentError, updateTaskContent, type TaskRow } from "../lib/sidecar";
@@ -27,27 +27,47 @@ const normBody = (s: string) => s
 const DEBOUNCE_MS = 600;
 
 // 工具列只在游標位置插入字元（spec §6.3）。檔案內容永遠等於文字區裡看得到的那串字。
+// 斜體與連結兩顆按鈕已拿掉（使用者驗收）：斜體是可用性判斷（個人待辦工具用不到），
+// 連結是因為壞的——插入 `[選取](url)` 之後 `safeHref("url")` 解析不出協定，預覽永遠不會
+// 出現連結，是 spec §6.3 明講要避免的「按了沒反應」。**這兩個只是拿掉工具列按鈕，不是拿掉
+// markdown 能力**：既有票檔（手寫或 AI 透過 skill 寫的）可能已經含有 `*斜體*` 或
+// `[文字](url)`，renderMarkdownLite 與其測試完全不動，兩種語法照樣要能正確渲染。
 type Tool = { key: string; a11y: string; wrap?: [string, string]; linePrefix?: string; block?: string };
 const TOOLS: Tool[] = [
   { key: "H", a11y: "a11y.toolbarHeading", linePrefix: "## " },
   { key: "B", a11y: "a11y.toolbarBold", wrap: ["**", "**"] },
-  { key: "I", a11y: "a11y.toolbarItalic", wrap: ["*", "*"] },
   { key: "<>", a11y: "a11y.toolbarCode", wrap: ["`", "`"] },
   { key: "•", a11y: "a11y.toolbarList", linePrefix: "- " },
   { key: "❝", a11y: "a11y.toolbarQuote", linePrefix: "> " },
   { key: "```", a11y: "a11y.toolbarCodeBlock", block: "```" },
-  { key: "🔗", a11y: "a11y.toolbarLink", wrap: ["[", "](url)"] },
 ];
 
-function applyTool(ta: HTMLTextAreaElement, tool: Tool): string {
+// wrap 工具在「沒有選取」時回傳游標該落在哪（review：使用者發現空選取按下去只會插入
+// `****` 這種看得到、用不出來的字面符號，打字接在整段的最後面，格式完全沒套用）。
+// linePrefix／block 刻意不回傳游標資訊——範圍只改 wrap，這兩類的游標行為同樣不完美但
+// 使用者沒有提出，``` 這顆另有已知限制（行中插入產生的圍籬 renderMarkdownLite 認不得）
+// 記在別處，不在這裡一併處理。
+function applyTool(ta: HTMLTextAreaElement, tool: Tool): { value: string; caret?: [number, number] } {
   const { selectionStart: s, selectionEnd: e, value: v } = ta;
-  if (tool.wrap) return v.slice(0, s) + tool.wrap[0] + v.slice(s, e) + tool.wrap[1] + v.slice(e);
+  if (tool.wrap) {
+    const [open, close] = tool.wrap;
+    const value = v.slice(0, s) + open + v.slice(s, e) + close + v.slice(e);
+    // 沒有選取：游標放在兩個記號中間，打字立刻是套了格式的內容，不必先選字再套用。
+    // 有選取：游標放在整段（含右邊記號）之後，不維持選取——接著打字才會接在後面，
+    // 不會覆蓋掉剛包好的字（這是判斷，不是唯一正解，見 task-10-report.md）
+    const caret: [number, number] = s === e
+      ? [s + open.length, s + open.length]
+      : [s + open.length + (e - s) + close.length, s + open.length + (e - s) + close.length];
+    return { value, caret };
+  }
   if (tool.linePrefix) {
     const ls = v.lastIndexOf("\n", s - 1) + 1;
-    return v.slice(0, ls) + tool.linePrefix + v.slice(ls);
+    return { value: v.slice(0, ls) + tool.linePrefix + v.slice(ls) };
   }
-  if (tool.block) return v.slice(0, s) + `${tool.block}\n` + v.slice(s, e) + `\n${tool.block}` + v.slice(e);
-  return v;
+  if (tool.block) {
+    return { value: v.slice(0, s) + `${tool.block}\n` + v.slice(s, e) + `\n${tool.block}` + v.slice(e) };
+  }
+  return { value: v };
 }
 
 export function TaskEditor({ port, project, projectName, task, onSaved, onLeave, t }: {
@@ -207,7 +227,20 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   const discardAndReload = () => { cancelDebounce(); skipFlush.current = true; clearDraft(project, task.name); forceLeave(true); };
 
   const taRef = useRef<HTMLTextAreaElement>(null);
-  const tool = (tl: Tool) => { const ta = taRef.current; if (!ta) return; onBody(applyTool(ta, tl)); };
+  // 受控 textarea：套用工具後游標要等 React 把新的 value 交回 DOM 才能定位，不能在
+  // applyTool 當下直接設——那時候 DOM 還是舊值，設了也會被下一次 render 蓋掉。用 ref
+  // 記「這次要落在哪」，layout effect 每次 render 後檢查一次，不需要為此多開一個 state
+  const pendingCaret = useRef<[number, number] | null>(null);
+  useLayoutEffect(() => {
+    const c = pendingCaret.current;
+    if (c && taRef.current) { taRef.current.setSelectionRange(c[0], c[1]); pendingCaret.current = null; }
+  });
+  const tool = (tl: Tool) => {
+    const ta = taRef.current; if (!ta) return;
+    const { value, caret } = applyTool(ta, tl);
+    pendingCaret.current = caret ?? null;
+    onBody(value);
+  };
 
   return (
     <div className="tasks-pane">
@@ -269,7 +302,11 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
         <div className="ed-foot">
           <span className={`ed-hint${dirty ? " is-dirty" : ""}`}>{saving ? t("list.saving") : dirty ? t("list.unsaved") : ""}</span>
           <span className="spacer" />
-          <button className="btn is-quiet" disabled={saving} onClick={() => setPreview((p) => !p)}>{t("list.preview")}</button>
+          {/* 按鈕文字要講「按下去會做什麼」，不是「現在是什麼模式」（使用者回報：
+              預覽中這顆字還是寫「預覽」，點下去卻是回編輯，文字與動作相反） */}
+          <button className="btn is-quiet" disabled={saving} onClick={() => setPreview((p) => !p)}>
+            {t(preview ? "list.backToEdit" : "list.preview")}
+          </button>
           <button className="btn is-quiet" disabled={saving} onClick={leave}>{t("list.cancel")}</button>
           <button className="btn is-primary" disabled={locked} onClick={() => save()}>{t("list.save")}</button>
         </div>

@@ -36,6 +36,7 @@
     "editorTitle": "標題",
     "editorBody": "內文",
     "preview": "預覽",
+    "backToEdit": "返回編輯",
     "save": "儲存",
     "saving": "儲存中…",
     "unsaved": "未儲存",
@@ -88,11 +89,9 @@
     "collapseTicket": "收起內文",
     "toolbarHeading": "標題",
     "toolbarBold": "粗體",
-    "toolbarItalic": "斜體",
     "toolbarCode": "行內程式碼",
     "toolbarList": "清單",
     "toolbarQuote": "引用",
-    "toolbarCodeBlock": "程式碼區塊",
-    "toolbarLink": "連結"
+    "toolbarCodeBlock": "程式碼區塊"
   }
 }

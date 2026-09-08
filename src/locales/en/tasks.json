@@ -36,6 +36,7 @@
     "editorTitle": "Title",
     "editorBody": "Body",
     "preview": "Preview",
+    "backToEdit": "Back to editing",
     "save": "Save",
     "saving": "Saving…",
     "unsaved": "Unsaved",
@@ -88,11 +89,9 @@
     "collapseTicket": "Collapse body",
     "toolbarHeading": "Heading",
     "toolbarBold": "Bold",
-    "toolbarItalic": "Italic",
     "toolbarCode": "Inline code",
     "toolbarList": "List",
     "toolbarQuote": "Quote",
-    "toolbarCodeBlock": "Code block",
-    "toolbarLink": "Link"
+    "toolbarCodeBlock": "Code block"
   }
 }
