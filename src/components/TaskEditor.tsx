@@ -233,7 +233,15 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   const pendingCaret = useRef<[number, number] | null>(null);
   useLayoutEffect(() => {
     const c = pendingCaret.current;
-    if (c && taRef.current) { taRef.current.setSelectionRange(c[0], c[1]); pendingCaret.current = null; }
+    if (!c || !taRef.current) return;
+    // 點工具列按鈕會把焦點從文字區移到按鈕上；沒有焦點的欄位不顯示游標，就算
+    // selectionStart/End 設對了，使用者也看不到插入點在哪（使用者回報：「符號有出來，
+    // 但游標消失了」）。focus() 要在 setSelectionRange 之前——這也代表鍵盤使用者
+    // Tab 到工具列按鈕、按 Enter 之後，焦點會回到文字區：這是刻意的，工具列按鈕
+    // 存在的目的就是讓你按完接著打字，不是留在按鈕上
+    taRef.current.focus();
+    taRef.current.setSelectionRange(c[0], c[1]);
+    pendingCaret.current = null;
   });
   const tool = (tl: Tool) => {
     const ta = taRef.current; if (!ta) return;

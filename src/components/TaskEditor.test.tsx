@@ -443,7 +443,7 @@ describe("TaskEditor", () => {
     spy.mockRestore();
   });
 
-  it("工具列：粗體把選取包起來，游標落在整段（含右邊記號）之後", () => {
+  it("工具列：粗體把選取包起來，游標落在整段（含右邊記號）之後，且文字區真的拿到焦點", () => {
     setup();
     const box = bodyBox();
     fireEvent.change(box, { target: { value: "hello world" } });
@@ -452,9 +452,13 @@ describe("TaskEditor", () => {
     expect(box.value).toBe("**hello** world");
     expect(box.selectionStart).toBe(9);   // "**hello**".length
     expect(box.selectionEnd).toBe(9);
+    // 點按鈕會把焦點從文字區移走；沒有焦點的欄位不顯示游標，offset 設對了使用者也看不到
+    // （使用者回報：「符號有出來，但游標消失了」）——只驗 offset 抓不到這個，jsdom 對
+    // 沒有焦點的欄位一樣讓你讀寫 selectionStart/End（whole-branch review 四輪 FIX）
+    expect(document.activeElement).toBe(box);
   });
 
-  it("工具列：粗體在沒有選取時，游標落在兩個記號中間，打字立刻是套了格式的內容（whole-branch review 三輪 FIX 4）", () => {
+  it("工具列：粗體在沒有選取時，游標落在兩個記號中間，打字立刻是套了格式的內容，且文字區真的拿到焦點（whole-branch review 三輪 FIX 4；四輪補焦點）", () => {
     // 使用者回報：空選取按下去只會插入 **** 這種看得到、用不出來的字面符號，游標又落在
     // 整串最後面，接著打字變成 ****text，格式完全沒套用，而且不知道要先選字才能用
     setup();
@@ -465,6 +469,7 @@ describe("TaskEditor", () => {
     expect(box.value).toBe("hello****");
     expect(box.selectionStart).toBe(7);   // "hello**" 之後，也就是兩個 * 中間
     expect(box.selectionEnd).toBe(7);
+    expect(document.activeElement).toBe(box);   // 游標位置是對的，但沒有焦點就看不見
   });
 
   it("工具列剩六顆按鈕：斜體與連結已拿掉（使用者驗收——斜體可用但用不到；連結插入 [選取](url) 後 safeHref(\"url\") 解析不出協定，按了預覽不會出現連結）", () => {
