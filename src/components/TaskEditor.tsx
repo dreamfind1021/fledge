@@ -176,11 +176,15 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
         setSaving(false);
         // 判別碼是封閉列舉（spec §8）：not_editable（票在你打開之後於外部被改壞，round-trip
         // 不過）／invalid_content（值域仍不符——理論上已被上面的正規化擋在送出前，但 sidecar
-        // 是最後一道防線）各自有專屬文案；invalid_target／write_failed／null（5xx 或非 JSON
-        // body）與其餘錯誤一律落回通用的「儲存失敗：<原因>」。not_editable 與 write_failed
-        // 過去在畫面上長得一模一樣——一個是別人動了檔案，一個是磁碟在故障，使用者要做的事
-        // 完全不同（review Important finding；CLAUDE.md §4.6.13：判別碼由 sidecar 給，
-        // i18n 映射交給前端，不把 `updateTaskContent failed: 400` 這種字面值糊到使用者臉上）
+        // 是最後一道防線）各自有專屬文案；not_editable 與 write_failed 過去在畫面上長得
+        // 一模一樣——一個是別人動了檔案，一個是磁碟在故障，使用者要做的事完全不同
+        // （review Important finding）。
+        // **CLAUDE.md §4.6.13 管的是任何內部字串，不是只有 400 那條**：write_failed／
+        // invalid_target／null（5xx 或非 JSON body）／malformed response／網路錯誤，
+        // 一律不得把 e.message 或 resp.status 塞進 t() 的插值——那條路徑上曾經只換了
+        // 狀態碼、字面值照樣糊到使用者臉上，同一種違規換了個馬甲（whole-branch review
+        // 二輪 finding）。沿用 useCardSession.ts:89-92 已經定案的作法：console.error
+        // 留住診斷資訊給 devtools，畫面只給翻譯過的固定字串
         if (e instanceof TaskConflictError) { setNotice({ key: "list.conflictEditor" }); return; }
         if (e instanceof TaskContentError && e.code === "not_editable") {
           setNotice({ key: "list.saveFailedNotEditable" }); return;
@@ -188,7 +192,11 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
         if (e instanceof TaskContentError && e.code === "invalid_content") {
           setNotice({ key: "list.saveFailedInvalidContent" }); return;
         }
-        setNotice({ key: "list.saveFailed", reason: e instanceof Error ? e.message : String(e) });
+        console.error("updateTaskContent 失敗", e);
+        if (e instanceof TaskContentError && e.code === "write_failed") {
+          setNotice({ key: "list.saveFailedWriteFailed" }); return;   // 磁碟／檔案系統問題，不是使用者的錯
+        }
+        setNotice({ key: "list.saveFailedGeneric" });   // invalid_target／null／malformed response／其餘一律落這裡
       });
   }, [title, body, baseFp, port, project, task.name, onSaved]);
 

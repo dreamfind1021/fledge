@@ -51,9 +51,10 @@
     "conflictEditor": "這張票在別的地方被改過了，你的內容沒有存進去。檔案沒被動，你打的字也還在下面。",
     "copyMine": "複製我的內容",
     "discardAndReload": "捨棄我的版本，重新載入",
-    "saveFailed": "儲存失敗：{{reason}}",
     "saveFailedNotEditable": "這張票已經不能在這裡編輯了——你打開它之後，外部有東西改變了它的格式。你的內容沒有存進去，複製起來改用外部編輯器。",
     "saveFailedInvalidContent": "這張票的標題或內文目前的形式存不進去。你的內容沒有存進去——複製起來，拿掉不尋常的字元後再試一次。",
+    "saveFailedWriteFailed": "檔案寫不進去——看起來是磁碟或檔案系統的問題，不是你做錯了什麼。你的內容安全地留在草稿裡，問題排除後再試一次。",
+    "saveFailedGeneric": "儲存失敗。你的內容安全地留在草稿裡——再試一次。",
     "copied": "已複製",
     "orphanDraft": "這張票已經不在了，但你有一份未儲存的草稿：{{title}}",
     "orphanUnavailable": "現在讀不到這個專案的待辦，草稿留著。"

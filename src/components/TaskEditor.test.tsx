@@ -106,12 +106,16 @@ describe("TaskEditor", () => {
     expect(loadDraft("/p", "01-a.md")?.body).toBe("我打的");
   });
 
-  it("200 但回應缺 fingerprint → 當失敗，草稿留著", async () => {
+  it("200 但回應缺 fingerprint → 落回通用字串（不是 e.message），草稿留著（whole-branch review 二輪 FIX 1）", async () => {
+    // malformed response 不是 TaskContentError，是 sidecar.ts 自己驗形狀後拋的裸 Error——
+    // 這條路徑也不得把 e.message 塞進畫面（CLAUDE.md §4.6.13 管的是任何內部字串，不是只有
+    // 400 那條），所以斷言用具體的翻譯字串而不是拿 /Save failed/ 這種可能巧合命中的 regex
     updateTaskContent.mockRejectedValue(new Error("updateTaskContent: malformed response"));
     setup();
     fireEvent.change(bodyBox(), { target: { value: "x" } });
     fireEvent.click(saveBtn());
-    await waitFor(() => expect(screen.getByText(/Save failed/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(en.list.saveFailedGeneric)).toBeTruthy());
+    expect(screen.queryByText(/malformed response/)).toBeNull();   // 原始例外字串沒有外流
     expect(loadDraft("/p", "01-a.md")?.body).toBe("x");
   });
 
@@ -133,14 +137,31 @@ describe("TaskEditor", () => {
     expect(loadDraft("/p", "01-a.md")?.body).toBe("x");
   });
 
-  it("400 invalid_target／500 write_failed → 落回通用「儲存失敗」訊息，不誤用專屬字串（not_editable 與 write_failed 過去長得一樣）", async () => {
-    updateTaskContent.mockRejectedValue(new TaskContentError("write_failed", 500));
+  it("500 write_failed → 專屬訊息（磁碟／檔案系統問題，不是使用者的錯），並把原始例外記進 console（whole-branch review 二輪 FIX 1）", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = new TaskContentError("write_failed", 500);
+    updateTaskContent.mockRejectedValue(err);
     setup();
     fireEvent.change(bodyBox(), { target: { value: "x" } });
     fireEvent.click(saveBtn());
-    await waitFor(() => expect(screen.getByText(/Save failed/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(en.list.saveFailedWriteFailed)).toBeTruthy());
     expect(screen.queryByText(en.list.saveFailedNotEditable)).toBeNull();
     expect(screen.queryByText(en.list.saveFailedInvalidContent)).toBeNull();
+    expect(screen.queryByText(en.list.saveFailedGeneric)).toBeNull();
+    expect(screen.queryByText(/write_failed|status: 500|updateTaskContent failed/)).toBeNull();   // 判別碼／狀態碼沒有外流
+    expect(errSpy).toHaveBeenCalledWith(expect.any(String), err);   // 診斷資訊仍留在 devtools
+    errSpy.mockRestore();
+  });
+
+  it("400 invalid_target → 落回通用「儲存失敗」字串，不誤用 write_failed 或其他專屬字串（not_editable 與 write_failed 過去長得一樣，通用與專屬也不能混）", async () => {
+    updateTaskContent.mockRejectedValue(new TaskContentError("invalid_target", 400));
+    setup();
+    fireEvent.change(bodyBox(), { target: { value: "x" } });
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(screen.getByText(en.list.saveFailedGeneric)).toBeTruthy());
+    expect(screen.queryByText(en.list.saveFailedNotEditable)).toBeNull();
+    expect(screen.queryByText(en.list.saveFailedInvalidContent)).toBeNull();
+    expect(screen.queryByText(en.list.saveFailedWriteFailed)).toBeNull();
   });
 
   it("儲存失敗（非 409）也要有〔複製我的內容〕——spec §7.3 的失敗表格點名這顆按鈕（whole-branch review FIX 1）", async () => {
@@ -149,7 +170,7 @@ describe("TaskEditor", () => {
     setup();
     fireEvent.change(bodyBox(), { target: { value: "x" } });
     fireEvent.click(saveBtn());
-    await waitFor(() => expect(screen.getByText(/Save failed/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(en.list.saveFailedGeneric)).toBeTruthy());
     fireEvent.click(screen.getByText(en.list.copyMine));
     expect(writeClipboard).toHaveBeenCalledWith("# 舊標題\n\nx");
     await waitFor(() => expect(screen.getByText(en.list.copied)).toBeTruthy());
@@ -453,6 +474,24 @@ describe("TaskEditor", () => {
     // 複製後，衝突說明與捨棄按鈕都還在——不是被複製回饋整條換掉
     expect(screen.getByText(en.list.conflictEditor)).toBeTruthy();
     expect(screen.getByText(en.list.discardAndReload)).toBeTruthy();
+  });
+
+  it("〔複製我的內容〕在草稿存不進去（離開分支）的提示裡也不會吃掉〔仍要離開〕（whole-branch review 二輪 FIX 3：unsavable 分支的對稱測試）", async () => {
+    // FIX 4 只驗了 notice／conflictEditor 分支；copied 這面旗標同樣蓋在 unsavable 那個
+    // 提示條上（複製按鈕兩處共用），邏輯是對稱的，但這一半原本沒有測試釘住
+    const spy = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("q"); });
+    writeClipboard.mockResolvedValue(true);
+    setup();
+    fireEvent.change(bodyBox(), { target: { value: "x" } });
+    fireEvent.click(screen.getByText("p"));                              // 返回時 flush 失敗
+    expect(screen.getByText(en.list.draftUnsavable)).toBeTruthy();
+    fireEvent.click(screen.getByText(en.list.copyMine));
+    expect(writeClipboard).toHaveBeenCalledWith("# 舊標題\n\nx");
+    await waitFor(() => expect(screen.getByText(en.list.copied)).toBeTruthy());
+    // 複製後，警告文字與〔仍要離開〕都還在——不是被複製回饋整條換掉
+    expect(screen.getByText(en.list.draftUnsavable)).toBeTruthy();
+    expect(screen.getByText(en.list.leaveAnyway)).toBeTruthy();
+    spy.mockRestore();
   });
 
   it("複製我的內容失敗（回 false）→ 不顯示已複製，原本的提示還在（task 10 review FIX 6）", async () => {

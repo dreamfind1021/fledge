@@ -51,9 +51,10 @@
     "conflictEditor": "This ticket was changed elsewhere. Your content was NOT saved. The file is untouched and your text is still below.",
     "copyMine": "Copy my content",
     "discardAndReload": "Discard my version and reload",
-    "saveFailed": "Save failed: {{reason}}",
     "saveFailedNotEditable": "This ticket can no longer be edited here — something outside the app changed its format while you had it open. Your content was not saved; copy it and use an external editor.",
     "saveFailedInvalidContent": "This ticket's title or body isn't in a form that can be saved. Your content was not saved — copy it, remove any unusual characters, and try again.",
+    "saveFailedWriteFailed": "The file couldn't be written — this looks like a disk or filesystem problem, not something you did. Your content is safe in the draft; try again once it clears.",
+    "saveFailedGeneric": "Save failed. Your content is safe in the draft — try again.",
     "copied": "Copied",
     "orphanDraft": "This ticket is gone, but you have an unsaved draft: {{title}}",
     "orphanUnavailable": "This project's tasks can't be read right now. The draft is kept."
