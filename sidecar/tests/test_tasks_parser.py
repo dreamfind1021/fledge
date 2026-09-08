@@ -3,6 +3,7 @@
 §6.2 的表是契約的**示例、不是窮舉**——表上沒列到的壞法一律依契約辦理：
 回異常票、逐檔隔離、不隱藏。所以本檔除了逐個案，還有一條「餵任意二進位垃圾」的契約測試。
 """
+import os
 import random
 
 import pytest
@@ -149,3 +150,108 @@ def test_rendered_title_is_flattened_to_one_line():
     """多行標題會讓 `# ` 之後的內容被當成內文，存回去再讀出來就不是原本那張票。"""
     text = P.render_task("第一行\n第二行", created="2026-08-29")
     assert P.parse_task("01-x.md", text).title == "第一行 第二行"
+
+
+# ── replace_body（spec §5.1）──────────────────────────────────────────────
+
+FM = b"---\nstatus: doing\nsource: ai\ncreated: 2026-09-01\n---\n"
+
+
+def test_replace_body_keeps_frontmatter_bytes_and_rewrites_rest():
+    """frontmatter 位元組一字不動，圍籬之後整段換掉（spec §4 的契約）。"""
+    raw = FM + b"\n# old\n\nold body\n"
+    out = P.replace_body(raw, "new", "new body")
+    assert out == FM + b"\n# new\n\nnew body\n"
+    assert out[: len(FM)] == raw[: len(FM)]
+
+
+def test_replace_body_empty_body_matches_render_task_shape():
+    """空內文時沒有尾隨空行——要與 render_task() 產生的形狀相同，否則 Fledge 自己建的票
+    round-trip 會不過（Task 2）。"""
+    raw = FM + b"\n# t\n\nbody\n"
+    assert P.replace_body(raw, "t", "") == FM + b"\n# t\n"
+
+
+def test_replace_body_keeps_invalid_utf8_in_frontmatter():
+    """在位元組上做，frontmatter 裡的無效 UTF-8 不被換成 U+FFFD（spec §5.2）。"""
+    raw = b"---\nstatus: todo\nsource: \xff\xfe\ncreated: 2026-09-01\n---\n\n# t\n"
+    out = P.replace_body(raw, "t2", "")
+    assert b"source: \xff\xfe" in out
+
+
+def test_replace_body_collapses_title_to_one_line():
+    raw = FM + b"\n# t\n"
+    assert b"\n# a b\n" in P.replace_body(raw, "  a\n  b  ", "")
+
+
+def test_replace_body_rejects_incomplete_fence():
+    """closing fence 必須獨占一行。`---suffix`、`----`、沒有 fence、檔尾 fence 一律拒（spec §5.1）。"""
+    for bad in (
+        b"---\nstatus: todo\n---suffix\n# t\n",
+        b"---\nstatus: todo\n----\n# t\n",
+        b"no fence at all\n",
+        b"---\nstatus: todo\n---",
+        b"",
+    ):
+        with pytest.raises(ValueError):
+            P.replace_body(bad, "t", "")
+
+
+def test_replace_body_rejects_empty_title():
+    with pytest.raises(ValueError):
+        P.replace_body(FM + b"\n# t\n", "   \n  ", "")
+
+
+# ── can_round_trip（spec §5.2.1）─────────────────────────────────────────
+
+
+def test_render_task_output_round_trips():
+    """Fledge 自己建的票必須可編輯——這是整個資格檢查的地基（spec §10.1）。"""
+    for title, in (("匯出的檔名要能自訂",), ("A/B test",), ("x",)):
+        raw = P.render_task(title, created="2026-09-01").encode("utf-8")
+        assert P.can_round_trip(raw), title
+
+
+def test_standard_ticket_with_body_round_trips():
+    raw = FM + b"\n# t\n\nline one\n\n- item\n"
+    assert P.can_round_trip(raw)
+
+
+@pytest.mark.parametrize("raw", [
+    FM + b"\n\n# t\n",                    # 圍籬與標題間兩個空行（split_frontmatter 會 lstrip）
+    FM + b"\npreface\n# t\n",             # 標題前有文字（_split_title 丟掉）
+    FM + b"\n# t\n\nbody\n\n",            # 內文尾端兩個空行（strip("\\n") 削掉）
+    FM + b"\n# t\r\n\r\nbody\r\n",        # CRLF（splitlines 變 LF）
+    b"---\nstatus: todo\n---suffix\n# t\n",  # fence 不是完整行
+    FM + b"\n# \xff\xfe\n",               # 內文區無效 UTF-8（strict 解碼失敗）
+    FM + b"\nno title line\n",            # title_missing → parse 用 short_name 替代
+    b"",                                  # 空檔
+    b"garbage",                           # 沒有 frontmatter
+])
+def test_non_standard_shapes_are_not_editable(raw):
+    """每一種都是一條 parser 會削減內容的路徑，各自獨立測（spec §10.1 假綠警告）。"""
+    assert not P.can_round_trip(raw)
+
+
+def test_can_round_trip_never_raises():
+    """跑在 scan_tasks 的逐檔迴圈裡，一張壞票拋出去就違反契約 2（spec §5.2.1）。
+
+    兩組輸入缺一不可：隨機位元組幾乎必然在 decode 就被擋下，只證明得了解碼那條分支；
+    要驗到 parse_task／replace_body 的深處，輸入必須先是合法 UTF-8。手挑的那幾筆是
+    確定性的——不靠亂數碰運氣撞到 replace_body 的 ValueError。"""
+    rnd = random.Random(20260908)
+    payloads = [
+        b"", b"---", b"---\n", b"---\n---\n", b"\x00\x01\x02",
+        b"---\nstatus: todo\n---\n",
+        b"---\nstatus: todo\n---\n\n# t\n",
+        b"---\nstatus: todo\n---suffix\n# t\n",
+        b"---\nstatus: todo\n---\n\n\n# t\r\n",
+        b"---\nstatus: todo\n---\n\n# \n",
+    ]
+    payloads += [os.urandom(64) for _ in range(200)]
+    payloads += [
+        "".join(rnd.choice("---\n\r# :\tabc") for _ in range(rnd.randrange(1, 120))).encode("utf-8")
+        for _ in range(200)
+    ]
+    for raw in payloads:
+        assert P.can_round_trip(raw) in (True, False)

@@ -233,3 +233,56 @@ def replace_status(raw: bytes, status: str) -> bytes:
             return b"---\nstatus: " + st + raw[3:]
     # 整段沒有 frontmatter（或圍籬不完整）：補一個，原文一字不動接在後面
     return b"---\nstatus: " + st + b"\n---\n\n" + raw
+
+
+_FENCE_CLOSE = b"\n---\n"   # closing fence 必須獨占一行（spec §5.1）
+
+
+def replace_body(raw: bytes, title: str, body: str) -> bytes:
+    """把票檔圍籬之後的全部內容換成新的標題與內文，**frontmatter 位元組一字不動**（spec §5.1）。
+
+    **在位元組上定位 closing fence，且要求它獨占一行。** 不可以照抄 `split_frontmatter()`
+    的 `find("\\n---", 3)`——那個不要求獨占一行，`---suffix`、`----` 都會 match，
+    重寫範圍會落在錯的地方。
+
+    輸出形狀與 `render_task()` **完全相同**：空內文時 `\\n# 標題\\n`，非空時
+    `\\n# 標題\\n\\n內文\\n`。這是 `can_round_trip()` 成立的前提——Fledge 自己建的票
+    重組回去必須逐位元組相等。
+
+    找不到完整行 fence 或標題壓成單行後為空 → `ValueError`。呼叫端決定怎麼處理：
+    `can_round_trip()` 攔下回 False、`update_content()` 轉成 400。
+    """
+    if not raw.startswith(b"---"):
+        raise ValueError("no_frontmatter")
+    end = raw.find(_FENCE_CLOSE, 3)
+    if end == -1:
+        raise ValueError("no_closing_fence")
+    head = raw[: end + len(_FENCE_CLOSE)]
+    one_line = " ".join(title.split())
+    if not one_line:
+        raise ValueError("empty_title")
+    tail = f"\n# {one_line}\n" + (f"\n{body}\n" if body else "")
+    return head + tail.encode("utf-8")
+
+
+def can_round_trip(raw: bytes) -> bool:
+    """一張票可編輯 ⇔ 用它自己 parse 出來的 title／body 重組回去，逐位元組等於原檔（spec §5.2.1）。
+
+    前端拿到的 `title`／`body` 是 parser 修剪過的（標題前文字被丟、首尾換行被削、CRLF 變 LF、
+    圍籬後空行被削）。使用者只改一個字存回去，那些被削掉的東西就永久沒了。**不列舉形狀**
+    （列舉會漏），直接驗性質。
+
+    **對任意 raw 不拋例外。** 跑在 `scan_tasks()` 的逐檔迴圈裡，一張壞票拋出去就違反
+    「單一壞票不可拖垮整個掃描」的契約 2。嚴格解碼失敗（`UnicodeDecodeError`）與
+    `replace_body()` 的 `ValueError`（fence 不完整等）一律攔下回 False（spec §5.2.1，
+    只點名這兩種——不是「任何例外」）。
+
+    `parse_task` 需要檔名算編號與 short_name fallback，這裡傳 dummy：編號不影響 title／body；
+    title_missing 時 parse 會用 short_name 當標題，重組後多一行 `# _`，比對自然不等。
+    """
+    try:
+        text = raw.decode("utf-8")               # strict——無效位元組直接 False
+        task = parse_task("_.md", text)
+        return replace_body(raw, task.title, task.body) == raw
+    except (UnicodeDecodeError, ValueError):
+        return False

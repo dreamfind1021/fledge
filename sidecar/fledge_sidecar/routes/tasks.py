@@ -1,4 +1,4 @@
-"""待辦面板路由（design §7）。五個端點。
+"""待辦面板路由（design §7）。六個端點。
 
 錯誤一律回 error code，不回 user-facing 中文 prose（`CLAUDE.md` §4.6.13）。
 路徑邊界一律經 `tasks/scanner.py` 的 resolver，本檔不自己組路徑（design §7.1）。
@@ -122,6 +122,44 @@ def update_task(
             return JSONResponse({"error": "write_failed"}, status_code=500)
         except ValueError:
             return JSONResponse({"error": "invalid_target"}, status_code=400)
+        except FileNotFoundError:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        except OSError:
+            return JSONResponse({"error": "invalid_target"}, status_code=400)
+        if row is None:
+            return JSONResponse({"error": "stale"}, status_code=409)
+        return JSONResponse(_with_path([row], td.project)[0])
+
+
+@router.put("/content")
+def update_content(
+    project: str = Body(""), name: str = Body(""),
+    title: str = Body(""), body: str = Body(""), fingerprint: str = Body(""),
+) -> JSONResponse:
+    """改標題與內文（spec §8）。與 PATCH 分開：PATCH 只換 status 一行、其餘位元組不動；
+    這個端點換圍籬之後的全部、frontmatter 不動——兩種保真等級不混進同一個端點（§4）。
+
+    400 的 error code 直接來自 `update_content` 的 ValueError 訊息：`not_editable`
+    （round-trip 不過）、`invalid_content`（值域不符）、其餘歸 `invalid_target`。
+    **anomaly 標記不是 400 的理由**——`number_duplicate`／`number_missing` 的票照樣 200。
+    """
+    if not name:
+        return JSONResponse({"error": "name_required"}, status_code=400)
+    if not fingerprint:
+        return JSONResponse({"error": "fingerprint_required"}, status_code=400)
+    with scanner.open_tasks_dir(project, AppConfig.load()) as td:
+        rejected = _target(td)
+        if rejected is not None:
+            return rejected
+        try:
+            row = scanner.update_content(
+                td.fd, name, title=title, body=body, expected_fingerprint=fingerprint,
+            )
+        except (scanner.TaskWriteError, PermissionError):
+            return JSONResponse({"error": "write_failed"}, status_code=500)
+        except ValueError as exc:
+            code = str(exc) if str(exc) in ("not_editable", "invalid_content") else "invalid_target"
+            return JSONResponse({"error": code}, status_code=400)
         except FileNotFoundError:
             return JSONResponse({"error": "not_found"}, status_code=404)
         except OSError:

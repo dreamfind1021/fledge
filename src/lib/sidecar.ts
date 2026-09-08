@@ -1083,6 +1083,11 @@ export interface TaskRow {
   fingerprint: string;
   /** 票檔的絕對路徑，給「用編輯器打開」用。由 sidecar 組，前端不拼路徑 */
   path: string;
+  /** 內文（圍籬與標題行之後的全部，parser 修剪過）。spec §3 */
+  body: string;
+  /** 可否在介面內編輯（sidecar 的 round-trip 檢查）。runtime JSON 沒驗證，
+   *  讀的時候缺欄或不是布林一律當 false——fail-safe 落在「不給編輯」那側。spec §3 */
+  editable: boolean;
 }
 
 export interface TasksListResponse {
@@ -1149,6 +1154,17 @@ export class TaskConflictError extends Error {
   }
 }
 
+/** `PUT /tasks/content` 非 409 的失敗。spec §8 的封閉列舉：`not_editable`／`invalid_content`／
+ *  `invalid_target`／`write_failed`（5xx 或非 JSON body 時 `code` 為 null）。理由同
+ *  `SessionError`：`code` 只放欄位、不進 message，否則 `String(e)` 會讓判別碼繞過 i18n
+ *  映射直接出現在畫面上（CLAUDE.md §4.6.13）。 */
+export class TaskContentError extends Error {
+  constructor(public readonly code: string | null, public readonly status: number) {
+    super(`updateTaskContent failed: ${status}`);
+    this.name = "TaskContentError";
+  }
+}
+
 /** 改狀態。成功回傳更新後的票（含新 fingerprint），呼叫端必須用它取代本地狀態。 */
 export async function updateTask(
   port: number, project: string, name: string, status: string, fingerprint: string,
@@ -1171,4 +1187,32 @@ export async function deleteTask(
   const resp = await fetch(`${base(port)}/tasks?${q}`, { method: "DELETE", headers: authHeaders() });
   if (resp.status === 409) throw new TaskConflictError();
   if (!resp.ok) throw new Error(`deleteTask failed: ${resp.status}`);
+}
+
+/**
+ * 改標題與內文（spec §8）。成功回傳更新後的票（含新 fingerprint），呼叫端必須用它取代本地狀態。
+ *
+ * **成功的定義是「200 且 JSON 完整且有 fingerprint」**，不是「HTTP 200」（spec §7.3）。
+ * sidecar 送了 headers 之後被 kill，前端看到的是 200 ＋ 解析失敗的 body——那不是成功。
+ * `signal`：離開編輯器時 abort，讓晚到的回應根本不到達 handler（§7.3）。
+ */
+export async function updateTaskContent(
+  port: number, project: string, name: string, title: string, body: string, fingerprint: string,
+  signal?: AbortSignal,
+): Promise<TaskRow> {
+  const resp = await fetch(`${base(port)}/tasks/content`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ project, name, title, body, fingerprint }),
+    signal,
+  });
+  if (resp.status === 409) throw new TaskConflictError();
+  if (!resp.ok) throw new TaskContentError(await readErrorCode(resp), resp.status);
+  const row = (await resp.json()) as Partial<TaskRow>;
+  // spec §7.3 的成功定義：name、fingerprint、body 三個都要是字串。缺任何一個都不是成功——
+  // 缺 body 的 200 若被當成功，TaskEditor 會清掉唯一的草稿（plan R1 F3）
+  if (typeof row.fingerprint !== "string" || typeof row.name !== "string" || typeof row.body !== "string") {
+    throw new Error("updateTaskContent: malformed response");
+  }
+  return row as TaskRow;
 }
