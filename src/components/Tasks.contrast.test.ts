@@ -71,37 +71,58 @@ const paintToken = (selector: string, prop: string) => {
 
 describe("待辦面板的顏色對比", () => {
   const bg = token("bg");
+  // 編輯器（spec §6.2）的文字實際坐落在 .full-editor 的 --surface 上，不是 --bg——
+  // --surface 比 --bg 亮，拿 --bg 當底算出來的對比度會偏高、掩蓋掉真的不夠的情況，
+  // 所以這裡另外備一個底色，各選擇器依實際坐落的容器各自指定（task 10 review）
+  const surface = token("surface");
 
   // 記號是可操作的 UI 元件，非文字門檻 3:1（WCAG 1.4.11）
   it.each([
-    ["todo 空心框", ".tk-mark.is-todo::before", "border"],
-    ["doing 實心方", ".tk-mark.is-doing::before", "background"],
-    ["done 打勾（繼承 .tk-mark 的 color）", ".tk-mark", "color"],
-  ])("狀態記號 %s 對背景至少 3:1", (_label, selector, prop) => {
-    expect(contrast(token(paintToken(selector, prop)), bg)).toBeGreaterThanOrEqual(3);
+    ["todo 空心框", ".tk-mark.is-todo::before", "border", bg],
+    ["doing 實心方", ".tk-mark.is-doing::before", "background", bg],
+    ["done 打勾（繼承 .tk-mark 的 color）", ".tk-mark", "color", bg],
+    // 整頁編輯器（spec §6.2／§6.4）停用態的邊框：平常文字已經是 --dim，改文字色沒有用，
+    // 訊號改放邊框上（task 10 review FIX 2）——都坐落在 .full-editor 的 --surface 上
+    [".ed-btn 停用邊框", ".ed-btn:disabled", "border", surface],
+    ["Preview／Cancel 停用邊框", ".btn.is-quiet:disabled", "border-color", surface],
+    ["Save 停用邊框", ".btn.is-primary:disabled", "border-color", surface],
+  ])("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
+    expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(3);
   });
 
   // 票上的文字門檻 4.5:1。已完成的標題淡化到某個 token 就停，再淡就不合格
   it.each([
-    ["已完成的標題", ".tk.is-done .tk-title", "color"],
-    ["來源 AI", ".tk-src.is-ai", "color"],
-    ["來源 我", ".tk-src.is-me", "color"],
-    ["總覽的下一步", ".tov-next", "color"],
-    ["沒設下一步的提示", ".tov-next.is-none", "color"],
-    ["chip 文字", ".tov-chip", "color"],
-    ["還沒開始用", ".tov-unused", "color"],
-    ["總覽分區標籤", ".tov-sec-lab", "color"],
-    ["總覽分區計數", ".tov-sec-n", "color"],
-    ["第二層分區標籤", ".tasks-sec-lab", "color"],
-    ["第二層分區計數", ".tasks-sec-n", "color"],
+    ["已完成的標題", ".tk.is-done .tk-title", "color", bg],
+    ["來源 AI", ".tk-src.is-ai", "color", bg],
+    ["來源 我", ".tk-src.is-me", "color", bg],
+    ["總覽的下一步", ".tov-next", "color", bg],
+    ["沒設下一步的提示", ".tov-next.is-none", "color", bg],
+    ["chip 文字", ".tov-chip", "color", bg],
+    ["還沒開始用", ".tov-unused", "color", bg],
+    ["總覽分區標籤", ".tov-sec-lab", "color", bg],
+    ["總覽分區計數", ".tov-sec-n", "color", bg],
+    ["第二層分區標籤", ".tasks-sec-lab", "color", bg],
+    ["第二層分區計數", ".tasks-sec-n", "color", bg],
     // 展開預覽（spec §6.1／§6.4）新增的選擇器：不能只讓「16 tests passed」是因為
     // 這幾條規則根本沒被掃到——沒有內文、不可編輯說明、正文與連結都要各自過 4.5:1
-    [".tk-md 內文", ".tk-md", "color"],
-    ["沒有內文的提示", ".tk-empty", "color"],
-    ["不可編輯的說明", ".tk-noedit", "color"],
-    [".tk-md 連結", ".tk-md a", "color"],
-  ])("%s 對背景至少 4.5:1", (_label, selector, prop) => {
-    expect(contrast(token(paintToken(selector, prop)), bg)).toBeGreaterThanOrEqual(4.5);
+    [".tk-md 內文", ".tk-md", "color", bg],
+    ["沒有內文的提示", ".tk-empty", "color", bg],
+    ["不可編輯的說明", ".tk-noedit", "color", bg],
+    [".tk-md 連結", ".tk-md a", "color", bg],
+    // 整頁編輯器（spec §6.2／§6.4，task 10 review FIX 4）：坐落在 --surface 上的文字
+    [".ed-title 正常文字", ".ed-title", "color", surface],
+    [".ed-area 正常文字", ".ed-area", "color", surface],
+    [".ed-hint 狀態字", ".ed-hint", "color", surface],
+    [".ed-title 停用文字", ".ed-title:disabled", "color", surface],
+    [".ed-area 停用文字", ".ed-area:disabled", "color", surface],
+    ["Save 停用文字", ".btn.is-primary:disabled", "color", surface],
+    // 返回列與提示條坐落在 .tasks-pane，沿用 --bg
+    ["返回列的專案名", ".full-back", "color", bg],
+    ["返回列的票號", ".full-num", "color", bg],
+    ["提示條文字", ".tk-banner", "color", bg],
+    ["提示條按鈕文字", ".tk-banner .bbtn", "color", bg],
+  ])("%s 對背景至少 4.5:1", (_label, selector, prop, backdrop) => {
+    expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(4.5);
   });
 
   // 完成區的展開箭頭是 lucide 的 svg，用 currentColor 吃 .tasks-sec 的 color；

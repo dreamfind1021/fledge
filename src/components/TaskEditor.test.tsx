@@ -13,6 +13,11 @@ vi.mock("../lib/sidecar", async (orig) => ({
   updateTaskContent: (...a: unknown[]) => updateTaskContent(...a),
 }));
 
+// copyMine 換走了 brief 原本的 @tauri-apps/plugin-clipboard-manager，改走這個 repo 自己的
+// writeClipboard（回 boolean、不 throw）；mock 寫法沿用 EnvCard.test.tsx 已驗證過的樣子。
+const writeClipboard = vi.fn<(text: string) => Promise<boolean>>();
+vi.mock("../lib/clipboard", () => ({ writeClipboard: (t: string) => writeClipboard(t) }));
+
 const task = (over: Partial<TaskRow> = {}): TaskRow => ({
   name: "01-a.md", number: 1, title: "舊標題", status: "todo", source: "me", created: "2026-09-01",
   anomalies: [], fingerprint: "f0", path: "/p/.fledge/tasks/01-a.md", body: "舊內文", editable: true, ...over,
@@ -28,7 +33,10 @@ const bodyBox = () => screen.getByLabelText(en.list.editorBody) as HTMLTextAreaE
 const saveBtn = () => screen.getByText(en.list.save) as HTMLButtonElement;
 
 describe("TaskEditor", () => {
-  beforeEach(async () => { await i18n.changeLanguage("en"); vi.clearAllMocks(); localStorage.clear(); vi.useRealTimers(); });
+  beforeEach(async () => {
+    await i18n.changeLanguage("en"); vi.clearAllMocks(); localStorage.clear(); vi.useRealTimers();
+    writeClipboard.mockReset().mockResolvedValue(true);
+  });
   afterEach(cleanup);
 
   it("送出前正規化並寫回畫面；送出的 fingerprint 是開始編輯那一版", async () => {
@@ -181,9 +189,31 @@ describe("TaskEditor", () => {
     fireEvent.change(screen.getByLabelText(en.list.editorBody), { target: { value: "x" } });
     fireEvent.click(screen.getByText(en.list.save));
     await waitFor(() => expect(updateTaskContent).toHaveBeenCalled());
+    // save() 送 PUT 之前已經同步 flush 過一次草稿（:117）——不清掉的話，就算 cleanup 的
+    // saveDraft 整行被砍掉，下面的斷言照樣綠，因為看到的是 save() 那次 flush 留下的痕跡，
+    // 不是 cleanup 自己的（task 10 review FIX 3：這條原本是假綠）
+    localStorage.clear();
     unmount();                                                           // 模擬 closeTab：不經 leave()
     expect(seenSignal?.aborted).toBe(true);
     expect(loadDraft("/p", "01-a.md")?.body).toBe("x");
+  });
+
+  it("儲存成功後父層在 onSaved 當下同步卸載：cleanup 不會留下幽靈草稿（task 10 review FIX 1）", async () => {
+    // 重現真正的 bug 形狀：onSaved 常常是父層拿掉編輯器的那個動作本身（同一個事件迴圈裡），
+    // TaskEditor 自己完全沒有機會先用 dirty:false 多 render 一次——如果測試在 onSaved 之後
+    // 才 await 一輪再手動 unmount，等於多送了一次 render，會讓 latest.current 提前被
+    // render body（:61）同步掉，看不出 review 抓到的那個競態
+    updateTaskContent.mockResolvedValue(task({ fingerprint: "f1" }));
+    let doUnmount: (() => void) | null = null;
+    const onSaved = vi.fn(() => doUnmount?.());
+    const { unmount } = render(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={onSaved} onLeave={vi.fn()} t={t} />);
+    doUnmount = unmount;
+    fireEvent.change(screen.getByLabelText(en.list.editorBody), { target: { value: "x" } });
+    fireEvent.click(screen.getByText(en.list.save));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    // 不能只驗「存檔成功清了草稿」——要驗的是卸載當下沒有用舊 fingerprint 把剛存好的
+    // 內容當「未存」又寫回一份幽靈草稿
+    expect(loadDraft("/p", "01-a.md")).toBeNull();
   });
 
   it("捨棄我的版本後 unmount：草稿不會被 cleanup 寫回（plan R3 F1）", async () => {
@@ -229,5 +259,30 @@ describe("TaskEditor", () => {
     setup({ body: "**b**" });
     fireEvent.click(screen.getByText(en.list.preview));
     expect(document.querySelector(".ed-preview strong")?.textContent).toBe("b");
+  });
+
+  it("複製我的內容成功 → 顯示已複製（task 10 review FIX 6）", async () => {
+    updateTaskContent.mockRejectedValue(new TaskConflictError());
+    writeClipboard.mockResolvedValue(true);
+    setup();
+    fireEvent.change(bodyBox(), { target: { value: "我的內容" } });
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(screen.getByText(en.list.conflictEditor)).toBeTruthy());
+    fireEvent.click(screen.getByText(en.list.copyMine));
+    expect(writeClipboard).toHaveBeenCalledWith("# 舊標題\n\n我的內容");
+    await waitFor(() => expect(screen.getByText(en.list.copied)).toBeTruthy());
+  });
+
+  it("複製我的內容失敗（回 false）→ 不顯示已複製，原本的提示還在（task 10 review FIX 6）", async () => {
+    updateTaskContent.mockRejectedValue(new TaskConflictError());
+    writeClipboard.mockResolvedValue(false);
+    setup();
+    fireEvent.change(bodyBox(), { target: { value: "我的內容" } });
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(screen.getByText(en.list.conflictEditor)).toBeTruthy());
+    fireEvent.click(screen.getByText(en.list.copyMine));
+    await waitFor(() => expect(writeClipboard).toHaveBeenCalled());
+    expect(screen.queryByText(en.list.copied)).toBeNull();
+    expect(screen.getByText(en.list.conflictEditor)).toBeTruthy();   // notice 沒被覆蓋
   });
 });

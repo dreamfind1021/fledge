@@ -202,6 +202,17 @@
 .btn:hover:not(:disabled) { background: var(--hover); }
 .btn.is-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
 .btn.is-quiet { color: var(--dim); border-color: transparent; }
+/* 停用態（review 找到的缺漏）：不用 opacity 淡化（spec §6.4）。
+   .ed-title／.ed-area 平常文字是 --text，換成 --dim 是看得見的真變化；.ed-btn／.btn.is-quiet
+   平常文字已經是 --dim，再把文字換成 --dim 什麼都不會變，改用邊框；.btn.is-primary 平常靠橘底
+   當訊號，停用時把橘底整個拿掉、換成跟 is-quiet 一致的外框樣式——調暗橘底吃掉的正是它的訊號
+   本身，不是「訊號變弱」而是「訊號消失」，跟拿掉它是同一件事，不如老實拿掉。
+   邊框、文字都量過對比度（見 Tasks.contrast.test.ts 與 task-10-report.md）。 */
+.ed-title:disabled, .ed-area:disabled { color: var(--dim); cursor: default; }
+.ed-btn:disabled { border: 1px solid var(--dim); cursor: default; }
+.btn:disabled { cursor: default; }
+.btn.is-quiet:disabled { border-color: var(--dim); }
+.btn.is-primary:disabled { background: transparent; border-color: var(--dim); color: var(--dim); }
 /* 提示條 */
 .tk-banner { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 10px; padding: 9px 12px; border-radius: 8px; font-size: 12px; line-height: 1.65; color: var(--dim); }
 .tk-banner .btext { flex: 1; }

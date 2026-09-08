@@ -120,7 +120,12 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
     updateTaskContent(port, project, task.name, ti, bo, baseFp, ac.signal)
       .then((updated) => {
         if (ac.signal.aborted) return;                   // 晚到：不清草稿、不動狀態
-        clearDraft(project, task.name); setSaving(false); onSaved(updated);
+        clearDraft(project, task.name);
+        // 同步寫 ref，不能只靠 setDirty(false)：onSaved 常常讓父層在同一輪把編輯器卸載，
+        // 卸載沒有下一次 render，cleanup 讀到的 latest.current 會是還沒同步前的 dirty:true，
+        // 於是把剛存檔成功的內容當「未存」用舊 fingerprint 寫回一份幽靈草稿（review R1）
+        latest.current = { ...latest.current, dirty: false };
+        setDirty(false); setSaving(false); onSaved(updated);
       })
       .catch((e: unknown) => {
         if (ac.signal.aborted) return;
@@ -132,7 +137,9 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
 
   const copyMine = () => writeClipboard(`# ${title}\n\n${body}`).then((ok) => { if (ok) setNotice({ key: "list.copied" }); });
   // 「捨棄我的版本」：清草稿後直接走，**不經 leave()**——leave 會先 flush 草稿，跟「捨棄」矛盾
-  const discardAndReload = () => { skipFlush.current = true; clearDraft(project, task.name); forceLeave(true); };
+  // cancelDebounce 對稱於 discardDraft（:93）：少了它，若上一層哪天不再同步卸載，
+  // 排隊中的 debounce 會在 600ms 後把剛丟棄的內容又寫回去（plan R3 F1 同一種坑）
+  const discardAndReload = () => { cancelDebounce(); skipFlush.current = true; clearDraft(project, task.name); forceLeave(true); };
 
   const taRef = useRef<HTMLTextAreaElement>(null);
   const tool = (tl: Tool) => { const ta = taRef.current; if (!ta) return; onBody(applyTool(ta, tl)); };
