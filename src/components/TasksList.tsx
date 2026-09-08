@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, SquarePen, Trash2, TriangleAlert } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Pencil, SquarePen, Trash2, TriangleAlert } from "lucide-react";
+import { renderMarkdownLite } from "../lib/markdownLite";
 import type { TaskRow, TasksListResponse } from "../lib/sidecar";
 
 type T = (k: string, o?: Record<string, unknown>) => string;
@@ -12,19 +13,29 @@ export const NEXT_STATUS: Record<string, string> = { todo: "doing", doing: "done
 // 年份佔四個字寬卻幾乎不帶資訊。認不得的格式一律不畫，不做猜測性的切字。
 const monthDay = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(5) : "");
 
-function Ticket({ task, onCycle, onDelete, onOpen, t }: {
+function Ticket({ task, onCycle, onDelete, onOpen, onEdit, t }: {
   task: TaskRow;
   onCycle: (task: TaskRow) => void;
   onDelete: (task: TaskRow) => void;
   onOpen: (task: TaskRow) => void;
+  onEdit: (task: TaskRow) => void;
   t: T;
 }) {
   const [openFlag, setOpenFlag] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const date = monthDay(task.created);
+  // runtime JSON 沒驗證：缺欄、非布林一律當不可編輯，fail-safe 落在不給編輯那側（spec §3）
+  const editable = task.editable === true;
+  // 列上原有的按鈕不得因此被觸發兩次行為（spec §6.1）：每顆都 stopPropagation
+  const stop = (fn: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); fn(); };
   return (
     <div className={`tk is-${task.status}`}>
-      <div className="tk-row">
+      <div className="tk-row" role="button" tabIndex={0}
+        aria-label={expanded ? t("a11y.collapseTicket") : t("a11y.expandTicket")}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((x) => !x)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded((x) => !x); } }}>
         {/* 狀態記號＝狀態按鈕：點一下循環 todo → doing → done → todo（design §5.2）。
             三態要有三種**輪廓**：空心方／實心方／打勾。只差顏色不夠——doing 與 done 若都是
             實心方塊，色覺障礙或單色顯示下就分不開（Codex 審查 medium）。
@@ -35,14 +46,14 @@ function Ticket({ task, onCycle, onDelete, onOpen, t }: {
             current: t(`status.${task.status}`),
             next: t(`status.${NEXT_STATUS[task.status] ?? "todo"}`),
           })}
-          title={t(`status.${task.status}`)} onClick={() => onCycle(task)}>
+          title={t(`status.${task.status}`)} onClick={stop(() => onCycle(task))}>
           {task.status === "done" ? <Check size={12} strokeWidth={3} /> : null}
         </button>
         <span className="tk-num">{task.number ?? t("list.noNumber")}</span>
         <span className="tk-title">{task.title}</span>
         {task.anomalies.length > 0 && (
           <button className="tk-flag" aria-label={t("anomaly.label")} title={t("anomaly.label")}
-            onClick={() => setOpenFlag((o) => !o)}>
+            onClick={stop(() => setOpenFlag((o) => !o))}>
             <TriangleAlert size={12} strokeWidth={2} />
           </button>
         )}
@@ -51,17 +62,31 @@ function Ticket({ task, onCycle, onDelete, onOpen, t }: {
         {/* 動作滑過才顯形（用 opacity，不是 display：位置得留著，否則整列會在 hover 時跳動）。
             CSS 另有 :focus-within，鍵盤 Tab 進來一樣看得到。 */}
         <span className="tk-acts">
+          {editable && (
+            <button className="tk-act" aria-label={t("list.edit")} title={t("list.edit")} onClick={stop(() => onEdit(task))}>
+              <Pencil size={13} strokeWidth={2} />
+            </button>
+          )}
           {/* 要寫內文就開檔案（design §5.2）——刻意不做票詳情編輯表單 */}
           <button className="tk-act" aria-label={t("a11y.openInEditor")} title={t("a11y.openInEditor")}
-            onClick={() => onOpen(task)}>
+            onClick={stop(() => onOpen(task))}>
             <SquarePen size={13} strokeWidth={2} />
           </button>
           <button className="tk-act is-danger" aria-label={t("list.delete")} title={t("list.delete")}
-            onClick={() => setConfirming(true)}>
+            onClick={stop(() => setConfirming(true))}>
             <Trash2 size={13} strokeWidth={2} />
           </button>
         </span>
       </div>
+      {expanded && (
+        <div className="tk-body">
+          {task.body
+            ? <div className="tk-md">{renderMarkdownLite(task.body)}</div>
+            : <div className="tk-empty">{t("list.noBody")}</div>}
+          {!editable && <div className="tk-noedit">{t("list.notEditable")}</div>}
+        </div>
+      )}
+      {/* 以下兩個區塊（刪除確認、異常說明）與現有程式碼完全相同，原封保留 */}
       {confirming && (
         // 先跳確認（design §5.2）：檔案直接消失，而 .fledge/ 不進 git，刪了救不回
         <div className="tk-confirm">
@@ -86,7 +111,7 @@ function Ticket({ task, onCycle, onDelete, onOpen, t }: {
 
 // 第二層：進行中 → 待辦 → 已完成（摺疊）。**做完不刪檔案**——
 // 上一版的第一條結構性缺陷就是「完成即移除在燒資產」。
-export function TasksList({ data, projectName, failed, notice, onBack, onCreate, onCycle, onDelete, onOpen, t }: {
+export function TasksList({ data, projectName, failed, notice, onBack, onCreate, onCycle, onDelete, onOpen, onEdit, t }: {
   data: TasksListResponse | null;
   projectName: string;
   failed: boolean;
@@ -96,6 +121,7 @@ export function TasksList({ data, projectName, failed, notice, onBack, onCreate,
   onCycle: (task: TaskRow) => void;
   onDelete: (task: TaskRow) => void;
   onOpen: (task: TaskRow) => void;
+  onEdit: (task: TaskRow) => void;
   t: T;
 }) {
   const [showDone, setShowDone] = useState(false);
@@ -139,7 +165,7 @@ export function TasksList({ data, projectName, failed, notice, onBack, onCreate,
   // 否則哪天多一個狀態值，那些票會從畫面上無聲消失。
   const todo = data.tasks.filter((x) => x.status !== "doing" && x.status !== "done");
   const row = (x: TaskRow) => (
-    <Ticket key={x.name} task={x} onCycle={onCycle} onDelete={onDelete} onOpen={onOpen} t={t} />
+    <Ticket key={x.name} task={x} onCycle={onCycle} onDelete={onDelete} onOpen={onOpen} onEdit={onEdit} t={t} />
   );
   const section = (label: string, n: number) => (
     <div className="tasks-sec">

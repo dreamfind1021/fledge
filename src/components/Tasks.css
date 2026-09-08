@@ -135,6 +135,26 @@
 .tk-flagbody .tk-file { font-family: var(--font-mono); font-size: 11px; color: var(--faint); margin-bottom: 4px; }
 .tk-flagbody ul { margin: 0; padding-left: 16px; }
 
+/* ── 展開後的內文預覽（spec §6.1）── */
+.tk-row { cursor: pointer; }
+.tk-body { margin: 2px 10px 10px 30px; padding: 12px 14px 14px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); }
+.tk-md { font-size: 13px; line-height: 1.75; color: var(--dim); }
+.tk-md > *:first-child { margin-top: 0; }
+.tk-md > *:last-child { margin-bottom: 0; }
+.tk-md p { margin: 0 0 10px; }
+.tk-md strong, .tk-md em, .tk-md h2 { color: var(--text); }
+.tk-md h2 { font-size: 13.5px; font-weight: 700; margin: 16px 0 8px; }
+.tk-md code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
+.tk-md pre { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 9px 11px; overflow-x: auto; margin: 0 0 10px; }
+.tk-md pre code { background: none; padding: 0; }
+.tk-md ul { margin: 0 0 10px; padding-left: 19px; }
+.tk-md li { margin: 3px 0; }
+.tk-md blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 2px solid var(--border); }
+.tk-md a { color: var(--primary); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--primary) 40%, transparent); }
+/* 說明文字用 --dim 不用 --faint：後者 3.43:1 過不了文字門檻（spec §6.4） */
+.tk-empty, .tk-noedit { font-size: 12.5px; color: var(--dim); font-style: italic; }
+.tk-noedit { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--divider); }
+
 /* 動作：滑過或鍵盤走到才顯形。用 opacity 不用 display——位置得留著，否則整列會在 hover 時跳動 */
 .tk-acts { flex-shrink: 0; display: flex; gap: 2px; opacity: 0; transition: opacity .12s ease; }
 .tk-row:hover .tk-acts, .tk-acts:focus-within { opacity: 1; }

@@ -25,6 +25,9 @@
     "newPlaceholder": "打一行字，按 Enter 新增",
     "add": "新增",
     "createError": "建立待辦失敗",
+    "edit": "編輯",
+    "noBody": "這張票沒有內文",
+    "notEditable": "這張票的格式不標準，不能在這裡編輯，請用外部編輯器打開",
     "delete": "刪除",
     "cancel": "取消",
     "confirmDelete": "確定刪除這張票？檔案會直接消失，救不回來。",
@@ -55,6 +58,8 @@
     "expandDone": "展開已完成",
     "collapseDone": "收起已完成",
     "openInEditor": "用編輯器打開檔案",
-    "statusCycle": "{{current}}，點一下切換成 {{next}}"
+    "statusCycle": "{{current}}，點一下切換成 {{next}}",
+    "expandTicket": "展開看內文",
+    "collapseTicket": "收起內文"
   }
 }

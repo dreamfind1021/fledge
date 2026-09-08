@@ -25,6 +25,9 @@
     "newPlaceholder": "Add a task and press Enter",
     "add": "Add",
     "createError": "Could not create the task",
+    "edit": "Edit",
+    "noBody": "This ticket has no body",
+    "notEditable": "This ticket's format is non-standard and can't be edited here. Open it in an external editor.",
     "delete": "Delete",
     "cancel": "Cancel",
     "confirmDelete": "Delete this task? The file is removed and cannot be restored.",
@@ -55,6 +58,8 @@
     "expandDone": "Show done",
     "collapseDone": "Hide done",
     "openInEditor": "Open the file in your editor",
-    "statusCycle": "{{current}}, change status to {{next}}"
+    "statusCycle": "{{current}}, change status to {{next}}",
+    "expandTicket": "Expand to read body",
+    "collapseTicket": "Collapse body"
   }
 }

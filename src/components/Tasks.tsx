@@ -112,7 +112,9 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
         ? <TasksOverview data={overview} failed={failed} onSelect={select} t={t} />
         : <TasksList data={list} projectName={projectName} failed={failed} notice={notice}
             onBack={back} onCreate={create}
-            onCycle={cycle} onDelete={remove} onOpen={openInEditor} t={t} />}
+            onCycle={cycle} onDelete={remove} onOpen={openInEditor}
+            onEdit={() => {}} // TODO(Task 11): 接 TaskEditor
+            t={t} />}
     </div>
   );
 }

@@ -451,4 +451,56 @@ describe("Tasks 面板", () => {
     fireEvent.click(screen.getByLabelText(en.a11y.openInEditor));
     await waitFor(() => expect(screen.getByText(en.list.actionError)).toBeTruthy());
   });
+
+  // ── 展開預覽 ＋ 編輯入口（spec §6.1）──
+
+  it("點列展開顯示 render 後的內文；再點收起", async () => {
+    fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "",
+      tasks: [ticket({ body: "**粗**\n\n- 項" })] });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    const row = await screen.findByText("第一件");
+    fireEvent.click(row);
+    await waitFor(() => expect(document.querySelector(".tk-body strong")?.textContent).toBe("粗"));
+    expect(document.querySelector(".tk-body li")?.textContent).toBe("項");
+    fireEvent.click(row);
+    await waitFor(() => expect(document.querySelector(".tk-body")).toBeNull());
+  });
+
+  it("內文為空時顯示「沒有內文」", async () => {
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    fireEvent.click(await screen.findByText("第一件"));
+    await waitFor(() => expect(screen.getByText(en.list.noBody)).toBeTruthy());
+  });
+
+  it("點狀態記號不會順便展開（stopPropagation）", async () => {
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByLabelText(statusLabel(en.status.todo, en.status.doing)));
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    expect(document.querySelector(".tk-body")).toBeNull();
+  });
+
+  it.each([
+    ["明確 false", { editable: false }],
+    ["缺欄", { editable: undefined as unknown as boolean }],
+    ["非布林", { editable: "yes" as unknown as boolean }],
+  ])("editable 是 %s 時不顯示編輯按鈕、展開區有說明", async (_, over) => {
+    fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", tasks: [ticket(over)] });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    expect(screen.queryByLabelText(en.list.edit)).toBeNull();
+    fireEvent.click(screen.getByText("第一件"));
+    await waitFor(() => expect(screen.getByText(en.list.notEditable)).toBeTruthy());
+  });
+
+  it("editable 為 true 時有編輯按鈕", async () => {
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    expect(screen.getByLabelText(en.list.edit)).toBeTruthy();
+  });
 });
