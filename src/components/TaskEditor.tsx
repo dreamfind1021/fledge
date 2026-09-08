@@ -54,6 +54,14 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   // 草稿存不進去時是哪個動作觸發的：儲存 → 沒有強制路徑（§7.3 硬性前置條件），只給複製與繼續編輯／取消；
   // 離開 → 才有「仍要離開」的例外（K6：離開沒草稿頂多丟畫面上的字，儲存沒草稿可能寫壞票檔又救不回）
   const [unsavable, setUnsavable] = useState<"save" | "leave" | null>(null);
+  // 草稿提示還沒被回答（接著改／還是要還原／丟棄草稿）時，能改動內容的控制項要鎖住（spec §7.6）。
+  // 沒有這道鎖，使用者能在提示還沒選之前繼續打字：畫面顯示的是磁碟版本 A，但 600ms 後
+  // scheduleDraft 會用 A 覆寫同一把 localStorage 鍵，草稿 B 就這樣被打字動作悄悄蓋掉——
+  // 「只有明確存檔／丟棄才清除未存草稿」的保證因此被繞過（兩位獨立審查者都抓到）。
+  // Save 尤其不能漏鎖：它送出前也會 flush 同一把鍵，留著等於換一條路徑蓋掉 B。
+  // 返回／取消／預覽不鎖：離開路徑必須永遠可按（spec D8）——這裡安全，字都還沒打，dirty
+  // 仍是 false，leave() 不會 flush；預覽只是切換顯示，不動內容。
+  const locked = saving || draftPrompt != null;
   const debounce = useRef<number | null>(null);
   const abort = useRef<AbortController | null>(null);
   const pendingDraft = useRef(loadDraft(project, task.name));
@@ -84,12 +92,17 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
     cancelDebounce();
     debounce.current = window.setTimeout(() => { saveDraft(project, task.name, { title: ti, body: bo, fingerprint: baseFp }); debounce.current = null; }, DEBOUNCE_MS);
   };
-  const onTitle = (v: string) => { setTitle(v); setDirty(true); scheduleDraft(v, body); };
-  const onBody = (v: string) => { setBody(v); setDirty(true); scheduleDraft(title, v); };
+  // `disabled` 只擋得住點擊——受控輸入框在 disabled 時仍可能收到程式化的 change/input
+  // （測試環境如此，不能排除某些自動化或輔助工具也如此），畫面上的鎖不是唯一防線。
+  // early return 確保就算事件真的送達，locked 期間也不會動到 state 或排 debounce（two review findings）
+  const onTitle = (v: string) => { if (locked) return; setTitle(v); setDirty(true); scheduleDraft(v, body); };
+  const onBody = (v: string) => { if (locked) return; setBody(v); setDirty(true); scheduleDraft(title, v); };
 
   // §7.6：「送出期間整個編輯器鎖住，不會有新版本」是存檔 200 直接 clearDraft 的前提——
   // 這兩顆草稿按鈕若不鎖，使用者能在 A 送出途中還原成 B，A 的成功回應隨後無條件把 B
-  // 清掉；early return 是防呆的第二道，不能只靠畫面上 disabled（review high finding）
+  // 清掉。下面的 `if (saving) return` 現在是 belt-and-braces：`locked`（下方）已經讓
+  // Save 在 draftPrompt 還在時就按不下去，不可能再進到 isSaving 又同時看得到這兩顆按鈕，
+  // 但拿掉判斷不會讓程式更簡單、留著也不花什麼，防的是資料遺失，故不因「現在摸不到」而拔掉
   const restoreDraft = () => {
     if (saving) return;
     const d = pendingDraft.current; if (!d) return;
@@ -191,24 +204,24 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
         </div>
       )}
       <div className="full-editor">
-        <input className="ed-title" aria-label={t("list.editorTitle")} value={title} disabled={saving}
+        <input className="ed-title" aria-label={t("list.editorTitle")} value={title} disabled={locked}
           onChange={(e) => onTitle(e.target.value)} />
         <div className="ed-bar" role="toolbar">
           {TOOLS.map((tl) => (
-            <button key={tl.key} className="ed-btn" aria-label={t(tl.a11y)} title={t(tl.a11y)} disabled={saving || preview}
+            <button key={tl.key} className="ed-btn" aria-label={t(tl.a11y)} title={t(tl.a11y)} disabled={locked || preview}
               onClick={() => tool(tl)}>{tl.key}</button>
           ))}
         </div>
         {preview
           ? <div className="ed-preview tk-md">{renderMarkdownLite(body)}</div>
-          : <textarea ref={taRef} className="ed-area" aria-label={t("list.editorBody")} value={body} disabled={saving}
+          : <textarea ref={taRef} className="ed-area" aria-label={t("list.editorBody")} value={body} disabled={locked}
               onChange={(e) => onBody(e.target.value)} />}
         <div className="ed-foot">
           <span className={`ed-hint${dirty ? " is-dirty" : ""}`}>{saving ? t("list.saving") : dirty ? t("list.unsaved") : ""}</span>
           <span className="spacer" />
           <button className="btn is-quiet" disabled={saving} onClick={() => setPreview((p) => !p)}>{t("list.preview")}</button>
           <button className="btn is-quiet" disabled={saving} onClick={leave}>{t("list.cancel")}</button>
-          <button className="btn is-primary" disabled={saving} onClick={() => save()}>{t("list.save")}</button>
+          <button className="btn is-primary" disabled={locked} onClick={() => save()}>{t("list.save")}</button>
         </div>
       </div>
     </div>

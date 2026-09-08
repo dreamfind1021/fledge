@@ -234,24 +234,85 @@ describe("TaskEditor", () => {
     expect(loadDraft("/p", "01-a.md")).toBeNull();
   });
 
-  it("儲存中鎖住草稿提示按鈕：接著改在送出途中按下不會覆蓋畫面（review high finding FIX 1）", async () => {
-    // §7.6：「送出期間整個編輯器鎖住，不會有新版本」是存檔 200 直接 clearDraft 的前提；
-    // 草稿提示的兩顆按鈕若不鎖，A 送出途中按「接著改」把畫面換成 B，A 的成功回應隨後
-    // 無條件清掉草稿，B 就沒了——這裡兩者都要驗：畫面上 disabled，以及點下去真的沒反應
+  // 這條原本測「送出途中按接著改」，前提是 Save 能在草稿提示還在時按下去；
+  // 這一輪的修法（下面 5 條 review high finding 新測試）讓那個前提本身變得不可達——
+  // 提示還在時 Save 現在直接是 disabled，不可能同時進入 saving 又看得到提示。
+  // 換成驗證「不可達」這件事本身：草稿提示存在時，Save 按下去完全沒有效果
+  it("草稿提示還在時，Save 按不下去——不可能同時進入 saving（原「儲存中鎖住…」測試前提已被取代）", async () => {
     saveDraft("/p", "01-a.md", { title: "草稿標題", body: "草稿內文", fingerprint: "f0" });
-    let resolve!: (r: TaskRow) => void;
-    updateTaskContent.mockReturnValue(new Promise((r) => { resolve = r; }));
     setup();
     expect(screen.getByText(en.list.draftFound)).toBeTruthy();
-    fireEvent.click(saveBtn());                                          // 直接送出票原本的內容 A
-    await waitFor(() => expect(titleBox().disabled).toBe(true));         // 進入 saving
-    const resumeBtn = screen.getByText(en.list.draftResume) as HTMLButtonElement;
-    const discardBtn = screen.getByText(en.list.draftDiscard) as HTMLButtonElement;
-    expect(resumeBtn.disabled).toBe(true);
-    expect(discardBtn.disabled).toBe(true);
-    fireEvent.click(resumeBtn);                                          // 儲存中硬點下去
-    expect(bodyBox().value).toBe("舊內文");                               // 畫面仍是送出中的 A，沒被換成草稿 B
-    resolve(task({ fingerprint: "f1" }));
+    fireEvent.click(saveBtn());
+    expect(updateTaskContent).not.toHaveBeenCalled();
+    expect(screen.getByText(en.list.draftFound)).toBeTruthy();           // 提示還在，沒有被清掉或換頁
+  });
+
+  it("草稿提示顯示時：標題／內文／工具列／Save 都鎖住，返回與預覽不鎖（review high finding，spec §7.6）", () => {
+    saveDraft("/p", "01-a.md", { title: "草稿標題", body: "草稿內文", fingerprint: "f0" });
+    const { onLeave } = setup();
+    expect(screen.getByText(en.list.draftFound)).toBeTruthy();
+    expect(titleBox().disabled).toBe(true);
+    expect(bodyBox().disabled).toBe(true);
+    expect(saveBtn().disabled).toBe(true);
+    for (const tl of ["Heading", "Bold", "Italic", "Inline code", "List", "Quote", "Code block", "Link"]) {
+      expect((screen.getByLabelText(tl) as HTMLButtonElement).disabled).toBe(true);
+    }
+    const back = screen.getByText("p") as HTMLButtonElement;             // 返回列上的專案名
+    expect(back.disabled).toBe(false);
+    expect((screen.getByText(en.list.preview) as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(back);
+    expect(onLeave).toHaveBeenCalled();                                  // 返回真的可按、真的有效
+  });
+
+  it("草稿提示顯示時：即使程式化的 change 事件送達，舊草稿 B 撐過 debounce 視窗不被覆寫（review high finding）", () => {
+    // §7.6 硬性規定：只有存檔成功／按丟棄／自己刪票才可以清草稿，打字不算。
+    // disabled 屬性擋得住點擊（已驗證過），但擋不住直接派送的 change 事件（jsdom 對受控輸入框
+    // 就是會放行）——所以這裡刻意對著 disabled 的欄位發 fireEvent.change，模擬「萬一 UI 鎖
+    // 被繞過」的情境，驗的是 onTitle/onBody 自己的 early return，不是畫面上的 disabled 而已。
+    // 如果只靠 disabled，這條會抓到假象：change 會真的改到 state，但下面故意不再重複斷言那件事，
+    // 只驗最終結果——B 有沒有被蓋掉——因為那才是使用者真正在意的保證。
+    vi.useFakeTimers();
+    saveDraft("/p", "01-a.md", { title: "草稿標題", body: "草稿內文", fingerprint: "f0" });
+    setup();
+    expect(screen.getByText(en.list.draftFound)).toBeTruthy();
+    fireEvent.change(bodyBox(), { target: { value: "偷打的字" } });
+    vi.advanceTimersByTime(2000);                                        // 遠超過 600ms 的 debounce 視窗
+    expect(loadDraft("/p", "01-a.md")).toEqual(
+      expect.objectContaining({ title: "草稿標題", body: "草稿內文", fingerprint: "f0" }),
+    );
+    vi.useRealTimers();
+  });
+
+  it("接著改：解鎖編輯器，內容換成草稿 B（review high finding）", () => {
+    saveDraft("/p", "01-a.md", { title: "草稿標題", body: "草稿內文", fingerprint: "f0" });
+    setup();
+    fireEvent.click(screen.getByText(en.list.draftResume));
+    expect(titleBox().disabled).toBe(false);
+    expect(bodyBox().disabled).toBe(false);
+    expect(saveBtn().disabled).toBe(false);
+    expect(titleBox().value).toBe("草稿標題");
+    expect(bodyBox().value).toBe("草稿內文");
+  });
+
+  it("丟棄草稿：解鎖編輯器，內容維持檔案原本的內容（review high finding）", () => {
+    saveDraft("/p", "01-a.md", { title: "草稿標題", body: "草稿內文", fingerprint: "f0" });
+    setup();
+    fireEvent.click(screen.getByText(en.list.draftDiscard));
+    expect(titleBox().disabled).toBe(false);
+    expect(bodyBox().disabled).toBe(false);
+    expect(saveBtn().disabled).toBe(false);
+    expect(titleBox().value).toBe("舊標題");
+    expect(bodyBox().value).toBe("舊內文");
+  });
+
+  it("沒有草稿的票完全不鎖（回歸風險：整個改動最容易誤傷的情況）", () => {
+    setup();
+    expect(screen.queryByText(en.list.draftFound)).toBeNull();
+    expect(screen.queryByText(en.list.draftStale)).toBeNull();
+    expect(titleBox().disabled).toBe(false);
+    expect(bodyBox().disabled).toBe(false);
+    expect(saveBtn().disabled).toBe(false);
+    expect((screen.getByLabelText(en.a11y.toolbarBold) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("捨棄我的版本後 unmount：草稿不會被 cleanup 寫回（plan R3 F1）", async () => {
