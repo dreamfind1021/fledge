@@ -104,6 +104,24 @@ describe("TaskEditor", () => {
     spy.mockRestore();
   });
 
+  it("flush 持續失敗：按幾次儲存都不會發 PUT，沒有強制路徑（review high finding FIX 2）", async () => {
+    // §7.3：flush 失敗「不進 isSaving、不鎖、不發 PUT」是硬性前置條件，允許的操作只有
+    // 複製／繼續編輯／取消——沒有「仍要儲存」；K6 下寫壞票檔＋沒有最新草稿可能同時發生
+    const spy = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
+    setup();
+    fireEvent.change(bodyBox(), { target: { value: "x" } });
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(screen.getByText(en.list.draftUnsavable)).toBeTruthy());
+    expect(updateTaskContent).not.toHaveBeenCalled();
+    // 警告條裡只剩複製我的內容一顆按鈕——「仍要儲存」被整個拿掉，不是被停用
+    const banner = screen.getByText(en.list.draftUnsavable).closest(".tk-banner");
+    expect(banner?.querySelectorAll("button.bbtn").length).toBe(1);
+    fireEvent.click(saveBtn());                                          // 再按一次儲存
+    expect(updateTaskContent).not.toHaveBeenCalled();
+    expect(screen.getByText(en.list.draftUnsavable)).toBeTruthy();       // 警告還在，不是被清空後偷偷發了 PUT
+    spy.mockRestore();
+  });
+
   it("打字後未滿 debounce 就返回：草稿已同步 flush（spec §7.3 一般離開）", () => {
     vi.useFakeTimers();
     const { onLeave } = setup();
@@ -214,6 +232,26 @@ describe("TaskEditor", () => {
     // 不能只驗「存檔成功清了草稿」——要驗的是卸載當下沒有用舊 fingerprint 把剛存好的
     // 內容當「未存」又寫回一份幽靈草稿
     expect(loadDraft("/p", "01-a.md")).toBeNull();
+  });
+
+  it("儲存中鎖住草稿提示按鈕：接著改在送出途中按下不會覆蓋畫面（review high finding FIX 1）", async () => {
+    // §7.6：「送出期間整個編輯器鎖住，不會有新版本」是存檔 200 直接 clearDraft 的前提；
+    // 草稿提示的兩顆按鈕若不鎖，A 送出途中按「接著改」把畫面換成 B，A 的成功回應隨後
+    // 無條件清掉草稿，B 就沒了——這裡兩者都要驗：畫面上 disabled，以及點下去真的沒反應
+    saveDraft("/p", "01-a.md", { title: "草稿標題", body: "草稿內文", fingerprint: "f0" });
+    let resolve!: (r: TaskRow) => void;
+    updateTaskContent.mockReturnValue(new Promise((r) => { resolve = r; }));
+    setup();
+    expect(screen.getByText(en.list.draftFound)).toBeTruthy();
+    fireEvent.click(saveBtn());                                          // 直接送出票原本的內容 A
+    await waitFor(() => expect(titleBox().disabled).toBe(true));         // 進入 saving
+    const resumeBtn = screen.getByText(en.list.draftResume) as HTMLButtonElement;
+    const discardBtn = screen.getByText(en.list.draftDiscard) as HTMLButtonElement;
+    expect(resumeBtn.disabled).toBe(true);
+    expect(discardBtn.disabled).toBe(true);
+    fireEvent.click(resumeBtn);                                          // 儲存中硬點下去
+    expect(bodyBox().value).toBe("舊內文");                               // 畫面仍是送出中的 A，沒被換成草稿 B
+    resolve(task({ fingerprint: "f1" }));
   });
 
   it("捨棄我的版本後 unmount：草稿不會被 cleanup 寫回（plan R3 F1）", async () => {

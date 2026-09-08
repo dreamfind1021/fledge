@@ -46,7 +46,6 @@
     "draftRestoreAnyway": "還是要還原",
     "draftDiscard": "丟棄草稿",
     "draftUnsavable": "草稿存不進去（瀏覽器儲存空間可能已滿或被停用），這次儲存失敗的話沒有退路。要繼續嗎？",
-    "draftUnsavableProceed": "仍要儲存",
     "leaveAnyway": "仍要離開",
     "conflictEditor": "這張票在別的地方被改過了，你的內容沒有存進去。檔案沒被動，你打的字也還在下面。",
     "copyMine": "複製我的內容",

@@ -51,7 +51,8 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   const [preview, setPreview] = useState(false);
   const [notice, setNotice] = useState<{ key: string; reason?: string } | null>(null);
   const [draftPrompt, setDraftPrompt] = useState<"same" | "stale" | null>(null);
-  // 草稿存不進去時是哪個動作觸發的：儲存 → 給「仍要儲存」，離開 → 給「仍要離開」
+  // 草稿存不進去時是哪個動作觸發的：儲存 → 沒有強制路徑（§7.3 硬性前置條件），只給複製與繼續編輯／取消；
+  // 離開 → 才有「仍要離開」的例外（K6：離開沒草稿頂多丟畫面上的字，儲存沒草稿可能寫壞票檔又救不回）
   const [unsavable, setUnsavable] = useState<"save" | "leave" | null>(null);
   const debounce = useRef<number | null>(null);
   const abort = useRef<AbortController | null>(null);
@@ -86,11 +87,18 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   const onTitle = (v: string) => { setTitle(v); setDirty(true); scheduleDraft(v, body); };
   const onBody = (v: string) => { setBody(v); setDirty(true); scheduleDraft(title, v); };
 
+  // §7.6：「送出期間整個編輯器鎖住，不會有新版本」是存檔 200 直接 clearDraft 的前提——
+  // 這兩顆草稿按鈕若不鎖，使用者能在 A 送出途中還原成 B，A 的成功回應隨後無條件把 B
+  // 清掉；early return 是防呆的第二道，不能只靠畫面上 disabled（review high finding）
   const restoreDraft = () => {
+    if (saving) return;
     const d = pendingDraft.current; if (!d) return;
     setTitle(d.title); setBody(d.body); setBaseFp(d.fingerprint); setDirty(true); setDraftPrompt(null);
   };
-  const discardDraft = () => { cancelDebounce(); clearDraft(project, task.name); pendingDraft.current = null; setDraftPrompt(null); };
+  const discardDraft = () => {
+    if (saving) return;
+    cancelDebounce(); clearDraft(project, task.name); pendingDraft.current = null; setDraftPrompt(null);
+  };
 
   // 離開（spec §7.3）：先同步 flush 草稿——打字後 600ms 內按返回，最後那段還在 debounce 等待，
   // 直接走就丟了（plan R1 F2）。flush 失敗不靜默離開，給複製與「仍要離開」兩條路。
@@ -106,14 +114,17 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
     forceLeave();
   };
 
-  // §7.3 的固定順序：正規化 → 取消 pending → flush → 進 isSaving → PUT
-  const save = useCallback((force = false) => {
+  // §7.3 的固定順序：正規化 → 取消 pending → flush → 進 isSaving → PUT。
+  // flush 失敗「不進 isSaving、不鎖、不發 PUT」是硬性前置條件，沒有強制路徑——
+  // §7.3 允許的操作只列了「複製、繼續編輯、取消」，離開路徑才有「仍要離開」的例外（review high finding，
+  // K6：寫入不是原子的，草稿留不住又寫壞票檔會同時發生、關掉編輯器後無法復原）
+  const save = useCallback(() => {
     const ti = normTitle(title), bo = normBody(body);
     setTitle(ti); setBody(bo);
     if (!ti) { setNotice({ key: "list.titleRequired" }); return; }
     cancelDebounce();
-    if (!saveDraft(project, task.name, { title: ti, body: bo, fingerprint: baseFp }) && !force) {
-      setUnsavable("save"); return;                      // 不鎖、不發 PUT，使用者決定
+    if (!saveDraft(project, task.name, { title: ti, body: bo, fingerprint: baseFp })) {
+      setUnsavable("save"); return;                      // 不鎖、不發 PUT，沒有強制路徑
     }
     setUnsavable(null); setNotice(null); setSaving(true);
     const ac = new AbortController(); abort.current = ac;
@@ -154,8 +165,8 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
         <div className={`tk-banner is-draft${draftPrompt === "stale" ? " is-stale" : ""}`}>
           <span className="btext">{t(draftPrompt === "same" ? "list.draftFound" : "list.draftStale")}</span>
           <span className="bacts">
-            <button className="bbtn" onClick={restoreDraft}>{t(draftPrompt === "same" ? "list.draftResume" : "list.draftRestoreAnyway")}</button>
-            <button className="bbtn" onClick={discardDraft}>{t("list.draftDiscard")}</button>
+            <button className="bbtn" disabled={saving} onClick={restoreDraft}>{t(draftPrompt === "same" ? "list.draftResume" : "list.draftRestoreAnyway")}</button>
+            <button className="bbtn" disabled={saving} onClick={discardDraft}>{t("list.draftDiscard")}</button>
           </span>
         </div>
       )}
@@ -164,9 +175,7 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
           <span className="btext">{t("list.draftUnsavable")}</span>
           <span className="bacts">
             <button className="bbtn" onClick={copyMine}>{t("list.copyMine")}</button>
-            {unsavable === "save"
-              ? <button className="bbtn" onClick={() => save(true)}>{t("list.draftUnsavableProceed")}</button>
-              : <button className="bbtn" onClick={() => forceLeave()}>{t("list.leaveAnyway")}</button>}
+            {unsavable === "leave" && <button className="bbtn" onClick={() => forceLeave()}>{t("list.leaveAnyway")}</button>}
           </span>
         </div>
       )}

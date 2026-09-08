@@ -46,7 +46,6 @@
     "draftRestoreAnyway": "Restore anyway",
     "draftDiscard": "Discard draft",
     "draftUnsavable": "The draft can't be saved (browser storage may be full or disabled). If this save fails, there's no fallback. Continue?",
-    "draftUnsavableProceed": "Save anyway",
     "leaveAnyway": "Leave anyway",
     "conflictEditor": "This ticket was changed elsewhere. Your content was NOT saved. The file is untouched and your text is still below.",
     "copyMine": "Copy my content",
