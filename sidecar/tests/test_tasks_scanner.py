@@ -909,16 +909,25 @@ def test_update_content_lock_has_no_overlap_between_fingerprint_check_and_write(
 
     只驗『恰好一個成功』不夠：把鎖縮小到只包 `_read_all`，兩個 thread 一樣可以各自讀到
     舊內容、各自通過 fingerprint 比對、最後恰好一個成功——結果看起來一樣，但兩個臨界區
-    其實重疊過。"""
+    其實重疊過。
+
+    **liveness 也要驗**：`not rendezvoused` 在『barrier 真的 timeout』與『兩個 thread 根本
+    都沒走到這個探針』兩種情況下長得一模一樣——後者是假綠，日後 `update_content` 在
+    `replace_body` 之前多長出一條會拋的路徑，這道防線會無聲消失（`_race` 把 OSError／
+    ValueError 都壓平成 None，光看 `not rendezvoused` 分不出來）。所以額外釘住：探針必須
+    恰好被叫到一次（另一個 thread 在自己的 fingerprint 比對就該被擋下，不該死於例外），
+    且 `results` 裡恰好一個非 None（呼應 Property B 對 `results` 的護欄）。"""
     _, proj = _setup(tmp_path)
     d = _tasks_dir(proj)
     p = _ticket(d)
     fp = scanner.fingerprint(p.read_bytes())
     barrier = threading.Barrier(2)
     rendezvoused = []
+    entered = []
     real_replace_body = scanner.replace_body
 
     def gated(raw, title, body):
+        entered.append(True)               # liveness：探針真的被叫到了嗎
         try:
             barrier.wait(timeout=3)
             rendezvoused.append(True)      # 只有兩邊都排到才會走到這行
@@ -927,7 +936,12 @@ def test_update_content_lock_has_no_overlap_between_fingerprint_check_and_write(
         return real_replace_body(raw, title, body)
 
     monkeypatch.setattr(scanner, "replace_body", gated)
-    _race(d, [_content(fp, "A"), _content(fp, "B")])
+    results = _race(d, [_content(fp, "A"), _content(fp, "B")])
+    assert sum(1 for r in results if r is not None) == 1, f"預期恰好一個成功：{results}"
+    assert len(entered) == 1, (
+        f"探針必須恰好被叫到一次——0 次代表兩個 thread 都沒走到這裡（假綠，"
+        f"see liveness 註解），得到 {len(entered)} 次"
+    )
     assert not rendezvoused, "兩個 thread 同時站在 fingerprint 比對之後、寫入之前——鎖沒有蓋住這段"
 
 
@@ -953,7 +967,10 @@ def test_update_content_lock_is_global_not_per_ticket(tmp_path, monkeypatch):
         with probe_lock:
             state["inside"] += 1
             max_inside.append(state["inside"])
-        time.sleep(0.2)                    # 撐開窗口，讓另一個 thread 有機會趕上來
+        # 這 2.0 秒是「per-name 鎖的第二個 thread 必須被抓到重疊」的容錯窗口，要撐得住
+        # 機器負載高的情況（只影響『證明會紅』的方向——正常路徑下鎖是全域的，第二個
+        # thread 根本進不來，這段 sleep 不花任何額外時間在正確實作上）。
+        time.sleep(2.0)
         try:
             return real_replace_body(raw, title, body)
         finally:
