@@ -151,7 +151,7 @@
 .tk-md li { margin: 3px 0; }
 .tk-md blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .tk-md a { color: var(--primary); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--primary) 40%, transparent); }
-/* 說明文字用 --dim 不用 --faint：後者 3.43:1 過不了文字門檻（spec §6.4） */
+/* 說明文字用 --dim 不用 --faint：--faint 是色階裡最淡的一階，保留給非文字用途（spec §6.4） */
 .tk-empty, .tk-noedit { font-size: 12.5px; color: var(--dim); font-style: italic; }
 .tk-noedit { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--divider); }
 

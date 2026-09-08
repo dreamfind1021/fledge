@@ -1154,6 +1154,17 @@ export class TaskConflictError extends Error {
   }
 }
 
+/** `PUT /tasks/content` 非 409 的失敗。spec §8 的封閉列舉：`not_editable`／`invalid_content`／
+ *  `invalid_target`／`write_failed`（5xx 或非 JSON body 時 `code` 為 null）。理由同
+ *  `SessionError`：`code` 只放欄位、不進 message，否則 `String(e)` 會讓判別碼繞過 i18n
+ *  映射直接出現在畫面上（CLAUDE.md §4.6.13）。 */
+export class TaskContentError extends Error {
+  constructor(public readonly code: string | null, public readonly status: number) {
+    super(`updateTaskContent failed: ${status}`);
+    this.name = "TaskContentError";
+  }
+}
+
 /** 改狀態。成功回傳更新後的票（含新 fingerprint），呼叫端必須用它取代本地狀態。 */
 export async function updateTask(
   port: number, project: string, name: string, status: string, fingerprint: string,
@@ -1196,7 +1207,7 @@ export async function updateTaskContent(
     signal,
   });
   if (resp.status === 409) throw new TaskConflictError();
-  if (!resp.ok) throw new Error(`updateTaskContent failed: ${resp.status}`);
+  if (!resp.ok) throw new TaskContentError(await readErrorCode(resp), resp.status);
   const row = (await resp.json()) as Partial<TaskRow>;
   // spec §7.3 的成功定義：name、fingerprint、body 三個都要是字串。缺任何一個都不是成功——
   // 缺 body 的 200 若被當成功，TaskEditor 會清掉唯一的草稿（plan R1 F3）

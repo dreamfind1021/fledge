@@ -1,15 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { writeClipboard } from "../lib/clipboard";
-import { TaskConflictError, updateTaskContent, type TaskRow } from "../lib/sidecar";
+import { TaskConflictError, TaskContentError, updateTaskContent, type TaskRow } from "../lib/sidecar";
 import { clearDraft, loadDraft, saveDraft } from "../lib/taskDraft";
 import { renderMarkdownLite } from "../lib/markdownLite";
 
 type T = (k: string, o?: Record<string, unknown>) => string;
 
-// §5.2.2 值域：送出前正規化並寫回畫面，使用者看到的就是會存進去的
-const normTitle = (s: string) => s.split(/\s+/).filter(Boolean).join(" ");
-const normBody = (s: string) => s.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
+// §5.2.2 值域：送出前正規化並寫回畫面，使用者看到的就是會存進去的。
+// JS 的 \s 與 Python 的空白判定不是同一個集合：\x1c-\x1f（檔案/群組/紀錄/單位分隔符）與
+// \x85（NEL）在 Python 的 str.split() 裡算空白，JS 的 \s 不算——貼上網頁/PDF/Word 的段落
+// 常帶這些字元，只用 \s 分隔會漏切，正規化後的標題到了 sidecar 的 _validate_content_domain
+// 仍判 invalid_content（全鏈路審查抓到）
+const normTitle = (s: string) => s.split(/[\s\x1c-\x1f\x85]+/).filter(Boolean).join(" ");
+// 同一個落差在內文更嚴重：parser 用 Python 的 str.splitlines() 斷行，除了 \r\n／\r／\n，
+// 還認 \v\f\x1c-\x1e\x85\u2028\u2029 ——JS 的 /\r\n?/ 完全不認得這些字元，貼上的段落
+// 存下去後 sidecar 端 can_round_trip(new_raw) 會直接判 False（400 invalid_content），
+// 使用者看到一個看不見、猜不到、按幾次都一樣失敗的錯誤（Codex 全鏈路審查 high）。
+// 折成 \n 而不是拒絕：spec §5.2.2 的意圖是 UI 端正規化、sidecar 端只做防前端漏掉的回驗，
+// 現在只有 sidecar 那層在擋，且用的是拒絕不是正規化，違反了這個分工
+const normBody = (s: string) => s
+  .replace(/\r\n?/g, "\n")
+  .replace(/[\v\f\x1c-\x1e\x85\u2028\u2029]/g, "\n")
+  .replace(/^\n+|\n+$/g, "");
 
 const DEBOUNCE_MS = 600;
 
@@ -50,6 +63,12 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   const [saving, setSaving] = useState(false);
   const [preview, setPreview] = useState(false);
   const [notice, setNotice] = useState<{ key: string; reason?: string } | null>(null);
+  // 「已複製」是獨立旗標，不能塞進 notice：notice 同時是 409／儲存失敗訊息的容器，
+  // copyMine 若用 setNotice({key:"list.copied"}) 覆寫，會把它坐落的那個提示條（連同
+  // 「捨棄我的版本，重新載入」）一起換掉——§7.5 的復原流程是「先複製、再捨棄重載」，
+  // 復原流程的第二步就這樣消失了。這個 repo 對孤兒草稿（copiedDraft）與救援複製
+  // （rescueCopied）已經各自這樣修過一次，這裡是第三次同一種形狀（review Important finding）
+  const [copied, setCopied] = useState(false);
   const [draftPrompt, setDraftPrompt] = useState<"same" | "stale" | null>(null);
   // 草稿存不進去時是哪個動作觸發的：儲存 → 沒有強制路徑（§7.3 硬性前置條件），只給複製與繼續編輯／取消；
   // 離開 → 才有「仍要離開」的例外（K6：離開沒草稿頂多丟畫面上的字，儲存沒草稿可能寫壞票檔又救不回）
@@ -122,7 +141,7 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   const leave = () => {
     cancelDebounce();
     if (dirty && !saveDraft(project, task.name, { title, body, fingerprint: baseFp })) {
-      setUnsavable("leave"); return;
+      setCopied(false); setUnsavable("leave"); return;   // 新的提示上場，舊的「已複製」回饋作廢
     }
     forceLeave();
   };
@@ -134,6 +153,7 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   const save = useCallback(() => {
     const ti = normTitle(title), bo = normBody(body);
     setTitle(ti); setBody(bo);
+    setCopied(false);                                    // 新的儲存嘗試開始，舊的「已複製」回饋作廢
     if (!ti) { setNotice({ key: "list.titleRequired" }); return; }
     cancelDebounce();
     if (!saveDraft(project, task.name, { title: ti, body: bo, fingerprint: baseFp })) {
@@ -154,12 +174,25 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
       .catch((e: unknown) => {
         if (ac.signal.aborted) return;
         setSaving(false);
-        if (e instanceof TaskConflictError) setNotice({ key: "list.conflictEditor" });
-        else setNotice({ key: "list.saveFailed", reason: e instanceof Error ? e.message : String(e) });
+        // 判別碼是封閉列舉（spec §8）：not_editable（票在你打開之後於外部被改壞，round-trip
+        // 不過）／invalid_content（值域仍不符——理論上已被上面的正規化擋在送出前，但 sidecar
+        // 是最後一道防線）各自有專屬文案；invalid_target／write_failed／null（5xx 或非 JSON
+        // body）與其餘錯誤一律落回通用的「儲存失敗：<原因>」。not_editable 與 write_failed
+        // 過去在畫面上長得一模一樣——一個是別人動了檔案，一個是磁碟在故障，使用者要做的事
+        // 完全不同（review Important finding；CLAUDE.md §4.6.13：判別碼由 sidecar 給，
+        // i18n 映射交給前端，不把 `updateTaskContent failed: 400` 這種字面值糊到使用者臉上）
+        if (e instanceof TaskConflictError) { setNotice({ key: "list.conflictEditor" }); return; }
+        if (e instanceof TaskContentError && e.code === "not_editable") {
+          setNotice({ key: "list.saveFailedNotEditable" }); return;
+        }
+        if (e instanceof TaskContentError && e.code === "invalid_content") {
+          setNotice({ key: "list.saveFailedInvalidContent" }); return;
+        }
+        setNotice({ key: "list.saveFailed", reason: e instanceof Error ? e.message : String(e) });
       });
   }, [title, body, baseFp, port, project, task.name, onSaved]);
 
-  const copyMine = () => writeClipboard(`# ${title}\n\n${body}`).then((ok) => { if (ok) setNotice({ key: "list.copied" }); });
+  const copyMine = () => writeClipboard(`# ${title}\n\n${body}`).then((ok) => { if (ok) setCopied(true); });
   // 「捨棄我的版本」：清草稿後直接走，**不經 leave()**——leave 會先 flush 草稿，跟「捨棄」矛盾
   // cancelDebounce 對稱於 discardDraft（:93）：少了它，若上一層哪天不再同步卸載，
   // 排隊中的 debounce 會在 600ms 後把剛丟棄的內容又寫回去（plan R3 F1 同一種坑）
@@ -185,7 +218,10 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
       )}
       {unsavable && (
         <div className="tk-banner is-conflict">
-          <span className="btext">{t("list.draftUnsavable")}</span>
+          {/* save 分支沒有「仍要儲存」可以回答「要繼續嗎」——那顆按鈕已經拿掉了，
+              兩個分支各自的文案分開放（review Important finding：見 locale 檔） */}
+          <span className="btext">{t(unsavable === "save" ? "list.draftUnsavableSave" : "list.draftUnsavable")}</span>
+          {copied && <span className="btext">{t("list.copied")}</span>}
           <span className="bacts">
             <button className="bbtn" onClick={copyMine}>{t("list.copyMine")}</button>
             {unsavable === "leave" && <button className="bbtn" onClick={() => forceLeave()}>{t("list.leaveAnyway")}</button>}
@@ -193,12 +229,18 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
         </div>
       )}
       {notice && (
-        <div className={`tk-banner ${notice.key === "list.copied" ? "is-draft" : "is-conflict"}`}>
+        <div className="tk-banner is-conflict">
           <span className="btext">{t(notice.key, notice.reason ? { reason: notice.reason } : undefined)}</span>
-          {notice.key === "list.conflictEditor" && (
+          {copied && <span className="btext">{t("list.copied")}</span>}
+          {/* §7.3 的失敗表格：非 409 的每一種失敗都要有〔複製我的內容〕，titleRequired 除外——
+              那是送出前的用戶端擋檢，內容還活在可編輯的欄位裡，不是「PUT 失敗、內容卡在記憶體裡
+              拿不出來」的情境，不屬於這張表（review Important finding：這裡原本只有 409 有按鈕）*/}
+          {notice.key !== "list.titleRequired" && (
             <span className="bacts">
               <button className="bbtn" onClick={copyMine}>{t("list.copyMine")}</button>
-              <button className="bbtn" onClick={discardAndReload}>{t("list.discardAndReload")}</button>
+              {notice.key === "list.conflictEditor" && (
+                <button className="bbtn" onClick={discardAndReload}>{t("list.discardAndReload")}</button>
+              )}
             </span>
           )}
         </div>

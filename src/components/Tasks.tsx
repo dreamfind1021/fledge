@@ -140,10 +140,17 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   const projectName = overview?.projects.find((p) => p.path === selected)?.name ?? t("tabTitle");
 
   // 孤兒草稿：草稿的檔名不在目前清單裡（spec §7.4）。list 還沒回來（null）時不知道哪些
-  // 草稿是孤兒，一律不算；list.tasks 是 null（目錄 unavailable/absent）時 `?.some` 短路成
-  // undefined，全部草稿都算孤兒——但不清掉任何東西，只讓 TasksList 顯示 orphanUnavailable。
+  // 草稿是孤兒，一律不算；tasks_status 是 unavailable 時 list.tasks 是 null，`?.some` 短路成
+  // undefined，全部草稿都算孤兒——但不清掉任何東西，只讓 TasksList 的 `data.tasks == null`
+  // 分支顯示 orphanUnavailable 提示，不會走到下面會渲染逐張刪除鍵的正常清單路徑。
+  // tasks_status 是 absent 時 list.tasks 是空陣列 `[]`——**不是 null**——上面那條 null 短路
+  // 救不到它：naive 比對會讓每一份草稿都被判成「票已經不在了」的孤兒，配上一鍵不可逆的
+  // 〔丟棄草稿〕，而 spec §7.4 明講 absent 跟 unavailable 要同一套待遇（現在讀不到，草稿留著，
+  // 不做任何清除）。排除 absent（whole-branch review M3）：unavailable 沿用原本的 null 短路
+  // 不動，只有 absent 額外被擋下來，兩者互不影響。
   const allDrafts = selected && list ? listDrafts(selected) : [];
-  const orphanDrafts = allDrafts.filter((d) => !list?.tasks?.some((x) => x.name === d.name));
+  const orphanDrafts = allDrafts.filter((d) =>
+    list?.tasks_status !== "absent" && !list?.tasks?.some((x) => x.name === d.name));
   // 票還活著但寫壞了（update_content 非原子寫入中途失敗 → can_round_trip 失敗 → editable:
   // false）：TasksList 正確地藏起編輯入口，但草稿的檔名還在清單裡、不是孤兒，不會出現在上面
   // 那份孤兒草稿列——沒有這份對照表，草稿會卡在 localStorage 裡，介面上完全看不到也複製不出來。

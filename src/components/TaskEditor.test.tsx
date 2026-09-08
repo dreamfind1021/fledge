@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import en from "../locales/en/tasks.json";
-import { TaskConflictError, type TaskRow } from "../lib/sidecar";
+import { TaskConflictError, TaskContentError, type TaskRow } from "../lib/sidecar";
 import { loadDraft, saveDraft } from "../lib/taskDraft";
 import { TaskEditor } from "./TaskEditor";
 
@@ -53,6 +53,28 @@ describe("TaskEditor", () => {
     expect(loadDraft("/p", "01-a.md")).toBeNull();               // 成功清草稿
   });
 
+  it("貼上網頁／PDF／Word 常見的分行與空白字元也正規化成 \\n／空白後送出（whole-branch review FIX 2）", async () => {
+    // Python 的 str.splitlines() 除了 \r\n／\r／\n，還認 \v\f\x1c\x1d\x1e\x85\u2028\u2029；
+    // JS 的 /\r\n?/ 完全不認得——不折成 \n 的話這些字元原封送到 sidecar，can_round_trip
+    // 判 False、400 invalid_content，訊息看不出原因，使用者按幾次 Save 都一樣失敗
+    // （這是原本的死路：Task 3 讓 sidecar 用後置條件拒絕，Task 10 依 spec §5.2.2 字面實作
+    // 正規化，兩邊各自正確、合起來卻沒有出口）。標題另外還要吃 \x1c-\x1f 與 \x85——
+    // Python str.split() 認的空白比 JS 的 \s 寬
+    updateTaskContent.mockResolvedValue(task({ fingerprint: "f1" }));
+    setup();
+    const body = "first\x0bsecond\x0cthird\x1cfourth\x1dfifth\x1esixth\x85seventh\u2028eighth\u2029ninth";
+    fireEvent.change(bodyBox(), { target: { value: body } });
+    fireEvent.change(titleBox(), { target: { value: "a\x1cb\x1fc" } });
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(updateTaskContent).toHaveBeenCalledTimes(1));
+    const [, , , sentTitle, sentBody] = updateTaskContent.mock.calls[0];
+    const expectedBody = "first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh\neighth\nninth";
+    expect(sentTitle).toBe("a b c");
+    expect(sentBody).toBe(expectedBody);
+    expect(titleBox().value).toBe("a b c");                     // 畫面寫回的是正規化後的結果（§5.2.2）
+    expect(bodyBox().value).toBe(expectedBody);
+  });
+
   it("標題正規化後為空 → 擋下儲存不發 PUT", async () => {
     setup();
     fireEvent.change(titleBox(), { target: { value: "   " } });
@@ -93,12 +115,60 @@ describe("TaskEditor", () => {
     expect(loadDraft("/p", "01-a.md")?.body).toBe("x");
   });
 
+  it("400 not_editable → 顯示專屬訊息、草稿留著（whole-branch review FIX 3，spec §8 封閉列舉）", async () => {
+    updateTaskContent.mockRejectedValue(new TaskContentError("not_editable", 400));
+    setup();
+    fireEvent.change(bodyBox(), { target: { value: "x" } });
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(screen.getByText(en.list.saveFailedNotEditable)).toBeTruthy());
+    expect(loadDraft("/p", "01-a.md")?.body).toBe("x");
+  });
+
+  it("400 invalid_content → 顯示專屬訊息、草稿留著", async () => {
+    updateTaskContent.mockRejectedValue(new TaskContentError("invalid_content", 400));
+    setup();
+    fireEvent.change(bodyBox(), { target: { value: "x" } });
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(screen.getByText(en.list.saveFailedInvalidContent)).toBeTruthy());
+    expect(loadDraft("/p", "01-a.md")?.body).toBe("x");
+  });
+
+  it("400 invalid_target／500 write_failed → 落回通用「儲存失敗」訊息，不誤用專屬字串（not_editable 與 write_failed 過去長得一樣）", async () => {
+    updateTaskContent.mockRejectedValue(new TaskContentError("write_failed", 500));
+    setup();
+    fireEvent.change(bodyBox(), { target: { value: "x" } });
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(screen.getByText(/Save failed/)).toBeTruthy());
+    expect(screen.queryByText(en.list.saveFailedNotEditable)).toBeNull();
+    expect(screen.queryByText(en.list.saveFailedInvalidContent)).toBeNull();
+  });
+
+  it("儲存失敗（非 409）也要有〔複製我的內容〕——spec §7.3 的失敗表格點名這顆按鈕（whole-branch review FIX 1）", async () => {
+    updateTaskContent.mockRejectedValue(new Error("updateTaskContent: malformed response"));
+    writeClipboard.mockResolvedValue(true);
+    setup();
+    fireEvent.change(bodyBox(), { target: { value: "x" } });
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(screen.getByText(/Save failed/)).toBeTruthy());
+    fireEvent.click(screen.getByText(en.list.copyMine));
+    expect(writeClipboard).toHaveBeenCalledWith("# 舊標題\n\nx");
+    await waitFor(() => expect(screen.getByText(en.list.copied)).toBeTruthy());
+  });
+
+  it("titleRequired 不需要〔複製我的內容〕——內容還活在可編輯的欄位裡，不是 §7.3 失敗表格的情境", async () => {
+    setup();
+    fireEvent.change(titleBox(), { target: { value: "   " } });
+    fireEvent.click(saveBtn());
+    await waitFor(() => expect(screen.getByText(en.list.titleRequired)).toBeTruthy());
+    expect(screen.queryByText(en.list.copyMine)).toBeNull();
+  });
+
   it("flush 失敗：不鎖、不發 PUT、顯示警告且複製與返回可按", async () => {
     const spy = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
     setup();
     fireEvent.change(bodyBox(), { target: { value: "x" } });
     fireEvent.click(saveBtn());
-    await waitFor(() => expect(screen.getByText(en.list.draftUnsavable)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(en.list.draftUnsavableSave)).toBeTruthy());
     expect(updateTaskContent).not.toHaveBeenCalled();
     expect(bodyBox().disabled).toBe(false);
     spy.mockRestore();
@@ -111,14 +181,14 @@ describe("TaskEditor", () => {
     setup();
     fireEvent.change(bodyBox(), { target: { value: "x" } });
     fireEvent.click(saveBtn());
-    await waitFor(() => expect(screen.getByText(en.list.draftUnsavable)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(en.list.draftUnsavableSave)).toBeTruthy());
     expect(updateTaskContent).not.toHaveBeenCalled();
     // 警告條裡只剩複製我的內容一顆按鈕——「仍要儲存」被整個拿掉，不是被停用
-    const banner = screen.getByText(en.list.draftUnsavable).closest(".tk-banner");
+    const banner = screen.getByText(en.list.draftUnsavableSave).closest(".tk-banner");
     expect(banner?.querySelectorAll("button.bbtn").length).toBe(1);
     fireEvent.click(saveBtn());                                          // 再按一次儲存
     expect(updateTaskContent).not.toHaveBeenCalled();
-    expect(screen.getByText(en.list.draftUnsavable)).toBeTruthy();       // 警告還在，不是被清空後偷偷發了 PUT
+    expect(screen.getByText(en.list.draftUnsavableSave)).toBeTruthy();   // 警告還在，不是被清空後偷偷發了 PUT
     spy.mockRestore();
   });
 
@@ -264,18 +334,25 @@ describe("TaskEditor", () => {
     expect(onLeave).toHaveBeenCalled();                                  // 返回真的可按、真的有效
   });
 
-  it("草稿提示顯示時：即使程式化的 change 事件送達，舊草稿 B 撐過 debounce 視窗不被覆寫（review high finding）", () => {
+  it("草稿提示顯示時：即使程式化的 change 事件送達，舊草稿 B 撐過 debounce 視窗不被覆寫（review high finding；whole-branch review M4）", () => {
     // §7.6 硬性規定：只有存檔成功／按丟棄／自己刪票才可以清草稿，打字不算。
     // disabled 屬性擋得住點擊（已驗證過），但擋不住直接派送的 change 事件（jsdom 對受控輸入框
     // 就是會放行）——所以這裡刻意對著 disabled 的欄位發 fireEvent.change，模擬「萬一 UI 鎖
     // 被繞過」的情境，驗的是 onTitle/onBody 自己的 early return，不是畫面上的 disabled 而已。
-    // 如果只靠 disabled，這條會抓到假象：change 會真的改到 state，但下面故意不再重複斷言那件事，
-    // 只驗最終結果——B 有沒有被蓋掉——因為那才是使用者真正在意的保證。
     vi.useFakeTimers();
     saveDraft("/p", "01-a.md", { title: "草稿標題", body: "草稿內文", fingerprint: "f0" });
     setup();
     expect(screen.getByText(en.list.draftFound)).toBeTruthy();
     fireEvent.change(bodyBox(), { target: { value: "偷打的字" } });
+    // 錨點：只驗 loadDraft 分不出「guard 真的擋下來」跟「change 事件根本沒送達」——兩種情況
+    // localStorage 都不會被寫，斷言一樣綠（whole-branch review M4）。React 的受控輸入框只有
+    // 在 onChange 真的被呼叫、而且沒有呼叫對應的 setState 時，才會在下一次 commit 把 DOM 的
+    // 原始 value 拉回目前的 state；如果事件根本沒送達任何 listener，fireEvent.change 自己
+    // 直接寫入 DOM 的 "偷打的字" 不會有任何東西把它拉回去，畫面會停在 "偷打的字"。
+    // 實測驗證過兩種路徑：guarded → "舊內文"（React 拉回去了）；unguarded → "偷打的字"
+    // （state 真的被改了，controlled value 因此變成新值）。所以這裡斷言拉回原文，
+    // 證明的是「事件送達了、而且被 early return 擋下」，不是「什麼都沒發生」。
+    expect(bodyBox().value).toBe("舊內文");
     vi.advanceTimersByTime(2000);                                        // 遠超過 600ms 的 debounce 視窗
     expect(loadDraft("/p", "01-a.md")).toEqual(
       expect.objectContaining({ title: "草稿標題", body: "草稿內文", fingerprint: "f0" }),
@@ -360,7 +437,10 @@ describe("TaskEditor", () => {
     expect(document.querySelector(".ed-preview strong")?.textContent).toBe("b");
   });
 
-  it("複製我的內容成功 → 顯示已複製（task 10 review FIX 6）", async () => {
+  it("複製我的內容成功 → 顯示已複製，且不吃掉 409 提示與〔捨棄我的版本，重新載入〕（task 10 review FIX 6；whole-branch review FIX 4）", async () => {
+    // 複製曾經用 setNotice({key:"list.copied"}) 蓋掉 notice——notice 同時是 409 說明與
+    // 「捨棄我的版本，重新載入」的容器，蓋掉就等於把 §7.5 復原流程的第二步一起端走。
+    // 這個 repo 對孤兒草稿／救援複製已經各自修過一次同一種形狀，這是第三次（whole-branch review）
     updateTaskContent.mockRejectedValue(new TaskConflictError());
     writeClipboard.mockResolvedValue(true);
     setup();
@@ -370,6 +450,9 @@ describe("TaskEditor", () => {
     fireEvent.click(screen.getByText(en.list.copyMine));
     expect(writeClipboard).toHaveBeenCalledWith("# 舊標題\n\n我的內容");
     await waitFor(() => expect(screen.getByText(en.list.copied)).toBeTruthy());
+    // 複製後，衝突說明與捨棄按鈕都還在——不是被複製回饋整條換掉
+    expect(screen.getByText(en.list.conflictEditor)).toBeTruthy();
+    expect(screen.getByText(en.list.discardAndReload)).toBeTruthy();
   });
 
   it("複製我的內容失敗（回 false）→ 不顯示已複製，原本的提示還在（task 10 review FIX 6）", async () => {

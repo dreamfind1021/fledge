@@ -273,7 +273,9 @@ def can_round_trip(raw: bytes) -> bool:
     （列舉會漏），直接驗性質。
 
     **對任意 raw 不拋例外。** 跑在 `scan_tasks()` 的逐檔迴圈裡，一張壞票拋出去就違反
-    「單一壞票不可拖垮整個掃描」的契約 2。嚴格解碼失敗、fence 不完整、任何例外一律回 False。
+    「單一壞票不可拖垮整個掃描」的契約 2。嚴格解碼失敗（`UnicodeDecodeError`）與
+    `replace_body()` 的 `ValueError`（fence 不完整等）一律攔下回 False（spec §5.2.1，
+    只點名這兩種——不是「任何例外」）。
 
     `parse_task` 需要檔名算編號與 short_name fallback，這裡傳 dummy：編號不影響 title／body；
     title_missing 時 parse 會用 short_name 當標題，重組後多一行 `# _`，比對自然不等。

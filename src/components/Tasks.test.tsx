@@ -702,6 +702,24 @@ describe("Tasks 面板", () => {
     expect(document.querySelector(".tk-banner.is-draft")).toBeNull();
   });
 
+  // tasks_status absent 時 list.tasks 是空陣列（不是 null）——naive 比對會讓草稿被判成
+  // 「票已經不在了」的孤兒，配上一鍵不可逆的〔丟棄草稿〕；spec §7.4 明講 absent 跟
+  // unavailable 要同一套待遇：現在讀不到，草稿留著，不做任何清除（whole-branch review M3）
+  it("tasks_status absent 時草稿不被當成孤兒，不出現一鍵不可逆的丟棄鍵", async () => {
+    fetchTasksOverview.mockResolvedValue({
+      projects: [proj({ tasks_status: "absent", unfinished: 0 })], permission_error: false,
+    });
+    fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "absent", tasks: [], next_step: "" });
+    saveDraft("/p/a", "01-a.md", { title: "還沒送出的草稿", body: "b", fingerprint: "f" });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await waitFor(() => expect(screen.getByText(en.list.empty)).toBeTruthy());
+    expect(document.querySelector(".tk-banner.is-draft")).toBeNull();
+    expect(screen.queryByText(/還沒送出的草稿/)).toBeNull();
+    expect(screen.queryByText(en.list.draftDiscard)).toBeNull();
+    expect(loadDraft("/p/a", "01-a.md")).not.toBeNull();   // 沒被清掉——只是沒被畫成孤兒
+  });
+
   it("離開後重進再送：V1 的晚到 200 不干擾 V2 的 409 畫面（spec §10.2）", async () => {
     // V1 送出 → 離開 → 重進改成 B → 送 V2 得 409 → V1 的 200 之後才到 → B 仍在編輯區、409 提示仍在
     let resolveV1!: (r: TaskRow) => void;
