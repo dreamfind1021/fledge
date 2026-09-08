@@ -32,7 +32,27 @@
     "cancel": "取消",
     "confirmDelete": "確定刪除這張票？檔案會直接消失，救不回來。",
     "conflict": "這張票已被改過，正在重新載入。",
-    "actionError": "沒有成功，再試一次。"
+    "actionError": "沒有成功，再試一次。",
+    "editorTitle": "標題",
+    "editorBody": "內文",
+    "preview": "預覽",
+    "save": "儲存",
+    "saving": "儲存中…",
+    "unsaved": "未儲存",
+    "titleRequired": "標題不能是空的",
+    "draftFound": "你有一份未儲存的草稿。",
+    "draftStale": "你有一份未儲存的草稿，但這張票在你離開之後被改過了。草稿是舊版的，還原之後儲存會被擋下來。",
+    "draftResume": "接著改",
+    "draftRestoreAnyway": "還是要還原",
+    "draftDiscard": "丟棄草稿",
+    "draftUnsavable": "草稿存不進去（瀏覽器儲存空間可能已滿或被停用），這次儲存失敗的話沒有退路。要繼續嗎？",
+    "draftUnsavableProceed": "仍要儲存",
+    "leaveAnyway": "仍要離開",
+    "conflictEditor": "這張票在別的地方被改過了，你的內容沒有存進去。檔案沒被動，你打的字也還在下面。",
+    "copyMine": "複製我的內容",
+    "discardAndReload": "捨棄我的版本，重新載入",
+    "saveFailed": "儲存失敗：{{reason}}",
+    "copied": "已複製"
   },
   "status": {
     "todo": "待辦",
@@ -60,6 +80,14 @@
     "openInEditor": "用編輯器打開檔案",
     "statusCycle": "{{current}}，點一下切換成 {{next}}",
     "expandTicket": "展開看內文",
-    "collapseTicket": "收起內文"
+    "collapseTicket": "收起內文",
+    "toolbarHeading": "標題",
+    "toolbarBold": "粗體",
+    "toolbarItalic": "斜體",
+    "toolbarCode": "行內程式碼",
+    "toolbarList": "清單",
+    "toolbarQuote": "引用",
+    "toolbarCodeBlock": "程式碼區塊",
+    "toolbarLink": "連結"
   }
 }

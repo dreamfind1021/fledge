@@ -32,7 +32,27 @@
     "cancel": "Cancel",
     "confirmDelete": "Delete this task? The file is removed and cannot be restored.",
     "conflict": "This task was changed elsewhere. Reloading.",
-    "actionError": "That did not work. Try again."
+    "actionError": "That did not work. Try again.",
+    "editorTitle": "Title",
+    "editorBody": "Body",
+    "preview": "Preview",
+    "save": "Save",
+    "saving": "Saving…",
+    "unsaved": "Unsaved",
+    "titleRequired": "Title can't be empty",
+    "draftFound": "You have an unsaved draft.",
+    "draftStale": "You have an unsaved draft, but this ticket was changed after you left. The draft is based on the old version; saving after restoring it will be rejected.",
+    "draftResume": "Continue editing",
+    "draftRestoreAnyway": "Restore anyway",
+    "draftDiscard": "Discard draft",
+    "draftUnsavable": "The draft can't be saved (browser storage may be full or disabled). If this save fails, there's no fallback. Continue?",
+    "draftUnsavableProceed": "Save anyway",
+    "leaveAnyway": "Leave anyway",
+    "conflictEditor": "This ticket was changed elsewhere. Your content was NOT saved. The file is untouched and your text is still below.",
+    "copyMine": "Copy my content",
+    "discardAndReload": "Discard my version and reload",
+    "saveFailed": "Save failed: {{reason}}",
+    "copied": "Copied"
   },
   "status": {
     "todo": "To do",
@@ -60,6 +80,14 @@
     "openInEditor": "Open the file in your editor",
     "statusCycle": "{{current}}, change status to {{next}}",
     "expandTicket": "Expand to read body",
-    "collapseTicket": "Collapse body"
+    "collapseTicket": "Collapse body",
+    "toolbarHeading": "Heading",
+    "toolbarBold": "Bold",
+    "toolbarItalic": "Italic",
+    "toolbarCode": "Inline code",
+    "toolbarList": "List",
+    "toolbarQuote": "Quote",
+    "toolbarCodeBlock": "Code block",
+    "toolbarLink": "Link"
   }
 }

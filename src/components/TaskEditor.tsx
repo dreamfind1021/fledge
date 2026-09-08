@@ -1,0 +1,200 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronLeft } from "lucide-react";
+import { writeClipboard } from "../lib/clipboard";
+import { TaskConflictError, updateTaskContent, type TaskRow } from "../lib/sidecar";
+import { clearDraft, loadDraft, saveDraft } from "../lib/taskDraft";
+import { renderMarkdownLite } from "../lib/markdownLite";
+
+type T = (k: string, o?: Record<string, unknown>) => string;
+
+// §5.2.2 值域：送出前正規化並寫回畫面，使用者看到的就是會存進去的
+const normTitle = (s: string) => s.split(/\s+/).filter(Boolean).join(" ");
+const normBody = (s: string) => s.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
+
+const DEBOUNCE_MS = 600;
+
+// 工具列只在游標位置插入字元（spec §6.3）。檔案內容永遠等於文字區裡看得到的那串字。
+type Tool = { key: string; a11y: string; wrap?: [string, string]; linePrefix?: string; block?: string };
+const TOOLS: Tool[] = [
+  { key: "H", a11y: "a11y.toolbarHeading", linePrefix: "## " },
+  { key: "B", a11y: "a11y.toolbarBold", wrap: ["**", "**"] },
+  { key: "I", a11y: "a11y.toolbarItalic", wrap: ["*", "*"] },
+  { key: "<>", a11y: "a11y.toolbarCode", wrap: ["`", "`"] },
+  { key: "•", a11y: "a11y.toolbarList", linePrefix: "- " },
+  { key: "❝", a11y: "a11y.toolbarQuote", linePrefix: "> " },
+  { key: "```", a11y: "a11y.toolbarCodeBlock", block: "```" },
+  { key: "🔗", a11y: "a11y.toolbarLink", wrap: ["[", "](url)"] },
+];
+
+function applyTool(ta: HTMLTextAreaElement, tool: Tool): string {
+  const { selectionStart: s, selectionEnd: e, value: v } = ta;
+  if (tool.wrap) return v.slice(0, s) + tool.wrap[0] + v.slice(s, e) + tool.wrap[1] + v.slice(e);
+  if (tool.linePrefix) {
+    const ls = v.lastIndexOf("\n", s - 1) + 1;
+    return v.slice(0, ls) + tool.linePrefix + v.slice(ls);
+  }
+  if (tool.block) return v.slice(0, s) + `${tool.block}\n` + v.slice(s, e) + `\n${tool.block}` + v.slice(e);
+  return v;
+}
+
+export function TaskEditor({ port, project, projectName, task, onSaved, onLeave, t }: {
+  port: number; project: string; projectName: string; task: TaskRow;
+  onSaved: (updated: TaskRow) => void; onLeave: (reload: boolean) => void; t: T;
+}) {
+  const [title, setTitle] = useState(task.title);
+  const [body, setBody] = useState(task.body);
+  // 開始編輯那一版的 fingerprint（spec §7.2）。草稿還原時會換成草稿記的那版——
+  // 送出的必須是「內容所基於的那版」，不是送出當下重抓的
+  const [baseFp, setBaseFp] = useState(task.fingerprint);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState(false);
+  const [notice, setNotice] = useState<{ key: string; reason?: string } | null>(null);
+  const [draftPrompt, setDraftPrompt] = useState<"same" | "stale" | null>(null);
+  // 草稿存不進去時是哪個動作觸發的：儲存 → 給「仍要儲存」，離開 → 給「仍要離開」
+  const [unsavable, setUnsavable] = useState<"save" | "leave" | null>(null);
+  const debounce = useRef<number | null>(null);
+  const abort = useRef<AbortController | null>(null);
+  const pendingDraft = useRef(loadDraft(project, task.name));
+  // 最新的編輯狀態，給 unmount cleanup 用——cleanup 的 closure 是首次 render 的，讀不到最新 state
+  const latest = useRef({ title, body, baseFp, dirty });
+  latest.current = { title, body, baseFp, dirty };
+
+  // closeTab() 直接從 store 移除分頁，不會經過 leave()（plan R2 F3）。unmount cleanup 無條件 abort，
+  // 並 best-effort flush 草稿——同步的，失敗只能吞：已經在卸載了，沒有 UI 可顯示警告。
+  // 正常離開路徑（leave）已經 flush 過，這裡再存一次是 idempotent 的，無害
+  // 「捨棄我的版本」清掉草稿後，cleanup 不得再把它寫回（plan R3 F1）
+  const skipFlush = useRef(false);
+  useEffect(() => () => {
+    abort.current?.abort();
+    if (debounce.current != null) { window.clearTimeout(debounce.current); debounce.current = null; }   // 舊 timer 不得在卸載後覆寫新草稿
+    const l = latest.current;
+    if (l.dirty && !skipFlush.current) saveDraft(project, task.name, { title: l.title, body: l.body, fingerprint: l.baseFp });
+  }, [project, task.name]);
+
+  // 進來時有草稿 → 依 fingerprint 相同／不同給不同提示（spec §7.4），不自動動任何東西
+  useEffect(() => {
+    const d = pendingDraft.current;
+    if (d) setDraftPrompt(d.fingerprint === task.fingerprint ? "same" : "stale");
+  }, [task.fingerprint]);
+
+  const cancelDebounce = () => { if (debounce.current != null) { window.clearTimeout(debounce.current); debounce.current = null; } };
+  const scheduleDraft = (ti: string, bo: string) => {
+    cancelDebounce();
+    debounce.current = window.setTimeout(() => { saveDraft(project, task.name, { title: ti, body: bo, fingerprint: baseFp }); debounce.current = null; }, DEBOUNCE_MS);
+  };
+  const onTitle = (v: string) => { setTitle(v); setDirty(true); scheduleDraft(v, body); };
+  const onBody = (v: string) => { setBody(v); setDirty(true); scheduleDraft(title, v); };
+
+  const restoreDraft = () => {
+    const d = pendingDraft.current; if (!d) return;
+    setTitle(d.title); setBody(d.body); setBaseFp(d.fingerprint); setDirty(true); setDraftPrompt(null);
+  };
+  const discardDraft = () => { cancelDebounce(); clearDraft(project, task.name); pendingDraft.current = null; setDraftPrompt(null); };
+
+  // 離開（spec §7.3）：先同步 flush 草稿——打字後 600ms 內按返回，最後那段還在 debounce 等待，
+  // 直接走就丟了（plan R1 F2）。flush 失敗不靜默離開，給複製與「仍要離開」兩條路。
+  // 沒改過就不 flush（dirty 為 false），避免把原始內容當草稿存進去。
+  // flush 成功後 abort 在途請求，讓晚到的回應根本不到達；然後卸載
+  // reload=true 只有「捨棄我的版本」會傳：父層要把清單進 loading、重讀完才能再操作（plan R2 F4）
+  const forceLeave = (reload = false) => { abort.current?.abort(); onLeave(reload); };
+  const leave = () => {
+    cancelDebounce();
+    if (dirty && !saveDraft(project, task.name, { title, body, fingerprint: baseFp })) {
+      setUnsavable("leave"); return;
+    }
+    forceLeave();
+  };
+
+  // §7.3 的固定順序：正規化 → 取消 pending → flush → 進 isSaving → PUT
+  const save = useCallback((force = false) => {
+    const ti = normTitle(title), bo = normBody(body);
+    setTitle(ti); setBody(bo);
+    if (!ti) { setNotice({ key: "list.titleRequired" }); return; }
+    cancelDebounce();
+    if (!saveDraft(project, task.name, { title: ti, body: bo, fingerprint: baseFp }) && !force) {
+      setUnsavable("save"); return;                      // 不鎖、不發 PUT，使用者決定
+    }
+    setUnsavable(null); setNotice(null); setSaving(true);
+    const ac = new AbortController(); abort.current = ac;
+    updateTaskContent(port, project, task.name, ti, bo, baseFp, ac.signal)
+      .then((updated) => {
+        if (ac.signal.aborted) return;                   // 晚到：不清草稿、不動狀態
+        clearDraft(project, task.name); setSaving(false); onSaved(updated);
+      })
+      .catch((e: unknown) => {
+        if (ac.signal.aborted) return;
+        setSaving(false);
+        if (e instanceof TaskConflictError) setNotice({ key: "list.conflictEditor" });
+        else setNotice({ key: "list.saveFailed", reason: e instanceof Error ? e.message : String(e) });
+      });
+  }, [title, body, baseFp, port, project, task.name, onSaved]);
+
+  const copyMine = () => writeClipboard(`# ${title}\n\n${body}`).then((ok) => { if (ok) setNotice({ key: "list.copied" }); });
+  // 「捨棄我的版本」：清草稿後直接走，**不經 leave()**——leave 會先 flush 草稿，跟「捨棄」矛盾
+  const discardAndReload = () => { skipFlush.current = true; clearDraft(project, task.name); forceLeave(true); };
+
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const tool = (tl: Tool) => { const ta = taRef.current; if (!ta) return; onBody(applyTool(ta, tl)); };
+
+  return (
+    <div className="tasks-pane">
+      <div className="full-head">
+        <button className="full-back" onClick={leave}><ChevronLeft size={14} />{projectName}</button>
+        <span className="full-num">{task.number ?? ""}</span>
+      </div>
+      {draftPrompt && (
+        <div className={`tk-banner is-draft${draftPrompt === "stale" ? " is-stale" : ""}`}>
+          <span className="btext">{t(draftPrompt === "same" ? "list.draftFound" : "list.draftStale")}</span>
+          <span className="bacts">
+            <button className="bbtn" onClick={restoreDraft}>{t(draftPrompt === "same" ? "list.draftResume" : "list.draftRestoreAnyway")}</button>
+            <button className="bbtn" onClick={discardDraft}>{t("list.draftDiscard")}</button>
+          </span>
+        </div>
+      )}
+      {unsavable && (
+        <div className="tk-banner is-conflict">
+          <span className="btext">{t("list.draftUnsavable")}</span>
+          <span className="bacts">
+            <button className="bbtn" onClick={copyMine}>{t("list.copyMine")}</button>
+            {unsavable === "save"
+              ? <button className="bbtn" onClick={() => save(true)}>{t("list.draftUnsavableProceed")}</button>
+              : <button className="bbtn" onClick={() => forceLeave()}>{t("list.leaveAnyway")}</button>}
+          </span>
+        </div>
+      )}
+      {notice && (
+        <div className={`tk-banner ${notice.key === "list.copied" ? "is-draft" : "is-conflict"}`}>
+          <span className="btext">{t(notice.key, notice.reason ? { reason: notice.reason } : undefined)}</span>
+          {notice.key === "list.conflictEditor" && (
+            <span className="bacts">
+              <button className="bbtn" onClick={copyMine}>{t("list.copyMine")}</button>
+              <button className="bbtn" onClick={discardAndReload}>{t("list.discardAndReload")}</button>
+            </span>
+          )}
+        </div>
+      )}
+      <div className="full-editor">
+        <input className="ed-title" aria-label={t("list.editorTitle")} value={title} disabled={saving}
+          onChange={(e) => onTitle(e.target.value)} />
+        <div className="ed-bar" role="toolbar">
+          {TOOLS.map((tl) => (
+            <button key={tl.key} className="ed-btn" aria-label={t(tl.a11y)} title={t(tl.a11y)} disabled={saving || preview}
+              onClick={() => tool(tl)}>{tl.key}</button>
+          ))}
+        </div>
+        {preview
+          ? <div className="ed-preview tk-md">{renderMarkdownLite(body)}</div>
+          : <textarea ref={taRef} className="ed-area" aria-label={t("list.editorBody")} value={body} disabled={saving}
+              onChange={(e) => onBody(e.target.value)} />}
+        <div className="ed-foot">
+          <span className={`ed-hint${dirty ? " is-dirty" : ""}`}>{saving ? t("list.saving") : dirty ? t("list.unsaved") : ""}</span>
+          <span className="spacer" />
+          <button className="btn is-quiet" disabled={saving} onClick={() => setPreview((p) => !p)}>{t("list.preview")}</button>
+          <button className="btn is-quiet" disabled={saving} onClick={leave}>{t("list.cancel")}</button>
+          <button className="btn is-primary" disabled={saving} onClick={() => save()}>{t("list.save")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
