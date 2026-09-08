@@ -35,7 +35,12 @@ function Ticket({ task, onCycle, onDelete, onOpen, onEdit, t }: {
         aria-label={expanded ? t("a11y.collapseTicket") : t("a11y.expandTicket")}
         aria-expanded={expanded}
         onClick={() => setExpanded((x) => !x)}
-        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded((x) => !x); } }}>
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;   // 巢狀按鈕自己的鍵盤啟動不該被列吃掉：
+                                                        // 在冒泡途中 preventDefault 會取消瀏覽器合成 click，
+                                                        // 那顆按鈕的 onClick 連觸發的機會都沒有
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded((x) => !x); }
+        }}>
         {/* 狀態記號＝狀態按鈕：點一下循環 todo → doing → done → todo（design §5.2）。
             三態要有三種**輪廓**：空心方／實心方／打勾。只差顏色不夠——doing 與 done 若都是
             實心方塊，色覺障礙或單色顯示下就分不開（Codex 審查 medium）。

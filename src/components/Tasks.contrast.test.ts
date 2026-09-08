@@ -94,6 +94,12 @@ describe("待辦面板的顏色對比", () => {
     ["總覽分區計數", ".tov-sec-n", "color"],
     ["第二層分區標籤", ".tasks-sec-lab", "color"],
     ["第二層分區計數", ".tasks-sec-n", "color"],
+    // 展開預覽（spec §6.1／§6.4）新增的選擇器：不能只讓「16 tests passed」是因為
+    // 這幾條規則根本沒被掃到——沒有內文、不可編輯說明、正文與連結都要各自過 4.5:1
+    [".tk-md 內文", ".tk-md", "color"],
+    ["沒有內文的提示", ".tk-empty", "color"],
+    ["不可編輯的說明", ".tk-noedit", "color"],
+    [".tk-md 連結", ".tk-md a", "color"],
   ])("%s 對背景至少 4.5:1", (_label, selector, prop) => {
     expect(contrast(token(paintToken(selector, prop)), bg)).toBeGreaterThanOrEqual(4.5);
   });

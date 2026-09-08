@@ -483,6 +483,30 @@ describe("Tasks 面板", () => {
     expect(document.querySelector(".tk-body")).toBeNull();
   });
 
+  // 鍵盤啟動整列（role="button" 的 tk-row 本身）：Enter／Space 都要能展開、收起
+  it("鍵盤 Enter／Space 在列本身上展開、收起", async () => {
+    await openList();
+    fireEvent.keyDown(screen.getByRole("button", { name: en.a11y.expandTicket }), { key: "Enter" });
+    await waitFor(() => expect(document.querySelector(".tk-body")).toBeTruthy());
+    fireEvent.keyDown(screen.getByRole("button", { name: en.a11y.collapseTicket }), { key: "Enter" });
+    await waitFor(() => expect(document.querySelector(".tk-body")).toBeNull());
+    fireEvent.keyDown(screen.getByRole("button", { name: en.a11y.expandTicket }), { key: " " });
+    await waitFor(() => expect(document.querySelector(".tk-body")).toBeTruthy());
+  });
+
+  // 迴歸測試（review fix 1）：keydown 冒泡到 tk-row 途中，若列不分辨事件來源就無條件
+  // preventDefault，會連巢狀按鈕自己的合成 click 都一起取消掉——鍵盤使用者 Tab 到
+  // 狀態記號／旗標／編輯／開檔／刪除任一顆，按 Enter 都會被列吃掉，只展開/收合整列。
+  // fireEvent.keyDown 在 jsdom 不會像真實瀏覽器一樣合成出 click，所以斷言按鈕動作
+  // 真的被觸發是測不出來的（那是在測 jsdom，不是測我們的程式碼）；這裡斷言的是
+  // 觀察得到、且正是缺陷本體的那件事——列沒有被誤展開。
+  it("鍵盤在狀態記號按鈕上按 Enter 不會誤觸列展開", async () => {
+    await openList();
+    const btn = screen.getByLabelText(statusLabel(en.status.todo, en.status.doing));
+    fireEvent.keyDown(btn, { key: "Enter" });
+    expect(document.querySelector(".tk-body")).toBeNull();
+  });
+
   it.each([
     ["明確 false", { editable: false }],
     ["缺欄", { editable: undefined as unknown as boolean }],
