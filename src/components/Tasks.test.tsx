@@ -32,7 +32,8 @@ const statusLabel = (current: string, next: string) =>
   en.a11y.statusCycle.replace("{{current}}", current).replace("{{next}}", next);
 const ticket = (over: Partial<TaskRow> = {}): TaskRow => ({
   name: "01-a.md", number: 1, title: "第一件", status: "todo", source: "me",
-  created: "2026-08-29", anomalies: [], fingerprint: "f", path: "/p/a/.fledge/tasks/01-a.md", ...over,
+  created: "2026-08-29", anomalies: [], fingerprint: "f", path: "/p/a/.fledge/tasks/01-a.md",
+  body: "", editable: true, ...over,
 });
 
 describe("Tasks 面板", () => {
