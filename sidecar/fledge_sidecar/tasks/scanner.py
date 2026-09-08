@@ -47,7 +47,8 @@ class TaskWriteError(OSError):
     這個是磁碟／檔案系統出問題（500）。混在一起會讓真正的 I/O 故障被報成參數錯誤。"""
 
 
-# 所有票的寫入用一把全域鎖序列化（spec §5.4、K9）。
+# 既有票的三個寫入函式（update_content／update_status／delete_task）用一把全域鎖序列化
+# （spec §5.4、K9）。建票走 O_EXCL ＋ 編號碰撞重試，不經這把鎖。
 #
 # 為什麼是全域一把而不是 per-name：per-name 需要「票的身分」當鍵，而本 repo 記錄過 APFS 上
 # realpath 字串比對判不出同一個目錄（大小寫別名），name 也一樣——鍵錯了就是兩把鎖，
@@ -512,6 +513,13 @@ def update_content(
             if fingerprint(raw) != expected_fingerprint:
                 return None
             new_raw = replace_body(raw, title, body)
+            # 寫下去的東西自己要讀得回來（spec §5.2.1）。值域檢查只認 \r\n，但 parser 用
+            # str.splitlines()，它還會在 \x0b\x0c\x1c-\x1e\x85   斷行——那些字元
+            # 從網頁／PDF 貼上很常見，放行的話這張票寫完就自己拒絕再編輯，且面板顯示的
+            # 內文與磁碟位元組不符。用後置條件而不是補字元清單：往後 parser 若再長出新的
+            # 分岔，這裡自動擋得住，不必記得回來同步。
+            if not can_round_trip(new_raw):
+                raise ValueError("invalid_content")
             try:
                 os.lseek(fd, 0, os.SEEK_SET)
                 _write_all(fd, new_raw)

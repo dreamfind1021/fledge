@@ -6,6 +6,7 @@ resolver 是**所有端點共用的唯一入口**，所以它的拒絕條件在 
 import json
 import os
 import stat
+import threading
 
 import pytest
 
@@ -531,8 +532,6 @@ def test_absent_project_reports_zero_doing(tmp_path):
 
 # ── update_content ＋ _row 加欄位（spec §3、§5.3、§5.4）────────────────────
 
-import threading
-
 STD = "---\nstatus: todo\nsource: me\ncreated: 2026-09-01\n---\n\n# old title\n\nold body\n"
 
 
@@ -682,6 +681,23 @@ def test_update_content_rejects_out_of_domain_input(tmp_path, title, body):
     try:
         with pytest.raises(ValueError, match="invalid_content"):
             scanner.update_content(fd, "01-old.md", title=title, body=body, expected_fingerprint=scanner.fingerprint(before))
+    finally:
+        os.close(fd)
+    assert p.read_bytes() == before
+
+
+@pytest.mark.parametrize("body", ["a b", "a b", "a\x0cb", "a\x0bb", "a\x85b"])
+def test_update_content_rejects_bodies_the_parser_would_resplit(tmp_path, body):
+    """值域檢查只認 \r\n，parser 的 splitlines 還認另外六種分隔字元。放行的話這張票
+    寫完就自己拒絕再編輯（editable False），且顯示的內文與磁碟位元組不符。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p = _ticket(d)
+    before = p.read_bytes()
+    fd = _fd(d)
+    try:
+        with pytest.raises(ValueError, match="invalid_content"):
+            scanner.update_content(fd, "01-old.md", title="t", body=body, expected_fingerprint=scanner.fingerprint(before))
     finally:
         os.close(fd)
     assert p.read_bytes() == before
