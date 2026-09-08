@@ -35,6 +35,19 @@ describe("taskDraft", () => {
     localStorage.setItem("fledge.taskDraft./p/01-a.md", "{not json");
     expect(loadDraft("/p", "01-a.md")).toBeNull();
   });
+  it("JSON 解析得出來但形狀不對，也當沒有草稿", () => {
+    // 這條分支擋的是「JSON 解析得出來、但欄位型別不對」的舊版或損壞草稿；
+    // 沒有它，undefined 會被還原進受控的 input，觸發警告並且把使用者的內容弄丟。
+    const badShapes = [
+      '{"title":1,"body":"b","fingerprint":"f"}', // 型別不符：title 不是字串
+      '{"title":"t","body":"b"}', // 缺 fingerprint
+      "[]", // 不是物件；JSON.parse 不拋錯，落到形狀檢查那個 if（實測過："null" 反而是 d.title 直接拋 TypeError、走另一條 catch，行為一樣回 null 但走的分支不同，所以這裡選會走到 if 分支的 "[]"）
+    ];
+    badShapes.forEach((raw, i) => {
+      localStorage.setItem(`fledge.taskDraft./p/bad-${i}.md`, raw);
+      expect(loadDraft("/p", `bad-${i}.md`)).toBeNull();
+    });
+  });
   it("listDrafts 只列該專案的", () => {
     saveDraft("/p", "01-a.md", { title: "a", body: "", fingerprint: "f" });
     saveDraft("/p", "02-b.md", { title: "b", body: "", fingerprint: "f" });
