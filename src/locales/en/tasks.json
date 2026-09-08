@@ -52,7 +52,9 @@
     "copyMine": "Copy my content",
     "discardAndReload": "Discard my version and reload",
     "saveFailed": "Save failed: {{reason}}",
-    "copied": "Copied"
+    "copied": "Copied",
+    "orphanDraft": "This ticket is gone, but you have an unsaved draft: {{title}}",
+    "orphanUnavailable": "This project's tasks can't be read right now. The draft is kept."
   },
   "status": {
     "todo": "To do",

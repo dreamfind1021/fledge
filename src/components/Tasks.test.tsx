@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import i18n from "../i18n";
 import en from "../locales/en/tasks.json";
 import { TaskConflictError, type TaskRow, type TasksListResponse, type TasksOverview } from "../lib/sidecar";
+import { loadDraft, saveDraft } from "../lib/taskDraft";
 import { Tasks } from "./Tasks";
 
 const fetchTasksOverview = vi.fn<(port: number) => Promise<TasksOverview>>();
@@ -12,6 +13,9 @@ const createTask = vi.fn<(port: number, project: string, title: string) => Promi
 const updateTask = vi.fn<(p: number, proj: string, name: string, status: string, fp: string) => Promise<TaskRow>>();
 const deleteTask = vi.fn<(p: number, proj: string, name: string, fp: string) => Promise<void>>();
 const openFile = vi.fn<(port: number, p: string) => Promise<{ status: string }>>();
+const updateTaskContent = vi.fn<
+  (p: number, proj: string, name: string, title: string, body: string, fp: string, signal?: AbortSignal) => Promise<TaskRow>
+>();
 
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
@@ -21,6 +25,8 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   updateTask: (p: number, proj: string, n: string, st: string, fp: string) => updateTask(p, proj, n, st, fp),
   deleteTask: (p: number, proj: string, n: string, fp: string) => deleteTask(p, proj, n, fp),
   openFile: (port: number, path: string) => openFile(port, path),
+  updateTaskContent: (p: number, proj: string, n: string, ti: string, bo: string, fp: string, sig?: AbortSignal) =>
+    updateTaskContent(p, proj, n, ti, bo, fp, sig),
 }));
 
 const proj = (over: Partial<TasksOverview["projects"][number]> = {}) => ({
@@ -40,12 +46,14 @@ describe("Tasks 面板", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("en");
     vi.clearAllMocks();
+    localStorage.clear();   // 草稿住在 localStorage，測試之間不清會互相污染
     fetchTasksOverview.mockResolvedValue({ projects: [proj()], permission_error: false });
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "" });
     createTask.mockResolvedValue(ticket({ name: "02-b.md", number: 2, title: "新的" }));
     updateTask.mockResolvedValue(ticket({ status: "doing", fingerprint: "f2" }));
     deleteTask.mockResolvedValue(undefined);
     openFile.mockResolvedValue({ status: "ok" });
+    updateTaskContent.mockResolvedValue(ticket({ fingerprint: "f2" }));
   });
   afterEach(cleanup);   // vitest 未開 globals → testing-library 不會自動 cleanup
 
@@ -526,5 +534,122 @@ describe("Tasks 面板", () => {
     fireEvent.click(await screen.findByText("a"));
     await screen.findByText("第一件");
     expect(screen.getByLabelText(en.list.edit)).toBeTruthy();
+  });
+
+  // ── 第三層導覽（spec §6.2）──
+
+  it("點編輯進編輯器；儲存後回清單且那張票展開、fingerprint 已更新", async () => {
+    updateTaskContent.mockResolvedValue(ticket({ title: "改過", fingerprint: "f9", body: "新內文" }));
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByLabelText(en.list.edit));
+    await screen.findByLabelText(en.list.editorTitle);
+    fireEvent.change(screen.getByLabelText(en.list.editorTitle), { target: { value: "改過" } });
+    fireEvent.click(screen.getByText(en.list.save));
+    await screen.findByText("改過");                                   // 回到清單
+    expect(document.querySelector(".tk-body")?.textContent).toContain("新內文");   // 保持展開
+    // 下一次操作用新 fingerprint
+    fireEvent.click(screen.getByLabelText(statusLabel(en.status.todo, en.status.doing)));
+    await waitFor(() => expect(updateTask).toHaveBeenCalledWith(1234, "/p/a", "01-a.md", "doing", "f9"));
+  });
+
+  it("編輯中切走再切回，不重讀、內容不被蓋掉", async () => {
+    const { rerender } = render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByLabelText(en.list.edit));
+    const box = await screen.findByLabelText(en.list.editorBody);
+    fireEvent.change(box, { target: { value: "打到一半" } });
+    const calls = fetchTasks.mock.calls.length;
+    rerender(<Tasks port={1234} isActive={false} />);
+    rerender(<Tasks port={1234} isActive />);
+    fireEvent(window, new Event("focus"));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(fetchTasks.mock.calls.length).toBe(calls);
+    expect((screen.getByLabelText(en.list.editorBody) as HTMLTextAreaElement).value).toBe("打到一半");
+  });
+
+  it("孤兒草稿：票不在清單裡時列在頂端，可複製與丟棄", async () => {
+    saveDraft("/p/a", "99-gone.md", { title: "消失的", body: "b", fingerprint: "f" });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText(/消失的/);
+    fireEvent.click(screen.getAllByText(en.list.draftDiscard)[0]);
+    await waitFor(() => expect(loadDraft("/p/a", "99-gone.md")).toBeNull());
+  });
+
+  it("離開後重進再送：V1 的晚到 200 不干擾 V2 的 409 畫面（spec §10.2）", async () => {
+    // V1 送出 → 離開 → 重進改成 B → 送 V2 得 409 → V1 的 200 之後才到 → B 仍在編輯區、409 提示仍在
+    let resolveV1!: (r: TaskRow) => void;
+    updateTaskContent
+      .mockImplementationOnce(() => new Promise((r) => { resolveV1 = r; }))
+      .mockRejectedValueOnce(new TaskConflictError());
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByLabelText(en.list.edit));
+    fireEvent.change(await screen.findByLabelText(en.list.editorBody), { target: { value: "V1" } });
+    fireEvent.click(screen.getByText(en.list.save));
+    await waitFor(() => expect(updateTaskContent).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByText("a"));                              // 離開（abort V1）
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByLabelText(en.list.edit));                // 重進
+    fireEvent.click(await screen.findByText(en.list.draftDiscard));       // 不要 V1 的草稿
+    fireEvent.change(screen.getByLabelText(en.list.editorBody), { target: { value: "B" } });
+    fireEvent.click(screen.getByText(en.list.save));                     // V2 → 409
+    await screen.findByText(en.list.conflictEditor);
+    resolveV1(ticket({ fingerprint: "f1" }));                             // V1 晚到
+    await new Promise((r) => setTimeout(r, 0));
+    expect((screen.getByLabelText(en.list.editorBody) as HTMLTextAreaElement).value).toBe("B");
+    expect(screen.getByText(en.list.conflictEditor)).toBeTruthy();
+  });
+
+  it("換票時編輯器 remount，B 不承接 A 的狀態（plan R3 F2）", async () => {
+    fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", tasks: [
+      ticket({ name: "01-a.md", title: "A", body: "A 的內文" }),
+      ticket({ name: "02-b.md", number: 2, title: "B", body: "B 的內文" }),
+    ] });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("A");
+    fireEvent.click(screen.getAllByLabelText(en.list.edit)[0]);          // 進 A
+    fireEvent.change(await screen.findByLabelText(en.list.editorBody), { target: { value: "A 打了字" } });
+    fireEvent.click(screen.getByText("a"));                              // 返回
+    await screen.findByText("B");
+    fireEvent.click(screen.getAllByLabelText(en.list.edit)[1]);          // 進 B
+    expect((await screen.findByLabelText(en.list.editorBody) as HTMLTextAreaElement).value).toBe("B 的內文");
+    expect(screen.queryByText(en.list.draftFound)).toBeNull();           // 不讀 A 的草稿
+    expect(loadDraft("/p/a", "01-a.md")?.body).toBe("A 打了字");         // A 的草稿在 A
+  });
+
+  it("捨棄版本重載：清單進 loading，重讀完才有編輯按鈕（plan R2 F4）", async () => {
+    updateTaskContent.mockRejectedValue(new TaskConflictError());
+    let resolveList!: (l: TasksListResponse) => void;
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByLabelText(en.list.edit));
+    fireEvent.change(await screen.findByLabelText(en.list.editorBody), { target: { value: "x" } });
+    fireEvent.click(screen.getByText(en.list.save));
+    await screen.findByText(en.list.conflictEditor);
+    fetchTasks.mockReturnValueOnce(new Promise((r) => { resolveList = r; }));
+    fireEvent.click(screen.getByText(en.list.discardAndReload));
+    await screen.findByText(en.overview.loading);                       // 清單進 loading
+    expect(screen.queryByLabelText(en.list.edit)).toBeNull();            // 沒有編輯按鈕可按
+    resolveList({ project: "/p/a", tasks_status: "ok", tasks: [ticket({ fingerprint: "NEW" })], next_step: "" });
+    await screen.findByText("第一件");
+    expect(screen.getByLabelText(en.list.edit)).toBeTruthy();
+  });
+
+  it("使用者自己刪票時草稿一併清掉", async () => {
+    saveDraft("/p/a", "01-a.md", { title: "t", body: "b", fingerprint: "f" });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByLabelText(en.list.delete));
+    fireEvent.click(screen.getByText(en.list.delete, { selector: ".tk-confirm-yes" }));
+    await waitFor(() => expect(deleteTask).toHaveBeenCalled());
+    expect(loadDraft("/p/a", "01-a.md")).toBeNull();
   });
 });

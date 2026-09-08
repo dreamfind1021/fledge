@@ -52,7 +52,9 @@
     "copyMine": "複製我的內容",
     "discardAndReload": "捨棄我的版本，重新載入",
     "saveFailed": "儲存失敗：{{reason}}",
-    "copied": "已複製"
+    "copied": "已複製",
+    "orphanDraft": "這張票已經不在了，但你有一份未儲存的草稿：{{title}}",
+    "orphanUnavailable": "現在讀不到這個專案的待辦，草稿留著。"
   },
   "status": {
     "todo": "待辦",

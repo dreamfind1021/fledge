@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Pencil, SquarePen, Trash2, TriangleAlert } from "lucide-react";
 import { renderMarkdownLite } from "../lib/markdownLite";
+import { writeClipboard } from "../lib/clipboard";
+import type { TaskDraft } from "../lib/taskDraft";
 import type { TaskRow, TasksListResponse } from "../lib/sidecar";
 
 type T = (k: string, o?: Record<string, unknown>) => string;
@@ -13,8 +15,10 @@ export const NEXT_STATUS: Record<string, string> = { todo: "doing", doing: "done
 // 年份佔四個字寬卻幾乎不帶資訊。認不得的格式一律不畫，不做猜測性的切字。
 const monthDay = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(5) : "");
 
-function Ticket({ task, onCycle, onDelete, onOpen, onEdit, t }: {
+function Ticket({ task, expanded, onToggle, onCycle, onDelete, onOpen, onEdit, t }: {
   task: TaskRow;
+  expanded: boolean;
+  onToggle: () => void;
   onCycle: (task: TaskRow) => void;
   onDelete: (task: TaskRow) => void;
   onOpen: (task: TaskRow) => void;
@@ -23,7 +27,9 @@ function Ticket({ task, onCycle, onDelete, onOpen, onEdit, t }: {
 }) {
   const [openFlag, setOpenFlag] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [expanded, setExpanded] = useState(false);
+  // 展開狀態改由父層（Tasks.tsx 的 expandedName）控制，不再是本地 state——
+  // 從編輯器返回時這個 Ticket 會重新 mount，本地 state 會被重置成收起，
+  // 「保持展開」（spec §6.2）就做不到。
   const date = monthDay(task.created);
   // runtime JSON 沒驗證：缺欄、非布林一律當不可編輯，fail-safe 落在不給編輯那側（spec §3）
   const editable = task.editable === true;
@@ -34,12 +40,12 @@ function Ticket({ task, onCycle, onDelete, onOpen, onEdit, t }: {
       <div className="tk-row" role="button" tabIndex={0}
         aria-label={expanded ? t("a11y.collapseTicket") : t("a11y.expandTicket")}
         aria-expanded={expanded}
-        onClick={() => setExpanded((x) => !x)}
+        onClick={onToggle}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;   // 巢狀按鈕自己的鍵盤啟動不該被列吃掉：
                                                         // 在冒泡途中 preventDefault 會取消瀏覽器合成 click，
                                                         // 那顆按鈕的 onClick 連觸發的機會都沒有
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded((x) => !x); }
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); }
         }}>
         {/* 狀態記號＝狀態按鈕：點一下循環 todo → doing → done → todo（design §5.2）。
             三態要有三種**輪廓**：空心方／實心方／打勾。只差顏色不夠——doing 與 done 若都是
@@ -116,7 +122,10 @@ function Ticket({ task, onCycle, onDelete, onOpen, onEdit, t }: {
 
 // 第二層：進行中 → 待辦 → 已完成（摺疊）。**做完不刪檔案**——
 // 上一版的第一條結構性缺陷就是「完成即移除在燒資產」。
-export function TasksList({ data, projectName, failed, notice, onBack, onCreate, onCycle, onDelete, onOpen, onEdit, t }: {
+export function TasksList({
+  data, projectName, failed, notice, onBack, onCreate, onCycle, onDelete, onOpen, onEdit,
+  expandedName, onExpand, orphanDrafts, onOrphanDiscard, t,
+}: {
   data: TasksListResponse | null;
   projectName: string;
   failed: boolean;
@@ -127,6 +136,10 @@ export function TasksList({ data, projectName, failed, notice, onBack, onCreate,
   onDelete: (task: TaskRow) => void;
   onOpen: (task: TaskRow) => void;
   onEdit: (task: TaskRow) => void;
+  expandedName: string | null;
+  onExpand: (name: string | null) => void;
+  orphanDrafts: Array<{ name: string; draft: TaskDraft }>;
+  onOrphanDiscard: (name: string) => void;
   t: T;
 }) {
   const [showDone, setShowDone] = useState(false);
@@ -161,7 +174,12 @@ export function TasksList({ data, projectName, failed, notice, onBack, onCreate,
   if (data == null) return <div className="tasks-pane">{back}{head()}<div className="tasks-note">{t("overview.loading")}</div></div>;
   if (data.tasks == null) {
     // 讀不到 → 錯誤態，**不是空清單**（design §6.3）：空清單與「這個專案沒待辦」長得一樣
-    return <div className="tasks-pane">{back}{head()}<div className="tasks-note is-error">{t("list.unavailable")}</div></div>;
+    // 目錄讀不到時（spec §7.4）：草稿留著，但不列出、不提供丟棄——沒有清單可以比對，
+    // 分不出哪些是真孤兒、哪些只是暫時讀不到，這種情況下什麼都不動最安全。
+    return <div className="tasks-pane">{back}{head()}
+      <div className="tasks-note is-error">{t("list.unavailable")}</div>
+      {orphanDrafts.length > 0 && <div className="tasks-note">{t("list.orphanUnavailable")}</div>}
+    </div>;
   }
 
   const doing = data.tasks.filter((x) => x.status === "doing");
@@ -170,7 +188,9 @@ export function TasksList({ data, projectName, failed, notice, onBack, onCreate,
   // 否則哪天多一個狀態值，那些票會從畫面上無聲消失。
   const todo = data.tasks.filter((x) => x.status !== "doing" && x.status !== "done");
   const row = (x: TaskRow) => (
-    <Ticket key={x.name} task={x} onCycle={onCycle} onDelete={onDelete} onOpen={onOpen} onEdit={onEdit} t={t} />
+    <Ticket key={x.name} task={x} expanded={expandedName === x.name}
+      onToggle={() => onExpand(expandedName === x.name ? null : x.name)}
+      onCycle={onCycle} onDelete={onDelete} onOpen={onOpen} onEdit={onEdit} t={t} />
   );
   const section = (label: string, n: number) => (
     <div className="tasks-sec">
@@ -202,6 +222,17 @@ export function TasksList({ data, projectName, failed, notice, onBack, onCreate,
       </form>
       {createFailed ? <div className="tasks-note is-error">{t("list.createError")}</div> : null}
       {notice ? <div className="tasks-note is-error">{t(notice)}</div> : null}
+      {/* 孤兒草稿（spec §7.4）：票已不在清單裡，只給複製與丟棄，不提供「重建成新票」——
+          清單頂端，一張票一條，跟其他票列分開，使用者一眼能看出這不是正常的票 */}
+      {orphanDrafts.map(({ name, draft }) => (
+        <div key={name} className="tk-banner is-draft">
+          <span className="btext">{t("list.orphanDraft", { title: draft.title })}</span>
+          <span className="bacts">
+            <button className="bbtn" onClick={() => writeClipboard(`# ${draft.title}\n\n${draft.body}`)}>{t("list.copyMine")}</button>
+            <button className="bbtn" onClick={() => onOrphanDiscard(name)}>{t("list.draftDiscard")}</button>
+          </span>
+        </div>
+      ))}
       {data.tasks.length === 0 ? (
         <div className="tasks-note">{t("list.empty")}</div>
       ) : (

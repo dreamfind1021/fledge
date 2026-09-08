@@ -4,8 +4,10 @@ import {
   TaskConflictError, createTask, deleteTask, fetchTasks, fetchTasksOverview, openFile, updateTask,
   type TaskRow, type TasksListResponse, type TasksOverview as TasksOverviewData,
 } from "../lib/sidecar";
+import { clearDraft, listDrafts } from "../lib/taskDraft";
 import { NEXT_STATUS, TasksList } from "./TasksList";
 import { TasksOverview } from "./TasksOverview";
+import { TaskEditor } from "./TaskEditor";
 import "./Tasks.css";
 
 // 待辦面板（design §5）。兩層導覽：總覽 → 單一專案。
@@ -19,18 +21,22 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   const [failed, setFailed] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [notice, setNotice] = useState("");   // i18n key，空字串＝不顯示
+  const [editing, setEditing] = useState<TaskRow | null>(null);       // 正在編輯的票，非 null＝第三層
+  const [expandedName, setExpandedName] = useState<string | null>(null);   // 展開哪一張票，父層管才能跨編輯器返回保留
   // 在途的改狀態請求（鍵＝專案路徑＋票檔名）。用 ref 不用 state：它只擋重複送出，
   // 不影響畫面，進 state 會多一輪不必要的 re-render。
   const inFlight = useRef(new Set<string>());
 
   // design §5.5：切到本面板時重讀（isActive 進到依賴陣列）＋ 視窗重新取得焦點時重讀。
   // 不做即時檔案監看——使用者的節奏是「叫 AI 開票 → 之後才去看」，中間必然經過切換面板。
+  // 編輯中（editing 非 null）兩條都要擋（spec §6.2）：否則切走再切回會用伺服器版本
+  // 蓋掉正在打的字。
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive || editing) return;
     const bump = () => setReloadKey((k) => k + 1);
     window.addEventListener("focus", bump);
     return () => window.removeEventListener("focus", bump);
-  }, [isActive]);
+  }, [isActive, editing]);
 
   const select = useCallback((path: string) => { setList(null); setSelected(path); }, []);
   const back = useCallback(() => { setSelected(null); }, []);
@@ -67,13 +73,30 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
       .finally(() => inFlight.current.delete(key));
   }, [port, selected, onActionError]);
 
+  // 刪票時一併清草稿（spec §7.6：使用者自己刪的才清；票是外部消失的孤兒草稿不動）
   const remove = useCallback((task: TaskRow) => {
     if (port == null || selected == null) return;
     setNotice("");
     deleteTask(port, selected, task.name, task.fingerprint)
-      .then(() => setReloadKey((k) => k + 1))
+      .then(() => { clearDraft(selected, task.name); setReloadKey((k) => k + 1); })
       .catch(onActionError);
   }, [port, selected, onActionError]);
+
+  const edit = useCallback((task: TaskRow) => setEditing(task), []);
+  const saved = useCallback((updated: TaskRow) => {
+    setList((cur) => (cur && cur.tasks
+      ? { ...cur, tasks: cur.tasks.map((x) => (x.name === updated.name ? updated : x)) }
+      : cur));
+    setExpandedName(updated.name);   // 返回後保持展開（spec §6.2）：剛改完要立刻看到 render 結果
+    setEditing(null);
+  }, []);
+  // reload=true 只有 TaskEditor 的「捨棄我的版本」會傳（plan R2 F4）：把清單打成 loading
+  // (setList(null)) 再重讀——不這樣做的話舊清單還在畫面上，使用者可以立刻再點編輯、
+  // 帶著舊 fingerprint 再送一次，保證又是一次 409。
+  const leaveEditor = useCallback((reload: boolean) => {
+    setEditing(null);
+    if (reload) { setList(null); setReloadKey((k) => k + 1); }
+  }, []);
 
   // 用編輯器打開（design §5.2）。path 由 sidecar 組，前端不拼 `.fledge/tasks` 這個佈局。
   //
@@ -92,7 +115,7 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   }, [port]);
 
   useEffect(() => {
-    if (port == null || !isActive) return;
+    if (port == null || !isActive || editing) return;   // editing：同上，擋掉重讀（spec §6.2）
     let cancelled = false;
     setFailed(false);
     const done = selected == null
@@ -100,20 +123,48 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
       : fetchTasks(port, selected).then((l) => { if (!cancelled) setList(l); });
     done.catch(() => { if (!cancelled) setFailed(true); });   // 失敗顯錯誤態，不留空白
     return () => { cancelled = true; };
+    // editing 刻意不放進依賴陣列：這裡只需要「編輯中擋掉這一次重讀」，不需要「離開編輯這件事
+    // 本身觸發一次新的重讀」。若放進依賴陣列，存檔成功離開編輯（editing 從票物件變成 null）
+    // 會被 React 視為依賴變動而重跑整個 effect body——那一刻 editing 已經是 null，guard 讓
+    // 它直接發出一次重讀，把 saved() 剛才本地更新好的新內容（新 fingerprint／新內文）蓋掉。
+    // 真正該觸發重讀的時機（切分頁、切專案、reloadKey 被主動 bump）都已經在別的依賴裡了；
+    // 「捨棄我的版本」也是靠 reloadKey 觸發，不靠 editing 本身。
   }, [port, isActive, selected, reloadKey]);
 
   // 第二層的標題是專案名。名字從已載入的總覽推導，不另存一份 state——
   // 存兩份就會有一份過期，而且進到第二層的唯一入口就是總覽那一列。
   const projectName = overview?.projects.find((p) => p.path === selected)?.name ?? t("tabTitle");
 
+  // 孤兒草稿：草稿的檔名不在目前清單裡（spec §7.4）。list 還沒回來（null）時不知道哪些
+  // 草稿是孤兒，一律不算；list.tasks 是 null（目錄 unavailable/absent）時 `?.some` 短路成
+  // undefined，全部草稿都算孤兒——但不清掉任何東西，只讓 TasksList 顯示 orphanUnavailable。
+  const orphanDrafts = selected && list
+    ? listDrafts(selected).filter((d) => !list.tasks?.some((x) => x.name === d.name))
+    : [];
+
+  if (editing && selected != null && port != null) {
+    return (
+      <div className="tasks-root" data-testid="tasks-panel">
+        {/* key 強制換票時整個 remount：TaskEditor 的 state（title/body/baseFp/草稿）只在
+            mount 時從 props 初始化，沒有這把 key，返回後再進另一張票會沿用上一張的
+            instance，B 會承接 A 打到一半的內容與草稿提示（plan R3 F2） */}
+        <TaskEditor key={`${selected}:${editing.name}`}
+          port={port} project={selected} projectName={projectName} task={editing}
+          onSaved={saved} onLeave={leaveEditor} t={t} />
+      </div>
+    );
+  }
+
   return (
     <div className="tasks-root" data-testid="tasks-panel">
       {selected == null
         ? <TasksOverview data={overview} failed={failed} onSelect={select} t={t} />
         : <TasksList data={list} projectName={projectName} failed={failed} notice={notice}
+            expandedName={expandedName} onExpand={setExpandedName}
+            orphanDrafts={orphanDrafts}
+            onOrphanDiscard={(name) => { clearDraft(selected, name); setReloadKey((k) => k + 1); }}
             onBack={back} onCreate={create}
-            onCycle={cycle} onDelete={remove} onOpen={openInEditor}
-            onEdit={() => {}} // TODO(Task 11): 接 TaskEditor
+            onCycle={cycle} onDelete={remove} onOpen={openInEditor} onEdit={edit}
             t={t} />}
     </div>
   );
