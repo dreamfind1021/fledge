@@ -532,3 +532,25 @@ def test_put_content_path_boundary(tmp_path, monkeypatch):
     for bad in ("../x.md", "sub/x.md", ".", "x.txt"):
         r = c.put("/tasks/content", json={"project": str(proj), "name": bad, "title": "t", "body": "", "fingerprint": "f"})
         assert r.status_code == 400, bad
+
+
+def test_put_content_read_failure_returns_500(tmp_path, monkeypatch):
+    """spec §8：I/O 失敗回 500，不是 400。fd 已經過 `_open_existing` 的 T1–T4 邊界檢查，
+    `_read_all` 之後失敗只可能是 I/O（EIO、掛載掉了…），不是「目標不合法」（Codex 對抗式
+    審查抓到：改前這裡會落到路由的 generic OSError 分支，誤報成 400 invalid_target）。"""
+    import errno
+
+    from fledge_sidecar.tasks import scanner
+
+    root = tmp_path / "root"; proj = root / "p"; d = proj / ".fledge" / "tasks"
+    d.mkdir(parents=True)
+    _std_ticket(d)
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    fp = c.get(f"/tasks?project={proj}").json()["tasks"][0]["fingerprint"]
+
+    def boom(fd):
+        raise OSError(errno.EIO, "io error")
+
+    monkeypatch.setattr(scanner, "_read_all", boom)
+    r = c.put("/tasks/content", json={"project": str(proj), "name": "01-t.md", "title": "x", "body": "", "fingerprint": fp})
+    assert r.status_code == 500 and r.json()["error"] == "write_failed"

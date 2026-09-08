@@ -3,10 +3,12 @@
 resolver 是**所有端點共用的唯一入口**，所以它的拒絕條件在 T1 就要測滿——T2／T3 的
 端點只是接上它，不會再重寫一份。
 """
+import errno
 import json
 import os
 import stat
 import threading
+import time
 
 import pytest
 
@@ -648,6 +650,48 @@ def test_update_content_stale_fingerprint_does_not_write(tmp_path):
     assert p.read_bytes() == before
 
 
+def test_update_content_read_failure_is_task_write_error(tmp_path, monkeypatch):
+    """spec §8：I/O 失敗回 500，不是 400。fd 已經過 `_open_existing` 的 T1–T4，`_read_all`
+    之後失敗只可能是 I/O（EIO、掛載掉了…），不是目標不合法——不轉成 `TaskWriteError` 的話
+    會落到路由的 generic OSError 分支回 400 invalid_target（Codex 對抗式審查抓到）。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p = _ticket(d)
+    before = p.read_bytes()
+
+    def boom(fd):
+        raise OSError(errno.EIO, "io error")
+
+    monkeypatch.setattr(scanner, "_read_all", boom)
+    fd = _fd(d)
+    try:
+        with pytest.raises(scanner.TaskWriteError):
+            scanner.update_content(fd, "01-old.md", title="x", body="",
+                                    expected_fingerprint=scanner.fingerprint(before))
+    finally:
+        os.close(fd)
+    assert p.read_bytes() == before
+
+
+def test_update_content_symlink_target_is_400_class_not_500(tmp_path):
+    """§8 的另一半：`_open_existing`（T3 symlink）撞到 `O_NOFOLLOW` 時，`os.open` 本身
+    拋的是 `OSError`（ELOOP）——這是邊界判斷，不是 I/O 失敗，路由歸 400 invalid_target。
+    FIX 1 只包住 `_read_all`，不可以連帶把這個也吞成 `TaskWriteError`（500）。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    outside = tmp_path / "outside.md"
+    outside.write_bytes(STD.encode("utf-8"))
+    (d / "01-link.md").symlink_to(outside)
+    fd = _fd(d)
+    try:
+        with pytest.raises(OSError) as exc_info:
+            scanner.update_content(fd, "01-link.md", title="x", body="", expected_fingerprint="whatever")
+        assert not isinstance(exc_info.value, scanner.TaskWriteError)
+    finally:
+        os.close(fd)
+    assert outside.read_bytes() == STD.encode("utf-8")
+
+
 @pytest.mark.parametrize("bad", [
     b"---\nstatus: todo\n---suffix\n# t\n",
     b"---\nstatus: todo\n---\n\n\n# t\n",
@@ -851,3 +895,79 @@ def test_lock_released_on_open_failure(tmp_path):
         scanner._WRITE_LOCK.release()
     finally:
         os.close(fd)
+
+
+# ── Codex 對抗式審查 Finding 2：serialized／without_lock 只驗「恰好一個成功」，
+# 證明不了鎖涵蓋 fingerprint→寫入整段、也證明不了鎖是全域的（plan main...a4c3669 review）────
+
+def test_update_content_lock_has_no_overlap_between_fingerprint_check_and_write(tmp_path, monkeypatch):
+    """Property A：鎖必須涵蓋『fingerprint 比對通過之後、第一個會動到磁碟的 syscall 之前』
+    整段，不能只鎖住讀取。探針釘在 `replace_body`——它是純計算，正好卡在這個窗口正中央。
+    用 barrier 當偵測器：barrier 真的完成（兩邊都排到）就代表兩個 thread 同時站在臨界區
+    內，鎖被縮小了；鎖夠寬的話，第二個 thread 在自己的 fingerprint 比對就會先被擋下來
+    （讀到第一個已經寫完的新內容），根本到不了這個探針，barrier 永遠等不到第二個人。
+
+    只驗『恰好一個成功』不夠：把鎖縮小到只包 `_read_all`，兩個 thread 一樣可以各自讀到
+    舊內容、各自通過 fingerprint 比對、最後恰好一個成功——結果看起來一樣，但兩個臨界區
+    其實重疊過。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    p = _ticket(d)
+    fp = scanner.fingerprint(p.read_bytes())
+    barrier = threading.Barrier(2)
+    rendezvoused = []
+    real_replace_body = scanner.replace_body
+
+    def gated(raw, title, body):
+        try:
+            barrier.wait(timeout=3)
+            rendezvoused.append(True)      # 只有兩邊都排到才會走到這行
+        except threading.BrokenBarrierError:
+            pass                            # 正常情況：另一邊根本沒機會排隊
+        return real_replace_body(raw, title, body)
+
+    monkeypatch.setattr(scanner, "replace_body", gated)
+    _race(d, [_content(fp, "A"), _content(fp, "B")])
+    assert not rendezvoused, "兩個 thread 同時站在 fingerprint 比對之後、寫入之前——鎖沒有蓋住這段"
+
+
+def test_update_content_lock_is_global_not_per_ticket(tmp_path, monkeypatch):
+    """Property B：鎖必須是全域一把，不是 per-name。現有六條並行測試全部固定同一個檔名
+    （01-old.md），per-name 鎖一樣會讓它們全綠——這條改成兩張不同的票，兩邊都應該成功
+    （各自檔案、各自 fingerprint，彼此不衝突），但『兩個臨界區不能同時進行』這件事必須
+    成立，不管鎖用什麼當鍵。探針一樣釘在 `replace_body`，量到同時有 2 個 thread 站在裡面
+    就代表鎖被縮小成 per-name（或根本沒鎖）。"""
+    _, proj = _setup(tmp_path)
+    d = _tasks_dir(proj)
+    _ticket(d, name="01-a.md")
+    _ticket(d, name="02-b.md")
+    fp_a = scanner.fingerprint((d / "01-a.md").read_bytes())
+    fp_b = scanner.fingerprint((d / "02-b.md").read_bytes())
+
+    max_inside = []
+    state = {"inside": 0}
+    probe_lock = threading.Lock()
+    real_replace_body = scanner.replace_body
+
+    def probe(raw, title, body):
+        with probe_lock:
+            state["inside"] += 1
+            max_inside.append(state["inside"])
+        time.sleep(0.2)                    # 撐開窗口，讓另一個 thread 有機會趕上來
+        try:
+            return real_replace_body(raw, title, body)
+        finally:
+            with probe_lock:
+                state["inside"] -= 1
+
+    monkeypatch.setattr(scanner, "replace_body", probe)
+
+    def op_a(fd):
+        return scanner.update_content(fd, "01-a.md", title="t", body="A", expected_fingerprint=fp_a)
+
+    def op_b(fd):
+        return scanner.update_content(fd, "02-b.md", title="t", body="B", expected_fingerprint=fp_b)
+
+    results = _race(d, [op_a, op_b])
+    assert all(r is not None for r in results), f"不同票應該兩邊都成功：{results}"
+    assert max(max_inside) == 1, f"兩張不同票的臨界區同時進行過（尖峰 {max(max_inside)} 個）——鎖不是全域的"

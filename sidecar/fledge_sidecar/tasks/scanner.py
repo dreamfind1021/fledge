@@ -507,14 +507,20 @@ def update_content(
     with _WRITE_LOCK:
         fd = _open_existing(tasks_fd, name, write=True)
         try:
-            raw = _read_all(fd)
+            try:
+                raw = _read_all(fd)
+            except OSError as exc:
+                # fd 已經過 _open_existing 的 T1–T4，讀失敗只可能是 I/O（EIO、掛載掉了…），
+                # 不是目標不合法。不轉成 TaskWriteError 的話會落到路由的 generic OSError
+                # 分支回 400 invalid_target，而 spec §8 的 400 是封閉列舉、I/O 失敗屬 500。
+                raise TaskWriteError(str(exc)) from exc
             if not can_round_trip(raw):
                 raise ValueError("not_editable")
             if fingerprint(raw) != expected_fingerprint:
                 return None
             new_raw = replace_body(raw, title, body)
             # 寫下去的東西自己要讀得回來（spec §5.2.1）。值域檢查只認 \r\n，但 parser 用
-            # str.splitlines()，它還會在 \x0b\x0c\x1c-\x1e\x85   斷行——那些字元
+            # str.splitlines()，它還會在 \x0b\x0c\x1c-\x1e\x85\u2028\u2029 斷行——那些字元
             # 從網頁／PDF 貼上很常見，放行的話這張票寫完就自己拒絕再編輯，且面板顯示的
             # 內文與磁碟位元組不符。用後置條件而不是補字元清單：往後 parser 若再長出新的
             # 分岔，這裡自動擋得住，不必記得回來同步。
