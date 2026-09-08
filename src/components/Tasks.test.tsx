@@ -541,6 +541,70 @@ describe("Tasks 面板", () => {
     expect(screen.getByLabelText(en.list.edit)).toBeTruthy();
   });
 
+  // ── 票寫壞時的草稿救援（Codex 全鏈路審查 high）──
+  // update_content 非原子寫入中途失敗會留下一個 can_round_trip 過不了的檔案，回應變成
+  // editable:false。編輯入口正確地被藏起來，但這張票的檔名還在清單裡、不是孤兒草稿，
+  // 不會出現在孤兒草稿列——沒有這條救援路徑，草稿會卡在 localStorage 裡完全看不到摸不到。
+
+  it("票寫壞（editable:false）但還在清單裡時，有草稿的話展開區顯示救援複製按鈕", async () => {
+    saveDraft("/p/a", "01-a.md", { title: "救回來", body: "壞掉前打的字", fingerprint: "f" });
+    fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", tasks: [ticket({ editable: false })] });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByText("第一件"));                          // 展開
+    await waitFor(() => expect(screen.getByText(en.list.notEditable)).toBeTruthy());
+    expect(screen.getByText(en.list.draftFound)).toBeTruthy();
+    expect(screen.getByText(en.list.copyMine)).toBeTruthy();
+  });
+
+  it("票寫壞但沒有草稿時，展開區只有既有的 notEditable 說明，沒有救援按鈕", async () => {
+    fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", tasks: [ticket({ editable: false })] });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByText("第一件"));
+    await waitFor(() => expect(screen.getByText(en.list.notEditable)).toBeTruthy());
+    expect(screen.queryByText(en.list.draftFound)).toBeNull();
+    expect(screen.queryByText(en.list.copyMine)).toBeNull();
+  });
+
+  it("可編輯的票有草稿時不顯示救援按鈕——那份草稿走編輯器就能救回來", async () => {
+    saveDraft("/p/a", "01-a.md", { title: "第一件", body: "改到一半", fingerprint: "f" });
+    render(<Tasks port={1234} isActive />);        // 預設 ticket() editable 為 true
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByText("第一件"));
+    await waitFor(() => expect(document.querySelector(".tk-body")).toBeTruthy());
+    expect(screen.queryByText(en.list.draftFound)).toBeNull();
+  });
+
+  it("救援複製成功顯示已複製", async () => {
+    writeClipboard.mockResolvedValue(true);
+    saveDraft("/p/a", "01-a.md", { title: "救回來", body: "壞掉前打的字", fingerprint: "f" });
+    fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", tasks: [ticket({ editable: false })] });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByText("第一件"));
+    fireEvent.click(await screen.findByText(en.list.copyMine));
+    await waitFor(() => expect(writeClipboard).toHaveBeenCalledWith("# 救回來\n\n壞掉前打的字"));
+    await waitFor(() => expect(screen.getByText(en.list.copied)).toBeTruthy());
+  });
+
+  it("救援複製失敗（writeClipboard 回 false）不顯示已複製", async () => {
+    writeClipboard.mockResolvedValue(false);
+    saveDraft("/p/a", "01-a.md", { title: "救回來", body: "壞掉前打的字", fingerprint: "f" });
+    fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", tasks: [ticket({ editable: false })] });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByText("a"));
+    await screen.findByText("第一件");
+    fireEvent.click(screen.getByText("第一件"));
+    fireEvent.click(await screen.findByText(en.list.copyMine));
+    await waitFor(() => expect(writeClipboard).toHaveBeenCalled());
+    expect(screen.queryByText(en.list.copied)).toBeNull();
+  });
+
   // ── 第三層導覽（spec §6.2）──
 
   it("點編輯進編輯器；儲存後回清單且那張票展開、fingerprint 已更新", async () => {

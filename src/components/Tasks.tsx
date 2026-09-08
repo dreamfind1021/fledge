@@ -142,9 +142,13 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   // 孤兒草稿：草稿的檔名不在目前清單裡（spec §7.4）。list 還沒回來（null）時不知道哪些
   // 草稿是孤兒，一律不算；list.tasks 是 null（目錄 unavailable/absent）時 `?.some` 短路成
   // undefined，全部草稿都算孤兒——但不清掉任何東西，只讓 TasksList 顯示 orphanUnavailable。
-  const orphanDrafts = selected && list
-    ? listDrafts(selected).filter((d) => !list.tasks?.some((x) => x.name === d.name))
-    : [];
+  const allDrafts = selected && list ? listDrafts(selected) : [];
+  const orphanDrafts = allDrafts.filter((d) => !list?.tasks?.some((x) => x.name === d.name));
+  // 票還活著但寫壞了（update_content 非原子寫入中途失敗 → can_round_trip 失敗 → editable:
+  // false）：TasksList 正確地藏起編輯入口，但草稿的檔名還在清單裡、不是孤兒，不會出現在上面
+  // 那份孤兒草稿列——沒有這份對照表，草稿會卡在 localStorage 裡，介面上完全看不到也複製不出來。
+  // K6「寫壞檔＋沒有草稿不可能同時發生」的安全網在這個情境下事實上打不開（Codex 全鏈路審查 high）。
+  const draftsByName = new Map(allDrafts.map((d) => [d.name, d.draft]));
 
   if (editing && selected != null && port != null) {
     return (
@@ -167,7 +171,7 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
         ? <TasksOverview data={overview} failed={failed} onSelect={select} t={t} />
         : <TasksList data={list} projectName={projectName} failed={failed} notice={notice}
             expandedName={expandedName} onExpand={setExpandedName}
-            orphanDrafts={orphanDrafts}
+            orphanDrafts={orphanDrafts} draftsByName={draftsByName}
             onOrphanDiscard={(name) => { clearDraft(selected, name); setReloadKey((k) => k + 1); }}
             onBack={back} onCreate={create}
             onCycle={cycle} onDelete={remove} onOpen={openInEditor} onEdit={edit}

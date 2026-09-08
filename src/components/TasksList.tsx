@@ -15,7 +15,7 @@ export const NEXT_STATUS: Record<string, string> = { todo: "doing", doing: "done
 // 年份佔四個字寬卻幾乎不帶資訊。認不得的格式一律不畫，不做猜測性的切字。
 const monthDay = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(5) : "");
 
-function Ticket({ task, expanded, onToggle, onCycle, onDelete, onOpen, onEdit, t }: {
+function Ticket({ task, expanded, onToggle, onCycle, onDelete, onOpen, onEdit, rescueDraft, t }: {
   task: TaskRow;
   expanded: boolean;
   onToggle: () => void;
@@ -23,10 +23,14 @@ function Ticket({ task, expanded, onToggle, onCycle, onDelete, onOpen, onEdit, t
   onDelete: (task: TaskRow) => void;
   onOpen: (task: TaskRow) => void;
   onEdit: (task: TaskRow) => void;
+  rescueDraft: TaskDraft | null;
   t: T;
 }) {
   const [openFlag, setOpenFlag] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // 這張票的救援草稿是否已複製——票寫壞（editable:false）時編輯入口沒了，
+  // 這是唯一救得回內容的地方，複製回饋不能像 onClick 直丟一樣悄悄失敗。
+  const [rescueCopied, setRescueCopied] = useState(false);
   // 展開狀態改由父層（Tasks.tsx 的 expandedName）控制，不再是本地 state——
   // 從編輯器返回時這個 Ticket 會重新 mount，本地 state 會被重置成收起，
   // 「保持展開」（spec §6.2）就做不到。
@@ -95,6 +99,21 @@ function Ticket({ task, expanded, onToggle, onCycle, onDelete, onOpen, onEdit, t
             ? <div className="tk-md">{renderMarkdownLite(task.body)}</div>
             : <div className="tk-empty">{t("list.noBody")}</div>}
           {!editable && <div className="tk-noedit">{t("list.notEditable")}</div>}
+          {/* 票寫壞了但檔名還在清單裡：草稿不是孤兒，不會出現在孤兒草稿列，這裡是唯一救得回
+              內容的地方（Codex 全鏈路審查 high）。不給丟棄——這張票還在，檔案可能還救得回來，
+              在壞檔旁邊放一顆一鍵刪除使用者文字唯一副本的按鈕，跟「救援」的目的正相反。 */}
+          {!editable && rescueDraft && (
+            <div className="tk-banner is-draft">
+              <span className="btext">{t("list.draftFound")}</span>
+              {rescueCopied && <span className="btext">{t("list.copied")}</span>}
+              <span className="bacts">
+                <button className="bbtn"
+                  onClick={() => writeClipboard(`# ${rescueDraft.title}\n\n${rescueDraft.body}`).then((ok) => ok && setRescueCopied(true))}>
+                  {t("list.copyMine")}
+                </button>
+              </span>
+            </div>
+          )}
         </div>
       )}
       {/* 以下兩個區塊（刪除確認、異常說明）與現有程式碼完全相同，原封保留 */}
@@ -124,7 +143,7 @@ function Ticket({ task, expanded, onToggle, onCycle, onDelete, onOpen, onEdit, t
 // 上一版的第一條結構性缺陷就是「完成即移除在燒資產」。
 export function TasksList({
   data, projectName, failed, notice, onBack, onCreate, onCycle, onDelete, onOpen, onEdit,
-  expandedName, onExpand, orphanDrafts, onOrphanDiscard, t,
+  expandedName, onExpand, orphanDrafts, draftsByName, onOrphanDiscard, t,
 }: {
   data: TasksListResponse | null;
   projectName: string;
@@ -139,6 +158,7 @@ export function TasksList({
   expandedName: string | null;
   onExpand: (name: string | null) => void;
   orphanDrafts: Array<{ name: string; draft: TaskDraft }>;
+  draftsByName: Map<string, TaskDraft>;
   onOrphanDiscard: (name: string) => void;
   t: T;
 }) {
@@ -194,6 +214,7 @@ export function TasksList({
   const row = (x: TaskRow) => (
     <Ticket key={x.name} task={x} expanded={expandedName === x.name}
       onToggle={() => onExpand(expandedName === x.name ? null : x.name)}
+      rescueDraft={draftsByName.get(x.name) ?? null}
       onCycle={onCycle} onDelete={onDelete} onOpen={onOpen} onEdit={onEdit} t={t} />
   );
   const section = (label: string, n: number) => (
