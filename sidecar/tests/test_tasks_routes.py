@@ -459,3 +459,76 @@ def test_patch_reports_permission_error_as_500_not_400(tmp_path, monkeypatch):
         assert r.status_code == 500 and r.json()["error"] == "write_failed"
     finally:
         os.chmod(tasks / "01-a.md", 0o644)
+
+
+# ── PUT /tasks/content（spec §8）─────────────────────────────────────────
+
+def _std_ticket(d, name="01-t.md"):
+    p = d / name
+    p.write_text("---\nstatus: todo\nsource: me\ncreated: 2026-09-01\n---\n\n# t\n\nb\n", encoding="utf-8")
+    return p
+
+
+def test_put_content_registered_on_composed_app(tmp_path, monkeypatch):
+    """接線測試：對【組好的 app】打，斷言 200 ＋ shape。**不可寫成「非 404」**（spec §10.1）。"""
+    root = tmp_path / "root"; proj = root / "p"; d = proj / ".fledge" / "tasks"
+    d.mkdir(parents=True)
+    p = _std_ticket(d)
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    fp = c.get(f"/tasks?project={proj}").json()["tasks"][0]["fingerprint"]
+    r = c.put("/tasks/content", json={"project": str(proj), "name": "01-t.md", "title": "new", "body": "nb", "fingerprint": fp})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["title"] == "new" and body["body"] == "nb" and body["name"] == "01-t.md"
+    assert body["editable"] is True and "fingerprint" in body
+    assert p.read_text(encoding="utf-8").endswith("# new\n\nnb\n")
+
+
+def test_put_content_stale_returns_409_and_leaves_file(tmp_path, monkeypatch):
+    root = tmp_path / "root"; proj = root / "p"; d = proj / ".fledge" / "tasks"
+    d.mkdir(parents=True)
+    p = _std_ticket(d)
+    before = p.read_bytes()
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    r = c.put("/tasks/content", json={"project": str(proj), "name": "01-t.md", "title": "x", "body": "", "fingerprint": "wrong"})
+    assert r.status_code == 409 and r.json()["error"] == "stale"
+    assert p.read_bytes() == before
+
+
+def test_put_content_not_editable_returns_400(tmp_path, monkeypatch):
+    root = tmp_path / "root"; proj = root / "p"; d = proj / ".fledge" / "tasks"
+    d.mkdir(parents=True)
+    p = d / "01-bad.md"
+    p.write_bytes(b"---\nstatus: todo\n---suffix\n# t\n")
+    before = p.read_bytes()
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    fp = c.get(f"/tasks?project={proj}").json()["tasks"][0]["fingerprint"]
+    r = c.put("/tasks/content", json={"project": str(proj), "name": "01-bad.md", "title": "x", "body": "", "fingerprint": fp})
+    assert r.status_code == 400 and r.json()["error"] == "not_editable"
+    assert p.read_bytes() == before
+
+
+def test_put_content_invalid_domain_returns_400(tmp_path, monkeypatch):
+    root = tmp_path / "root"; proj = root / "p"; d = proj / ".fledge" / "tasks"
+    d.mkdir(parents=True)
+    _std_ticket(d)
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    fp = c.get(f"/tasks?project={proj}").json()["tasks"][0]["fingerprint"]
+    r = c.put("/tasks/content", json={"project": str(proj), "name": "01-t.md", "title": "", "body": "", "fingerprint": fp})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_content"
+
+
+def test_put_content_requires_name_and_fingerprint(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch)
+    assert c.put("/tasks/content", json={"project": "/x", "name": "", "title": "t", "body": "", "fingerprint": "f"}).status_code == 400
+    assert c.put("/tasks/content", json={"project": "/x", "name": "a.md", "title": "t", "body": "", "fingerprint": ""}).status_code == 400
+
+
+def test_put_content_path_boundary(tmp_path, monkeypatch):
+    """T1：非純檔名一律 400（spec §5.3 沿用既有邊界）。"""
+    root = tmp_path / "root"; proj = root / "p"; d = proj / ".fledge" / "tasks"
+    d.mkdir(parents=True)
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    for bad in ("../x.md", "sub/x.md", ".", "x.txt"):
+        r = c.put("/tasks/content", json={"project": str(proj), "name": bad, "title": "t", "body": "", "fingerprint": "f"})
+        assert r.status_code == 400, bad
