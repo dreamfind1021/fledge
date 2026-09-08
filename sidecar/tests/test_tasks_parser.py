@@ -3,6 +3,7 @@
 §6.2 的表是契約的**示例、不是窮舉**——表上沒列到的壞法一律依契約辦理：
 回異常票、逐檔隔離、不隱藏。所以本檔除了逐個案，還有一條「餵任意二進位垃圾」的契約測試。
 """
+import os
 import random
 
 import pytest
@@ -233,7 +234,24 @@ def test_non_standard_shapes_are_not_editable(raw):
 
 
 def test_can_round_trip_never_raises():
-    """跑在 scan_tasks 的逐檔迴圈裡，一張壞票拋出去就違反契約 2（spec §5.2.1）。"""
-    import os
-    for _ in range(200):
-        assert P.can_round_trip(os.urandom(64)) in (True, False)
+    """跑在 scan_tasks 的逐檔迴圈裡，一張壞票拋出去就違反契約 2（spec §5.2.1）。
+
+    兩組輸入缺一不可：隨機位元組幾乎必然在 decode 就被擋下，只證明得了解碼那條分支；
+    要驗到 parse_task／replace_body 的深處，輸入必須先是合法 UTF-8。手挑的那幾筆是
+    確定性的——不靠亂數碰運氣撞到 replace_body 的 ValueError。"""
+    rnd = random.Random(20260908)
+    payloads = [
+        b"", b"---", b"---\n", b"---\n---\n", b"\x00\x01\x02",
+        b"---\nstatus: todo\n---\n",
+        b"---\nstatus: todo\n---\n\n# t\n",
+        b"---\nstatus: todo\n---suffix\n# t\n",
+        b"---\nstatus: todo\n---\n\n\n# t\r\n",
+        b"---\nstatus: todo\n---\n\n# \n",
+    ]
+    payloads += [os.urandom(64) for _ in range(200)]
+    payloads += [
+        "".join(rnd.choice("---\n\r# :\tabc") for _ in range(rnd.randrange(1, 120))).encode("utf-8")
+        for _ in range(200)
+    ]
+    for raw in payloads:
+        assert P.can_round_trip(raw) in (True, False)
