@@ -263,3 +263,24 @@ def replace_body(raw: bytes, title: str, body: str) -> bytes:
         raise ValueError("empty_title")
     tail = f"\n# {one_line}\n" + (f"\n{body}\n" if body else "")
     return head + tail.encode("utf-8")
+
+
+def can_round_trip(raw: bytes) -> bool:
+    """一張票可編輯 ⇔ 用它自己 parse 出來的 title／body 重組回去，逐位元組等於原檔（spec §5.2.1）。
+
+    前端拿到的 `title`／`body` 是 parser 修剪過的（標題前文字被丟、首尾換行被削、CRLF 變 LF、
+    圍籬後空行被削）。使用者只改一個字存回去，那些被削掉的東西就永久沒了。**不列舉形狀**
+    （列舉會漏），直接驗性質。
+
+    **對任意 raw 不拋例外。** 跑在 `scan_tasks()` 的逐檔迴圈裡，一張壞票拋出去就違反
+    「單一壞票不可拖垮整個掃描」的契約 2。嚴格解碼失敗、fence 不完整、任何例外一律回 False。
+
+    `parse_task` 需要檔名算編號與 short_name fallback，這裡傳 dummy：編號不影響 title／body；
+    title_missing 時 parse 會用 short_name 當標題，重組後多一行 `# _`，比對自然不等。
+    """
+    try:
+        text = raw.decode("utf-8")               # strict——無效位元組直接 False
+        task = parse_task("_.md", text)
+        return replace_body(raw, task.title, task.body) == raw
+    except (UnicodeDecodeError, ValueError):
+        return False

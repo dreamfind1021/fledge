@@ -199,3 +199,41 @@ def test_replace_body_rejects_incomplete_fence():
 def test_replace_body_rejects_empty_title():
     with pytest.raises(ValueError):
         P.replace_body(FM + b"\n# t\n", "   \n  ", "")
+
+
+# ── can_round_trip（spec §5.2.1）─────────────────────────────────────────
+
+
+def test_render_task_output_round_trips():
+    """Fledge 自己建的票必須可編輯——這是整個資格檢查的地基（spec §10.1）。"""
+    for title, in (("匯出的檔名要能自訂",), ("A/B test",), ("x",)):
+        raw = P.render_task(title, created="2026-09-01").encode("utf-8")
+        assert P.can_round_trip(raw), title
+
+
+def test_standard_ticket_with_body_round_trips():
+    raw = FM + b"\n# t\n\nline one\n\n- item\n"
+    assert P.can_round_trip(raw)
+
+
+@pytest.mark.parametrize("raw", [
+    FM + b"\n\n# t\n",                    # 圍籬與標題間兩個空行（split_frontmatter 會 lstrip）
+    FM + b"\npreface\n# t\n",             # 標題前有文字（_split_title 丟掉）
+    FM + b"\n# t\n\nbody\n\n",            # 內文尾端兩個空行（strip("\\n") 削掉）
+    FM + b"\n# t\r\n\r\nbody\r\n",        # CRLF（splitlines 變 LF）
+    b"---\nstatus: todo\n---suffix\n# t\n",  # fence 不是完整行
+    FM + b"\n# \xff\xfe\n",               # 內文區無效 UTF-8（strict 解碼失敗）
+    FM + b"\nno title line\n",            # title_missing → parse 用 short_name 替代
+    b"",                                  # 空檔
+    b"garbage",                           # 沒有 frontmatter
+])
+def test_non_standard_shapes_are_not_editable(raw):
+    """每一種都是一條 parser 會削減內容的路徑，各自獨立測（spec §10.1 假綠警告）。"""
+    assert not P.can_round_trip(raw)
+
+
+def test_can_round_trip_never_raises():
+    """跑在 scan_tasks 的逐檔迴圈裡，一張壞票拋出去就違反契約 2（spec §5.2.1）。"""
+    import os
+    for _ in range(200):
+        assert P.can_round_trip(os.urandom(64)) in (True, False)
