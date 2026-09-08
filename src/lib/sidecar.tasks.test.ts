@@ -32,4 +32,12 @@ describe("updateTaskContent 的成功定義（spec §7.3）", () => {
     stub(400, () => Promise.resolve({ error: "not_editable" }));
     await expect(call()).rejects.toThrow("400");
   });
+  // 離開編輯器時要靠這個 signal abort 在途請求，否則晚到的 200 會清掉已經屬於另一次編輯的草稿；
+  // 元件層的測試 mock 掉 updateTaskContent，抓不到這裡漏傳。
+  it("signal 有轉送進 fetch 的 options", async () => {
+    stub(200, () => Promise.resolve({ name: "a.md", fingerprint: "f", body: "b" }));
+    const controller = new AbortController();
+    await updateTaskContent(1, "/p", "a.md", "t", "b", "f0", controller.signal);
+    expect(vi.mocked(fetch).mock.calls[0][1]?.signal).toBe(controller.signal);
+  });
 });
