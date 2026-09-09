@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 // 有人把 --faint 調回原本的 #5E6981 時，48 條文字規則會一起悄悄失效，
 // 而每條規則各自的測試（如果有的話）都不會動。
 //
+// 四級文字色（--text / --text-2 / --dim / --faint）全部納入。
 // 只涵蓋 nightfall。daylight 尚未出貨（`--faint: #AEB4BE` 對它的 --bg 只有 1.94，
 // 連非文字的 3:1 都不到），那套色階需要自己的一次視覺審查，見票 07。
 const RAW = import.meta.glob("/src/**/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
@@ -39,7 +40,9 @@ const contrast = (a: string, b: string) => {
 
 // 文字實際會坐在這些底色上。--active 不在裡面，理由見下面那條測試
 const TEXT_BACKDROPS = ["bg", "sidebar", "surface", "surface-2", "hover"];
-const TEXT_INKS = ["text", "dim", "faint"];
+// 由亮到暗排。--text-2 是 2026-09-09 補定義的第四級（檔案樹檔名，票 18）——
+// 那個顏色本來就在畫面上，只是靠一個沒定義的 token 的 fallback 撐著。
+const TEXT_INKS = ["text", "text-2", "dim", "faint"];
 
 describe("nightfall 的文字色階", () => {
   it.each(TEXT_INKS.flatMap((ink) => TEXT_BACKDROPS.map((bg) => [ink, bg])))(
@@ -58,12 +61,14 @@ describe("nightfall 的文字色階", () => {
 
   // 色階要分得出來，否則「這是次要資訊」的暗示就沒了。
   // 這條同時擋住「為了過對比把 --faint 一路調到跟 --dim 一樣亮」
-  it("三級色階彼此拉得開", () => {
+  it("四級色階由亮到暗、每一級彼此拉得開", () => {
     const bg = token("bg");
-    const [text, dim, faint] = TEXT_INKS.map((t) => contrast(token(t), bg));
-    expect(text).toBeGreaterThan(dim);
-    expect(dim).toBeGreaterThan(faint);
-    expect(dim - faint).toBeGreaterThanOrEqual(1);
+    const steps = TEXT_INKS.map((t) => contrast(token(t), bg));
+    for (let i = 1; i < steps.length; i += 1) {
+      // 順序反了代表 TEXT_INKS 排錯或某個 token 被調過頭，兩種都要炸
+      expect(steps[i - 1], `${TEXT_INKS[i - 1]} 應該比 ${TEXT_INKS[i]} 亮`).toBeGreaterThan(steps[i]);
+      expect(steps[i - 1] - steps[i], `${TEXT_INKS[i - 1]} 與 ${TEXT_INKS[i]} 差太近`).toBeGreaterThanOrEqual(1);
+    }
   });
 });
 

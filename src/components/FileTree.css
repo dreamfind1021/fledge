@@ -2,7 +2,7 @@
 .filetree-node {
   display: flex; align-items: center; gap: 4px;
   height: 22px; padding-right: 6px; cursor: default;
-  color: var(--text-2, #c8c8cc); user-select: none;
+  color: var(--text-2); user-select: none;
 }
 .filetree-node:hover { background: var(--surface-2); }
 .filetree-caret, .filetree-caret-ph { width: 14px; display: inline-flex; flex: none; }

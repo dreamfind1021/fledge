@@ -29,7 +29,10 @@
   /* 表面/文字/結構 */
   --bg: #0C111B; --sidebar: #0F1623; --surface: #161F30; --surface-2: #1E2940;
   --hover: #1B2640; --active: #233152; --overlay: rgba(6,9,15,.62);
-  --text: #E7EAF0; --dim: #93A0B4; --faint: #8590A6;   /* faint 2026-09-02 由 #5E6981 調亮：
+  --text: #E7EAF0; --text-2: #c8c8cc; --dim: #93A0B4; --faint: #8590A6;   /* text-2 2026-09-09 補定義：
+     檔案樹檔名本來就渲染這個顏色，只是引用了一個沒定義的 token 而靠 fallback 撐著（票 18）。
+     使用者決定檔名維持現況，所以是把既有的第四級正式命名，不是新增一級。
+     它落在 --text 與 --dim 之間 51% 的位置 */   /* faint 2026-09-02 由 #5E6981 調亮：
      舊值對 --bg 只有 3.43、對 --surface 3.00、對 --active 2.34，48 條文字規則全數低於
      文字門檻 4.5:1，連 --active 上的圖示都不到非文字的 3:1。代價是與 --dim 的差距從
      3.70 縮到 1.25，色階變平——這是知情的取捨，票 06。防線在 index.contrast.test.ts */
@@ -50,7 +53,8 @@
   --focus: color-mix(in srgb, var(--primary) 60%, transparent);
   --bg: #F4EFE9; --sidebar: #FBF8F4; --surface: #FFFFFF; --surface-2: #FFEEE6;
   --hover: #F2ECE5; --active: #FFE4D8; --overlay: rgba(45,40,35,.34);
-  --text: #2D3748; --dim: #79808D; --faint: #AEB4BE;
+  --text: #2D3748; --text-2: #495261; --dim: #79808D; --faint: #AEB4BE;   /* text-2 取 nightfall 同一比例（51%）的草稿值；
+     整個 daylight 區塊都未經視覺審查，見票 07 */
   --border: rgba(45,55,72,.10); --divider: rgba(45,55,72,.07);
   --win-radius: 12px; --row-radius: 8px; --tab-radius: 13px; --item-py: 7px;
   --shadow: 0 1px 2px rgba(45,55,72,.06), 0 12px 34px rgba(45,55,72,.10);
