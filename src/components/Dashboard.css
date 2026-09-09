@@ -135,7 +135,7 @@
 .dash-badge {
   font-size: 10px;
   font-weight: 700;
-  color: #191038;
+  color: var(--ai-ink);
   background: var(--ai);
   border-radius: 5px;
   padding: 1px 6px;
@@ -188,10 +188,10 @@
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--primary), #FFBE76);
+  background: linear-gradient(90deg, var(--primary), color-mix(in srgb, var(--primary) 70%, var(--text)));
 }
 .dash-bar.is-codex > i {
-  background: linear-gradient(90deg, var(--session), #8FE7D6);
+  background: linear-gradient(90deg, var(--session), color-mix(in srgb, var(--session) 70%, var(--text)));
 }
 
 /* ── Gauge（Codex 窗口格）── */

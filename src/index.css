@@ -22,7 +22,7 @@
   /* 語義/UI */
   --primary: #F59E42; --primary-ink: #3B2207;
   --session: #67D5C0;
-  --ai: #A99BFF;
+  --ai: #A99BFF; --ai-ink: #191038;
   /* 帳號識別色（work 藍 / personal 紫）由 lib/accountColor.ts 提供（經 JS inline style 套用、CSS 不需 token）*/
   --warning: #FBBF24; --error: #EF4444; --error-ink: #FFFFFF;
   --focus: color-mix(in srgb, var(--primary) 60%, transparent);
@@ -45,7 +45,7 @@
 
 /* ===== Daylight：結構預留（草稿值，v1 不啟用、不驗證）===== */
 [data-theme="daylight"] {
-  --primary: #F59E42; --primary-ink: #3B2207; --session: #67D5C0; --ai: #9B8CFF;
+  --primary: #F59E42; --primary-ink: #3B2207; --session: #67D5C0; --ai: #9B8CFF; --ai-ink: #191038;
   --warning: #FBBF24; --error: #EF4444; --error-ink: #FFFFFF;
   --focus: color-mix(in srgb, var(--primary) 60%, transparent);
   --bg: #F4EFE9; --sidebar: #FBF8F4; --surface: #FFFFFF; --surface-2: #FFEEE6;

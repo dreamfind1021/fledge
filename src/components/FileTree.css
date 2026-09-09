@@ -4,9 +4,9 @@
   height: 22px; padding-right: 6px; cursor: default;
   color: var(--text-2, #c8c8cc); user-select: none;
 }
-.filetree-node:hover { background: var(--surface-2, #2a2a33); }
+.filetree-node:hover { background: var(--surface-2); }
 .filetree-caret, .filetree-caret-ph { width: 14px; display: inline-flex; flex: none; }
-.filetree-ico { display: inline-flex; flex: none; color: var(--faint, #8a8a92); }
+.filetree-ico { display: inline-flex; flex: none; color: var(--faint); }
 .filetree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.filetree-hint { height: 20px; color: var(--faint, #8a8a92); font-style: italic; }
-.filetree-retry { margin-left: 6px; font-size: 11px; color: var(--accent, #7aa2f7); background: none; border: none; cursor: pointer; text-decoration: underline; }
+.filetree-hint { height: 20px; color: var(--faint); font-style: italic; }
+.filetree-retry { margin-left: 6px; font-size: 11px; color: var(--primary); background: none; border: none; cursor: pointer; text-decoration: underline; }
