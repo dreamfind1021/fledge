@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-09-09
+- **最後更新：** 2026-09-13
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -30,7 +30,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | 檔案 | 職責 | 匯出 |
 |------|------|------|
 | `src/lib.rs` | entry：註冊 plugin、manage state、setup（先 orphan reap、生 per-launch token 存 state、再啟 sidecar；**spawn 失敗不 panic**——把原因寫進 `spawn_error` 後照常讓 webview 起來，否則啟動畫面的錯誤態與重試按鈕永遠到不了）、註冊 command（sidecar_port/restart_sidecar/sidecar_token/sidecar_spawn_error）、exit 收 sidecar | `run()` |
-| `src/sidecar.rs` | sidecar 生命週期：spawn（dev/prod 統一 `std::process::Command`，dev=venv python、prod=`bundle.resources`/`resource_dir` 的 onedir exe，`.env(FLEDGE_TOKEN)`）、抓 `FLEDGE_PORT`、**統一持有當前 `std::process::Child`**、per-launch token（uuid v4、跨 restart 不變）、原子 pidfile、startup orphan reaper（pid-only 先禮後兵 `terminate_pid_gracefully`）、restart command（RestartGuard 互斥、kill 用 `try_wait` 收 zombie；重 spawn 前清 `spawn_error`、spawn 失敗立即回 `Err` 不進 30s 等待）、`sidecar_token` 查詢；**`spawn_sidecar` 回 `Result<(), String>` 而非 panic**——`.claude/tauri-rust.md` §4 允許 startup 用 `expect` fail-fast，但那適用於「無從補救」的前置條件，sidecar spawn 失敗（binary 遺失／無執行權限）是使用者可修復且值得被告知的狀態；失敗原因存進 `spawn_error` 供前端查（訊息帶完整 binary 路徑，會出現在啟動畫面的「詳細資訊」） | `SidecarState`, `generate_token()`, `spawn_sidecar()`, `sidecar_port()`, `sidecar_token()`, `sidecar_spawn_error()`, `restart_sidecar()`, `reap_orphan_sidecar()`, `kill_sidecar()` |
+| `src/sidecar.rs` | sidecar 生命週期：spawn（dev/prod 統一 `std::process::Command`，dev=venv python、prod=`bundle.resources`/`resource_dir` 的 onedir exe，`.env(FLEDGE_TOKEN)`）、抓 `FLEDGE_PORT`、**統一持有當前 `std::process::Child`**、per-launch token（uuid v4、跨 restart 不變）、原子 pidfile（**每個 app 實例一檔 `~/.fledge/sidecar.<app pid>.pid`**——票 20：dev 與打包版曾共用 `sidecar.pid`，後起的實例把先起的記錄蓋掉、reaper 殺到別人正在用的 sidecar）、startup orphan reaper（掃 `~/.fledge/` 所有 `sidecar.*.pid` 含舊格式；一次 `ps` 拿 ppid＋cmdline 成 `Probe{Unknown,Absent,Present}`，`reap_action` 純函式決策表：**Unknown 一律不動**（查不到≠不在，Codex R1/R2）、父進程還活著＝別的實例正在用 → 不殺不刪檔、ppid=1 被 launchd 收養的真 orphan 才 pid-only 先禮後兵 `terminate_pid_gracefully`；依賴 macOS 無 subreaper）、restart command（RestartGuard 互斥、kill 用 `try_wait` 收 zombie；重 spawn 前清 `spawn_error`、spawn 失敗立即回 `Err` 不進 30s 等待）、`sidecar_token` 查詢；**`spawn_sidecar` 回 `Result<(), String>` 而非 panic**——`.claude/tauri-rust.md` §4 允許 startup 用 `expect` fail-fast，但那適用於「無從補救」的前置條件，sidecar spawn 失敗（binary 遺失／無執行權限）是使用者可修復且值得被告知的狀態；失敗原因存進 `spawn_error` 供前端查（訊息帶完整 binary 路徑，會出現在啟動畫面的「詳細資訊」） | `SidecarState`, `generate_token()`, `spawn_sidecar()`, `sidecar_port()`, `sidecar_token()`, `sidecar_spawn_error()`, `restart_sidecar()`, `reap_orphan_sidecar()`, `kill_sidecar()` |
 | `tauri.conf.json` | Tauri 設定，`bundle.resources` map 打包 onedir sidecar 資料夾（prod 走 `std::process::Command` + `resource_dir`） | — |
 | `capabilities/default.json` | 權限：執行 sidecar、opener reveal、opener open-path（檔案樹雙擊開檔，scope `$HOME/**`）、dialog open（directory picker）、clipboard-manager read-text（終端機右鍵貼上走原生讀，繞 macOS Paste 膠囊） | — |
 

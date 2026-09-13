@@ -25,9 +25,23 @@ pub fn generate_token() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-fn pidfile_path() -> std::path::PathBuf {
+/// pidfile 所在目錄（`~/.fledge`）；reaper 掃這裡找所有實例留下的 pidfile。
+fn fledge_dir() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    std::path::Path::new(&home).join(".fledge").join("sidecar.pid")
+    std::path::Path::new(&home).join(".fledge")
+}
+
+/// 本 app 實例的 pidfile：`~/.fledge/sidecar.<app pid>.pid`。
+/// 檔名帶 app 自己的 pid 是票 20 的關鍵——dev 與打包版（或兩個打包版）曾共用一個 `sidecar.pid`，
+/// 後起的實例會把先起的 pid 記錄蓋掉，reaper 也因此殺到別人正在用的 sidecar。
+fn pidfile_path() -> std::path::PathBuf {
+    fledge_dir().join(format!("sidecar.{}.pid", std::process::id()))
+}
+
+/// 檔名是否為 sidecar pidfile。收新格式 `sidecar.<pid>.pid` 與舊格式 `sidecar.pid`（換版前的
+/// 打包版還在寫它，reaper 要能一併處理）；排除原子寫入的 `.tmp` 與任何非 `.pid` 結尾的檔。
+fn is_pidfile_name(name: &str) -> bool {
+    name.starts_with("sidecar.") && name.ends_with(".pid")
 }
 
 /// 原子寫 pidfile：temp + rename（避免 crash 留半個 PID／空檔）。
@@ -42,18 +56,75 @@ fn write_pidfile(pid: u32) {
     }
 }
 
-/// 讀 pid 的 cmdline（`ps -p <pid> -o command=`）；不存在/查不到回空字串。
-fn pid_cmdline(pid: u32) -> String {
+/// 一次 ps 查到的進程事實。三態分開是因為 reaper 對「不確定」與「確認不在」要做不同的事：
+/// 原本把兩種都壓成空字串，會把「查不到」當「不在」而刪掉別的實例的 pidfile（Codex R2／R3）。
+#[derive(Debug, PartialEq)]
+enum Probe {
+    /// ps 起不來、被訊號中止、或輸出解析不出來 → 什麼都不確定
+    Unknown,
+    /// ps 明確回「沒有這個 pid」
+    Absent,
+    Present { ppid: u32, cmdline: String },
+}
+
+/// 一次 `ps -p <pid> -o ppid=,command=` 同時拿父進程與 cmdline（合併是為了少一次 fork，也消掉
+/// 兩次查詢之間進程狀態變動的縫）。
+fn probe_pid(pid: u32) -> Probe {
     match std::process::Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "command="])
+        .args(["-p", &pid.to_string(), "-o", "ppid=,command="])
         .output()
     {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => String::new(),
+        Ok(out) => parse_ps_probe(out.status.code(), &String::from_utf8_lossy(&out.stdout)),
+        Err(_) => Probe::Unknown,
     }
 }
 
-/// cmdline 是否為我們的 sidecar（含標記）。空字串＝取不到 → 視為非 sidecar（寧漏殺不誤殺）。
+/// ps 結果 → Probe（純函式，方便把分類釘在測試裡）。exit 1＝pid 不存在（ps 對不存在的 pid 就回 1）；
+/// code None＝被訊號中止，不能當不存在。
+fn parse_ps_probe(code: Option<i32>, stdout: &str) -> Probe {
+    match code {
+        Some(0) => {
+            let line = stdout.trim();
+            match line.split_once(char::is_whitespace) {
+                Some((ppid, cmd)) => match ppid.parse() {
+                    Ok(ppid) => Probe::Present { ppid, cmdline: cmd.trim().to_string() },
+                    Err(_) => Probe::Unknown,
+                },
+                None => Probe::Unknown,
+            }
+        }
+        Some(_) => Probe::Absent,
+        None => Probe::Unknown,
+    }
+}
+
+/// reaper 對一個 pidfile 該做的事。
+#[derive(Debug, PartialEq)]
+enum ReapAction {
+    /// 確認是真 orphan → 先禮後兵殺掉、成功後刪檔
+    Terminate,
+    /// 進程已不在或 pid 被別的程式重用 → 只刪檔、不碰進程
+    RemoveFile,
+    /// 別的實例正在用、或任何一項查不到 → 什麼都不動，pidfile 留到下次啟動再看
+    Keep,
+}
+
+/// reaper 決策表（純函式，方便把每一格釘死在測試裡）。
+/// 原則：**只有明確查到才動手**，Unknown 一律 Keep——查不到不能當不在（會刪掉別的實例的
+/// pidfile，Codex R2），也不能當 orphan（父可能還活著，Codex R1）。
+/// ppid == 1：macOS 上父進程死掉的子進程一律由 launchd 收養，這才是真 orphan；
+/// 其他值＝父活著＝別的 Fledge 實例正在用（票 20）。依賴 macOS 沒有 subreaper。
+fn reap_action(probe: &Probe) -> ReapAction {
+    match probe {
+        Probe::Unknown => ReapAction::Keep,
+        Probe::Absent => ReapAction::RemoveFile,
+        Probe::Present { cmdline, .. } if !cmdline_is_sidecar(cmdline) => ReapAction::RemoveFile,
+        Probe::Present { ppid: 1, .. } => ReapAction::Terminate,
+        Probe::Present { .. } => ReapAction::Keep,
+    }
+}
+
+/// cmdline 是否為我們的 sidecar（含標記）。不含標記＝pid 被別的程式重用 → 非 sidecar（寧漏殺不誤殺）。
 fn cmdline_is_sidecar(cmdline: &str) -> bool {
     !cmdline.is_empty() && (cmdline.contains("fledge_sidecar") || cmdline.contains("fledge-sidecar"))
 }
@@ -65,27 +136,38 @@ fn cmdline_is_sidecar(cmdline: &str) -> bool {
 /// 回傳是否「確認該 pid 已消失」——reaper 只在 true 才移除 pidfile（Codex PR-gate / spec §1.3）。
 fn terminate_pid_gracefully(pid: u32) -> bool {
     let pid_s = pid.to_string();
-    let is_sidecar = || cmdline_is_sidecar(&pid_cmdline(pid));
-    if !is_sidecar() {
-        return true; // 已不在或非 sidecar → 視為已收
+    // Some(true)＝仍是 sidecar；Some(false)＝已不在或 pid 換人；None＝ps 查不到。
+    // None 一律不動手也不宣稱已收——「查不到」不等於「已退出」（Codex R2）。
+    let probe = || match probe_pid(pid) {
+        Probe::Present { cmdline, .. } => Some(cmdline_is_sidecar(&cmdline)),
+        Probe::Absent => Some(false),
+        Probe::Unknown => None,
+    };
+    match probe() {
+        Some(false) => return true, // 已不在或非 sidecar → 視為已收
+        None => return false,
+        Some(true) => {}
     }
     let _ = std::process::Command::new("kill").args(["-TERM", &pid_s]).status();
     let mut waited = 0u32;
     while waited < 3000 {
-        if !is_sidecar() {
+        if probe() == Some(false) {
             return true; // 已退出（或 pid 換人）
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
         waited += 100;
     }
-    // 逾時仍在 → SIGKILL（迴圈只在「仍是 sidecar」時才走到這）
+    // 逾時：只有「確認仍是 sidecar」才 SIGKILL——pid 重用防護就靠這次確認，查不到就不動
+    if probe() != Some(true) {
+        return false;
+    }
     let _ = std::process::Command::new("kill").args(["-KILL", &pid_s]).status();
     let mut w = 0u32;
-    while w < 500 && is_sidecar() {
+    while w < 500 && probe() == Some(true) {
         std::thread::sleep(std::time::Duration::from_millis(50));
         w += 50;
     }
-    !is_sidecar() // 回傳是否確認消失
+    probe() == Some(false) // 回傳是否確認消失
 }
 
 /// kill 當前 child（先禮後兵）+ 移除 pidfile。
@@ -249,7 +331,7 @@ pub fn sidecar_spawn_error(state: State<SidecarState>) -> Option<String> {
     state.spawn_error.lock().unwrap().clone()
 }
 
-/// app 退出時呼叫：kill 當前 sidecar 子進程 + 移除 pidfile（dev/prod 同一路徑）。
+/// app 退出時呼叫：kill 當前 sidecar 子進程 + 移除本實例的 pidfile（別的實例的不碰）。
 pub fn kill_sidecar(app: &AppHandle) {
     kill_current_child(&app.state::<SidecarState>());
 }
@@ -267,42 +349,214 @@ pub fn sidecar_token(state: State<SidecarState>) -> Option<String> {
 }
 
 /// 啟動時清掉上次 crash 殘留的 sidecar（安全預設：無法確認 cmdline 就不 kill）。
+/// pidfile 一個實例一個檔（見 pidfile_path），上次的 app pid 跟這次不同，所以要掃整個目錄。
 pub fn reap_orphan_sidecar() {
-    let pidfile = pidfile_path();
-    let Ok(content) = std::fs::read_to_string(&pidfile) else {
-        return; // 無 pidfile：乾淨
+    reap_orphans_in(&fledge_dir());
+}
+
+/// 掃 dir 底下所有 pidfile 逐一處理。拆出 dir 參數是讓測試能用暫存目錄跑真進程。
+fn reap_orphans_in(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return; // 目錄不存在：乾淨
     };
-    let Ok(pid) = content.trim().parse::<u32>() else {
-        let _ = std::fs::remove_file(&pidfile); // parse 失敗 → 只清檔、不 kill
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_pidfile = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(is_pidfile_name)
+            .unwrap_or(false);
+        if is_pidfile {
+            reap_pidfile(&path);
+        }
+    }
+}
+
+/// 處理單一 pidfile：真 orphan 才殺；別的實例正在用的不碰。
+fn reap_pidfile(pidfile: &std::path::Path) {
+    let Ok(content) = std::fs::read_to_string(pidfile) else {
         return;
     };
-    let cmdline = pid_cmdline(pid);
-    // 僅 cmdline 明確含標記才 kill；取不到/不含 → 不 kill（寧漏殺不誤殺）
-    if cmdline_is_sidecar(&cmdline) {
-        if terminate_pid_gracefully(pid) {
-            // 確認舊 sidecar 已退出 → 才清 pidfile（spec §1.3 / Codex PR-gate）
-            eprintln!("[fledge] reaped orphan sidecar pid {}", pid);
-            let _ = std::fs::remove_file(&pidfile);
-        } else {
-            // 無法確認退出 → 保留 pidfile（下次啟動再 reap）、loud log，不靜默
+    let Ok(pid) = content.trim().parse::<u32>() else {
+        let _ = std::fs::remove_file(pidfile); // parse 失敗 → 只清檔、不 kill
+        return;
+    };
+    let probe = probe_pid(pid);
+    match reap_action(&probe) {
+        ReapAction::Keep => {
             eprintln!(
-                "[fledge] 警告：orphan sidecar pid {} 無法確認已退出 → 保留 pidfile",
-                pid
+                "[fledge] pidfile pid {} {:?} → 別的實例在用或查不到，不動、保留 pidfile",
+                pid, probe
             );
+            return;
         }
+        ReapAction::RemoveFile => {
+            eprintln!(
+                "[fledge] pidfile pid {} 無法確認為 sidecar（{:?}）→ 不 kill、清檔",
+                pid, probe
+            );
+            let _ = std::fs::remove_file(pidfile);
+            return;
+        }
+        ReapAction::Terminate => {}
+    }
+    if terminate_pid_gracefully(pid) {
+        // 確認舊 sidecar 已退出 → 才清 pidfile（spec §1.3 / Codex PR-gate）
+        eprintln!("[fledge] reaped orphan sidecar pid {}", pid);
+        let _ = std::fs::remove_file(pidfile);
     } else {
-        // 取不到/非 sidecar：pidfile 已無對應 sidecar → 清掉
+        // 無法確認退出 → 保留 pidfile（下次啟動再 reap）、loud log，不靜默
         eprintln!(
-            "[fledge] pidfile pid {} 無法確認為 sidecar（cmdline={:?}）→ 不 kill",
-            pid, cmdline
+            "[fledge] 警告：orphan sidecar pid {} 無法確認已退出 → 保留 pidfile",
+            pid
         );
-        let _ = std::fs::remove_file(&pidfile);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::generate_token;
+
+    /// 票 20：pidfile 一個 app 實例一個檔，dev／打包版／兩個打包版並存都不會互相覆寫。
+    #[test]
+    fn pidfile_path_is_per_app_instance() {
+        let p = super::pidfile_path();
+        let expected = format!("sidecar.{}.pid", std::process::id());
+        assert_eq!(p.file_name().and_then(|n| n.to_str()), Some(expected.as_str()));
+        assert_eq!(
+            p.parent().and_then(|d| d.file_name()).and_then(|n| n.to_str()),
+            Some(".fledge")
+        );
+    }
+
+    /// 掃目錄時只收 pidfile：新格式、舊格式（打包版換版前留下的）都要；原子寫入的 `.tmp`
+    /// 與使用者手動移開的 `.hold` 不能被當殘留處理。
+    #[test]
+    fn is_pidfile_name_accepts_new_and_legacy_rejects_tmp_and_hold() {
+        assert!(super::is_pidfile_name("sidecar.2087.pid"));
+        assert!(super::is_pidfile_name("sidecar.pid"));
+        assert!(!super::is_pidfile_name("sidecar.2087.pid.tmp"));
+        assert!(!super::is_pidfile_name("sidecar.pid.hold"));
+        assert!(!super::is_pidfile_name("other.pid"));
+        assert!(!super::is_pidfile_name("config.toml"));
+    }
+
+    /// 測試用暫存目錄，Drop 時一定刪掉（斷言失敗 panic 也會清）。
+    struct TempDir(std::path::PathBuf);
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let d = std::env::temp_dir()
+                .join(format!("fledge-reaper-test-{}-{}", std::process::id(), tag));
+            std::fs::create_dir_all(&d).unwrap();
+            Self(d)
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// 測試用假 sidecar（本進程直接 spawn 的子進程），Drop 時一定收掉。
+    struct FakeSidecar(std::process::Child);
+    impl Drop for FakeSidecar {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// 票 20 本尊：另一個 Fledge 實例正在用的 sidecar（父進程活著）不是 orphan，
+    /// reaper 不能殺它、也不能動它的 pidfile。
+    #[test]
+    fn reaper_skips_sidecar_whose_parent_is_alive() {
+        let dir = TempDir::new("alive");
+        // 假 sidecar：cmdline 帶標記、父進程＝本測試進程。要兩個指令 sh 才會留著——
+        // 單一指令 sh 會直接 exec 成 sleep，cmdline 就沒有標記了。
+        let child = std::process::Command::new("sh")
+            .args(["-c", "sleep 5; true", "fledge_sidecar_fake"])
+            .spawn()
+            .unwrap();
+        let pidfile = dir.0.join("sidecar.99999.pid");
+        std::fs::write(&pidfile, child.id().to_string()).unwrap();
+        let mut fake = FakeSidecar(child);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        super::reap_orphans_in(&dir.0);
+
+        assert!(pidfile.exists(), "父進程活著的 sidecar 不是 orphan，pidfile 不該被動");
+        assert!(
+            matches!(fake.0.try_wait(), Ok(None)),
+            "父進程活著的 sidecar 不該被殺"
+        );
+    }
+
+    /// 守住原功能：真 orphan（父進程已死、被 launchd 收養）仍要被殺並清 pidfile。
+    #[test]
+    fn reaper_kills_true_orphan_and_removes_pidfile() {
+        let dir = TempDir::new("orphan");
+        // 造 orphan：外層 sh 起內層假 sidecar 後立刻退出，內層被 launchd 收養（ppid=1）。
+        // 內層 stdout/stderr 導到 /dev/null，否則 output() 會等內層結束才回。
+        let out = std::process::Command::new("sh")
+            .args([
+                "-c",
+                r#"sh -c "sleep 5; true" fledge_sidecar_fake >/dev/null 2>&1 & echo $!"#,
+            ])
+            .output()
+            .unwrap();
+        let pid: u32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+        let pidfile = dir.0.join("sidecar.99998.pid");
+        std::fs::write(&pidfile, pid.to_string()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            matches!(super::probe_pid(pid), super::Probe::Present { ppid: 1, .. }),
+            "前置：內層應已被 launchd 收養"
+        );
+
+        super::reap_orphans_in(&dir.0);
+
+        let still_there = matches!(super::probe_pid(pid), super::Probe::Present { .. });
+        // 保底：萬一沒殺掉別讓它留 20 秒
+        let _ = std::process::Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+        assert!(!still_there, "orphan 應已被殺");
+        assert!(!pidfile.exists(), "orphan 收掉後 pidfile 要清");
+    }
+
+    /// ps 結果 → 進程事實的分類（Codex R3：觀測層要先把「查不到」和「不在」分開，決策表才不會
+    /// 收到錯誤的確定值）。exit 1＝pid 不存在；被訊號中止（code None）＝什麼都不確定。
+    #[test]
+    fn parse_ps_probe_classifies_unknown_absent_present() {
+        use super::Probe;
+        assert_eq!(super::parse_ps_probe(None, ""), Probe::Unknown, "ps 被訊號中止");
+        assert_eq!(super::parse_ps_probe(Some(1), ""), Probe::Absent, "pid 不存在");
+        assert_eq!(
+            super::parse_ps_probe(Some(0), "  2069 /Applications/Fledge.app/x/fledge-sidecar\n"),
+            Probe::Present { ppid: 2069, cmdline: "/Applications/Fledge.app/x/fledge-sidecar".into() }
+        );
+        // cmdline 內含空白只切第一段（ppid），其餘原樣
+        assert_eq!(
+            super::parse_ps_probe(Some(0), "1 sh -c sleep 5; true fledge_sidecar_fake\n"),
+            Probe::Present { ppid: 1, cmdline: "sh -c sleep 5; true fledge_sidecar_fake".into() }
+        );
+        assert_eq!(super::parse_ps_probe(Some(0), "garbage"), Probe::Unknown, "解析不出 ppid：不確定");
+    }
+
+    /// reaper 決策表：每一種進程事實都釘死。
+    /// Codex R1 high：父進程活著不是 orphan；R2 medium：查不到不能當不在（會刪別的實例的 pidfile）。
+    #[test]
+    fn reap_action_decision_table() {
+        use super::{Probe, ReapAction::*};
+        let sc = |ppid| Probe::Present { ppid, cmdline: "python -m fledge_sidecar".into() };
+        assert_eq!(super::reap_action(&sc(1)), Terminate, "真 orphan：被 launchd 收養");
+        assert_eq!(super::reap_action(&sc(2069)), Keep, "父活著：別的實例正在用");
+        assert_eq!(super::reap_action(&Probe::Absent), RemoveFile, "進程已不在：只清檔");
+        assert_eq!(
+            super::reap_action(&Probe::Present { ppid: 1, cmdline: "vim".into() }),
+            RemoveFile,
+            "pid 被非 sidecar 重用：只清檔"
+        );
+        assert_eq!(super::reap_action(&Probe::Unknown), Keep, "查不到（ps 失敗）：不動");
+    }
 
     #[test]
     fn token_non_empty_and_unique() {

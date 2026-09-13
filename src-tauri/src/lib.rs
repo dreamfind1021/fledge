@@ -40,7 +40,7 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            // app 退出：收掉當前 sidecar 子進程 + 清 pidfile（dev/prod 同一路徑）
+            // app 退出：收掉當前 sidecar 子進程 + 清本實例的 pidfile
             if let tauri::RunEvent::Exit = event {
                 sidecar::kill_sidecar(app_handle);
             }
