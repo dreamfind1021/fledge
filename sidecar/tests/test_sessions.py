@@ -245,7 +245,16 @@ def test_flow_pause_resume_roundtrip_no_data_loss(tmp_path: Path, monkeypatch):
         ws.send_text(json.dumps({"type": "pause"}))
         ws.send_bytes(b"second\n")
         ws.send_text(json.dumps({"type": "resume"}))
-        assert b"second" in ws.receive_bytes()
+        # `first\n` 會產生兩份輸出（tty 回顯 + cat 的輸出），有時合在一個訊框、有時分兩個；
+        # 分兩個時上面那次 receive 只吃掉回顯，這裡第一個訊框是 cat 的 `first` 而不是 `second`。
+        # 所以累積讀到 `second` 出現為止（同 test_flow_pause_holds_output 的寫法），設上限避免
+        # 真的丟資料時掛住。
+        data = b""
+        for _ in range(10):
+            data += ws.receive_bytes()
+            if b"second" in data:
+                break
+        assert b"second" in data
 
     client.delete(f"/api/sessions/{sid}")
 
