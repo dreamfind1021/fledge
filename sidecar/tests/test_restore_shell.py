@@ -91,7 +91,9 @@ def _fake_bin(tmp_path: Path, name: str, body: str) -> Path:
 
 def test_no_personal_path_left_in_script():
     """公開 repo 不能留開發者的個人路徑（原本第 19 行寫死了一個備份目錄）。"""
-    assert "/Users/tc" not in SCRIPT.read_text(encoding="utf-8")
+    # 非註解行不得含任何 /Users/<name>/ 形狀的路徑（註解裡的 /Users/o'brien 是說明 HOME 含引號的例子）
+    code_lines = [ln for ln in SCRIPT.read_text(encoding="utf-8").splitlines() if not ln.lstrip().startswith("#")]
+    assert not [ln for ln in code_lines if "/Users/" in ln]
 
 
 def test_fails_without_bundle_or_backup_dir(tmp_path: Path):

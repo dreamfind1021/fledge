@@ -587,9 +587,9 @@ describe("fetchTasks", () => {
     setAuthToken("tok-list");
     const spy = vi.fn(async () => ({ ok: true, json: async () => ({ project: "/p", tasks_status: "ok", tasks: [], next_step: "" }) }) as unknown as Response);
     vi.stubGlobal("fetch", spy);
-    await fetchTasks(4321, "/Users/tc/NAS/work/Meeting Agent");
+    await fetchTasks(4321, "/Users/demo/work/Meeting Agent");
     const [url, init] = spy.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("http://127.0.0.1:4321/tasks?project=%2FUsers%2Ftc%2FNAS%2Fwork%2FMeeting%20Agent");
+    expect(url).toBe("http://127.0.0.1:4321/tasks?project=%2FUsers%2Fdemo%2Fwork%2FMeeting%20Agent");
     expect(init.headers).toEqual({ "X-Fledge-Token": "tok-list" });
     setAuthToken(null);
   });

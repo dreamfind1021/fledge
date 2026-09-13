@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { linksInLine, strIndexToColumn, type BufferLineLike } from "./terminalLinks";
 
-const home = "/Users/tc";
-const proj = "/Users/tc/proj";
+const home = "/Users/demo";
+const proj = "/Users/demo/proj";
 const opts = { home, projectPath: proj };
 
 // 以 [chars, width] 陣列建假 buffer line（全形字＝[字,2] 後接 spacer [,0]）
@@ -62,16 +62,16 @@ describe("linksInLine — 檔案路徑（邊界＝projectPath）", () => {
   it("相對路徑對 projectPath 解析", () => {
     const ls = linksInLine("edit src/components/App.tsx now", opts);
     expect(ls).toHaveLength(1);
-    expect(ls[0]).toMatchObject({ kind: "path", target: "/Users/tc/proj/src/components/App.tsx" });
+    expect(ls[0]).toMatchObject({ kind: "path", target: "/Users/demo/proj/src/components/App.tsx" });
   });
 
   it("絕對路徑（projectPath 內）直接用", () => {
-    expect(linksInLine("open /Users/tc/proj/notes.md", opts)[0].target).toBe("/Users/tc/proj/notes.md");
+    expect(linksInLine("open /Users/demo/proj/notes.md", opts)[0].target).toBe("/Users/demo/proj/notes.md");
   });
 
   it("~/ 展開後須落在 projectPath 內才放行", () => {
     // proj 在 home 下：~/proj/x.md 落在 projectPath 內 → 放行
-    expect(linksInLine("cat ~/proj/x.md", opts)[0].target).toBe("/Users/tc/proj/x.md");
+    expect(linksInLine("cat ~/proj/x.md", opts)[0].target).toBe("/Users/demo/proj/x.md");
     // ~/ 指向 projectPath 外 → 拒絕
     expect(linksInLine("cat ~/todo.md", opts)).toEqual([]);
   });
@@ -79,7 +79,7 @@ describe("linksInLine — 檔案路徑（邊界＝projectPath）", () => {
   it("剝除 :line:col 行號後綴，target 不含行號、底線範圍含行號", () => {
     const line = "err at src/x.ts:42:7 here";
     const ls = linksInLine(line, opts);
-    expect(ls[0]).toMatchObject({ kind: "path", target: "/Users/tc/proj/src/x.ts" });
+    expect(ls[0]).toMatchObject({ kind: "path", target: "/Users/demo/proj/src/x.ts" });
     expect(line.slice(ls[0].start, ls[0].end)).toBe("src/x.ts:42:7");
   });
 
@@ -89,7 +89,7 @@ describe("linksInLine — 檔案路徑（邊界＝projectPath）", () => {
 
   it("拒絕 projectPath 外的絕對路徑（含 home 內但專案外）", () => {
     expect(linksInLine("x /etc/hosts", opts)).toEqual([]);
-    expect(linksInLine("x /Users/tc/other/secret.md", opts)).toEqual([]); // home 內但專案外
+    expect(linksInLine("x /Users/demo/other/secret.md", opts)).toEqual([]); // home 內但專案外
   });
 
   it("無 projectPath → 相對路徑無基準、不連結", () => {
@@ -124,6 +124,6 @@ describe("linksInLine — 混合與邊界", () => {
     const ls = linksInLine("see https://x.com edit src/a.ts and ~/z.md", { projectPath: proj });
     expect(ls.map((l) => l.kind)).toEqual(["url", "path"]); // ~/z.md 因無 home 被略過
     expect(ls[0].target).toBe("https://x.com");
-    expect(ls[1].target).toBe("/Users/tc/proj/src/a.ts");
+    expect(ls[1].target).toBe("/Users/demo/proj/src/a.ts");
   });
 });

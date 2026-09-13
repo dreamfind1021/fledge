@@ -29,7 +29,7 @@ def test_scan_root_excludes_hidden(tmp_path: Path):
 
 def test_encode_cc_project_dir():
     # Claude Code 把專案路徑編碼成目錄名：所有非英數字元一律 → -（已對 19 個真實專案 round-trip 驗證）
-    assert encode_cc_project_dir("/Users/tc/NAS/work/foo") == "-Users-tc-NAS-work-foo"
+    assert encode_cc_project_dir("/Users/demo/work/foo") == "-Users-demo-work-foo"
     assert encode_cc_project_dir("/a/b_c") == "-a-b-c"          # 底線
     assert encode_cc_project_dir("/a/foo.bar") == "-a-foo-bar"  # 點
     assert encode_cc_project_dir("/a/with space") == "-a-with-space"  # 空白

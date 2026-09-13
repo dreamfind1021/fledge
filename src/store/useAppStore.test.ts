@@ -9,7 +9,7 @@ const proj = (path: string): sidecar.Project => ({
   path,
   account: "work",
   source: "root",
-  root: "/Users/tc/NAS/work",
+  root: "/Users/demo/work",
   recent: null,
 });
 
