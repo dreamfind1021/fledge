@@ -60,7 +60,7 @@ const ERROR_TEXT: Record<string, string> = {
 /** 精靈系統設置頁的第三張卡（票 28）：列出 allowlist 的全部範本、選一個目的地把範本部署過去。
  *
  * 兩件刻意為之的事：
- * - **`available=false` 照列不隱藏**。public build 只內建 `project-starter`，另兩個必然是「未內建」；
+ * - **`available=false` 照列不隱藏**。public build 內建 `project-starter` 與 `kms-seed`，`dev-methodology` 必然是「未內建」；
  *   那是正常狀態，藏起來會讓使用者以為這個版本少了東西。未內建者不給部署鈕——按了也只會拿到
  *   `template_unavailable`。
  * - **逐列一個部署鈕**，而不是 demo 那顆放在「部署到」列尾的單一按鈕：清單有三列，單一按鈕指涉不明

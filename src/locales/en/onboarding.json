@@ -287,8 +287,8 @@
         "desc": "Personal development methodology documents."
       },
       "kms-seed": {
-        "name": "Knowledge base seed",
-        "desc": "Knowledge base directory skeleton."
+        "name": "Second brain",
+        "desc": "A research and ideation vault: CLAUDE.md rules, topics/ and library/ templates, derived index files, and Claude Code hooks for session wrap-up."
       }
     },
     "notBundled": "Not bundled",
