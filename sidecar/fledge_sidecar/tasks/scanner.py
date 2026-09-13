@@ -65,7 +65,7 @@ class TasksDir:
 
     `fledge_fd` 在 `.fledge` 開得起來時就有值——即使 `tasks/` 不存在。理由：`state.md`
     住在 `.fledge/` 而不是 `tasks/`，而實測 22 個專案中唯一有 `state.md` 的那個
-    （Meeting Agent）正好沒有 `tasks/`。綁在一起會讓它的「下一步」永遠是空的。"""
+    正好沒有 `tasks/`。綁在一起會讓它的「下一步」永遠是空的。"""
 
     fd: int | None          # tasks 目錄；只在 status == ok 時有值
     fledge_fd: int | None   # .fledge 目錄；開得起來就有值

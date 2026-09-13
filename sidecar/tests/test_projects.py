@@ -263,7 +263,7 @@ def test_tree_missing_parameter(tree_setup):
 
 def test_tree_kms_root_as_project_is_browsable(tree_setup):
     client, root, cfg_path = tree_setup
-    # kms_root 同時是 allowed root 下的專案（如「創意發想」既是 KMS vault 又是工作專案）：
+    # kms_root 同時是 allowed root 下的專案（第二大腦的 vault 本身也可以是一個工作專案）：
     # 應可正常瀏覽其檔案樹——containment（allowed roots）是唯一邊界（撤銷 PR review F1，見 spec §15）
     kms = root / "proj"
     cfg = json.loads(cfg_path.read_text())

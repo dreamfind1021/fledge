@@ -13,7 +13,7 @@ def test_parse_frontmatter_and_links(tmp_path):
 name: fledge-foo
 description: 一句話摘要
 type: project
-tags: [Meeting-Agent, 商周]
+tags: [Garden-Planner, 園藝]
 ---
 
 本文內容，連到 [[other-name]] 與 [[second]]。
@@ -23,7 +23,7 @@ tags: [Meeting-Agent, 商周]
     assert d.title == "fledge-foo"          # name 優先
     assert d.summary == "一句話摘要"          # description→summary
     assert d.type == "project"
-    assert d.tags == ("Meeting-Agent", "商周")
+    assert d.tags == ("Garden-Planner", "園藝")
     assert d.links == ("other-name", "second")
     assert "本文內容" in d.body
 

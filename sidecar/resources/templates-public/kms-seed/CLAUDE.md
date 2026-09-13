@@ -63,7 +63,7 @@
 status: active          # active / dormant
 created: 2026-04-28     # 建立日期
 mode: 研究              # 研究 / 創意 / 混合
-tags: [商周, 地端LLM]   # 新 tag 可加；疑似同義先查 _TAGS.md 再用
+tags: [園藝, 地端LLM]   # 新 tag 可加；疑似同義先查 _TAGS.md 再用
 summary: 近況摘要       # 進 _INDEX.md 的描述；見下方「summary 是近況摘要」
 ---
 ```

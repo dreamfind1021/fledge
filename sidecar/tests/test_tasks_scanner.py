@@ -206,7 +206,7 @@ def test_next_step_is_read_from_state_md(tmp_path):
 
 
 def test_next_step_works_when_tasks_dir_absent(tmp_path):
-    """實測 22 個專案中唯一有 state.md 的那個（Meeting Agent）正好沒有 tasks/。
+    """實測 22 個專案中唯一有 state.md 的那個正好沒有 tasks/。
 
     把 fledge_fd 綁在 tasks/ 存在與否上，它的「下一步」會永遠是空的。"""
     config, proj = _setup(tmp_path)

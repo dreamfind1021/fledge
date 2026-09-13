@@ -85,13 +85,13 @@ def test_project_rollup_collapses_worktrees_and_subdirs():
         _e(project="/work/fledge/.claude/worktrees/feat-x", dedup="a:1", cost=2.0),
         _e(project="/work/fledge/sidecar", dedup="b:2", cost=0.5),
         _e(project="/work/fledge/node_modules/@xterm/xterm", dedup="c:3", cost=0.25),
-        _e(source="codex", model="gpt-5.5", dedup="", project="/work/創意發想/topics/x/slides", cost=4.0),
+        _e(source="codex", model="gpt-5.5", dedup="", project="/work/食譜整理/topics/x/slides", cost=4.0),
     ]
     d = build_dashboard(entries, subscriptions=[], now=NOW, roots=[root])
     by_path = {p["path"]: p for p in d["projects"]}
-    assert set(by_path) == {"/work/fledge", "/work/創意發想"}
+    assert set(by_path) == {"/work/fledge", "/work/食譜整理"}
     assert by_path["/work/fledge"]["claude_cost"] == 3.75   # 1 + 2 + 0.5 + 0.25
-    assert by_path["/work/創意發想"]["codex_cost"] == 4.0
+    assert by_path["/work/食譜整理"]["codex_cost"] == 4.0
 
 
 def test_project_no_roots_keeps_raw_cwd():

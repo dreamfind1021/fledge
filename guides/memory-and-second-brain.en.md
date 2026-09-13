@@ -69,8 +69,8 @@ The three `_`-prefixed index files are **derived**: the source of truth is each 
 
 ### Two conventions that let Fledge see the connections
 
-1. **Folder names are slugs**, e.g. `meeting-agent-asr-tuning`.
-2. **Frontmatter `tags` line up with project names**, e.g. `tags: [Meeting-Agent, ASR]`.
+1. **Folder names are slugs**, e.g. `garden-planner-irrigation`.
+2. **Frontmatter `tags` line up with project names**, e.g. `tags: [Garden-Planner, weather]`.
 
 Fledge's suggestions come from matching project names against exactly these two things. Neither convention exists for Fledge's sake — you'd write them this way for Obsidian navigation anyway; Fledge just reads back connections that are already in the data.
 

@@ -66,7 +66,7 @@ def project_tree(body: TreeBody):
     config = AppConfig.load()
 
     # allowed roots = roots ∪ manual（config 已 canonical，再 resolve 一次保險）。
-    # 不特別 deny kms_root：它可同時是 sidebar 專案（如「創意發想」既是 KMS vault 又是工作專案），
+    # 不特別 deny kms_root：它可同時是 sidebar 專案（第二大腦的 vault 本身也可以是一個工作專案），
     # 使用者有權瀏覽其檔案樹。containment（限 allowed roots＝使用者自己的 roots/manual）是唯一且
     # 足夠的安全邊界——撤銷 PR review F1 的 kms deny（基於「kms 與專案互斥」的錯誤假設，見 spec §15）。
     roots = [resolve_best_effort(r["path"]) for r in config.roots]

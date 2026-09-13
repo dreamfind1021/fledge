@@ -21,18 +21,18 @@ def test_file_mode_0600(tmp_path):
 
 def test_dismiss_bound_to_pair(tmp_path):
     s = LinksStore(tmp_path / "l.json")
-    s.dismiss("/work/Meeting Agent", "/kms/topics/meeting-agent-asr-tuning")
-    assert s.is_dismissed("/work/Meeting Agent", "/kms/topics/meeting-agent-asr-tuning")
-    assert not s.is_dismissed("/work/Meeting Agent", "/kms/topics/other")
+    s.dismiss("/work/Garden Planner", "/kms/topics/garden-planner-irrigation")
+    assert s.is_dismissed("/work/Garden Planner", "/kms/topics/garden-planner-irrigation")
+    assert not s.is_dismissed("/work/Garden Planner", "/kms/topics/other")
 
 
 def test_suggest_matches_topic_name_contains_project():
-    projects = [{"path": "/work/Meeting Agent", "name": "Meeting Agent"}]
-    topics = [{"path": "/kms/topics/meeting-agent-asr-tuning", "name": "meeting-agent-asr-tuning", "tags": []},
+    projects = [{"path": "/work/Garden Planner", "name": "Garden Planner"}]
+    topics = [{"path": "/kms/topics/garden-planner-irrigation", "name": "garden-planner-irrigation", "tags": []},
               {"path": "/kms/topics/unrelated", "name": "unrelated", "tags": []}]
     sugg = suggest_links(projects, topics, confirmed=set(), dismissed=set())
     pairs = {(x["project"], x["topic"]) for x in sugg}
-    assert ("/work/Meeting Agent", "/kms/topics/meeting-agent-asr-tuning") in pairs
+    assert ("/work/Garden Planner", "/kms/topics/garden-planner-irrigation") in pairs
     assert all(t != "/kms/topics/unrelated" for _, t in pairs)
 
 
@@ -43,8 +43,8 @@ def test_suggest_short_name_manual_only():
 
 
 def test_norm():
-    assert _norm("Meeting Agent") == "meetingagent"
-    assert _norm("meeting-agent_x") == "meetingagentx"
+    assert _norm("Garden Planner") == "gardenplanner"
+    assert _norm("garden-planner_x") == "gardenplannerx"
 
 
 def test_concurrent_adds_no_loss(tmp_path):

@@ -47,11 +47,11 @@ def test_orphan_ambiguous_visible(tmp_path):
 
 def test_linked_topic_attached_to_project():
     # 已連 KMS topic folder 的 item 掛到 project 的 items，不留在 kb
-    topic_folder = "/kms/topics/meeting-agent-asr-tuning"
+    topic_folder = "/kms/topics/garden-planner-irrigation"
     kms = [(KmsRef(topic_folder + "/CONTEXT.md", "topics", topic_folder), _pd("ASR topic", "", "決策"))]
-    links = [{"from": "/work/Meeting Agent", "to": topic_folder, "note": ""}]
+    links = [{"from": "/work/Garden Planner", "to": topic_folder, "note": ""}]
     d = build_overview([], kms, links=links, suggestions=[], q="")
-    proj = next(p for p in d["projects"] if p["project"] == "/work/Meeting Agent")
+    proj = next(p for p in d["projects"] if p["project"] == "/work/Garden Planner")
     assert any(i["title"] == "ASR topic" for i in proj["items"])     # 掛進 project
     assert all(i["title"] != "ASR topic" for i in d["kb"])           # 不在 kb
 

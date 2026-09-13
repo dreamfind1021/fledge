@@ -153,6 +153,6 @@ def test_codex_bad_timestamp_skipped_not_epoch0(tmp_path: Path):
 
 def test_claude_chinese_cwd_preserved(tmp_path: Path):
     f = tmp_path / "a.jsonl"
-    f.write_text(_claude_line(cwd="/Users/demo/work/創意發想"), encoding="utf-8")
+    f.write_text(_claude_line(cwd="/Users/demo/work/食譜整理"), encoding="utf-8")
     entries, _ = parse_claude_file(f)
-    assert entries[0].project == "/Users/demo/work/創意發想"  # 中文路徑原樣保留（spec §15）
+    assert entries[0].project == "/Users/demo/work/食譜整理"  # 中文路徑原樣保留（spec §15）

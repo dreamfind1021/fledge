@@ -69,8 +69,8 @@ Fledge 自己唯一寫的檔案是 `~/.fledge/memory-links.json`——確認過�
 
 ### 兩個慣例，讓 Fledge 認得出關聯
 
-1. **資料夾名用 slug**，例如 `meeting-agent-asr-tuning`。
-2. **frontmatter 的 `tags` 對齊專案名**，例如 `tags: [Meeting-Agent, ASR]`。
+1. **資料夾名用 slug**，例如 `garden-planner-irrigation`。
+2. **frontmatter 的 `tags` 對齊專案名**，例如 `tags: [Garden-Planner, 天氣]`。
 
 Fledge 的自動建議就是拿專案名去比對這兩樣。這不是為 Fledge 特別做的——為了 Obsidian 導覽本來就會這樣寫，Fledge 只是把已經在資料裡的關聯讀出來。
 
