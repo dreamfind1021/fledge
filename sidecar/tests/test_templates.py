@@ -635,16 +635,51 @@ def test_deploy_logs_outcomes(tmp_path: Path, caplog):
                for r in caplog.records)
 
 
-def test_repo_public_seed_manifest_matches_its_content():
-    # committed manifest 與實際內容脫節時，出貨的範本就會漏檔或多檔——這裡擋住 drift
+@pytest.mark.parametrize("template_id", [s.id for s in tp.TEMPLATE_SPECS if s.source_class == "public"])
+def test_repo_public_seed_manifest_matches_its_content(template_id: str):
+    # committed manifest 與實際內容脫節時，出貨的範本就會漏檔或多檔——這裡擋住 drift。
+    # 對每個 public 範本各跑一次：規格表翻成 public 但 seed 沒放進 repo，這裡就會紅。
     import json as _json
 
-    root = Path(tp.templates_root()) / "project-starter"
-    assert root.is_dir(), "repo 內的 public seed 必須存在"
+    root = Path(tp.templates_root()) / template_id
+    assert root.is_dir(), f"repo 內的 public seed 必須存在：{template_id}"
     committed = _json.loads((root / tp.MANIFEST_FILENAME).read_text(encoding="utf-8"))
     generated = [{"path": e.path, "type": e.type}
                  for e in tp.build_manifest_entries(str(root))]
     assert committed["entries"] == generated
+
+
+@pytest.mark.parametrize("template_id", [s.id for s in tp.TEMPLATE_SPECS if s.source_class == "public"])
+def test_repo_public_seed_files_are_tracked_by_git(template_id: str):
+    # 本機 .git/info/exclude 排除 CLAUDE.md／.claude/／docs/ 時，`git add <seed 目錄>` 會靜默跳過
+    # 這些檔案——manifest 列了、工作樹有、index 沒有；乾淨 checkout 的 release drift 檢查才會爆。
+    # 這裡直接對 git index 驗：manifest 的每個 file 都必須被追蹤（含 staged）。
+    import json as _json
+    import shutil as _shutil
+    import subprocess as _sp
+
+    root = Path(tp.templates_root()) / template_id
+    if _shutil.which("git") is None:
+        pytest.skip("沒有 git")
+    inside = _sp.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=root, capture_output=True, text=True)
+    if inside.returncode != 0 or inside.stdout.strip() != "true":
+        pytest.skip("不在 git 工作樹內（例如從 sdist 跑測試）")
+    tracked = set(_sp.run(["git", "ls-files", "--", "."], cwd=root, capture_output=True, text=True,
+                          check=True).stdout.split("\n"))
+    committed = _json.loads((root / tp.MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    missing = [e["path"] for e in committed["entries"] if e["type"] == "file" and e["path"] not in tracked]
+    assert not missing, f"{template_id}：manifest 有列但 git 沒追蹤（多半是被 exclude 規則吃掉，用 git add -f）：{missing}"
+
+
+def test_kms_seed_ships_as_public_template():
+    # 第二大腦範本（ForIdea+LLM_wiki）隨公開版出貨；README 承諾精靈能直接部署它
+    spec = tp.get_template_spec("kms-seed")
+    assert spec.source_class == "public"
+    root = Path(tp.templates_root()) / "kms-seed"
+    for must in ("CLAUDE.md", ".claude/settings.json", ".claude/vault_dirty.py",
+                 ".claude/prompt_router.py", "topics/_TEMPLATE/CONTEXT.md", "library/_TEMPLATE/CONTEXT.md"):
+        assert (root / must).is_file(), f"kms-seed 缺 {must}"
+    assert not list(root.rglob(".DS_Store")), "seed 不得夾帶 .DS_Store"
 
 
 def test_deploy_blocks_the_subtree_when_an_existing_dir_cannot_be_opened(tmp_path: Path,

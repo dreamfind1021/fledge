@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/prompt_router.py\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/vault_dirty.py\" mark"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ts_file=/tmp/claude-session-reminder-ts; now=$(date +%s); last=0; [ -f \"$ts_file\" ] && last=$(cat \"$ts_file\") 2>/dev/null || true; diff=$((now - last)); if [ $diff -gt 300 ]; then date +%s > \"$ts_file\"; echo \"{\\\"systemMessage\\\": \\\"💾 提醒：記得讓 Claude 建立 session 卡片並更新 CONTEXT.md\\\"}\"; fi"
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/vault_dirty.py\" gate"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "statusMessage": "載入工作流程...",
+            "command": "python3 -c \"\nimport json, os\nbase = os.environ.get('CLAUDE_PROJECT_DIR', '.')\nindex = open(os.path.join(base, '_INDEX.md')).read() if os.path.exists(os.path.join(base, '_INDEX.md')) else '（尚無內容）'\nctx = '【SessionStart 自動提醒】\\n請依照 CLAUDE.md 的上下文恢復規則開始本次對話：\\n1. 讀取 _INDEX.md（已附於下方）找到使用者要繼續的主題\\n2. 讀取該主題的 CONTEXT.md\\n3. 讀取最新 session 卡片\\n4. 告知使用者上次討論到哪裡，詢問是否繼續\\n\\n_INDEX.md 內容：\\n' + index\nprint(json.dumps({'hookSpecificOutput': {'hookEventName': 'SessionStart', 'additionalContext': ctx}}))\n\""
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/vault_dirty.py\" restore"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "entries": [
+    {
+      "path": ".claude",
+      "type": "dir"
+    },
+    {
+      "path": ".claude/library-workflow.md",
+      "type": "file"
+    },
+    {
+      "path": ".claude/prompt_router.py",
+      "type": "file"
+    },
+    {
+      "path": ".claude/settings.json",
+      "type": "file"
+    },
+    {
+      "path": ".claude/vault-structure.md",
+      "type": "file"
+    },
+    {
+      "path": ".claude/vault_dirty.py",
+      "type": "file"
+    },
+    {
+      "path": "CLAUDE.md",
+      "type": "file"
+    },
+    {
+      "path": "_CONNECTIONS.md",
+      "type": "file"
+    },
+    {
+      "path": "_INDEX.md",
+      "type": "file"
+    },
+    {
+      "path": "_TAGS.md",
+      "type": "file"
+    },
+    {
+      "path": "library",
+      "type": "dir"
+    },
+    {
+      "path": "library/_TEMPLATE",
+      "type": "dir"
+    },
+    {
+      "path": "library/_TEMPLATE/CONTEXT.md",
+      "type": "file"
+    },
+    {
+      "path": "library/_TEMPLATE/overview.md",
+      "type": "file"
+    },
+    {
+      "path": "library/_TEMPLATE/queries.md",
+      "type": "file"
+    },
+    {
+      "path": "library/_TEMPLATE/source-notes",
+      "type": "dir"
+    },
+    {
+      "path": "library/_TEMPLATE/source-notes/_NOTE-TEMPLATE.md",
+      "type": "file"
+    },
+    {
+      "path": "library/_TEMPLATE/sources",
+      "type": "dir"
+    },
+    {
+      "path": "library/_TEMPLATE/sources/_SOURCE-TEMPLATE.md",
+      "type": "file"
+    },
+    {
+      "path": "topics",
+      "type": "dir"
+    },
+    {
+      "path": "topics/_TEMPLATE",
+      "type": "dir"
+    },
+    {
+      "path": "topics/_TEMPLATE/CONTEXT.md",
+      "type": "file"
+    },
+    {
+      "path": "topics/_TEMPLATE/INSIGHTS.md",
+      "type": "file"
+    },
+    {
+      "path": "topics/_TEMPLATE/sessions",
+      "type": "dir"
+    },
+    {
+      "path": "topics/_TEMPLATE/sessions/YYYY-MM-DD-NN.md",
+      "type": "file"
+    },
+    {
+      "path": "topics/_TEMPLATE/spec.md",
+      "type": "file"
+    }
+  ]
+}

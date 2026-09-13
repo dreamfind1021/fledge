@@ -61,9 +61,10 @@ TEMPLATE_SPECS: list[TemplateSpec] = [
         "private",
     ),
     TemplateSpec(
-        "kms-seed", "Knowledge base seed",
-        "Knowledge management (KMS) directory skeleton; bundled in self-use builds only.",
-        "private",
+        "kms-seed", "Second brain",
+        "Research and ideation vault: CLAUDE.md rules, topics/ and library/ templates, "
+        "derived index files, and Claude Code hooks for session wrap-up.",
+        "public",
     ),
 ]
 

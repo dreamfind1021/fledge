@@ -287,8 +287,8 @@
         "desc": "個人開發方法論文件集。"
       },
       "kms-seed": {
-        "name": "知識庫骨架",
-        "desc": "知識庫目錄骨架。"
+        "name": "第二大腦",
+        "desc": "研究與發想用的 vault：CLAUDE.md 行為準則、topics/ 與 library/ 範本、自動衍生的索引檔，以及收尾用的 Claude Code hooks。"
       }
     },
     "notBundled": "未內建",
