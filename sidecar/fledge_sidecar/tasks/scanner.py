@@ -43,7 +43,11 @@ _NEXT_STEP = re.compile(r"^\*\*(?:下一步|Next)\*\*[:：]\s*(.+)$")
 # `/handoff` skill 寫在 state.md 末尾的段落標題（票 21）。**這個標題從此是格式合約**：
 # skill 那邊改了字，面板會靜默找不到、指令區塊消失。改之前兩邊要一起改。
 _HANDOFF_HEADING = "## 貼進新對話的指令"
-_FENCE = "```"
+# 圍籬用 CommonMark 語意：開圍籬＝行首 ≥3 個反引號（可帶語言標記）；關圍籬＝**只含**反引號的行，
+# 且數量 ≥ 開圍籬。兩輪 Codex 各打掉一個「以 ``` 開頭」的變體（R1 漏認 ```text、R2 內文行以
+# ``` 開頭被提早關閉）——與其再補條件，不如一次用標準規則。
+_FENCE_OPEN = re.compile(r"^(`{3,})")
+_FENCE_CLOSE = re.compile(r"^(`{3,})\s*$")
 
 
 class TaskWriteError(OSError):
@@ -309,22 +313,26 @@ def read_handoff_command(fledge_fd: int | None) -> str:
     64KB 是 `_read_state_text` 既有的上限（實測最大的 state.md 是 12KB）；超過的部分
     靜默不讀，這是知情的取捨，不是「整份」（Codex R1）。
     圍籬沒關視為「沒有」：那代表檔案寫到一半或被截斷，半段指令給人複製比不顯示更糟。
-    開圍籬認「以 ``` 開頭」（```text 也算）：只認裸 ``` 的話，帶標記的開圍籬會被跳過、
-    它的關圍籬反而被當成開圍籬，回傳的是兩個區塊**之間的說明文字**（Codex R1 重現）。"""
+    圍籬判定見 `_FENCE_OPEN`／`_FENCE_CLOSE` 的註解——開關分開認，關圍籬的反引號數要
+    ≥ 開圍籬，內文裡以 ``` 開頭的行（說明文字、巢狀程式碼區塊）才不會提早關閉。"""
     lines = _read_state_text(fledge_fd).splitlines()
     try:
         start = lines.index(_HANDOFF_HEADING)
     except ValueError:
         return ""
     body: list[str] | None = None
+    fence_len = 0
     for line in lines[start + 1:]:
-        if line.strip().startswith(_FENCE):
-            if body is None:
-                body = []          # 進入圍籬（開圍籬可帶語言標記）
-                continue
+        stripped = line.strip()
+        if body is None:
+            m = _FENCE_OPEN.match(stripped)
+            if m:
+                body, fence_len = [], len(m.group(1))   # 進入圍籬，記住開圍籬的長度
+            continue
+        m = _FENCE_CLOSE.match(stripped)
+        if m and len(m.group(1)) >= fence_len:
             return "\n".join(body).strip()   # 圍籬關上，只取第一段
-        if body is not None:
-            body.append(line)
+        body.append(line)
     return ""                      # 沒有圍籬，或開了沒關
 
 

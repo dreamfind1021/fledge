@@ -313,6 +313,35 @@ def test_handoff_command_language_tagged_fence_does_not_capture_prose_between_bl
         assert scanner.read_handoff_command(td.fledge_fd) == "要的指令"
 
 
+def test_handoff_command_prose_line_starting_with_fence_does_not_close(tmp_path):
+    """Codex R2（打在 R1 修法上）：關圍籬若也認「以 ``` 開頭」，內文裡一行
+    「```text 是文件中的標記」會提早關閉，後面的指令靜默被截掉、前端照樣顯示已複製。
+    關圍籬必須是**只含**反引號的行。"""
+    config, proj = _setup(tmp_path)
+    fledge = proj / ".fledge"
+    fledge.mkdir()
+    (fledge / "state.md").write_text(
+        "## 貼進新對話的指令\n```\n第一句。\n```text 是文件中的標記，請保留。\n第三句。\n```\n",
+        encoding="utf-8",
+    )
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.read_handoff_command(td.fledge_fd) == "第一句。\n```text 是文件中的標記，請保留。\n第三句。"
+
+
+def test_handoff_command_nested_fence_inside_four_backtick_block(tmp_path):
+    """Codex R2：四反引號外框包一個 ```python 區塊——內層的 ``` 不能關掉外框。
+    關圍籬的反引號數要 ≥ 開圍籬（CommonMark 語意）。"""
+    config, proj = _setup(tmp_path)
+    fledge = proj / ".fledge"
+    fledge.mkdir()
+    (fledge / "state.md").write_text(
+        "## 貼進新對話的指令\n````\n第一句。\n```python\nprint(1)\n```\n第三句。\n````\n",
+        encoding="utf-8",
+    )
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.read_handoff_command(td.fledge_fd) == "第一句。\n```python\nprint(1)\n```\n第三句。"
+
+
 # ── T3：建票、逐層建立、撞號重試 ───────────────────────────────
 
 def test_create_task_makes_missing_dirs_and_numbers_from_one(tmp_path):
