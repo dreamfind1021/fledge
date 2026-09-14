@@ -87,16 +87,20 @@
    標籤用 --dim——「下一步」是這一層最重要的一句，指令是它的附屬，不該跟它搶第一眼。
    margin-top 為負是要貼在 .tasks-next 的 24px 下緣裡，讓兩塊讀起來是同一組 */
 .tasks-cmd { border-left: 3px solid var(--divider); padding: 2px 0 2px 16px; margin: -8px 0 24px 2px; }
-.tasks-cmd-top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
-.tasks-cmd-lab { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); }
-.tasks-cmd-toggle { background: transparent; border: none; padding: 0; color: var(--dim); font-family: var(--font-ui); font-size: 11px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
-.tasks-cmd-toggle:hover { color: var(--text); }
-.tasks-cmd-btn { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600; font-family: var(--font-ui); background: transparent; color: var(--text); cursor: pointer; white-space: nowrap; }
-.tasks-cmd-btn:hover { background: var(--hover); }
-.tasks-cmd-btn.is-done { color: var(--session); border-color: color-mix(in srgb, var(--session) 40%, var(--border)); }
-.tasks-cmd-pre { margin: 0; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7; color: var(--dim); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 9px 11px; white-space: pre-wrap; word-break: break-word; }
+.tasks-cmd-lab { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
+/* 整個框是按鈕（點了展開／收合），跟 .tk-row 同一套 */
+.tasks-cmd-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 8px 9px 11px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); cursor: pointer; }
+.tasks-cmd-row:hover { background: var(--hover); }
+.tasks-cmd-pre { flex: 1; min-width: 0; margin: 0; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7; color: var(--dim); white-space: pre-wrap; word-break: break-word; }
 /* 摺疊：只露第一行。全文留在 DOM 裡靠樣式截斷，複製才拿得到整段 */
 .tasks-cmd.is-folded .tasks-cmd-pre { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 動作：跟 .tk-acts 同一條規則——滑過或鍵盤走到才顯形，用 opacity 位置留著。
+   已複製那兩秒圖示要留著讓人看到，:has(.is-done) 蓋回 1 */
+.tasks-cmd-acts { flex-shrink: 0; display: flex; gap: 2px; margin: -2px 0; opacity: 0; transition: opacity .12s ease; }
+.tasks-cmd-row:hover .tasks-cmd-acts, .tasks-cmd-acts:focus-within, .tasks-cmd-acts:has(.is-done) { opacity: 1; }
+.tasks-cmd-act { display: inline-flex; align-items: center; padding: 3px; background: transparent; border: none; color: var(--faint); cursor: pointer; border-radius: 4px; }
+.tasks-cmd-act:hover { color: var(--text); background: var(--surface); }
+.tasks-cmd-act.is-done { color: var(--session); }
 
 /* 分區標頭 */
 .tasks-sec { display: flex; align-items: center; gap: 7px; width: 100%; margin: 28px 0 8px; padding: 0 2px; background: transparent; border: none; font-family: var(--font-ui); color: var(--dim); }

@@ -250,26 +250,48 @@ describe("Tasks 面板", () => {
 
   // 票 21：state.md 末尾的「貼進新對話的指令」。預設摺疊（只露第一行），展開才看全文
   const CMD = "第一句。\n\n第二句。\n\n第三句。";
-  it("第二層：有指令段就出現區塊，預設摺疊、點展開看全文", async () => {
+  it("第二層：有指令段就出現區塊，預設摺疊、點內容框展開、再點收合", async () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "", handoff_command: CMD });
     render(<Tasks port={1234} isActive />);
     fireEvent.click(await screen.findByTitle("/p/a"));
     await screen.findByText(en.list.handoffLabel);
     const pre = screen.getByText((_, el) => el?.tagName === "PRE" && el.textContent === CMD);
-    expect(pre.closest(".tasks-cmd")?.classList.contains("is-folded")).toBe(true);   // 全文在 DOM 裡，靠樣式只露第一行
-    fireEvent.click(screen.getByText(en.list.handoffExpand));
-    expect(pre.closest(".tasks-cmd")?.classList.contains("is-folded")).toBe(false);
-    expect(screen.getByText(en.list.handoffCollapse)).toBeTruthy();
+    const box = pre.closest(".tasks-cmd")!;
+    const row = pre.closest("[role=button]")!;                       // 跟票列同一套：整個框是按鈕
+    expect(box.classList.contains("is-folded")).toBe(true);           // 全文在 DOM 裡，靠樣式只露第一行
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(row);
+    expect(box.classList.contains("is-folded")).toBe(false);
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.click(row);
+    expect(box.classList.contains("is-folded")).toBe(true);
+    expect(screen.queryByText("Expand")).toBeNull();                   // 沒有另外的「展開」文字
   });
 
-  it("第二層：按複製把整段指令寫進剪貼簿並顯示已複製", async () => {
+  it("第二層：指令框可用鍵盤展開（Enter／空白鍵）", async () => {
+    fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "", handoff_command: CMD });
+    render(<Tasks port={1234} isActive />);
+    fireEvent.click(await screen.findByTitle("/p/a"));
+    await screen.findByText(en.list.handoffLabel);
+    const row = screen.getByText((_, el) => el?.tagName === "PRE" && el.textContent === CMD).closest("[role=button]")!;
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(row.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.keyDown(row, { key: " " });
+    expect(row.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("第二層：框尾的複製圖示把整段指令寫進剪貼簿、圖示變成已複製，且不會連帶展開", async () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "", handoff_command: CMD });
     writeClipboard.mockResolvedValue(true);
     render(<Tasks port={1234} isActive />);
     fireEvent.click(await screen.findByTitle("/p/a"));
-    fireEvent.click(await screen.findByText(en.list.handoffCopy));
+    const copy = await screen.findByLabelText(en.list.handoffCopy);   // 圖示鈕，只有可及名稱沒有文字
+    expect(copy.textContent).toBe("");
+    fireEvent.click(copy);
     expect(writeClipboard).toHaveBeenCalledWith(CMD);                 // 摺疊時也複製全文，不是露出的那一行
-    await waitFor(() => expect(screen.getByText(en.list.copied)).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText(en.list.copied)).toBeTruthy());
+    const box = copy.closest(".tasks-cmd")!;
+    expect(box.classList.contains("is-folded")).toBe(true);           // 點圖示不能把框展開（stopPropagation）
   });
 
   it("第二層：沒有指令段就整塊不出現", async () => {

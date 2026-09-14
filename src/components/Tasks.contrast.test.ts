@@ -88,6 +88,9 @@ describe("待辦面板的顏色對比", () => {
     [".ed-btn 停用邊框", ".ed-btn:disabled", "border", surface],
     ["Preview／Cancel 停用邊框", ".btn.is-quiet:disabled", "border-color", surface],
     ["Save 停用邊框", ".btn.is-primary:disabled", "border-color", surface],
+    // 票 21 指令框尾的複製圖示（lucide svg 吃 currentColor）與已複製的勾，坐落在框的 --surface-2 上
+    ["指令複製圖示", ".tasks-cmd-act", "color", surface2],
+    ["指令已複製的勾", ".tasks-cmd-act.is-done", "color", surface2],
   ])("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(3);
   });
@@ -123,11 +126,8 @@ describe("待辦面板的顏色對比", () => {
     ["返回列的票號", ".full-num", "color", bg],
     ["提示條文字", ".tk-banner", "color", bg],
     ["提示條按鈕文字", ".tk-banner .bbtn", "color", bg],
-    // 票 21 貼進新對話的指令：標籤、展開鈕、複製鈕坐落在 .tasks-pane 的 --bg；<pre> 在自己的 --surface-2 上
+    // 票 21 貼進新對話的指令：標籤坐落在 .tasks-pane 的 --bg；<pre> 在框自己的 --surface-2 上
     ["指令區塊標籤", ".tasks-cmd-lab", "color", bg],
-    ["指令展開／收合鈕", ".tasks-cmd-toggle", "color", bg],
-    ["指令複製鈕", ".tasks-cmd-btn", "color", bg],
-    ["指令已複製狀態", ".tasks-cmd-btn.is-done", "color", bg],
     ["指令內文", ".tasks-cmd-pre", "color", surface2],
   ])("%s 對背景至少 4.5:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(4.5);

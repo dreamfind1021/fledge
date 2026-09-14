@@ -146,6 +146,8 @@ const COPIED_FEEDBACK_MS = 2000;
 // 票 21：state.md 末尾的「貼進新對話的指令」（handoff skill 寫的，一般收工不會有）。
 // 預設摺疊只露第一行——這一頁的主角是票清單，指令只在要換對話那一刻才用到。
 // 全文一直在 DOM 裡、靠樣式截斷，所以複製永遠拿到整段，不是露出的那一行。
+// 互動跟一張票同一套（使用者驗收時要求）：整個框是按鈕、點了展開／收合；
+// 複製是框尾的圖示、滑過才亮、沒有文字。複製成功換成勾兩秒，可及名稱換成「已複製」。
 function HandoffCommand({ text, t }: { text: string; t: T }) {
   const [folded, setFolded] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -155,6 +157,7 @@ function HandoffCommand({ text, t }: { text: string; t: T }) {
     mounted.current = true;   // StrictMode 會 mount→cleanup→再 mount，這裡要重設回來
     return () => { mounted.current = false; if (timer.current) clearTimeout(timer.current); };
   }, []);
+  const toggle = () => setFolded((f) => !f);
   const copy = () => writeClipboard(text).then((ok) => {
     // 卸載可能發生在寫入完成前——cleanup 已經跑過，此時再排 timer 就沒人清得掉
     if (!ok || !mounted.current) return;   // 失敗不謊稱已複製
@@ -162,18 +165,24 @@ function HandoffCommand({ text, t }: { text: string; t: T }) {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
   });
+  const copyLabel = t(copied ? "list.copied" : "list.handoffCopy");
   return (
     <div className={folded ? "tasks-cmd is-folded" : "tasks-cmd"}>
-      <div className="tasks-cmd-top">
-        <span className="tasks-cmd-lab">{t("list.handoffLabel")}</span>
-        <button type="button" className="tasks-cmd-toggle" onClick={() => setFolded((f) => !f)}>
-          {t(folded ? "list.handoffExpand" : "list.handoffCollapse")}
-        </button>
-        <button type="button" className={copied ? "tasks-cmd-btn is-done" : "tasks-cmd-btn"} onClick={copy}>
-          <Copy size={11} strokeWidth={2.2} />{t(copied ? "list.copied" : "list.handoffCopy")}
-        </button>
+      <div className="tasks-cmd-lab">{t("list.handoffLabel")}</div>
+      <div className="tasks-cmd-row" role="button" tabIndex={0} aria-expanded={!folded}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;   // 同 .tk-row：巢狀按鈕的鍵盤啟動不該被框吃掉
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+        }}>
+        <pre className="tasks-cmd-pre">{text}</pre>
+        <span className="tasks-cmd-acts">
+          <button className={copied ? "tasks-cmd-act is-done" : "tasks-cmd-act"} aria-label={copyLabel} title={copyLabel}
+            onClick={(e) => { e.stopPropagation(); copy(); }}>
+            {copied ? <Check size={13} strokeWidth={2.5} /> : <Copy size={13} strokeWidth={2} />}
+          </button>
+        </span>
       </div>
-      <pre className="tasks-cmd-pre">{text}</pre>
     </div>
   );
 }
