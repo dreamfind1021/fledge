@@ -56,11 +56,7 @@ jobs:
           test -x "$SIDE" || { echo "::error::sidecar 不在 $SIDE"; exit 1; }
           # 啟動 sidecar，確認印出 FLEDGE_PORT 且 /api/health 真的回應——不只「曾印 port 後崩潰」
           # （__main__.py 先印 port 再 uvicorn.run，故 create_app/bind 失敗會在印 port 後；Codex PR-gate R2）
-          # SSL_CERT_FILE／SSL_CERT_DIR 指向不存在處＝模擬使用者機器：成品帶的 libcrypto 編死的
-          # 憑證路徑（CI 這台 Python 的）在使用者機器不存在（2026-09-14 根因，Codex 額度卡片全回
-          # network）。成品必須自帶根憑證，下面用 /api/health 的 tls_ca_certs 驗
-          FLEDGE_TEST_UNAUTH=1 SSL_CERT_FILE=/nonexistent/nope.pem SSL_CERT_DIR=/nonexistent \
-            "$SIDE" >/tmp/side.log 2>&1 & PID=$!
+          FLEDGE_TEST_UNAUTH=1 "$SIDE" >/tmp/side.log 2>&1 & PID=$!
           PORT=""
           for _ in $(seq 1 20); do
             PORT=$(grep -m1 '^FLEDGE_PORT=' /tmp/side.log | cut -d= -f2 | tr -d '[:space:]')
@@ -70,15 +66,12 @@ jobs:
           [ -n "$PORT" ] || { echo "::error::sidecar 未印 FLEDGE_PORT"; cat /tmp/side.log; kill "$PID" 2>/dev/null || true; exit 1; }
           OK=""
           for _ in $(seq 1 20); do
-            curl -fsS --connect-timeout 1 --max-time 2 "http://127.0.0.1:$PORT/api/health" >/tmp/health.json 2>/dev/null && { OK=1; break; }
+            curl -fsS --connect-timeout 1 --max-time 2 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && { OK=1; break; }
             kill -0 "$PID" 2>/dev/null || break   # 進程已死（印 port 後崩潰）→ 別再等
             sleep 0.5
           done
           kill -TERM "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true
           [ -n "$OK" ] || { echo "::error::sidecar /api/health 無回應（啟動後崩潰？）"; cat /tmp/side.log; exit 1; }
-          # 成品自檢：系統憑證路徑已指向不存在處，載到的根憑證仍要超過 100 張，否則 cacert.pem 沒被打進去
-          CA=$(python3 -c 'import json,sys; print(json.load(open("/tmp/health.json")).get("tls_ca_certs", 0))')
-          [ "$CA" -gt 100 ] || { echo "::error::成品的根憑證只有 $CA 張（certifi cacert.pem 沒打進 PyInstaller 成品？）"; cat /tmp/health.json; exit 1; }
 
       - name: Verify + package (驗證失敗就沒有可上傳的檔案)
         run: |

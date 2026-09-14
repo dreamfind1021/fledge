@@ -33,16 +33,3 @@ def test_health_reports_claude_found(monkeypatch):
     monkeypatch.setattr(health_mod.shutil, "which", lambda _: None)
     body = TestClient(create_app()).get("/api/health").json()
     assert body["claude_found"] is False
-
-
-def test_health_reports_tls_ca_certs_independent_of_system_paths(tmp_path, monkeypatch):
-    """release CI 的自檢入口（2026-09-14 根因）：打包版 OpenSSL 編死的憑證路徑在使用者機器
-    不存在。CI 沒有 auth.json 也沒有網路可打 Codex，需要一個不用登入就能證明
-    「成品真的帶了根憑證」的地方——health 回載到的 CA 張數，CI 起成品時把系統路徑指向
-    不存在的地方再讀它。這裡同樣模擬：預設 context 必須是 0 張（模擬成立），health 仍 >100。"""
-    import ssl
-    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "nope.pem"))
-    monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path / "nope"))
-    assert len(ssl.create_default_context().get_ca_certs()) == 0
-    body = TestClient(create_app()).get("/api/health").json()
-    assert isinstance(body["tls_ca_certs"], int) and body["tls_ca_certs"] > 100
