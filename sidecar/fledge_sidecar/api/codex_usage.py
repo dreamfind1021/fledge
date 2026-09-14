@@ -13,13 +13,29 @@
 from __future__ import annotations
 
 import json
+import ssl
 import urllib.error
 import urllib.request
 from pathlib import Path
 
+import certifi
+
 # 已逆向驗證的端點（ChatGPT auth 模式，與 codex `/status` 同源）。未公開故全程容錯降級。
 USAGE_URL = "https://chatgpt.com/backend-api/codex/usage"
 REQUEST_TIMEOUT = 8.0
+
+
+def tls_context() -> ssl.SSLContext:
+    """帶自己根憑證的 TLS context（2026-09-14 根因）：打包版的 libcrypto 是 CI 那台 Python
+    編出來的，編死的 OPENSSLDIR 在使用者機器不存在 → 零張根憑證 → 驗證失敗被歸成 network。
+    dev 用 Homebrew Python、路徑剛好在，所以只有打包版壞。
+
+    CA 來自 certifi（PyInstaller 的內建 hook 偵測到 import 就會把 cacert.pem 收進成品），
+    不靠系統路徑、也不設 SSL_CERT_FILE 環境變數——那會外溢到 PTY 裡的 claude／codex 子進程。
+    **已知限制**：certifi 不含 macOS Keychain 的企業自簽 CA；要支援得換 truststore，這是
+    信任政策的選擇，目前沒有需求。成品有沒有真的收到 cacert.pem 由 /api/health 的
+    tls_ca_certs ＋ release CI 的自檢守，單元測試看不到 frozen 環境。"""
+    return ssl.create_default_context(cafile=certifi.where())
 
 
 def _read_auth(codex_home: Path) -> tuple[str, str] | None:
@@ -90,7 +106,7 @@ def fetch_codex_usage(codex_home: Path, now: float, *, opener=None) -> dict:
     })
     _open = opener or urllib.request.urlopen
     try:
-        with _open(req, timeout=REQUEST_TIMEOUT) as resp:
+        with _open(req, timeout=REQUEST_TIMEOUT, context=tls_context()) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
         return _fail("unauthorized" if exc.code in (401, 403) else "bad_response")

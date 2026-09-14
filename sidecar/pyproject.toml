@@ -6,6 +6,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "ptyprocess>=0.7",
+    "certifi>=2024.7",   # 打包版 OpenSSL 編死的憑證路徑在使用者機器不存在，TLS 要帶自己的根憑證
 ]
 
 [project.optional-dependencies]

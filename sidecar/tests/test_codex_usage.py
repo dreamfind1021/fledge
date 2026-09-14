@@ -67,7 +67,7 @@ def test_fetch_no_auth_file_is_no_auth(tmp_path: Path):
 def test_fetch_success_returns_live(tmp_path: Path):
     home = _auth(tmp_path)
     captured = {}
-    def opener(req, timeout=None):
+    def opener(req, timeout=None, context=None):
         captured["auth"] = req.headers.get("Authorization")
         captured["acct"] = req.headers.get("Chatgpt-account-id")
         return _Resp(json.dumps(_body(p_pct=7.0)).encode())
@@ -116,7 +116,7 @@ def test_certifi_is_a_declared_dependency():
 
 def test_fetch_http_401_is_unauthorized(tmp_path: Path):
     home = _auth(tmp_path)
-    def opener(req, timeout=None):
+    def opener(req, timeout=None, context=None):
         raise urllib.error.HTTPError(codex_usage.USAGE_URL, 401, "Unauthorized", {}, None)
     out = codex_usage.fetch_codex_usage(home, now=1.0, opener=opener)
     assert out["source"] == "unavailable" and out["failure_reason"] == "unauthorized"
@@ -124,7 +124,7 @@ def test_fetch_http_401_is_unauthorized(tmp_path: Path):
 
 def test_fetch_network_error_is_network(tmp_path: Path):
     home = _auth(tmp_path)
-    def opener(req, timeout=None):
+    def opener(req, timeout=None, context=None):
         raise urllib.error.URLError("boom")
     out = codex_usage.fetch_codex_usage(home, now=1.0, opener=opener)
     assert out["source"] == "unavailable" and out["failure_reason"] == "network"
@@ -132,7 +132,7 @@ def test_fetch_network_error_is_network(tmp_path: Path):
 
 def test_fetch_bad_json_is_bad_response(tmp_path: Path):
     home = _auth(tmp_path)
-    def opener(req, timeout=None):
+    def opener(req, timeout=None, context=None):
         return _Resp(b"not json")
     out = codex_usage.fetch_codex_usage(home, now=1.0, opener=opener)
     assert out["source"] == "unavailable" and out["failure_reason"] == "bad_response"
