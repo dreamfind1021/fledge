@@ -1096,6 +1096,8 @@ export interface TasksListResponse {
   /** 讀不到時是 null 而不是空清單：空清單與「這個專案沒待辦」在畫面上長得一樣（design §6.3） */
   tasks: TaskRow[] | null;
   next_step: string;
+  /** state.md 末尾「貼進新對話的指令」圍籬內的文字（票 21）；沒有就是空字串。總覽不帶這欄 */
+  handoff_command: string;
 }
 
 export interface TasksOverview {

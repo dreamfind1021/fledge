@@ -229,6 +229,63 @@ def test_next_step_absent_or_beyond_head_is_empty(tmp_path):
         assert scanner.read_next_step(td.fledge_fd) == ""       # 超出前 20 行就不抓
 
 
+def test_handoff_command_is_read_from_state_md_tail(tmp_path):
+    """票 21：`## 貼進新對話的指令` 標題之後第一個 ``` 圍籬的內容。
+
+    這段由 handoff skill 寫在 state.md **末尾**（實測在第 56 行之後），
+    所以不能沿用 read_next_step 的前 20 行上限。回傳不含圍籬那兩行。"""
+    config, proj = _setup(tmp_path)
+    fledge = proj / ".fledge"
+    fledge.mkdir()
+    (fledge / "state.md").write_text(
+        "# 標題\n\n**下一步**：先做 A。\n\n" + "x\n" * 50
+        + "## 貼進新對話的指令\n\n```\n第一句。\n\n第二句。\n\n第三句。\n```\n",
+        encoding="utf-8",
+    )
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.read_handoff_command(td.fledge_fd) == "第一句。\n\n第二句。\n\n第三句。"
+        assert scanner.read_next_step(td.fledge_fd) == "先做 A。"   # 既有行為不受影響
+
+
+def test_handoff_command_absent_is_empty(tmp_path):
+    """一般收工（resume-note）整份覆寫、不帶指令段——「沒有」是常態，回空字串不報錯。"""
+    config, proj = _setup(tmp_path)
+    fledge = proj / ".fledge"
+    fledge.mkdir()
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.read_handoff_command(td.fledge_fd) == ""     # 根本沒有 state.md
+    (fledge / "state.md").write_text("**下一步**：只有這行。\n", encoding="utf-8")
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.read_handoff_command(td.fledge_fd) == ""     # 有檔沒標題
+    assert scanner.read_handoff_command(None) == ""                 # .fledge/ 開不起來
+
+
+def test_handoff_command_unclosed_fence_is_empty(tmp_path):
+    """圍籬沒關＝檔案寫到一半或被截斷，寧可不顯示也不要把半段當指令給人複製。"""
+    config, proj = _setup(tmp_path)
+    fledge = proj / ".fledge"
+    fledge.mkdir()
+    (fledge / "state.md").write_text(
+        "## 貼進新對話的指令\n\n```\n只有開頭沒有結尾\n", encoding="utf-8",
+    )
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.read_handoff_command(td.fledge_fd) == ""
+
+
+def test_handoff_command_takes_first_fence_after_heading_only(tmp_path):
+    """標題之前的圍籬（例如第 4 節的審查指令）不能被誤抓；標題之後只取第一個。"""
+    config, proj = _setup(tmp_path)
+    fledge = proj / ".fledge"
+    fledge.mkdir()
+    (fledge / "state.md").write_text(
+        "## 4. 工作慣例\n```\npytest -q\n```\n"
+        "## 貼進新對話的指令\n```\n要的這段\n```\n```\n不要這段\n```\n",
+        encoding="utf-8",
+    )
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.read_handoff_command(td.fledge_fd) == "要的這段"
+
+
 # ── T3：建票、逐層建立、撞號重試 ───────────────────────────────
 
 def test_create_task_makes_missing_dirs_and_numbers_from_one(tmp_path):

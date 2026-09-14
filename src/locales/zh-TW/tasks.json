@@ -57,6 +57,10 @@
     "saveFailedWriteFailed": "檔案寫不進去——看起來是磁碟或檔案系統的問題，不是你做錯了什麼。你的內容安全地留在草稿裡，問題排除後再試一次。",
     "saveFailedGeneric": "儲存失敗。你的內容安全地留在草稿裡——再試一次。",
     "copied": "已複製",
+    "handoffLabel": "貼進新對話的指令",
+    "handoffExpand": "展開",
+    "handoffCollapse": "收合",
+    "handoffCopy": "複製",
     "orphanDraft": "這張票已經不在了，但你有一份未儲存的草稿：{{title}}",
     "orphanUnavailable": "現在讀不到這個專案的待辦，草稿留著。"
   },

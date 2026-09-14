@@ -174,6 +174,26 @@ def test_list_tasks_absent_is_empty_list(tmp_path, monkeypatch):
     assert body["tasks"] == []
 
 
+def test_list_tasks_carries_handoff_command_but_overview_does_not(tmp_path, monkeypatch):
+    """票 21：專案頁回 state.md 末尾的「貼進新對話的指令」；沒有就是空字串。
+
+    **總覽刻意不帶**——那一層每個專案都要掃，而指令只在點進專案後才用到。"""
+    root, proj = _proj_with_tasks(tmp_path)
+    (proj / ".fledge" / "state.md").write_text(
+        "**下一步**：做 A。\n\n## 貼進新對話的指令\n\n```\n第一句。\n\n第二句。\n```\n",
+        encoding="utf-8",
+    )
+    bare = root / "bare"
+    bare.mkdir()
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    body = c.get("/tasks", params={"project": str(proj)}).json()
+    assert body["next_step"] == "做 A。"
+    assert body["handoff_command"] == "第一句。\n\n第二句。"
+    assert c.get("/tasks", params={"project": str(bare)}).json()["handoff_command"] == ""
+    for row in c.get("/tasks/overview").json()["projects"]:
+        assert "handoff_command" not in row
+
+
 def test_list_tasks_requires_token_when_auth_enforced(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"version": 1, "accounts": {}, "roots": [], "kms_root": ""}), encoding="utf-8")

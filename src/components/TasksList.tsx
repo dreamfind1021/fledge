@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Pencil, SquarePen, Trash2, TriangleAlert } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Pencil, SquarePen, Trash2, TriangleAlert } from "lucide-react";
 import { renderMarkdownLite } from "../lib/markdownLite";
 import { writeClipboard } from "../lib/clipboard";
 import type { TaskDraft } from "../lib/taskDraft";
@@ -141,6 +141,43 @@ function Ticket({ task, expanded, onToggle, onCycle, onDelete, onOpen, onEdit, r
 
 // 第二層：進行中 → 待辦 → 已完成（摺疊）。**做完不刪檔案**——
 // 上一版的第一條結構性缺陷就是「完成即移除在燒資產」。
+const COPIED_FEEDBACK_MS = 2000;
+
+// 票 21：state.md 末尾的「貼進新對話的指令」（handoff skill 寫的，一般收工不會有）。
+// 預設摺疊只露第一行——這一頁的主角是票清單，指令只在要換對話那一刻才用到。
+// 全文一直在 DOM 裡、靠樣式截斷，所以複製永遠拿到整段，不是露出的那一行。
+function HandoffCommand({ text, t }: { text: string; t: T }) {
+  const [folded, setFolded] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const mounted = useRef(true);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    mounted.current = true;   // StrictMode 會 mount→cleanup→再 mount，這裡要重設回來
+    return () => { mounted.current = false; if (timer.current) clearTimeout(timer.current); };
+  }, []);
+  const copy = () => writeClipboard(text).then((ok) => {
+    // 卸載可能發生在寫入完成前——cleanup 已經跑過，此時再排 timer 就沒人清得掉
+    if (!ok || !mounted.current) return;   // 失敗不謊稱已複製
+    setCopied(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
+  });
+  return (
+    <div className={folded ? "tasks-cmd is-folded" : "tasks-cmd"}>
+      <div className="tasks-cmd-top">
+        <span className="tasks-cmd-lab">{t("list.handoffLabel")}</span>
+        <button type="button" className="tasks-cmd-toggle" onClick={() => setFolded((f) => !f)}>
+          {t(folded ? "list.handoffExpand" : "list.handoffCollapse")}
+        </button>
+        <button type="button" className={copied ? "tasks-cmd-btn is-done" : "tasks-cmd-btn"} onClick={copy}>
+          <Copy size={11} strokeWidth={2.2} />{t(copied ? "list.copied" : "list.handoffCopy")}
+        </button>
+      </div>
+      <pre className="tasks-cmd-pre">{text}</pre>
+    </div>
+  );
+}
+
 export function TasksList({
   data, projectName, failed, notice, onBack, onCreate, onCycle, onDelete, onOpen, onEdit,
   expandedName, onExpand, orphanDrafts, draftsByName, onOrphanDiscard, t,
@@ -235,6 +272,8 @@ export function TasksList({
           <div className="tasks-next-tx">{data.next_step}</div>
         </div>
       ) : null}
+      {/* key 綁專案：換專案時摺疊與「已複製」都歸零，不把上一個專案的展開態帶過來 */}
+      {data.handoff_command ? <HandoffCommand key={data.project} text={data.handoff_command} t={t} /> : null}
       <form className="tasks-new" onSubmit={(e) => { e.preventDefault(); submit(); }}>
         <input
           className="tasks-new-input"

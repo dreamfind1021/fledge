@@ -66,6 +66,8 @@ def list_tasks(project: str = "") -> JSONResponse:
             "tasks_status": td.status,
             "tasks": tasks,
             "next_step": scanner.read_next_step(td.fledge_fd),
+            # 票 21：只有這一層帶指令段。總覽不帶——那層每個專案都要掃，指令卻只在點進來後才用
+            "handoff_command": scanner.read_handoff_command(td.fledge_fd),
         })
 
 

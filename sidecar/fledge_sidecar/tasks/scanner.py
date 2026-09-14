@@ -40,6 +40,10 @@ STATUS_UNKNOWN_PROJECT = "unknown_project"
 
 # `/resume-note` skill 寫死的格式合約（該 skill 不需要修改）。中英兩種標籤、全半形冒號都認。
 _NEXT_STEP = re.compile(r"^\*\*(?:下一步|Next)\*\*[:：]\s*(.+)$")
+# `/handoff` skill 寫在 state.md 末尾的段落標題（票 21）。**這個標題從此是格式合約**：
+# skill 那邊改了字，面板會靜默找不到、指令區塊消失。改之前兩邊要一起改。
+_HANDOFF_HEADING = "## 貼進新對話的指令"
+_FENCE = "```"
 
 
 class TaskWriteError(OSError):
@@ -271,10 +275,8 @@ def count_open(tasks_fd: int) -> OpenCounts:
     return OpenCounts(unfinished=unfinished, doing=doing)
 
 
-def read_next_step(fledge_fd: int | None) -> str:
-    """從 `.fledge/state.md` 的前 20 行抽「下一步」（design §5.1）。讀不到一律回空字串。
-
-    這是 `/resume-note` skill 已經寫死的格式合約，**該 skill 完全不需要修改**。"""
+def _read_state_text(fledge_fd: int | None) -> str:
+    """讀 `.fledge/state.md` 的前 64KB 文字。讀不到一律回空字串——兩個抽取函式共用。"""
     if fledge_fd is None:
         return ""
     try:
@@ -283,14 +285,43 @@ def read_next_step(fledge_fd: int | None) -> str:
         return ""
     try:
         with os.fdopen(fd, "rb") as fh:
-            head = _decode(fh.read(64 * 1024))
+            return _decode(fh.read(64 * 1024))
     except OSError:
         return ""
-    for line in head.splitlines()[:STATE_HEAD_LINES]:
+
+
+def read_next_step(fledge_fd: int | None) -> str:
+    """從 `.fledge/state.md` 的前 20 行抽「下一步」（design §5.1）。讀不到一律回空字串。
+
+    這是 `/resume-note` skill 已經寫死的格式合約，**該 skill 完全不需要修改**。"""
+    for line in _read_state_text(fledge_fd).splitlines()[:STATE_HEAD_LINES]:
         m = _NEXT_STEP.match(line.strip())
         if m:
             return m.group(1).strip()
     return ""
+
+
+def read_handoff_command(fledge_fd: int | None) -> str:
+    """從 `.fledge/state.md` 抽「貼進新對話的指令」（票 21）：`_HANDOFF_HEADING` 之後
+    第一個 ``` 圍籬的內容，不含圍籬行。讀不到、沒標題、圍籬沒關，一律回空字串。
+
+    掃整份而不是前 20 行——handoff skill 把這段寫在檔案**末尾**。
+    圍籬沒關視為「沒有」：那代表檔案寫到一半或被截斷，半段指令給人複製比不顯示更糟。"""
+    lines = _read_state_text(fledge_fd).splitlines()
+    try:
+        start = lines.index(_HANDOFF_HEADING)
+    except ValueError:
+        return ""
+    body: list[str] | None = None
+    for line in lines[start + 1:]:
+        if line.strip() == _FENCE:
+            if body is None:
+                body = []          # 進入圍籬
+                continue
+            return "\n".join(body).strip()   # 圍籬關上，只取第一段
+        if body is not None:
+            body.append(line)
+    return ""                      # 沒有圍籬，或開了沒關
 
 
 def build_overview(config: AppConfig) -> dict[str, Any]:

@@ -57,6 +57,10 @@
     "saveFailedWriteFailed": "The file couldn't be written — this looks like a disk or filesystem problem, not something you did. Your content is safe in the draft; try again once it clears.",
     "saveFailedGeneric": "Save failed. Your content is safe in the draft — try again.",
     "copied": "Copied",
+    "handoffLabel": "Paste into new conversation",
+    "handoffExpand": "Expand",
+    "handoffCollapse": "Collapse",
+    "handoffCopy": "Copy",
     "orphanDraft": "This ticket is gone, but you have an unsaved draft: {{title}}",
     "orphanUnavailable": "This project's tasks can't be read right now. The draft is kept."
   },

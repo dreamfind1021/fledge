@@ -75,6 +75,8 @@ describe("待辦面板的顏色對比", () => {
   // --surface 比 --bg 亮，拿 --bg 當底算出來的對比度會偏高、掩蓋掉真的不夠的情況，
   // 所以這裡另外備一個底色，各選擇器依實際坐落的容器各自指定（task 10 review）
   const surface = token("surface");
+  // 票 21 指令區塊的 <pre> 有自己的 --surface-2 底，比 --surface 再亮一階，同一個理由要另備一個底色
+  const surface2 = token("surface-2");
 
   // 記號是可操作的 UI 元件，非文字門檻 3:1（WCAG 1.4.11）
   it.each([
@@ -121,6 +123,12 @@ describe("待辦面板的顏色對比", () => {
     ["返回列的票號", ".full-num", "color", bg],
     ["提示條文字", ".tk-banner", "color", bg],
     ["提示條按鈕文字", ".tk-banner .bbtn", "color", bg],
+    // 票 21 貼進新對話的指令：標籤、展開鈕、複製鈕坐落在 .tasks-pane 的 --bg；<pre> 在自己的 --surface-2 上
+    ["指令區塊標籤", ".tasks-cmd-lab", "color", bg],
+    ["指令展開／收合鈕", ".tasks-cmd-toggle", "color", bg],
+    ["指令複製鈕", ".tasks-cmd-btn", "color", bg],
+    ["指令已複製狀態", ".tasks-cmd-btn.is-done", "color", bg],
+    ["指令內文", ".tasks-cmd-pre", "color", surface2],
   ])("%s 對背景至少 4.5:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(4.5);
   });
