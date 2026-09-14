@@ -305,8 +305,12 @@ def read_handoff_command(fledge_fd: int | None) -> str:
     """從 `.fledge/state.md` 抽「貼進新對話的指令」（票 21）：`_HANDOFF_HEADING` 之後
     第一個 ``` 圍籬的內容，不含圍籬行。讀不到、沒標題、圍籬沒關，一律回空字串。
 
-    掃整份而不是前 20 行——handoff skill 把這段寫在檔案**末尾**。
-    圍籬沒關視為「沒有」：那代表檔案寫到一半或被截斷，半段指令給人複製比不顯示更糟。"""
+    掃**前 64KB 內的所有行**而不是前 20 行——handoff skill 把這段寫在檔案末尾。
+    64KB 是 `_read_state_text` 既有的上限（實測最大的 state.md 是 12KB）；超過的部分
+    靜默不讀，這是知情的取捨，不是「整份」（Codex R1）。
+    圍籬沒關視為「沒有」：那代表檔案寫到一半或被截斷，半段指令給人複製比不顯示更糟。
+    開圍籬認「以 ``` 開頭」（```text 也算）：只認裸 ``` 的話，帶標記的開圍籬會被跳過、
+    它的關圍籬反而被當成開圍籬，回傳的是兩個區塊**之間的說明文字**（Codex R1 重現）。"""
     lines = _read_state_text(fledge_fd).splitlines()
     try:
         start = lines.index(_HANDOFF_HEADING)
@@ -314,9 +318,9 @@ def read_handoff_command(fledge_fd: int | None) -> str:
         return ""
     body: list[str] | None = None
     for line in lines[start + 1:]:
-        if line.strip() == _FENCE:
+        if line.strip().startswith(_FENCE):
             if body is None:
-                body = []          # 進入圍籬
+                body = []          # 進入圍籬（開圍籬可帶語言標記）
                 continue
             return "\n".join(body).strip()   # 圍籬關上，只取第一段
         if body is not None:

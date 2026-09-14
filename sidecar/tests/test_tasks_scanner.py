@@ -286,6 +286,33 @@ def test_handoff_command_takes_first_fence_after_heading_only(tmp_path):
         assert scanner.read_handoff_command(td.fledge_fd) == "要的這段"
 
 
+def test_handoff_command_accepts_language_tagged_fence(tmp_path):
+    """Codex R1：開圍籬帶語言標記（```text）也要認。handoff skill 寫的是裸圍籬，
+    但人手編輯加上 `text` 是常見動作——認不出來會靜默消失。"""
+    config, proj = _setup(tmp_path)
+    fledge = proj / ".fledge"
+    fledge.mkdir()
+    (fledge / "state.md").write_text(
+        "## 貼進新對話的指令\n\n```text\n要的指令\n```\n", encoding="utf-8",
+    )
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.read_handoff_command(td.fledge_fd) == "要的指令"
+
+
+def test_handoff_command_language_tagged_fence_does_not_capture_prose_between_blocks(tmp_path):
+    """Codex R1 重現的真正危險：```text 開頭沒被當開圍籬 → 它的關圍籬被當成開圍籬 →
+    回傳的是兩個區塊**之間的說明文字**。複製到錯的東西比沒顯示更糟。"""
+    config, proj = _setup(tmp_path)
+    fledge = proj / ".fledge"
+    fledge.mkdir()
+    (fledge / "state.md").write_text(
+        "## 貼進新對話的指令\n\n```text\n要的指令\n```\n\n備註：這段是說明\n\n```\n另一段\n```\n",
+        encoding="utf-8",
+    )
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.read_handoff_command(td.fledge_fd) == "要的指令"
+
+
 # ── T3：建票、逐層建立、撞號重試 ───────────────────────────────
 
 def test_create_task_makes_missing_dirs_and_numbers_from_one(tmp_path):
