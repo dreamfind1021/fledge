@@ -107,7 +107,6 @@ const ALLOWED_OPACITY: Record<string, string> = {
   ".splash-glow--warm": "裝飾光暈",
   ".splash-glow--cool": "裝飾光暈",
   // 狀態指示點與刻度：非文字元件，門檻 3:1
-  ".tov-marks i": "總覽刻度，實際 3.30 過 3:1",
   ".tab-dot.is-connecting": "分頁狀態點，實際 3.77 過 3:1",
   ".tab-dot.is-offline": "分頁狀態點 opacity .85，過 3:1",
   // ↓ 這兩條實際低於 3:1，2026-09-03 真機看過後**知情接受**（票 09 已關）。

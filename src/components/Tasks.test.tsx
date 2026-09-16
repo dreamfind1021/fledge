@@ -546,6 +546,23 @@ describe("Tasks 面板", () => {
     expect((screen.getByLabelText(en.list.editorBody) as HTMLTextAreaElement).value).toBe("打到一半");
   });
 
+  // 樹掛在編輯器旁邊之後多了一條路：編輯 A 的票時點樹上的 B，select() 不清 editing，
+  // 編輯器會以 project="/p/b" 重掛、存檔與草稿都落到 B。過渡期先讓樹在編輯中不動作，
+  // 不從樹呼叫 leaveEditor／setEditing(null)——那會繞過 TaskEditor.leave()（Codex R1 的保護）
+  it("過渡期：編輯中點樹上的另一個專案不動作（Task 9 換成編輯器離開流程）", async () => {
+    fetchTasksOverview.mockResolvedValue({ projects: [proj(), proj({ path: "/p/b", name: "b" })], permission_error: false, recent_days: 7 });
+    render(<Tasks port={1234} isActive />);
+    await openProject();
+    fireEvent.click(screen.getByLabelText(en.list.edit));
+    await screen.findByLabelText(en.list.editorBody);
+    const listCalls = fetchTasks.mock.calls.length;
+    fireEvent.click(tree().getByText("b"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByLabelText(en.list.editorBody)).toBeTruthy();      // 編輯器還在
+    expect(fetchTasks).toHaveBeenCalledTimes(listCalls);                 // 沒有切到 b
+    expect(tree().getByText("a").closest(".tree-item")?.classList.contains("active")).toBe(true);
+  });
+
   // 票檔名在專案之間會撞名（每個專案都有 01-*.md）：expandedName 是父層 state，
   // 不隨 Ticket 重新 mount 而重置，切專案時要自己清掉，否則 B 的同名票會無端展開。
   it("切專案後展開狀態重置，不會讓另一個專案撞名的票無端展開", async () => {

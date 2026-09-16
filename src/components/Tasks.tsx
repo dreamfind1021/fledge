@@ -162,7 +162,14 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   const shell = (inner: ReactNode) => (
     <div className="tasks-root" data-testid="tasks-panel">
       <div className="tasks-split">
-        <TasksTree data={overview} selected={selected} onSelect={(p) => (p === null ? back() : select(p))} t={t} />
+        <TasksTree data={overview} selected={selected} t={t}
+          onSelect={(p) => {
+            // 票 19 過渡期護欄：編輯中樹不動作。select() 不清 editing，放行的話編輯器會以另一個
+            // project 重掛、存檔與草稿落到錯的專案；也不能從這裡 setEditing(null)／leaveEditor——
+            // 那會繞過 TaskEditor.leave() 的離開流程（Codex R1）。Task 9 換成走編輯器離開流程。
+            if (editing != null) return;
+            if (p === null) back(); else select(p);
+          }} />
         <div className="tasks-col">{inner}</div>
       </div>
     </div>
