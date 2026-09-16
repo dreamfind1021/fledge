@@ -73,10 +73,12 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   }, [port, selected, noteOpen, reloadKey]);
 
   // 右欄的票永遠來自清單那份。清單回來但找不到那個檔名（外部刪了）→ 清 pane，**只在非編輯時**（Codex R4）
+  // tasks 是 null（tasks_status 變 unavailable）視同找不到：讀不到的專案沒有票可選，右欄回空；
+  // 只認陣列的話 pane 留著、task 又找不到，右欄會永遠卡在「載入中」（Codex R5）。編輯中不適用（同 Codex R4）
   const task = pane?.kind === "ticket" && list?.project === selected && list.tasks ? list.tasks.find((x) => x.name === pane.name) : undefined;
   useEffect(() => {
     if (editing || pane?.kind !== "ticket") return;
-    if (list?.project === selected && list.tasks && !list.tasks.some((x) => x.name === pane.name)) setPane(null);
+    if (list?.project === selected && (list.tasks == null || !list.tasks.some((x) => x.name === pane.name))) setPane(null);
   }, [list, selected, pane, editing]);
 
   // 導覽：編輯中先交給編輯器的離開流程，草稿寫成功才套用（spec §5.7，Codex R1）
@@ -116,12 +118,15 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   // reload=true 只有 TaskEditor 的「捨棄我的版本」會傳（plan R2 F4）：把清單打成 loading
   // (setList(null)) 再重讀——不這樣做的話舊清單還在畫面上，使用者可以立刻再點編輯、
   // 帶著舊 fingerprint 再送一次，保證又是一次 409。
-  const leaveEditor = useCallback((reload: boolean) => {
+  // viaRequest：這次離開是不是在完成 nav() 發出的 leaveRequest。只有是，才套用被攔下的導覽；
+  // 編輯器自發的返回／取消／捨棄是「離開 → pane 不變」（spec §5.7），pendingNav 一律清掉不執行——
+  // nav 觸發的 leave 寫草稿失敗後殘留的 pendingNav 不得被編輯器自發的離開消耗（Codex R5 medium）
+  const leaveEditor = useCallback((reload: boolean, viaRequest: boolean) => {
     setEditing(false);
     const fn = pendingNav.current;
     pendingNav.current = null;
     if (reload) setList(null);       // 「捨棄我的版本」：清單進 loading，重讀完才能再操作（plan R2 F4）
-    if (fn) fn();
+    if (viaRequest && fn) fn();
     bump();
   }, [bump]);
 

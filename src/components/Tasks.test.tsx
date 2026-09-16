@@ -704,6 +704,18 @@ describe("Tasks 面板", () => {
       fireEvent(window, new Event("focus"));
       await waitFor(() => expect(screen.getByText(en.detail.hint)).toBeTruthy());
     });
+
+    // tasks_status 變 unavailable 時 list.tasks 是 null：「找不到票」的 effect 若只認陣列，右欄的
+    // 票既找不到（view=loading）也不會被清（pane 留著），清單那欄寫「讀不到」、右欄卻永遠「載入中」（Codex R5）
+    it("非編輯時清單重讀回 unavailable → 右欄回空，不卡載入中", async () => {
+      render(<Tasks port={1234} isActive />);
+      await openProject();
+      fireEvent.click(screen.getByText("第一件"));
+      fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "unavailable", tasks: null, next_step: "", handoff_command: "" });
+      fireEvent(window, new Event("focus"));
+      await waitFor(() => expect(screen.getByText(en.detail.hint)).toBeTruthy());
+      expect(screen.queryByText(en.detail.loading)).toBeNull();
+    });
   });
 
   describe("資料重讀（spec §5.8，D12）", () => {
@@ -904,6 +916,23 @@ describe("Tasks 面板", () => {
         fireEvent.click(screen.getByText(en.list.leaveAnyway));
         await waitFor(() => expect(document.querySelector(".d-title")?.textContent).toBe("第二件"));
       } finally { setItem.mockRestore(); }
+    });
+
+    // nav 觸發的離開寫草稿失敗後，被攔下的導覽還掛在 pendingNav 上；使用者改按編輯器自己的取消
+    // 是「離開 → pane 不變」（spec §5.7），不得把那個過期的導覽消耗掉、跳去 B（Codex R5 medium）
+    it("編輯中點 B 但草稿寫失敗 → 改按編輯器的取消且這次寫成功 → 留在 A 的票檢視，不跳到 B", async () => {
+      fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket(), ticket({ name: "02-b.md", number: 2, title: "第二件" })], next_step: "", handoff_command: "" });
+      await startEditing();
+      const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
+      try {
+        fireEvent.change(screen.getByLabelText(en.list.editorBody), { target: { value: "typed" } });
+        fireEvent.click(screen.getByText("第二件"));
+        await screen.findByText(en.list.leaveAnyway);
+      } finally { setItem.mockRestore(); }                          // 這次寫得成功
+      fireEvent.click(within(document.querySelector(".lb-detail.is-editing") as HTMLElement).getByText(en.list.cancel));
+      await waitFor(() => expect(document.querySelector(".d-title")?.textContent).toBe("第一件"));
+      expect(screen.queryByText("第二件", { selector: ".d-title" })).toBeNull();
+      expect(loadDraft("/p/a", "01-a.md")?.body).toBe("typed");   // 取消走的是 leave()：草稿有 flush
     });
 
     it("儲存成功：右欄回到票檢視顯示新內容，並重讀一次", async () => {

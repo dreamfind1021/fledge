@@ -72,7 +72,7 @@ function applyTool(ta: HTMLTextAreaElement, tool: Tool): { value: string; caret?
 
 export function TaskEditor({ port, project, projectName, task, onSaved, onLeave, leaveRequest, t }: {
   port: number; project: string; projectName: string; task: TaskRow;
-  onSaved: (updated: TaskRow) => void; onLeave: (reload: boolean) => void; leaveRequest?: number; t: T;
+  onSaved: (updated: TaskRow) => void; onLeave: (reload: boolean, viaRequest: boolean) => void; leaveRequest?: number; t: T;
 }) {
   const [title, setTitle] = useState(task.title);
   const [body, setBody] = useState(task.body);
@@ -157,7 +157,15 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   // 沒改過就不 flush（dirty 為 false），避免把原始內容當草稿存進去。
   // flush 成功後 abort 在途請求，讓晚到的回應根本不到達；然後卸載
   // reload=true 只有「捨棄我的版本」會傳：父層要把清單進 loading、重讀完才能再操作（plan R2 F4）
-  const forceLeave = (reload = false) => { abort.current?.abort(); onLeave(reload); };
+  //
+  // 這次離開是誰發起的（onLeave 第二個參數）：父層的 leaveRequest → "request"，父層才套用被攔下的
+  // 導覽；編輯器自己的返回／取消／捨棄 → "self"，父層只結束編輯、pane 不變（spec §5.7）。
+  // 用 ref 而不是在 leave() 裡帶參數：request 觸發的 leave() 寫草稿失敗後停在「仍要離開」的提示，
+  // 那顆鍵走 forceLeave() 不經 leave()，它得知道自己是在完成哪一次請求——所以來源只在「發起」時
+  // 寫入，「仍要離開」沿用上一次的；只有新的自發動作才改回 "self"。少了這個區分，nav 觸發的 leave
+  // 失敗後殘留在父層的 pendingNav 會被之後使用者自己按的取消消耗掉，右欄無端跳去別張票（Codex R5 medium）
+  const leaveSource = useRef<"request" | "self">("self");
+  const forceLeave = (reload = false) => { abort.current?.abort(); onLeave(reload, leaveSource.current === "request"); };
   const leave = () => {
     cancelDebounce();
     if (dirty && !saveDraft(project, task.name, { title, body, fingerprint: baseFp })) {
@@ -165,6 +173,7 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
     }
     forceLeave();
   };
+  const selfLeave = () => { leaveSource.current = "self"; leave(); };   // 返回鍵與取消鍵
 
   // 父層的導覽（點別張票、換專案、回所有專案）在編輯中一律先問這裡（spec §5.7）：
   // 走同一條 leave()——草稿寫成功才 onLeave，寫不進去就留在原畫面給「複製／仍要離開」。
@@ -177,6 +186,7 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   useEffect(() => {
     if (leaveRequest == null || leaveRequest === seenLeave.current) return;
     seenLeave.current = leaveRequest;
+    leaveSource.current = "request";
     leaveRef.current();
   }, [leaveRequest]);
 
@@ -238,7 +248,7 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   // 「捨棄我的版本」：清草稿後直接走，**不經 leave()**——leave 會先 flush 草稿，跟「捨棄」矛盾
   // cancelDebounce 對稱於 discardDraft（:93）：少了它，若上一層哪天不再同步卸載，
   // 排隊中的 debounce 會在 600ms 後把剛丟棄的內容又寫回去（plan R3 F1 同一種坑）
-  const discardAndReload = () => { cancelDebounce(); skipFlush.current = true; clearDraft(project, task.name); forceLeave(true); };
+  const discardAndReload = () => { cancelDebounce(); skipFlush.current = true; clearDraft(project, task.name); leaveSource.current = "self"; forceLeave(true); };
 
   const taRef = useRef<HTMLTextAreaElement>(null);
   // 受控 textarea：套用工具後游標要等 React 把新的 value 交回 DOM 才能定位，不能在
@@ -267,7 +277,7 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
   return (
     <div className="tasks-pane">
       <div className="full-head">
-        <button className="full-back" onClick={leave}><ChevronLeft size={14} />{projectName}</button>
+        <button className="full-back" onClick={selfLeave}><ChevronLeft size={14} />{projectName}</button>
         <span className="full-num">{task.number ?? ""}</span>
       </div>
       {draftPrompt && (
@@ -329,7 +339,7 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
           <button className="btn is-quiet" disabled={saving} onClick={() => setPreview((p) => !p)}>
             {t(preview ? "list.backToEdit" : "list.preview")}
           </button>
-          <button className="btn is-quiet" disabled={saving} onClick={leave}>{t("list.cancel")}</button>
+          <button className="btn is-quiet" disabled={saving} onClick={selfLeave}>{t("list.cancel")}</button>
           <button className="btn is-primary" disabled={locked} onClick={() => save()}>{t("list.save")}</button>
         </div>
       </div>

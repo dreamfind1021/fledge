@@ -28,7 +28,7 @@ export function TaskDetail({
   backLabel: string; onBack: () => void;
   onCycle: (task: TaskRow) => void; onPark: (task: TaskRow) => void; onDelete: (task: TaskRow) => void;
   onOpen: (task: TaskRow) => void; onEdit: (task: TaskRow) => void; onOpenNote: (path: string) => void;
-  onSaved: (updated: TaskRow) => void; onLeave: (reload: boolean) => void;
+  onSaved: (updated: TaskRow) => void; onLeave: (reload: boolean, viaRequest: boolean) => void;
   t: T;
 }) {
   const [confirming, setConfirming] = useState(false);

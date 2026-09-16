@@ -547,12 +547,12 @@ describe("TaskEditor", () => {
   });
 
   describe("leaveRequest（票 19，spec §5.7）", () => {
-    it("值變大時走 leave()：草稿寫成功 → onLeave(false)", async () => {
+    it("值變大時走 leave()：草稿寫成功 → onLeave(false, viaRequest=true)", async () => {
       const onLeave = vi.fn();
       const { rerender } = render(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={0} t={t} />);
       fireEvent.change(screen.getByLabelText(en.list.editorBody), { target: { value: "typed" } });
       rerender(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={1} t={t} />);
-      await waitFor(() => expect(onLeave).toHaveBeenCalledWith(false));
+      await waitFor(() => expect(onLeave).toHaveBeenCalledWith(false, true));
       expect(loadDraft("/p", task().name)?.body).toBe("typed");
     });
 
@@ -577,7 +577,50 @@ describe("TaskEditor", () => {
         expect(onLeave).not.toHaveBeenCalled();
         expect(screen.getByDisplayValue("typed")).toBeTruthy();        // 字還在
         fireEvent.click(screen.getByText(en.list.leaveAnyway));
-        expect(onLeave).toHaveBeenCalledWith(false);
+        expect(onLeave).toHaveBeenCalledWith(false, true);
+      } finally { setItem.mockRestore(); }
+    });
+  });
+
+  // onLeave 的第二個參數說「這次離開是誰發起的」：父層靠它決定要不要套用被攔下的導覽。
+  // 編輯器自己的返回／取消／捨棄回 false——spec §5.7「離開 → pane 不變」；只有 leaveRequest
+  // 觸發的才回 true。少了這個區分，nav 觸發的 leave 寫草稿失敗後留下的 pendingNav 會被
+  // 之後使用者自己按的取消消耗掉，右欄無端跳到別張票（Codex R5 medium）
+  describe("leaveRequest 觸發的離開回呼 viaRequest=true；自己按取消回呼 viaRequest=false；request 失敗後按仍要離開仍是 true（Codex R5）", () => {
+    it("leaveRequest 觸發（沒改過、不 flush）→ onLeave(false, true)", async () => {
+      const onLeave = vi.fn();
+      const { rerender } = render(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={0} t={t} />);
+      rerender(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={1} t={t} />);
+      await waitFor(() => expect(onLeave).toHaveBeenCalledWith(false, true));
+    });
+
+    it("自己按取消／返回 → onLeave(false, false)；409 後捨棄我的版本 → onLeave(true, false)", async () => {
+      const { onLeave } = setup();
+      fireEvent.click(screen.getByText(en.list.cancel));
+      expect(onLeave).toHaveBeenNthCalledWith(1, false, false);
+      fireEvent.click(screen.getByText("p"));                            // 返回列上的專案名
+      expect(onLeave).toHaveBeenNthCalledWith(2, false, false);
+      updateTaskContent.mockRejectedValue(new TaskConflictError());
+      fireEvent.change(bodyBox(), { target: { value: "我的版本" } });
+      fireEvent.click(saveBtn());
+      await screen.findByText(en.list.conflictEditor);
+      fireEvent.click(screen.getByText(en.list.discardAndReload));
+      expect(onLeave).toHaveBeenNthCalledWith(3, true, false);
+    });
+
+    it("leaveRequest 觸發但草稿寫不進去 → 中間按複製（不是離開動作）→ 仍要離開 → 仍是 onLeave(false, true)", async () => {
+      const onLeave = vi.fn();
+      const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
+      try {
+        const { rerender } = render(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={0} t={t} />);
+        fireEvent.change(bodyBox(), { target: { value: "typed" } });
+        rerender(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={1} t={t} />);
+        await screen.findByText(en.list.leaveAnyway);
+        fireEvent.click(screen.getByText(en.list.copyMine));           // 複製不是離開動作，不得重設來源
+        await screen.findByText(en.list.copied);
+        fireEvent.click(screen.getByText(en.list.leaveAnyway));
+        expect(onLeave).toHaveBeenCalledTimes(1);
+        expect(onLeave).toHaveBeenCalledWith(false, true);
       } finally { setItem.mockRestore(); }
     });
   });
