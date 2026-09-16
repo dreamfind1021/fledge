@@ -77,6 +77,9 @@ describe("待辦面板的顏色對比", () => {
   const surface = token("surface");
   // 票 21 指令區塊的 <pre> 有自己的 --surface-2 底，比 --surface 再亮一階，同一個理由要另備一個底色
   const surface2 = token("surface-2");
+  // 專案樹（票 19）反白列的底是 --active，不是 --bg——同一個選擇器坐落在兩種底色上，
+  // 各自要驗一次（.tree-item 平常在 --bg，選到 .active 後底色換成 --active、文字色不變）
+  const active = token("active");
 
   // 記號是可操作的 UI 元件，非文字門檻 3:1（WCAG 1.4.11）
   it.each([
@@ -91,6 +94,8 @@ describe("待辦面板的顏色對比", () => {
     // 票 21 指令框尾的複製圖示（lucide svg 吃 currentColor）與已複製的勾，坐落在框的 --surface-2 上
     ["指令複製圖示", ".tasks-cmd-act", "color", surface2],
     ["指令已複製的勾", ".tasks-cmd-act.is-done", "color", surface2],
+    // 專案樹（票 19，spec §5.2）進行中橘點：非文字元件，門檻同記號 3:1
+    ["樹的進行中橘點", ".tree-n i", "background", bg],
   ])("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(3);
   });
@@ -129,6 +134,17 @@ describe("待辦面板的顏色對比", () => {
     // 票 21 貼進新對話的指令：標籤坐落在 .tasks-pane 的 --bg；<pre> 在框自己的 --surface-2 上
     ["指令區塊標籤", ".tasks-cmd-lab", "color", bg],
     ["指令內文", ".tasks-cmd-pre", "color", surface2],
+    // 專案樹（票 19，spec §5.2）：brief 的「新規則自動納入」是錯的，這幾條要補（task 5 review FIX）
+    ["樹頂端摘要文字", ".tree-head .s", "color", bg],
+    ["樹頂端摘要讀不到警告", ".tree-head .s .is-warn", "color", bg],
+    ["樹的數字", ".tree-n", "color", bg],
+    // review 點名的那一條：demo 用 --faint，brief 明確要求換成 --dim，這裡才守得住
+    ["樹的擱置 +N", ".tree-n .pk", "color", bg],
+    ["樹讀不到警告", ".tree-una", "color", bg],
+    ["樹未開待辦的淡化名稱", ".tree-item.is-dim .tree-name", "color", bg],
+    ["樹分組標籤", ".tree-grp", "color", bg],
+    ["樹列文字（一般底 --bg）", ".tree-item", "color", bg],
+    ["樹列文字（反白底 --active）", ".tree-item", "color", active],
   ])("%s 對背景至少 4.5:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(4.5);
   });
@@ -144,8 +160,8 @@ describe("待辦面板的顏色對比", () => {
 
   // opacity 禁令。上面那組是從 token 值算的，算不到 opacity 疊出來的實際顏色，
   // 所以「不准用 opacity」本身要是一條規則，否則上面那組會給出安心的假象。
-  it("狀態記號與已完成列不得用 opacity 淡化", () => {
-    const rules = [...tasksCss.matchAll(/^(\.tk-mark[^{]*|\.tk\.is-done[^{]*)\{([^}]*)\}/gm)];
+  it("狀態記號、已完成列與專案樹不得用 opacity 淡化", () => {
+    const rules = [...tasksCss.matchAll(/^(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*)\{([^}]*)\}/gm)];
     // regex 沒命中會讓迴圈跑零次而測試全綠——先確認真的有抓到規則
     expect(rules.length).toBeGreaterThanOrEqual(4);
     for (const [, selector, body] of rules) {
