@@ -11,13 +11,20 @@
     "empty": "尚無專案",
     "unavailable": "讀不到",
     "loading": "載入中…",
-    "loadError": "待辦讀取失敗"
+    "loadError": "待辦讀取失敗",
+    "doingAll": "進行中 · 所有專案",
+    "recent": "最近 {{days}} 天新增",
+    "noDoing": "沒有進行中的票",
+    "noRecent": "最近沒有新增的票"
   },
   "list": {
     "back": "所有專案",
-    "summary": "{{doing}} 進行中 · {{todo}} 待辦 · {{done}} 已完成",
+    "summary": "{{doing}} 進行中 · {{todo}} 待辦 · {{parked}} 擱置 · {{done}} 已完成",
     "doing": "進行中",
     "todo": "待辦",
+    "parked": "擱置",
+    "park": "擱置",
+    "unpark": "取回到待辦",
     "done": "已完成",
     "empty": "這個專案還沒有待辦",
     "unavailable": "這個專案的待辦資料夾讀不到",
@@ -65,7 +72,8 @@
   "status": {
     "todo": "待辦",
     "doing": "進行中",
-    "done": "已完成"
+    "done": "已完成",
+    "parked": "擱置"
   },
   "source": {
     "me": "我",
@@ -94,6 +102,26 @@
     "toolbarCode": "行內程式碼",
     "toolbarList": "清單",
     "toolbarQuote": "引用",
-    "toolbarCodeBlock": "程式碼區塊"
+    "toolbarCodeBlock": "程式碼區塊",
+    "showNote": "看離場筆記",
+    "hideNote": "收起離場筆記",
+    "expandDoing": "展開進行中",
+    "collapseDoing": "收起進行中",
+    "expandTodo": "展開待辦",
+    "collapseTodo": "收起待辦",
+    "expandParked": "展開擱置",
+    "collapseParked": "收起擱置",
+    "selectTicket": "在右邊顯示這張票",
+    "deselectTicket": "取消選取"
+  },
+  "tree": {
+    "allProjects": "所有專案"
+  },
+  "detail": {
+    "hint": "點左邊一張票，內文會顯示在這裡；編輯也在這一欄做，清單不會被蓋掉。",
+    "noteTitle": "離場筆記",
+    "noteUpdated": "更新 {{date}}",
+    "noteUnavailable": "讀不到離場筆記",
+    "loading": "載入中…"
   }
 }

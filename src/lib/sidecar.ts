@@ -1065,17 +1065,27 @@ export interface TasksProjectRow {
    * 讀不懂 status 的票 fallback 成 todo，**不計入這裡**——算進來等於宣稱有人在動它
    */
   doing: number | null;
+  /** 擱置的張數（票 19）。**不是** `unfinished` 的子集合、也不在裡面——獨立維度。
+   *  同一套三態規則：ok 實數、absent 0、unavailable null */
+  parked: number | null;
+  /** 進行中的票，編號升冪。列的形狀與 GET /tasks 完全相同（含 path）。ok 是陣列、absent 是 []、unavailable 是 null */
+  doing_tasks: TaskRow[] | null;
+  /** 最近 recent_days 天新增、未完成、不在 doing_tasks 裡的票；created 降冪、同日編號升冪。三態同上 */
+  recent_tasks: TaskRow[] | null;
   tasks_status: TasksStatus;
   /** 該專案 .fledge/state.md 前 20 行抽出的「下一步」；沒有就是空字串 */
   next_step: string;
 }
+
+/** 四種狀態（票 19 加 parked＝擱置；spec §3）。值域的唯一真相在 sidecar 的 VALID_STATUS，這裡只是型別鏡像 */
+export type TaskStatus = "todo" | "doing" | "done" | "parked";
 
 export interface TaskRow {
   name: string;
   /** 檔名前綴的編號（唯一真相源）。沒有數字前綴時為 null，該票會帶 number_missing */
   number: number | null;
   title: string;
-  status: "todo" | "doing" | "done";
+  status: TaskStatus;
   source: string;        // "me" | "ai"；判不出來為空字串
   created: string;       // YYYY-MM-DD；判不出來為空字串
   /** 異常代碼（英文），由前端 i18n 映射成畫面文字。有值不代表要隱藏這張票 */
@@ -1103,6 +1113,8 @@ export interface TasksListResponse {
 export interface TasksOverview {
   projects: TasksProjectRow[];
   permission_error: boolean;
+  /** 「最近 N 天新增」的 N，由 sidecar 決定，前端只插值 */
+  recent_days: number;
 }
 
 /**
@@ -1128,6 +1140,21 @@ export async function fetchTasksOverview(port: number): Promise<TasksOverview> {
   const resp = await fetch(`${base(port)}/tasks/overview`, { headers: authHeaders() });
   if (!resp.ok) throw new Error(`fetchTasksOverview failed: ${resp.status}`);
   return (await resp.json()) as TasksOverview;
+}
+
+export interface TasksNote {
+  /** ok＝讀到；absent＝沒有 .fledge 或 state.md；unavailable＝resolver 拒絕或讀取失敗（spec §4.4） */
+  status: TasksStatus;
+  content: string | null;   // 前 64KB
+  mtime: string | null;     // YYYY-MM-DD
+  path: string | null;      // 只在 ok 時有值，給「用編輯器打開」
+}
+
+/** 離場筆記全文（票 19）。點「下一步」才打，不快取。 */
+export async function fetchTasksNote(port: number, project: string): Promise<TasksNote> {
+  const resp = await fetch(`${base(port)}/tasks/note?project=${encodeURIComponent(project)}`, { headers: authHeaders() });
+  if (!resp.ok) throw new Error(`fetchTasksNote failed: ${resp.status}`);
+  return (await resp.json()) as TasksNote;
 }
 
 /** 第二層：單一專案的票列表（含異常標記與 fingerprint）。 */

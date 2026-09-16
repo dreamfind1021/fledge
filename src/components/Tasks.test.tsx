@@ -35,6 +35,7 @@ vi.mock("../lib/clipboard", () => ({ writeClipboard: (t: string) => writeClipboa
 
 const proj = (over: Partial<TasksOverview["projects"][number]> = {}) => ({
   path: "/p/a", name: "a", account: "work", unfinished: 1, doing: 0,
+  parked: 0, doing_tasks: [], recent_tasks: [],
   tasks_status: "ok" as const, next_step: "", ...over,
 });
 // 狀態按鈕的可及名稱是組出來的：「現在是什麼，點下去變什麼」
@@ -51,7 +52,7 @@ describe("Tasks 面板", () => {
     await i18n.changeLanguage("en");
     vi.clearAllMocks();
     localStorage.clear();   // 草稿住在 localStorage，測試之間不清會互相污染
-    fetchTasksOverview.mockResolvedValue({ projects: [proj()], permission_error: false });
+    fetchTasksOverview.mockResolvedValue({ projects: [proj()], permission_error: false, recent_days: 7 });
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "", handoff_command: "" });
     createTask.mockResolvedValue(ticket({ name: "02-b.md", number: 2, title: "新的" }));
     updateTask.mockResolvedValue(ticket({ status: "doing", fingerprint: "f2" }));
@@ -70,7 +71,7 @@ describe("Tasks 面板", () => {
     const n = () => container.querySelector(".tov-row .tov-n")?.textContent;
     await waitFor(() => expect(n()).toBe("1"));
 
-    fetchTasksOverview.mockResolvedValue({ projects: [proj({ unfinished: 3 })], permission_error: false });
+    fetchTasksOverview.mockResolvedValue({ projects: [proj({ unfinished: 3 })], permission_error: false, recent_days: 7 });
     fireEvent(window, new Event("focus"));
 
     await waitFor(() => expect(n()).toBe("3"));
@@ -87,7 +88,7 @@ describe("Tasks 面板", () => {
   // design §6.3：把「讀不到」顯示成「沒有」，正是這個功能存在的理由的反面
   it("總覽收到 unavailable 時畫成讀不到，不是 0", async () => {
     fetchTasksOverview.mockResolvedValue({
-      projects: [proj({ unfinished: null, tasks_status: "unavailable" })], permission_error: false,
+      projects: [proj({ unfinished: null, tasks_status: "unavailable" })], permission_error: false, recent_days: 7,
     });
     render(<Tasks port={1234} isActive />);
     await waitFor(() => expect(screen.getByText(en.overview.unavailable)).toBeTruthy());
@@ -103,7 +104,7 @@ describe("Tasks 面板", () => {
         proj({ path: "/p/c", name: "沒用過", unfinished: 0, tasks_status: "absent" }),
         proj({ path: "/p/d", name: "壞掉的", unfinished: null, tasks_status: "unavailable" }),
       ],
-      permission_error: false,
+      permission_error: false, recent_days: 7,
     });
     const { container } = render(<Tasks port={1234} isActive />);
     await waitFor(() => expect(screen.getByText("有票")).toBeTruthy());
@@ -125,7 +126,7 @@ describe("Tasks 面板", () => {
                next_step: "先把環境裝起來" }),
         proj({ path: "/p/f", name: "什麼都沒有", unfinished: 0, tasks_status: "absent" }),
       ],
-      permission_error: false,
+      permission_error: false, recent_days: 7,
     });
     const { container } = render(<Tasks port={1234} isActive />);
     await waitFor(() => expect(screen.getByText("先把環境裝起來")).toBeTruthy());
@@ -142,7 +143,7 @@ describe("Tasks 面板", () => {
         proj({ path: "/p/a", name: "正常", unfinished: 2, tasks_status: "ok" }),
         proj({ path: "/p/x", name: "未來狀態", unfinished: null, tasks_status: "brand-new" as never }),
       ],
-      permission_error: false,
+      permission_error: false, recent_days: 7,
     });
     const { container } = render(<Tasks port={1234} isActive />);
     await waitFor(() => expect(screen.getByText("未來狀態")).toBeTruthy());
@@ -157,7 +158,7 @@ describe("Tasks 面板", () => {
   it("ok 但 unfinished 不是非負整數時當成警告，不畫成 0", async () => {
     fetchTasksOverview.mockResolvedValue({
       projects: [proj({ path: "/p/y", name: "壞數字", unfinished: null, tasks_status: "ok" })],
-      permission_error: false,
+      permission_error: false, recent_days: 7,
     });
     const { container } = render(<Tasks port={1234} isActive />);
     await waitFor(() => expect(screen.getByText("壞數字")).toBeTruthy());
@@ -168,7 +169,7 @@ describe("Tasks 面板", () => {
   it("下一步是空字串時顯示提示，不是留白", async () => {
     fetchTasksOverview.mockResolvedValue({
       projects: [proj({ path: "/p/g", name: "沒設下一步", unfinished: 1, tasks_status: "ok", next_step: "" })],
-      permission_error: false,
+      permission_error: false, recent_days: 7,
     });
     const { container } = render(<Tasks port={1234} isActive />);
     await waitFor(() => expect(screen.getByText("沒設下一步")).toBeTruthy());
@@ -181,7 +182,7 @@ describe("Tasks 面板", () => {
   it("進行中的張數畫成上色刻度，其餘維持一般刻度", async () => {
     fetchTasksOverview.mockResolvedValue({
       projects: [proj({ path: "/p/a", name: "有進行中", unfinished: 5, doing: 2 })],
-      permission_error: false,
+      permission_error: false, recent_days: 7,
     });
     const { container } = render(<Tasks port={1234} isActive />);
     await waitFor(() => expect(screen.getByText("有進行中")).toBeTruthy());
@@ -202,7 +203,7 @@ describe("Tasks 面板", () => {
   ])("doing 是 %s 時不上色，刻度總數不受影響", async (_label, doing) => {
     fetchTasksOverview.mockResolvedValue({
       projects: [proj({ path: "/p/a", name: "壞的 doing", unfinished: 3, doing: doing as number })],
-      permission_error: false,
+      permission_error: false, recent_days: 7,
     });
     const { container } = render(<Tasks port={1234} isActive />);
     await waitFor(() => expect(screen.getByText("壞的 doing")).toBeTruthy());
@@ -213,7 +214,7 @@ describe("Tasks 面板", () => {
   it("點 chip 只進入該專案，不建立任何東西", async () => {
     fetchTasksOverview.mockResolvedValue({
       projects: [proj({ path: "/p/c", name: "沒用過", unfinished: 0, tasks_status: "absent" })],
-      permission_error: false,
+      permission_error: false, recent_days: 7,
     });
     fetchTasks.mockResolvedValue({ project: "/p/c", tasks_status: "absent", tasks: [], next_step: "", handoff_command: "" });
     const { container } = render(<Tasks port={1234} isActive />);
@@ -699,7 +700,7 @@ describe("Tasks 面板", () => {
   it("切專案後展開狀態重置，不會讓另一個專案撞名的票無端展開", async () => {
     fetchTasksOverview.mockResolvedValue({
       projects: [proj({ path: "/p/a", name: "a" }), proj({ path: "/p/b", name: "b" })],
-      permission_error: false,
+      permission_error: false, recent_days: 7,
     });
     fetchTasks.mockImplementation((_port: number, project: string) =>
       Promise.resolve({ project, tasks_status: "ok" as const, next_step: "", handoff_command: "", tasks: [ticket({ name: "01-a.md" })] }));
@@ -762,7 +763,7 @@ describe("Tasks 面板", () => {
   // unavailable 要同一套待遇：現在讀不到，草稿留著，不做任何清除（whole-branch review M3）
   it("tasks_status absent 時草稿不被當成孤兒，不出現一鍵不可逆的丟棄鍵", async () => {
     fetchTasksOverview.mockResolvedValue({
-      projects: [proj({ tasks_status: "absent", unfinished: 0 })], permission_error: false,
+      projects: [proj({ tasks_status: "absent", unfinished: 0 })], permission_error: false, recent_days: 7,
     });
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "absent", tasks: [], next_step: "", handoff_command: "" });
     saveDraft("/p/a", "01-a.md", { title: "還沒送出的草稿", body: "b", fingerprint: "f" });

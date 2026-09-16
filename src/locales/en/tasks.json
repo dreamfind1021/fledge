@@ -11,13 +11,20 @@
     "empty": "No projects yet",
     "unavailable": "Unreadable",
     "loading": "Loading…",
-    "loadError": "Failed to load tasks"
+    "loadError": "Failed to load tasks",
+    "doingAll": "In progress · all projects",
+    "recent": "Added in the last {{days}} days",
+    "noDoing": "Nothing in progress",
+    "noRecent": "Nothing added recently"
   },
   "list": {
     "back": "All projects",
-    "summary": "{{doing}} in progress · {{todo}} to do · {{done}} done",
+    "summary": "{{doing}} in progress · {{todo}} to do · {{parked}} parked · {{done}} done",
     "doing": "In progress",
     "todo": "To do",
+    "parked": "Parked",
+    "park": "Park",
+    "unpark": "Back to to-do",
     "done": "Done",
     "empty": "No tasks in this project yet",
     "unavailable": "This project's tasks folder cannot be read",
@@ -65,7 +72,8 @@
   "status": {
     "todo": "To do",
     "doing": "In progress",
-    "done": "Done"
+    "done": "Done",
+    "parked": "Parked"
   },
   "source": {
     "me": "me",
@@ -94,6 +102,26 @@
     "toolbarCode": "Inline code",
     "toolbarList": "List",
     "toolbarQuote": "Quote",
-    "toolbarCodeBlock": "Code block"
+    "toolbarCodeBlock": "Code block",
+    "showNote": "Show session note",
+    "hideNote": "Hide session note",
+    "expandDoing": "Expand in progress",
+    "collapseDoing": "Collapse in progress",
+    "expandTodo": "Expand to do",
+    "collapseTodo": "Collapse to do",
+    "expandParked": "Expand parked",
+    "collapseParked": "Collapse parked",
+    "selectTicket": "Show this task on the right",
+    "deselectTicket": "Deselect"
+  },
+  "tree": {
+    "allProjects": "All projects"
+  },
+  "detail": {
+    "hint": "Pick a task on the left to read it here. Editing happens here too—the list stays put.",
+    "noteTitle": "Session note",
+    "noteUpdated": "Updated {{date}}",
+    "noteUnavailable": "Can't read the session note",
+    "loading": "Loading…"
   }
 }

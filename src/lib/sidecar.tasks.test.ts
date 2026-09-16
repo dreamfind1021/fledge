@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TaskConflictError, updateTaskContent } from "./sidecar";
+import { TaskConflictError, fetchTasksNote, updateTaskContent } from "./sidecar";
 
 const stub = (status: number, json: () => Promise<unknown>) =>
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: status < 400, status, json }));
@@ -39,5 +39,23 @@ describe("updateTaskContent 的成功定義（spec §7.3）", () => {
     const controller = new AbortController();
     await updateTaskContent(1, "/p", "a.md", "t", "b", "f0", controller.signal);
     expect(vi.mocked(fetch).mock.calls[0][1]?.signal).toBe(controller.signal);
+  });
+});
+
+describe("fetchTasksNote（票 19，spec §4.4）", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("打 /tasks/note?project=，帶 auth header，回 JSON 原樣", async () => {
+    const body = { status: "ok", content: "# p", mtime: "2026-09-16", path: "/p/.fledge/state.md" };
+    stub(200, () => Promise.resolve(body));
+    const r = await fetchTasksNote(1, "/p x");
+    expect(r).toEqual(body);
+    const [url, opts] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toBe("http://127.0.0.1:1/tasks/note?project=%2Fp%20x");
+    expect(opts?.headers).toBeDefined();   // authHeaders()：漏了 dev 看似正常、打包版整個死掉
+  });
+  it("非 2xx → 拋", async () => {
+    stub(400, () => Promise.resolve({ error: "unknown_project" }));
+    await expect(fetchTasksNote(1, "/p")).rejects.toThrow("400");
   });
 });
