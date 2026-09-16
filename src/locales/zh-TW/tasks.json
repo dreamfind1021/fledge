@@ -120,6 +120,8 @@
     "noteTitle": "離場筆記",
     "noteUpdated": "更新 {{date}}",
     "noteUnavailable": "讀不到離場筆記",
-    "loading": "載入中…"
+    "loading": "載入中…",
+    "source": "來源 {{who}}",
+    "created": "建立 {{date}}"
   }
 }

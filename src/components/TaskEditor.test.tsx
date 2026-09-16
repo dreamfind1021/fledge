@@ -545,4 +545,40 @@ describe("TaskEditor", () => {
     expect(screen.queryByText(en.list.copied)).toBeNull();
     expect(screen.getByText(en.list.conflictEditor)).toBeTruthy();   // notice 沒被覆蓋
   });
+
+  describe("leaveRequest（票 19，spec §5.7）", () => {
+    it("值變大時走 leave()：草稿寫成功 → onLeave(false)", async () => {
+      const onLeave = vi.fn();
+      const { rerender } = render(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={0} t={t} />);
+      fireEvent.change(screen.getByLabelText(en.list.editorBody), { target: { value: "typed" } });
+      rerender(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={1} t={t} />);
+      await waitFor(() => expect(onLeave).toHaveBeenCalledWith(false));
+      expect(loadDraft("/p", task().name)?.body).toBe("typed");
+    });
+
+    it("掛載時 leaveRequest 已經非零 → 不重播、不離開", async () => {
+      const onLeave = vi.fn();
+      render(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={3} t={t} />);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(onLeave).not.toHaveBeenCalled();
+      expect(screen.getByLabelText(en.list.editorBody)).toBeTruthy();
+    });
+
+    it("草稿寫不進去 → 不呼叫 onLeave，顯示複製與仍要離開；按仍要離開才走", async () => {
+      const onLeave = vi.fn();
+      // spy 在 localStorage 這個物件本身，不是 Storage.prototype——這個 repo 的 vitest.setup.ts
+      // 換上的殼是純物件，setItem 是自身屬性，prototype 攔不到（見 lib/taskDraft.test.ts 的同一個註記）
+      const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
+      try {
+        const { rerender } = render(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={0} t={t} />);
+        fireEvent.change(screen.getByLabelText(en.list.editorBody), { target: { value: "typed" } });
+        rerender(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={1} t={t} />);
+        await screen.findByText(en.list.leaveAnyway);
+        expect(onLeave).not.toHaveBeenCalled();
+        expect(screen.getByDisplayValue("typed")).toBeTruthy();        // 字還在
+        fireEvent.click(screen.getByText(en.list.leaveAnyway));
+        expect(onLeave).toHaveBeenCalledWith(false);
+      } finally { setItem.mockRestore(); }
+    });
+  });
 });

@@ -103,6 +103,10 @@ describe("待辦面板的顏色對比", () => {
     ["停用的狀態記號", ".tk-mark:disabled", "color", bg],
     ["停用的動作鍵", ".tk-act:disabled", "color", bg],
     ["下一步的 › 記號", ".tasks-next-more", "color", bg],
+    // 右欄（票 19，spec §5.5）：動作鍵是圖示，非文字 3:1。
+    // .d-body 的邊框用 --border（rgba 半透明疊色，不是實色 hex）——token() 只認 #RRGGBB，
+    // 這條規則量不出來，略過（brief §Step 7 CSS 是條件式「if the helper supports border」）
+    ["右欄動作鍵", ".d-acts .tk-act", "color", bg],
   ])("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(3);
   });
@@ -149,6 +153,17 @@ describe("待辦面板的顏色對比", () => {
     ["樹分組標籤", ".tree-grp", "color", bg],
     ["樹列文字（一般底 --bg）", ".tree-item", "color", bg],
     ["樹列文字（反白底 --active）", ".tree-item", "color", active],
+    // 右欄（票 19，spec §5.5）：.tk-empty／.tk-noedit 坐落在 .d-body 的 --surface 上，
+    // 不是 --bg（task 7 拿掉時的白名單死條目留在別處，這裡是它們在右欄的落點）
+    [".tk-empty 無內文提示", ".tk-empty", "color", surface],
+    [".tk-noedit 不可編輯說明", ".tk-noedit", "color", surface],
+    ["右欄提示（空狀態）", ".d-hint", "color", bg],
+    ["右欄麵包屑", ".d-crumb", "color", bg],
+    ["右欄資訊列", ".d-meta", "color", bg],
+    // 選中的票列反白底是 --active（見 .tk-row.active）：已完成／擱置的標題淡化在那個底上
+    // 同樣要過 4.5:1——沒有測試釘住的話，反白列上淡化過頭的標題會被漏掉（task 7 review 遺留）
+    ["已完成的標題（反白底 --active）", ".tk.is-done .tk-title", "color", active],
+    ["擱置的標題（反白底 --active）", ".tk.is-parked .tk-title", "color", active],
   ])("%s 對背景至少 4.5:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(4.5);
   });
@@ -167,8 +182,8 @@ describe("待辦面板的顏色對比", () => {
   // 停用態也在禁令裡：index.contrast.test.ts 的全域白名單豁免 :disabled（WCAG 1.4.3），這裡不豁免——
   // 編輯中清單唯讀是靠換 token 淡化的，一用 opacity 上面那組就驗不到實際顏色。
   // `.tk-act(?!s)` 排除 .tk-acts：那是滑過才顯形的容器，0↔1 是顯示／隱藏不是淡化，刻意用 opacity
-  it("狀態記號、已完成列、專案樹、跨專案票列、動作鍵、一行輸入與下一步不得用 opacity 淡化", () => {
-    const rules = [...tasksCss.matchAll(/^(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*|\.tk-xrow[^{]*|\.tk-proj[^{]*|\.tk-act(?!s)[^{]*|\.tasks-new-input[^{]*|\.tasks-next[^{]*)\{([^}]*)\}/gm)];
+  it("狀態記號、已完成列、專案樹、跨專案票列、動作鍵、一行輸入、下一步與右欄不得用 opacity 淡化", () => {
+    const rules = [...tasksCss.matchAll(/^(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*|\.tk-xrow[^{]*|\.tk-proj[^{]*|\.tk-act(?!s)[^{]*|\.tasks-new-input[^{]*|\.tasks-next[^{]*|\.d-[^{]*|\.lb-detail[^{]*)\{([^}]*)\}/gm)];
     // regex 沒命中會讓迴圈跑零次而測試全綠——先確認真的有抓到規則
     expect(rules.length).toBeGreaterThanOrEqual(4);
     for (const [, selector, body] of rules) {

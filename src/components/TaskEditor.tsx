@@ -70,9 +70,9 @@ function applyTool(ta: HTMLTextAreaElement, tool: Tool): { value: string; caret?
   return { value: v };
 }
 
-export function TaskEditor({ port, project, projectName, task, onSaved, onLeave, t }: {
+export function TaskEditor({ port, project, projectName, task, onSaved, onLeave, leaveRequest, t }: {
   port: number; project: string; projectName: string; task: TaskRow;
-  onSaved: (updated: TaskRow) => void; onLeave: (reload: boolean) => void; t: T;
+  onSaved: (updated: TaskRow) => void; onLeave: (reload: boolean) => void; leaveRequest?: number; t: T;
 }) {
   const [title, setTitle] = useState(task.title);
   const [body, setBody] = useState(task.body);
@@ -165,6 +165,20 @@ export function TaskEditor({ port, project, projectName, task, onSaved, onLeave,
     }
     forceLeave();
   };
+
+  // 父層的導覽（點別張票、換專案、回所有專案）在編輯中一律先問這裡（spec §5.7）：
+  // 走同一條 leave()——草稿寫成功才 onLeave，寫不進去就留在原畫面給「複製／仍要離開」。
+  // 用 ref 拿最新的 leave：effect 只認 leaveRequest 的變化，closure 裡的 leave 會過期。
+  const leaveRef = useRef(leave);
+  leaveRef.current = leave;
+  // 只處理「掛載之後」的增量：父層的計數只增不減，若掛載時就把非零值當請求，
+  // 上一次編輯中導覽留下的值會讓下一個編輯器一掛上就立刻離開（Codex plan R1 high）
+  const seenLeave = useRef(leaveRequest ?? 0);
+  useEffect(() => {
+    if (leaveRequest == null || leaveRequest === seenLeave.current) return;
+    seenLeave.current = leaveRequest;
+    leaveRef.current();
+  }, [leaveRequest]);
 
   // §7.3 的固定順序：正規化 → 取消 pending → flush → 進 isSaving → PUT。
   // flush 失敗「不進 isSaving、不鎖、不發 PUT」是硬性前置條件，沒有強制路徑——

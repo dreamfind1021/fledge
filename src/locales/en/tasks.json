@@ -120,6 +120,8 @@
     "noteTitle": "Session note",
     "noteUpdated": "Updated {{date}}",
     "noteUnavailable": "Can't read the session note",
-    "loading": "Loading…"
+    "loading": "Loading…",
+    "source": "Source {{who}}",
+    "created": "Created {{date}}"
   }
 }
