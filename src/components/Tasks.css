@@ -127,6 +127,10 @@
 /* 跨專案的票列（所有專案頁）：整列是按鈕、記號純顯示、帶專案標籤 */
 .tk-xrow { width: 100%; border: none; background: transparent; font-family: var(--font-ui); text-align: left; color: var(--text); }
 .tk-proj { flex-shrink: 0; font-size: 11px; color: var(--dim); background: var(--surface-2); border-radius: 4px; padding: 1px 7px; }
+/* 所有專案頁的記號純顯示，不是按鈕；hover 不得暗示可點（同 .tk-mark／.tk-mark.is-todo::before 的基準色，等於沒變化） */
+.tk-xrow .tk-mark { cursor: default; }
+.tk-xrow .tk-mark:hover { background: transparent; color: var(--faint); }
+.tk-xrow .tk-mark.is-todo:hover::before { border-color: var(--faint); }
 
 .tk-flag { flex-shrink: 0; display: inline-flex; align-items: center; padding: 2px; background: transparent; border: none; color: var(--warning); cursor: pointer; border-radius: 4px; }
 .tk-flag:hover { background: color-mix(in srgb, var(--warning) 16%, transparent); }

@@ -1,7 +1,8 @@
 import { Check } from "lucide-react";
 import type { ReactNode } from "react";
 import type { TaskRow, TasksOverview as TasksOverviewData, TasksProjectRow } from "../lib/sidecar";
-import { okCount } from "./TasksTree";
+import { monthDay } from "./TasksList";
+import { summarize } from "./TasksTree";
 
 type T = (k: string, o?: Record<string, unknown>) => string;
 
@@ -21,9 +22,6 @@ export function collectHighlights(projects: TasksProjectRow[]): { doing: XTicket
   recent.sort((a, b) => (a.task.created < b.task.created ? 1 : a.task.created > b.task.created ? -1 : 0));
   return { doing, recent };
 }
-
-// created 是 YYYY-MM-DD；只顯示月-日，認不得就不畫（同 TasksList 的規則）
-const monthDay = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(5) : "");
 
 // 跨專案的一列：記號是純顯示（不是按鈕）、沒有動作鍵——動作在專案頁做（spec §2.2）
 function XRow({ x, onSelect, t }: { x: XTicket; onSelect: (path: string, name: string) => void; t: T }) {
@@ -69,8 +67,7 @@ export function TasksOverview({ data, failed, onSelect, t }: {
   if (data.projects.length === 0) return <>{head()}<div className="tasks-note">{t("overview.empty")}</div></>;
 
   // 讀不到的專案不併進總數也不當成 0（design §6.3）：單獨報「N 個讀不到」
-  const total = data.projects.reduce((s, p) => s + (okCount(p) ?? 0), 0);
-  const unreadable = data.projects.filter((p) => okCount(p) === null && p.tasks_status !== "absent").length;
+  const { total, unreadable } = summarize(data.projects);
   const { doing, recent } = collectHighlights(data.projects);
 
   return (

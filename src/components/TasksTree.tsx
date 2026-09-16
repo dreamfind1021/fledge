@@ -10,6 +10,12 @@ export const okCount = (p: TasksProjectRow) =>
     ? (p.unfinished as number)
     : null;
 
+// 樹與所有專案頁的頁首同一個數字，一份
+export const summarize = (projects: TasksProjectRow[]) => ({
+  total: projects.reduce((s, p) => s + (okCount(p) ?? 0), 0),
+  unreadable: projects.filter((p) => okCount(p) === null && p.tasks_status !== "absent").length,
+});
+
 // 「這個專案在總覽上有沒有話要說」。absent 但帶著 state.md 的下一步時仍然展開——
 // scanner.py 刻意讓 absent 也抽得到 next_step，只看 tasks_status 會把那句話丟掉。
 // 反面不成立：next_step 為空不代表這個專案沒動靜。
@@ -30,8 +36,7 @@ export function TasksTree({ data, selected, onSelect, t, asPage = false }: {
   const projects = data?.projects ?? [];
   const rows = projects.filter(speaks);
   const chips = projects.filter((p) => !speaks(p));
-  const total = projects.reduce((s, p) => s + (okCount(p) ?? 0), 0);
-  const unreadable = projects.filter((p) => okCount(p) === null && p.tasks_status !== "absent").length;
+  const { total, unreadable } = summarize(projects);
 
   const item = (p: TasksProjectRow, dim: boolean) => {
     const n = okCount(p);

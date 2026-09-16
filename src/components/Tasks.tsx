@@ -99,15 +99,20 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   // 編輯鍵帶票：右欄沒選票、或正在看 A 卻按 B 的編輯，都要先把 pane 指到那張票（Codex plan R1 high）。
   // 編輯中所有編輯鍵都 disabled，所以這裡不會撞到「編輯中再編輯」
   const edit = useCallback((task: TaskRow) => { setPane({ kind: "ticket", name: task.name }); setEditing(true); bump(); }, [bump]);
-  // 編輯結束（儲存／離開／切走）都 bump 一次重讀（D12）。onSaved 的就地更新帶專案歸屬（Codex R2）
-  const saved = useCallback((updated: TaskRow, origin: string) => {
+  // 用回傳的票取代清單裡對應那筆（含新 fingerprint／新內容）。只在清單仍是發出請求時那個
+  // 專案時才就地更新：回應晚到、使用者已切到 B，B 的同名票不能被 A 的回應蓋掉（Codex R2）。
+  const replaceTask = useCallback((origin: string, updated: TaskRow) => {
     setList((cur) => (cur && cur.project === origin && cur.tasks
       ? { ...cur, tasks: cur.tasks.map((x) => (x.name === updated.name ? updated : x)) }
       : cur));
+  }, []);
+  // 編輯結束（儲存／離開／切走）都 bump 一次重讀（D12）。onSaved 的就地更新帶專案歸屬（Codex R2）
+  const saved = useCallback((updated: TaskRow, origin: string) => {
+    replaceTask(origin, updated);
     pendingNav.current = null;       // 使用者選擇留下並儲存，之前被攔的導覽作廢
     setEditing(false);
     bump();
-  }, [bump]);
+  }, [bump, replaceTask]);
   // reload=true 只有 TaskEditor 的「捨棄我的版本」會傳（plan R2 F4）：把清單打成 loading
   // (setList(null)) 再重讀——不這樣做的話舊清單還在畫面上，使用者可以立刻再點編輯、
   // 帶著舊 fingerprint 再送一次，保證又是一次 409。
@@ -141,17 +146,10 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     updateTask(port, origin, task.name, next, task.fingerprint)
       // 用回傳的票取代本地狀態（含新 fingerprint）。少了這步，改一次之後本地的 fingerprint
       // 就過期了，下一次改狀態或刪除會被錯誤地判成 409（design §7.2）。
-      // 只在清單仍是發出請求時那個專案時才就地更新：回應晚到、使用者已切到 B，
-      // B 的同名票不能被 A 的回應蓋掉（Codex R2）。
-      .then((updated) => {
-        setList((cur) => (cur && cur.project === origin && cur.tasks
-          ? { ...cur, tasks: cur.tasks.map((x) => (x.name === updated.name ? updated : x)) }
-          : cur));
-        bump();
-      })
+      .then((updated) => { replaceTask(origin, updated); bump(); })
       .catch(onActionError)
       .finally(() => inFlight.current.delete(key));
-  }, [port, selected, editing, onActionError, bump]);
+  }, [port, selected, editing, onActionError, bump, replaceTask]);
   const cycle = useCallback((task: TaskRow) => setStatus(task, NEXT_STATUS[task.status]), [setStatus]);
   // 擱置／取回：parked→todo、其餘→parked（spec §5.6）
   const park = useCallback((task: TaskRow) => setStatus(task, task.status === "parked" ? "todo" : "parked"), [setStatus]);

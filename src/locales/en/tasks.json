@@ -3,7 +3,6 @@
   "entry": "Tasks",
   "overview": {
     "nextStep": "Next step",
-    "noNextStep": "No next step set",
     "groupInUse": "In use",
     "notUsing": "Not using tasks yet",
     "summary": "{{n}} unfinished",
@@ -101,8 +100,8 @@
     "toolbarList": "List",
     "toolbarQuote": "Quote",
     "toolbarCodeBlock": "Code block",
-    "showNote": "Show session note",
-    "hideNote": "Hide session note",
+    "showNote": "Show resume note",
+    "hideNote": "Hide resume note",
     "expandDoing": "Expand in progress",
     "collapseDoing": "Collapse in progress",
     "expandTodo": "Expand to do",
@@ -117,9 +116,9 @@
   },
   "detail": {
     "hint": "Pick a task on the left to read it here. Editing happens here too—the list stays put.",
-    "noteTitle": "Session note",
+    "noteTitle": "Resume note",
     "noteUpdated": "Updated {{date}}",
-    "noteUnavailable": "Can't read the session note",
+    "noteUnavailable": "Can't read the resume note",
     "loading": "Loading…",
     "source": "Source {{who}}",
     "created": "Created {{date}}"

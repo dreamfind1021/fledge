@@ -13,7 +13,8 @@ export const NEXT_STATUS: Record<TaskStatus, TaskStatus> = { todo: "doing", doin
 
 // created 是 YYYY-MM-DD，判不出來時 sidecar 回空字串。只顯示月-日：backlog 幾乎都是當年的，
 // 年份佔四個字寬卻幾乎不帶資訊。認不得的格式一律不畫，不做猜測性的切字。
-const monthDay = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(5) : "");
+// 匯出給 TasksOverview.tsx 用，同一條規則兩處都要（同 okCount 從 TasksTree.tsx 匯出的理由）
+export const monthDay = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(5) : "");
 
 function Ticket({ task, active, readOnly, onSelect, onCycle, onPark, onDelete, onOpen, onEdit, t }: {
   task: TaskRow; active: boolean; readOnly: boolean;

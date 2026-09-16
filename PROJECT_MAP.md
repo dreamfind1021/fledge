@@ -311,11 +311,11 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `src/lib/memoryView.ts`（VM/facet/selection 邏輯變更） | `Memory.tsx`、`MemoryIndex`/`MemoryGroup`、`memoryView.test.ts` |
 | `src/locales/*/memory.json`（key 增刪） | 另一語言 catalog 同步（`memory-parity.test.ts` 會擋）、`Memory.tsx`+記憶元件群/`RelatedFloat.tsx`/`Sidebar.tsx`/`TabBar.tsx`/`Settings.tsx` 的 t() 引用 |
 | `sidecar/.../tasks/parser.py`（欄位或異常代碼變更） | `tasks/scanner.py`（`_row` 的 API 形狀）、`src/lib/sidecar.ts` 的 `TaskRow`、`src/locales/*/tasks.json` 的 `anomaly.*`、`TasksList.tsx` |
-| `sidecar/.../tasks/scanner.py`（resolver 或 payload 變更） | `routes/tasks.py`（六端點共用它）、`src/lib/sidecar.ts` 型別、`Tasks.tsx`／`TasksOverview.tsx`／`TasksList.tsx` |
+| `sidecar/.../tasks/scanner.py`（resolver 或 payload 變更） | `routes/tasks.py`（七端點共用它）、`src/lib/sidecar.ts` 型別、`Tasks.tsx` 及四個子元件 |
 | `src/lib/markdownLite.ts`（語法或安全性變更） | `TasksList.tsx`（展開列的內文預覽）、`TaskEditor.tsx`（編輯器預覽） |
 | `sidecar/.../routes/projects.py` 的 `POST /api/open` | 「用系統預設程式打開檔案」的**唯一入口**（票 01）。邊界與檔案樹**共用** `is_within_any_root`（roots ∪ manual）——規則寫兩份必然漂移。順序固定 expand → realpath → containment，**resolve 一定要在 containment 之前**，否則 root 裡的一條 symlink 就能指到外面而檢查照樣過。只開一般檔案（目錄／fifo／device 一律拒），`open` 用 list 形式且路徑前加 `--`（以 `-` 開頭的檔名否則會被當旗標）。exec 抽成 `_run_open` 是為了讓測試斷言「擋掉的路徑真的沒有 exec」——只驗 HTTP 403 證明不了那件事 | `openFile` |
-| `sidecar/.../routes/tasks.py`（endpoint/payload 變更） | `src/lib/sidecar.ts` 的 tasks fetchers、`Tasks.tsx` 及三個子元件、`test_tasks_routes.py`、`TaskDetail.tsx`、`TasksTree.tsx` |
-| `src/locales/*/tasks.json`（key 增刪） | 另一語言 catalog 同步（`tasks-parity.test.ts` 會擋，但**擋不住語意分岔**，同一 commit 內要人工讀過兩語）、`Tasks.tsx` 及三個子元件 |
+| `sidecar/.../routes/tasks.py`（endpoint/payload 變更） | `src/lib/sidecar.ts` 的 tasks fetchers、`Tasks.tsx` 及四個子元件、`test_tasks_routes.py`、`TaskDetail.tsx`、`TasksTree.tsx` |
+| `src/locales/*/tasks.json`（key 增刪） | 另一語言 catalog 同步（`tasks-parity.test.ts` 會擋，但**擋不住語意分岔**，同一 commit 內要人工讀過兩語）、`Tasks.tsx` 及四個子元件 |
 | `src/store/useAppStore.ts` 的 `kind` union（新增面板種類） | `Workspace.tsx`／`TabBar.tsx` 的分派、`Sidebar.tsx` **兩套按鈕區**（收合 rail ＋ 展開）、`src/i18n.ts` 的 catalog 註冊、`app.py` 的 `include_router`——這四處都是「在既有檔案裡加一行」，最容易漏 |
 | `skills/fledge-tasks/SKILL.md`（票檔格式敘述變更） | `sidecar/.../tasks/parser.py`（同一份格式合約的另一端）、`docs/planning/tasks-panel-design.md` §2.2、`docs/planning/tasks-panel-layout-v3-design.md` §3 |
 | `sidecar/.../dir_tree.py`（列目錄邏輯變更） | `routes/projects.py`、`test_dir_tree.py` |

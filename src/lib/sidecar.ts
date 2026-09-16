@@ -1056,7 +1056,7 @@ export interface TasksProjectRow {
    * 未完成條數。`ok` 是實際條數、`absent` 是 0（沒有 tasks/ 資料夾）、
    * `unavailable` 才是 null——「讀不到」不可畫成 0（design §6.3）。
    * **不要拿這個欄位反推狀態**：`absent` 與「有資料夾但 0 條」在這裡是同一個 0，
-   * 分得開的是 `tasks_status`（見 `TasksOverview.tsx` 的 `okCount`）
+   * 分得開的是 `tasks_status`（見 `TasksTree.tsx` 的 `okCount`）
    */
   unfinished: number | null;
   /**

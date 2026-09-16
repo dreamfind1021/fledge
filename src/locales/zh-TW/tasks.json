@@ -3,7 +3,6 @@
   "entry": "待辦",
   "overview": {
     "nextStep": "下一步",
-    "noNextStep": "下一步未設定",
     "groupInUse": "使用中",
     "notUsing": "未開待辦",
     "summary": "{{n}} 張未完成",
