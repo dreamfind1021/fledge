@@ -182,8 +182,10 @@ describe("待辦面板的顏色對比", () => {
   // 停用態也在禁令裡：index.contrast.test.ts 的全域白名單豁免 :disabled（WCAG 1.4.3），這裡不豁免——
   // 編輯中清單唯讀是靠換 token 淡化的，一用 opacity 上面那組就驗不到實際顏色。
   // `.tk-act(?!s)` 排除 .tk-acts：那是滑過才顯形的容器，0↔1 是顯示／隱藏不是淡化，刻意用 opacity
-  it("狀態記號、已完成列、專案樹、跨專案票列、動作鍵、一行輸入、下一步與右欄不得用 opacity 淡化", () => {
-    const rules = [...tasksCss.matchAll(/^(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*|\.tk-xrow[^{]*|\.tk-proj[^{]*|\.tk-act(?!s)[^{]*|\.tasks-new-input[^{]*|\.tasks-next[^{]*|\.d-[^{]*|\.lb-detail[^{]*)\{([^}]*)\}/gm)];
+  // `.tasks-col[^{]*`／`.tasks-split[^{]*`（票 19 Task 10）：版面規則只管 display/flex/padding，
+  // 絕不准用 opacity 蓋掉整欄——那會讓一整欄安靜消失又量不出對比度
+  it("狀態記號、已完成列、專案樹、跨專案票列、動作鍵、一行輸入、下一步、右欄與版面不得用 opacity 淡化", () => {
+    const rules = [...tasksCss.matchAll(/^(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*|\.tk-xrow[^{]*|\.tk-proj[^{]*|\.tk-act(?!s)[^{]*|\.tasks-new-input[^{]*|\.tasks-next[^{]*|\.d-[^{]*|\.lb-detail[^{]*|\.tasks-col[^{]*|\.tasks-split[^{]*)\{([^}]*)\}/gm)];
     // regex 沒命中會讓迴圈跑零次而測試全綠——先確認真的有抓到規則
     expect(rules.length).toBeGreaterThanOrEqual(4);
     for (const [, selector, body] of rules) {
