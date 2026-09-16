@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
   TaskConflictError, createTask, deleteTask, fetchTasks, fetchTasksOverview, openFile, updateTask,
@@ -7,6 +7,7 @@ import {
 import { clearDraft, listDrafts } from "../lib/taskDraft";
 import { NEXT_STATUS, TasksList } from "./TasksList";
 import { TasksOverview } from "./TasksOverview";
+import { TasksTree } from "./TasksTree";
 import { TaskEditor } from "./TaskEditor";
 import "./Tasks.css";
 
@@ -157,32 +158,35 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   // K6「寫壞檔＋沒有草稿不可能同時發生」的安全網在這個情境下事實上打不開（Codex 全鏈路審查 high）。
   const draftsByName = new Map(allDrafts.map((d) => [d.name, d.draft]));
 
-  if (editing && selected != null && port != null) {
-    return (
-      <div className="tasks-root" data-testid="tasks-panel">
-        {/* 目前兩個 return 讓返回必經型別切換（TaskEditor → TasksList），React 本來就會重掛，
-            所以這把 key 現在不是唯一防線。留著是為未來「編輯器內直接換票」（editing 由 A 直接
-            變 B、不經清單）預留——那條路徑一旦出現，草稿那半會自癒（unmount cleanup 的 deps 是
-            [project, task.name]），但 title／body／baseFp 只在 mount 初始化
-            （TaskEditor.tsx:44-48），沒有 key 就會讓 B 顯示 A 打的字（plan R3 F2）。 */}
-        <TaskEditor key={`${selected}:${editing.name}`}
-          port={port} project={selected} projectName={projectName} task={editing}
-          onSaved={saved} onLeave={leaveEditor} t={t} />
+  // 票 19 過渡期：樹先掛上讓導覽有入口，狀態機留給 Task 9
+  const shell = (inner: ReactNode) => (
+    <div className="tasks-root" data-testid="tasks-panel">
+      <div className="tasks-split">
+        <TasksTree data={overview} selected={selected} onSelect={(p) => (p === null ? back() : select(p))} t={t} />
+        <div className="tasks-col">{inner}</div>
       </div>
+    </div>
+  );
+  if (editing && selected != null && port != null) {
+    return shell(
+      // 目前兩個 return 讓返回必經型別切換（TaskEditor → TasksList），React 本來就會重掛，
+      // 所以這把 key 現在不是唯一防線。留著是為未來「編輯器內直接換票」（editing 由 A 直接
+      // 變 B、不經清單）預留——那條路徑一旦出現，草稿那半會自癒（unmount cleanup 的 deps 是
+      // [project, task.name]），但 title／body／baseFp 只在 mount 初始化
+      // （TaskEditor.tsx:44-48），沒有 key 就會讓 B 顯示 A 打的字（plan R3 F2）。
+      <TaskEditor key={`${selected}:${editing.name}`}
+        port={port} project={selected} projectName={projectName} task={editing}
+        onSaved={saved} onLeave={leaveEditor} t={t} />,
     );
   }
 
-  return (
-    <div className="tasks-root" data-testid="tasks-panel">
-      {selected == null
-        ? <TasksOverview data={overview} failed={failed} onSelect={select} t={t} />
-        : <TasksList data={list} projectName={projectName} failed={failed} notice={notice}
-            expandedName={expandedName} onExpand={setExpandedName}
-            orphanDrafts={orphanDrafts} draftsByName={draftsByName}
-            onOrphanDiscard={(name) => { clearDraft(selected, name); setReloadKey((k) => k + 1); }}
-            onBack={back} onCreate={create}
-            onCycle={cycle} onDelete={remove} onOpen={openInEditor} onEdit={edit}
-            t={t} />}
-    </div>
-  );
+  return shell(selected == null
+    ? <TasksOverview data={overview} failed={failed} onSelect={select} t={t} />
+    : <TasksList data={list} projectName={projectName} failed={failed} notice={notice}
+        expandedName={expandedName} onExpand={setExpandedName}
+        orphanDrafts={orphanDrafts} draftsByName={draftsByName}
+        onOrphanDiscard={(name) => { clearDraft(selected, name); setReloadKey((k) => k + 1); }}
+        onBack={back} onCreate={create}
+        onCycle={cycle} onDelete={remove} onOpen={openInEditor} onEdit={edit}
+        t={t} />);
 }

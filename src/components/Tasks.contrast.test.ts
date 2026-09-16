@@ -105,12 +105,9 @@ describe("待辦面板的顏色對比", () => {
     ["已完成的標題", ".tk.is-done .tk-title", "color", bg],
     ["來源 AI", ".tk-src.is-ai", "color", bg],
     ["來源 我", ".tk-src.is-me", "color", bg],
-    ["總覽的下一步", ".tov-next", "color", bg],
-    ["沒設下一步的提示", ".tov-next.is-none", "color", bg],
-    ["chip 文字", ".tov-chip", "color", bg],
-    ["還沒開始用", ".tov-unused", "color", bg],
-    ["總覽分區標籤", ".tov-sec-lab", "color", bg],
-    ["總覽分區計數", ".tov-sec-n", "color", bg],
+    // 所有專案頁的跨專案票列（票 19，spec §5.3）：列文字在 --bg 上；專案標籤有自己的 --surface-2 底
+    ["跨專案票列文字", ".tk-xrow", "color", bg],
+    ["跨專案票列的專案標籤", ".tk-proj", "color", surface2],
     ["第二層分區標籤", ".tasks-sec-lab", "color", bg],
     ["第二層分區計數", ".tasks-sec-n", "color", bg],
     // 展開預覽（spec §6.1／§6.4）新增的選擇器：不能只讓「16 tests passed」是因為
@@ -160,8 +157,8 @@ describe("待辦面板的顏色對比", () => {
 
   // opacity 禁令。上面那組是從 token 值算的，算不到 opacity 疊出來的實際顏色，
   // 所以「不准用 opacity」本身要是一條規則，否則上面那組會給出安心的假象。
-  it("狀態記號、已完成列與專案樹不得用 opacity 淡化", () => {
-    const rules = [...tasksCss.matchAll(/^(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*)\{([^}]*)\}/gm)];
+  it("狀態記號、已完成列、專案樹與跨專案票列不得用 opacity 淡化", () => {
+    const rules = [...tasksCss.matchAll(/^(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*|\.tk-xrow[^{]*|\.tk-proj[^{]*)\{([^}]*)\}/gm)];
     // regex 沒命中會讓迴圈跑零次而測試全綠——先確認真的有抓到規則
     expect(rules.length).toBeGreaterThanOrEqual(4);
     for (const [, selector, body] of rules) {

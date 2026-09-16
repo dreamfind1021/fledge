@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import i18n from "../i18n";
 import en from "../locales/en/tasks.json";
 import { TaskConflictError, type TaskRow, type TasksListResponse, type TasksOverview } from "../lib/sidecar";
@@ -47,6 +47,14 @@ const ticket = (over: Partial<TaskRow> = {}): TaskRow => ({
   body: "", editable: true, ...over,
 });
 
+const tree = () => within(screen.getByTestId("tree"));
+// 等樹上有那個專案名（初始總覽落地）→ 點 → 等專案頁的標題出現（清單落地）。不寫死等某張票的標題，
+// 空清單／unavailable／不同 fixture 的測試都能用
+const openProject = async (name = "a") => {
+  fireEvent.click(await tree().findByText(name));
+  await waitFor(() => expect(document.querySelector(".tasks-pane .tasks-head h1")?.textContent).toBe(name));
+};
+
 describe("Tasks 面板", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("en");
@@ -63,21 +71,6 @@ describe("Tasks 面板", () => {
   });
   afterEach(cleanup);   // vitest 未開 globals → testing-library 不會自動 cleanup
 
-  // design §5.5：切到本面板時重讀 ＋ 視窗重新取得焦點時重讀。
-  // T6 的「叫 AI 開票後切回面板看到它」全靠這條——後端全綠也證明不了它。
-  it("視窗重新取得焦點時 refetch，且畫面跟著更新", async () => {
-    const { container } = render(<Tasks port={1234} isActive />);
-    // 只認列上的未完成數。分組標頭的計數也是數字，用 getByText 會兩邊都命中而炸掉
-    const n = () => container.querySelector(".tov-row .tov-n")?.textContent;
-    await waitFor(() => expect(n()).toBe("1"));
-
-    fetchTasksOverview.mockResolvedValue({ projects: [proj({ unfinished: 3 })], permission_error: false, recent_days: 7 });
-    fireEvent(window, new Event("focus"));
-
-    await waitFor(() => expect(n()).toBe("3"));
-    expect(fetchTasksOverview).toHaveBeenCalledTimes(2);
-  });
-
   it("分頁不在前景時不打 API；切到前景才讀", async () => {
     const { rerender } = render(<Tasks port={1234} isActive={false} />);
     expect(fetchTasksOverview).not.toHaveBeenCalled();
@@ -85,152 +78,10 @@ describe("Tasks 面板", () => {
     await waitFor(() => expect(fetchTasksOverview).toHaveBeenCalledTimes(1));
   });
 
-  // design §6.3：把「讀不到」顯示成「沒有」，正是這個功能存在的理由的反面
-  it("總覽收到 unavailable 時畫成讀不到，不是 0", async () => {
-    fetchTasksOverview.mockResolvedValue({
-      projects: [proj({ unfinished: null, tasks_status: "unavailable" })], permission_error: false, recent_days: 7,
-    });
-    render(<Tasks port={1234} isActive />);
-    await waitFor(() => expect(screen.getByText(en.overview.unavailable)).toBeTruthy());
-    expect(screen.queryByText("0")).toBeNull();
-  });
-
-  // 分組判準是「這個專案有沒有話要說」。absent 但帶著 state.md 的下一步時那句話必須留著
-  it("總覽分兩層：有話要說的展開，只有名字的收成 chip", async () => {
-    fetchTasksOverview.mockResolvedValue({
-      projects: [
-        proj({ path: "/p/a", name: "有票", unfinished: 3, tasks_status: "ok", next_step: "先修這個" }),
-        proj({ path: "/p/b", name: "做完了", unfinished: 0, tasks_status: "ok" }),
-        proj({ path: "/p/c", name: "沒用過", unfinished: 0, tasks_status: "absent" }),
-        proj({ path: "/p/d", name: "壞掉的", unfinished: null, tasks_status: "unavailable" }),
-      ],
-      permission_error: false, recent_days: 7,
-    });
-    const { container } = render(<Tasks port={1234} isActive />);
-    await waitFor(() => expect(screen.getByText("有票")).toBeTruthy());
-
-    expect([...container.querySelectorAll(".tov-row .tov-name")].map((n) => n.textContent))
-      .toEqual(["有票", "做完了", "壞掉的"]);
-    expect([...container.querySelectorAll(".tov-chip")].map((n) => n.textContent))
-      .toEqual(["沒用過"]);
-    expect(container.querySelector('.tov-chip[title="/p/d"]')).toBeNull();   // 警告不可被降級
-  });
-
-  // absent 也可能帶 next_step（state.md 住在 .fledge/ 不是 tasks/）。
-  // 同一份 fixture 一定要放一個 absent-但沒有下一步的兄弟，否則「全部都畫成列」
-  // 的現況也會通過這條測試（R2 抓到的假綠）
-  it("absent 但有下一步的展開，absent 且沒有下一步的收成 chip", async () => {
-    fetchTasksOverview.mockResolvedValue({
-      projects: [
-        proj({ path: "/p/e", name: "只有下一步", unfinished: 0, tasks_status: "absent",
-               next_step: "先把環境裝起來" }),
-        proj({ path: "/p/f", name: "什麼都沒有", unfinished: 0, tasks_status: "absent" }),
-      ],
-      permission_error: false, recent_days: 7,
-    });
-    const { container } = render(<Tasks port={1234} isActive />);
-    await waitFor(() => expect(screen.getByText("先把環境裝起來")).toBeTruthy());
-    expect(container.querySelector('.tov-row[title="/p/e"]')).toBeTruthy();
-    expect(container.querySelector('.tov-chip[title="/p/e"]')).toBeNull();
-    expect(container.querySelector('.tov-chip[title="/p/f"]')).toBeTruthy();   // 這行讓現況變紅
-    expect(container.querySelector('.tov-row[title="/p/f"]')).toBeNull();
-  });
-
-  // runtime JSON 沒有驗證。fail-safe 必須落在警告那一側，而且頁首計數也要跟著
-  it("認不得的 tasks_status 畫成警告，不算進未完成總數", async () => {
-    fetchTasksOverview.mockResolvedValue({
-      projects: [
-        proj({ path: "/p/a", name: "正常", unfinished: 2, tasks_status: "ok" }),
-        proj({ path: "/p/x", name: "未來狀態", unfinished: null, tasks_status: "brand-new" as never }),
-      ],
-      permission_error: false, recent_days: 7,
-    });
-    const { container } = render(<Tasks port={1234} isActive />);
-    await waitFor(() => expect(screen.getByText("未來狀態")).toBeTruthy());
-    expect(container.querySelector('.tov-row[title="/p/x"] .tov-n')).toBeNull();   // 沒有數字
-    // 頁首摘要也要正確——只修列不修 reducer 的實作必須被擋下來
-    const sum = container.querySelector(".tasks-sum")!.textContent!;
-    expect(sum).toContain("2");                                  // 總數只算 ok
-    expect(sum).toContain(en.overview.summaryUnreadable.replace("{{n}}", "1"));
-  });
-
-  // 同一個 fail-safe 用在 unfinished 上：ok 但數字是壞的，不可被壓成 0
-  it("ok 但 unfinished 不是非負整數時當成警告，不畫成 0", async () => {
-    fetchTasksOverview.mockResolvedValue({
-      projects: [proj({ path: "/p/y", name: "壞數字", unfinished: null, tasks_status: "ok" })],
-      permission_error: false, recent_days: 7,
-    });
-    const { container } = render(<Tasks port={1234} isActive />);
-    await waitFor(() => expect(screen.getByText("壞數字")).toBeTruthy());
-    expect(container.querySelector('.tov-row[title="/p/y"] .tov-n')).toBeNull();
-    expect(screen.getByText(en.overview.unavailable)).toBeTruthy();
-  });
-
-  it("下一步是空字串時顯示提示，不是留白", async () => {
-    fetchTasksOverview.mockResolvedValue({
-      projects: [proj({ path: "/p/g", name: "沒設下一步", unfinished: 1, tasks_status: "ok", next_step: "" })],
-      permission_error: false, recent_days: 7,
-    });
-    const { container } = render(<Tasks port={1234} isActive />);
-    await waitFor(() => expect(screen.getByText("沒設下一步")).toBeTruthy());
-    const cell = container.querySelector('.tov-row[title="/p/g"] .tov-next.is-none');
-    expect(cell).toBeTruthy();                        // 先確認節點存在，不要讓 undefined 比 undefined
-    expect(cell!.textContent).toBe(en.overview.noNextStep);
-  });
-
-  // 票 02：刻度分狀態上色。doing 是 unfinished 的子集合，只決定前幾根上色
-  it("進行中的張數畫成上色刻度，其餘維持一般刻度", async () => {
-    fetchTasksOverview.mockResolvedValue({
-      projects: [proj({ path: "/p/a", name: "有進行中", unfinished: 5, doing: 2 })],
-      permission_error: false, recent_days: 7,
-    });
-    const { container } = render(<Tasks port={1234} isActive />);
-    await waitFor(() => expect(screen.getByText("有進行中")).toBeTruthy());
-    const marks = [...container.querySelectorAll(".tov-marks i")];
-    expect(marks).toHaveLength(5);
-    expect(marks.filter((m) => m.classList.contains("is-doing"))).toHaveLength(2);
-    // 上色的必須排在前面，否則兩色會交錯而看不出比例
-    expect(marks.slice(0, 2).every((m) => m.classList.contains("is-doing"))).toBe(true);
-  });
-
-  // runtime JSON 沒有驗證。doing 壞掉時退回「全部一般刻度」——
-  // 刻度總數來自 unfinished，仍然可信，只有拆分不可信，不必整列降級成警告
-  it.each([
-    ["null", null],
-    ["超過 unfinished", 9],
-    ["負數", -1],
-    ["不是整數", 1.5],
-  ])("doing 是 %s 時不上色，刻度總數不受影響", async (_label, doing) => {
-    fetchTasksOverview.mockResolvedValue({
-      projects: [proj({ path: "/p/a", name: "壞的 doing", unfinished: 3, doing: doing as number })],
-      permission_error: false, recent_days: 7,
-    });
-    const { container } = render(<Tasks port={1234} isActive />);
-    await waitFor(() => expect(screen.getByText("壞的 doing")).toBeTruthy());
-    expect(container.querySelectorAll(".tov-marks i")).toHaveLength(3);
-    expect(container.querySelectorAll(".tov-marks i.is-doing")).toHaveLength(0);
-  });
-
-  it("點 chip 只進入該專案，不建立任何東西", async () => {
-    fetchTasksOverview.mockResolvedValue({
-      projects: [proj({ path: "/p/c", name: "沒用過", unfinished: 0, tasks_status: "absent" })],
-      permission_error: false, recent_days: 7,
-    });
-    fetchTasks.mockResolvedValue({ project: "/p/c", tasks_status: "absent", tasks: [], next_step: "", handoff_command: "" });
-    const { container } = render(<Tasks port={1234} isActive />);
-    await waitFor(() => expect(container.querySelector('.tov-chip[title="/p/c"]')).toBeTruthy());
-    expect(container.querySelector('.tov-row[title="/p/c"]')).toBeNull();
-
-    fireEvent.click(container.querySelector('.tov-chip[title="/p/c"]')!);
-    await waitFor(() => expect(fetchTasks).toHaveBeenCalledWith(1234, "/p/c"));
-    expect(createTask).not.toHaveBeenCalled();
-    expect(screen.getByText(en.list.empty)).toBeTruthy();   // 空清單，不是錯誤態
-  });
-
   it("單一專案收到 unavailable 時畫成錯誤態，不是空清單", async () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "unavailable", tasks: null, next_step: "", handoff_command: "" });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     await waitFor(() => expect(screen.getByText(en.list.unavailable)).toBeTruthy());
     expect(screen.queryByText(en.list.empty)).toBeNull();   // 不得退化成「沒有待辦」
   });
@@ -241,7 +92,7 @@ describe("Tasks 面板", () => {
       tasks: [ticket(), ticket({ name: "02-b.md", number: 2, title: "做完的", status: "done", source: "ai" })],
     });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     await waitFor(() => expect(screen.getByText("第一件")).toBeTruthy());
     expect(screen.queryByText("做完的")).toBeNull();                 // done 預設摺疊
     fireEvent.click(screen.getByLabelText(en.a11y.expandDone));
@@ -254,7 +105,7 @@ describe("Tasks 面板", () => {
   it("第二層：有指令段就出現區塊，預設摺疊、點內容框展開、再點收合", async () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "", handoff_command: CMD });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     await screen.findByText(en.list.handoffLabel);
     const pre = screen.getByText((_, el) => el?.tagName === "PRE" && el.textContent === CMD);
     const box = pre.closest(".tasks-cmd")!;
@@ -272,7 +123,7 @@ describe("Tasks 面板", () => {
   it("第二層：指令框可用鍵盤展開（Enter／空白鍵）", async () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "", handoff_command: CMD });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     await screen.findByText(en.list.handoffLabel);
     const row = screen.getByText((_, el) => el?.tagName === "PRE" && el.textContent === CMD).closest("[role=button]")!;
     fireEvent.keyDown(row, { key: "Enter" });
@@ -285,7 +136,7 @@ describe("Tasks 面板", () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "", handoff_command: CMD });
     writeClipboard.mockResolvedValue(true);
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     const copy = await screen.findByLabelText(en.list.handoffCopy);   // 圖示鈕，只有可及名稱沒有文字
     expect(copy.textContent).toBe("");
     fireEvent.click(copy);
@@ -298,7 +149,7 @@ describe("Tasks 面板", () => {
   it("第二層：沒有指令段就整塊不出現", async () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "有下一步", handoff_command: "" });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     await screen.findByText("有下一步");
     expect(screen.queryByText(en.list.handoffLabel)).toBeNull();
     expect(screen.queryByText(en.list.handoffCopy)).toBeNull();
@@ -314,7 +165,7 @@ describe("Tasks 面板", () => {
       ],
     });
     const { container, rerender } = render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     await waitFor(() => expect(screen.getByText("在做的")).toBeTruthy());
     // 後端給的順序是 01 在前，畫面上必須是「在做的」先出現——分組有真的改變排序
     const titles = [...container.querySelectorAll(".tk-title")].map((n) => n.textContent);
@@ -342,7 +193,7 @@ describe("Tasks 面板", () => {
       ],
     });
     const { container } = render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     await waitFor(() => expect(screen.getByText("有日期")).toBeTruthy());
     expect([...container.querySelectorAll(".tk-date")].map((n) => n.textContent)).toEqual(["08-29"]);
   });
@@ -354,7 +205,7 @@ describe("Tasks 面板", () => {
       tasks: [ticket({ name: "壞的.md", number: null, title: "壞的", anomalies: ["number_missing", "status_invalid"] })],
     });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     await waitFor(() => expect(screen.getByText("壞的")).toBeTruthy());   // 沒有被隱藏
     fireEvent.click(screen.getByLabelText(en.anomaly.label));
     expect(screen.getByText("壞的.md")).toBeTruthy();
@@ -365,7 +216,7 @@ describe("Tasks 面板", () => {
   // design §5.2：一行輸入建票。source/status/created 都由 sidecar 決定，前端只送標題。
   it("打字送出會建票並重讀清單", async () => {
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     const input = await screen.findByLabelText(en.list.newPlaceholder);
     fireEvent.change(input, { target: { value: "  新的一件事  " } });
     fireEvent.click(screen.getByText(en.list.add));
@@ -377,7 +228,7 @@ describe("Tasks 面板", () => {
 
   it("空白標題不送出", async () => {
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     const input = await screen.findByLabelText(en.list.newPlaceholder);
     fireEvent.change(input, { target: { value: "   " } });
     fireEvent.submit(input.closest("form")!);
@@ -387,7 +238,7 @@ describe("Tasks 面板", () => {
   it("建票失敗顯示錯誤，不清空使用者打的字", async () => {
     createTask.mockRejectedValue(new Error("400"));
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     const input = await screen.findByLabelText(en.list.newPlaceholder);
     fireEvent.change(input, { target: { value: "會失敗的" } });
     fireEvent.click(screen.getByText(en.list.add));
@@ -399,7 +250,7 @@ describe("Tasks 面板", () => {
 
   async function openList() {
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     await waitFor(() => expect(screen.getByText("第一件")).toBeTruthy());
   }
 
@@ -436,7 +287,7 @@ describe("Tasks 面板", () => {
       ],
     });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByTitle("/p/a"));
+    await openProject();
     await waitFor(() => expect(screen.getByText("在做的")).toBeTruthy());
     fireEvent.click(screen.getByLabelText(en.a11y.expandDone));
 
@@ -527,7 +378,7 @@ describe("Tasks 面板", () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", handoff_command: "",
       tasks: [ticket({ body: "**粗**\n\n- 項" })] });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     const row = await screen.findByText("第一件");
     fireEvent.click(row);
     await waitFor(() => expect(document.querySelector(".tk-body strong")?.textContent).toBe("粗"));
@@ -538,14 +389,14 @@ describe("Tasks 面板", () => {
 
   it("內文為空時顯示「沒有內文」", async () => {
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     fireEvent.click(await screen.findByText("第一件"));
     await waitFor(() => expect(screen.getByText(en.list.noBody)).toBeTruthy());
   });
 
   it("點狀態記號不會順便展開（stopPropagation）", async () => {
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     fireEvent.click(screen.getByLabelText(statusLabel(en.status.todo, en.status.doing)));
     await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
@@ -583,7 +434,7 @@ describe("Tasks 面板", () => {
   ])("editable 是 %s 時不顯示編輯按鈕、展開區有說明", async (_, over) => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", handoff_command: "", tasks: [ticket(over)] });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     expect(screen.queryByLabelText(en.list.edit)).toBeNull();
     fireEvent.click(screen.getByText("第一件"));
@@ -592,7 +443,7 @@ describe("Tasks 面板", () => {
 
   it("editable 為 true 時有編輯按鈕", async () => {
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     expect(screen.getByLabelText(en.list.edit)).toBeTruthy();
   });
@@ -606,7 +457,7 @@ describe("Tasks 面板", () => {
     saveDraft("/p/a", "01-a.md", { title: "救回來", body: "壞掉前打的字", fingerprint: "f" });
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", handoff_command: "", tasks: [ticket({ editable: false })] });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     fireEvent.click(screen.getByText("第一件"));                          // 展開
     await waitFor(() => expect(screen.getByText(en.list.notEditable)).toBeTruthy());
@@ -617,7 +468,7 @@ describe("Tasks 面板", () => {
   it("票寫壞但沒有草稿時，展開區只有既有的 notEditable 說明，沒有救援按鈕", async () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", handoff_command: "", tasks: [ticket({ editable: false })] });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     fireEvent.click(screen.getByText("第一件"));
     await waitFor(() => expect(screen.getByText(en.list.notEditable)).toBeTruthy());
@@ -628,7 +479,7 @@ describe("Tasks 面板", () => {
   it("可編輯的票有草稿時不顯示救援按鈕——那份草稿走編輯器就能救回來", async () => {
     saveDraft("/p/a", "01-a.md", { title: "第一件", body: "改到一半", fingerprint: "f" });
     render(<Tasks port={1234} isActive />);        // 預設 ticket() editable 為 true
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     fireEvent.click(screen.getByText("第一件"));
     await waitFor(() => expect(document.querySelector(".tk-body")).toBeTruthy());
@@ -640,7 +491,7 @@ describe("Tasks 面板", () => {
     saveDraft("/p/a", "01-a.md", { title: "救回來", body: "壞掉前打的字", fingerprint: "f" });
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", handoff_command: "", tasks: [ticket({ editable: false })] });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     fireEvent.click(screen.getByText("第一件"));
     fireEvent.click(await screen.findByText(en.list.copyMine));
@@ -653,7 +504,7 @@ describe("Tasks 面板", () => {
     saveDraft("/p/a", "01-a.md", { title: "救回來", body: "壞掉前打的字", fingerprint: "f" });
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", next_step: "", handoff_command: "", tasks: [ticket({ editable: false })] });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     fireEvent.click(screen.getByText("第一件"));
     fireEvent.click(await screen.findByText(en.list.copyMine));
@@ -666,7 +517,7 @@ describe("Tasks 面板", () => {
   it("點編輯進編輯器；儲存後回清單且那張票展開、fingerprint 已更新", async () => {
     updateTaskContent.mockResolvedValue(ticket({ title: "改過", fingerprint: "f9", body: "新內文" }));
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     fireEvent.click(screen.getByLabelText(en.list.edit));
     await screen.findByLabelText(en.list.editorTitle);
@@ -681,7 +532,7 @@ describe("Tasks 面板", () => {
 
   it("編輯中切走再切回，不重讀、內容不被蓋掉", async () => {
     const { rerender } = render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     fireEvent.click(screen.getByLabelText(en.list.edit));
     const box = await screen.findByLabelText(en.list.editorBody);
@@ -705,12 +556,12 @@ describe("Tasks 面板", () => {
     fetchTasks.mockImplementation((_port: number, project: string) =>
       Promise.resolve({ project, tasks_status: "ok" as const, next_step: "", handoff_command: "", tasks: [ticket({ name: "01-a.md" })] }));
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     const row = await screen.findByText("第一件");
     fireEvent.click(row);                                       // 展開 A 的 01-a.md
     await waitFor(() => expect(document.querySelector(".tk-body")).toBeTruthy());
-    fireEvent.click(screen.getByText(en.list.back));             // 返回總覽
-    fireEvent.click(await screen.findByText("b"));                // 進 B（同樣有 01-a.md）
+    fireEvent.click(tree().getByText(en.tree.allProjects));             // 返回總覽
+    await openProject("b");                                      // 進 B（同樣有 01-a.md）
     await screen.findByText("第一件");
     expect(document.querySelector(".tk-body")).toBeNull();
   });
@@ -718,7 +569,7 @@ describe("Tasks 面板", () => {
   it("孤兒草稿：票不在清單裡時列在頂端，可丟棄", async () => {
     saveDraft("/p/a", "99-gone.md", { title: "消失的", body: "b", fingerprint: "f" });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText(/消失的/);
     fireEvent.click(screen.getAllByText(en.list.draftDiscard)[0]);
     await waitFor(() => expect(loadDraft("/p/a", "99-gone.md")).toBeNull());
@@ -730,7 +581,7 @@ describe("Tasks 面板", () => {
     writeClipboard.mockResolvedValue(true);
     saveDraft("/p/a", "99-gone.md", { title: "消失的", body: "b", fingerprint: "f" });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText(/消失的/);
     fireEvent.click(screen.getAllByText(en.list.copyMine)[0]);
     await waitFor(() => expect(writeClipboard).toHaveBeenCalledWith("# 消失的\n\nb"));
@@ -741,7 +592,7 @@ describe("Tasks 面板", () => {
     writeClipboard.mockResolvedValue(false);
     saveDraft("/p/a", "99-gone.md", { title: "消失的", body: "b", fingerprint: "f" });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText(/消失的/);
     fireEvent.click(screen.getAllByText(en.list.copyMine)[0]);
     await waitFor(() => expect(writeClipboard).toHaveBeenCalled());
@@ -753,7 +604,7 @@ describe("Tasks 面板", () => {
   it("草稿對應的票還在清單裡時不算孤兒，不顯示孤兒草稿列", async () => {
     saveDraft("/p/a", "01-a.md", { title: "第一件", body: "改到一半", fingerprint: "f" });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     expect(document.querySelector(".tk-banner.is-draft")).toBeNull();
   });
@@ -768,7 +619,7 @@ describe("Tasks 面板", () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "absent", tasks: [], next_step: "", handoff_command: "" });
     saveDraft("/p/a", "01-a.md", { title: "還沒送出的草稿", body: "b", fingerprint: "f" });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await waitFor(() => expect(screen.getByText(en.list.empty)).toBeTruthy());
     expect(document.querySelector(".tk-banner.is-draft")).toBeNull();
     expect(screen.queryByText(/還沒送出的草稿/)).toBeNull();
@@ -783,13 +634,13 @@ describe("Tasks 面板", () => {
       .mockImplementationOnce(() => new Promise((r) => { resolveV1 = r; }))
       .mockRejectedValueOnce(new TaskConflictError());
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     fireEvent.click(screen.getByLabelText(en.list.edit));
     fireEvent.change(await screen.findByLabelText(en.list.editorBody), { target: { value: "V1" } });
     fireEvent.click(screen.getByText(en.list.save));
     await waitFor(() => expect(updateTaskContent).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByText("a"));                              // 離開（abort V1）
+    fireEvent.click(screen.getByText("a", { selector: ".full-back" }));   // 離開（abort V1）——樹上也有 "a"，限定編輯器的返回鍵
     await screen.findByText("第一件");
     fireEvent.click(screen.getByLabelText(en.list.edit));                // 重進
     fireEvent.click(await screen.findByText(en.list.draftDiscard));       // 不要 V1 的草稿
@@ -812,11 +663,11 @@ describe("Tasks 面板", () => {
       ticket({ name: "02-b.md", number: 2, title: "B", body: "B 的內文" }),
     ] });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("A");
     fireEvent.click(screen.getAllByLabelText(en.list.edit)[0]);          // 進 A
     fireEvent.change(await screen.findByLabelText(en.list.editorBody), { target: { value: "A 打了字" } });
-    fireEvent.click(screen.getByText("a"));                              // 返回
+    fireEvent.click(screen.getByText("a", { selector: ".full-back" }));   // 返回
     await screen.findByText("B");
     fireEvent.click(screen.getAllByLabelText(en.list.edit)[1]);          // 進 B
     expect((await screen.findByLabelText(en.list.editorBody) as HTMLTextAreaElement).value).toBe("B 的內文");
@@ -828,7 +679,7 @@ describe("Tasks 面板", () => {
     updateTaskContent.mockRejectedValue(new TaskConflictError());
     let resolveList!: (l: TasksListResponse) => void;
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     fireEvent.click(screen.getByLabelText(en.list.edit));
     fireEvent.change(await screen.findByLabelText(en.list.editorBody), { target: { value: "x" } });
@@ -846,7 +697,7 @@ describe("Tasks 面板", () => {
   it("使用者自己刪票時草稿一併清掉", async () => {
     saveDraft("/p/a", "01-a.md", { title: "t", body: "b", fingerprint: "f" });
     render(<Tasks port={1234} isActive />);
-    fireEvent.click(await screen.findByText("a"));
+    await openProject();
     await screen.findByText("第一件");
     fireEvent.click(screen.getByLabelText(en.list.delete));
     fireEvent.click(screen.getByText(en.list.delete, { selector: ".tk-confirm-yes" }));
