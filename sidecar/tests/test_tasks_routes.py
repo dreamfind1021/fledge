@@ -578,3 +578,51 @@ def test_put_content_read_failure_returns_500(tmp_path, monkeypatch):
     monkeypatch.setattr(scanner, "_read_all", boom)
     r = c.put("/tasks/content", json={"project": str(proj), "name": "01-t.md", "title": "x", "body": "", "fingerprint": fp})
     assert r.status_code == 500 and r.json()["error"] == "write_failed"
+
+
+# ── GET /tasks/note（票 19）────────────────────────────────────────────
+
+def test_note_registered_on_composed_app_and_shape(tmp_path, monkeypatch):
+    """接線：對組好的 app 打 /tasks/note 斷言 200＋shape（不可寫成「非 404」，見檔頭）。"""
+    root = _project_root(tmp_path)
+    p = root / "p"
+    (p / ".fledge").mkdir(parents=True)
+    (p / ".fledge" / "state.md").write_text("# p\n\n**下一步**：x\n", encoding="utf-8")
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    r = c.get("/tasks/note", params={"project": str(p)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["content"].startswith("# p")
+    assert body["path"] == str(p / ".fledge" / "state.md")
+    assert len(body["mtime"]) == 10
+
+
+def test_note_unknown_project_is_400(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch, roots=[])
+    r = c.get("/tasks/note", params={"project": str(tmp_path / "nope")})
+    assert r.status_code == 400 and r.json()["error"] == "unknown_project"
+
+
+def test_note_absent_and_unavailable_have_null_content_and_path(tmp_path, monkeypatch):
+    root = _project_root(tmp_path)
+    (root / "bare").mkdir()
+    linked = root / "linked"
+    linked.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (linked / ".fledge").symlink_to(elsewhere, target_is_directory=True)
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    a = c.get("/tasks/note", params={"project": str(root / "bare")}).json()
+    assert a == {"status": "absent", "content": None, "mtime": None, "path": None}
+    u = c.get("/tasks/note", params={"project": str(linked)}).json()
+    assert u == {"status": "unavailable", "content": None, "mtime": None, "path": None}
+
+
+def test_note_requires_token_when_auth_enforced(tmp_path, monkeypatch):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "accounts": {}, "roots": [], "kms_root": ""}), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.delenv("FLEDGE_TEST_UNAUTH", raising=False)
+    monkeypatch.setenv("FLEDGE_TOKEN", "secret")
+    assert TestClient(create_app()).get("/tasks/note", params={"project": "/x"}).status_code == 401

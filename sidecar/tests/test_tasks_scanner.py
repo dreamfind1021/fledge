@@ -1192,3 +1192,65 @@ def test_overview_carries_highlights_with_path_and_three_states(tmp_path):
     config2, proj2 = _setup(tmp_path / "second", project="empty")
     row2 = next(r for r in scanner.build_overview(config2)["projects"] if r["path"] == str(proj2))
     assert row2["doing_tasks"] == [] and row2["recent_tasks"] == []
+
+
+# ── 離場筆記全文（票 19，spec §4.4）────────────────────────────────────
+
+def test_read_note_ok_returns_content_and_mtime(tmp_path):
+    config, proj = _setup(tmp_path)
+    (proj / ".fledge").mkdir()
+    (proj / ".fledge" / "state.md").write_text("# p\n\n**下一步**：x\n\n## 停在哪\n\n- y\n", encoding="utf-8")
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+    assert r.status == scanner.STATUS_OK
+    assert r.content.startswith("# p\n")
+    assert r.mtime == _date.today().isoformat()
+
+
+def test_read_note_absent_when_fledge_or_state_missing(tmp_path):
+    config, proj = _setup(tmp_path)                       # 沒有 .fledge
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.read_note(td).status == scanner.STATUS_ABSENT
+    (proj / ".fledge").mkdir()                            # 有 .fledge、沒 state.md
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+    assert r.status == scanner.STATUS_ABSENT and r.content is None
+
+
+def test_read_note_symlinked_fledge_is_unavailable_not_absent(tmp_path):
+    """Codex R1：resolver 在 .fledge 是 symlink 時 fledge_fd 也是 None，但那是 unavailable。"""
+    config, proj = _setup(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "state.md").write_text("secret", encoding="utf-8")
+    (proj / ".fledge").symlink_to(elsewhere, target_is_directory=True)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+    assert r.status == scanner.STATUS_UNAVAILABLE
+    assert r.content is None
+
+
+def test_read_note_symlinked_state_md_is_unavailable(tmp_path):
+    """state.md 本身是 symlink → O_NOFOLLOW 擋下（ELOOP）→ unavailable，不讀目標。"""
+    config, proj = _setup(tmp_path)
+    (proj / ".fledge").mkdir()
+    target = tmp_path / "target.md"
+    target.write_text("secret", encoding="utf-8")
+    (proj / ".fledge" / "state.md").symlink_to(target)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+    assert r.status == scanner.STATUS_UNAVAILABLE
+    assert r.content is None
+
+
+def test_read_note_truncates_at_64kb(tmp_path):
+    config, proj = _setup(tmp_path)
+    (proj / ".fledge").mkdir()
+    (proj / ".fledge" / "state.md").write_text("a" * (70 * 1024), encoding="utf-8")
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+    assert len(r.content) == scanner.NOTE_MAX_BYTES == 64 * 1024
+
+
+def test_note_path_is_built_by_sidecar(tmp_path):
+    assert scanner.note_path("/p/x") == "/p/x/.fledge/state.md"

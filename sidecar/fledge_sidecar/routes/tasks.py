@@ -43,6 +43,24 @@ def overview() -> JSONResponse:
     return JSONResponse(scanner.build_overview(AppConfig.load()))
 
 
+@router.get("/note")
+def note(project: str = "") -> JSONResponse:
+    """離場筆記全文（票 19，spec §4.4）。只讀；點「下一步」才打，不隨總覽回。
+
+    三態分類在 `scanner.read_note` 裡，本函式不自己判 fd。`path` 只在 ok 時給——
+    給了 absent 的 path 等於邀請前端去開一個不存在的檔。"""
+    with scanner.open_tasks_dir(project, AppConfig.load()) as td:
+        if td.status == scanner.STATUS_UNKNOWN_PROJECT:
+            return JSONResponse({"error": "unknown_project"}, status_code=400)
+        r = scanner.read_note(td)
+        return JSONResponse({
+            "status": r.status,
+            "content": r.content,
+            "mtime": r.mtime,
+            "path": scanner.note_path(td.project) if r.status == scanner.STATUS_OK else None,
+        })
+
+
 @router.get("")
 def list_tasks(project: str = "") -> JSONResponse:
     """第二層：單一專案的票列表（含異常標記與 fingerprint）。

@@ -31,6 +31,7 @@ TASKS_DIRNAME = "tasks"
 STATE_FILENAME = "state.md"
 STATE_HEAD_LINES = 20  # 只讀前 20 行（design §5.1）
 RECENT_DAYS = 7   # 「最近 N 天新增」的 N（spec §4.1）。前端用 payload 的 recent_days 插值，不另抄一份
+NOTE_MAX_BYTES = 64 * 1024   # `GET /tasks/note` 全文上限（spec §4.4），與 _read_state_text 同值
 
 # tasks_status 三態（design §6.3）。**不可壓成一個數字**——把「讀不到」顯示成「沒有」，
 # 正是這個功能存在的理由的反面。
@@ -321,7 +322,7 @@ def _read_state_text(fledge_fd: int | None) -> str:
         return ""
     try:
         with os.fdopen(fd, "rb") as fh:
-            return _decode(fh.read(64 * 1024))
+            return _decode(fh.read(NOTE_MAX_BYTES))
     except OSError:
         return ""
 
@@ -366,6 +367,52 @@ def read_handoff_command(fledge_fd: int | None) -> str:
             return "\n".join(body).strip()   # 圍籬關上，只取第一段
         body.append(line)
     return ""                      # 沒有圍籬，或開了沒關
+
+
+@dataclass(frozen=True)
+class NoteResult:
+    """`GET /tasks/note` 的結果（spec §4.4）。三態與 tasks_status 同名，語意：
+    ok＝讀到了；absent＝`.fledge/` 開得起來但沒有 state.md（或 .fledge 不存在）；
+    unavailable＝resolver 拒絕或讀取失敗。"""
+
+    status: str
+    content: str | None
+    mtime: str | None   # YYYY-MM-DD
+
+
+def note_path(project: str) -> str:
+    """`.fledge/state.md` 的絕對路徑，給「用編輯器打開」用。同 `task_path` 的理由：佈局是本檔的常數。"""
+    return os.path.join(project, FLEDGE_DIRNAME, STATE_FILENAME)
+
+
+def read_note(td: TasksDir) -> NoteResult:
+    """讀 state.md 全文（前 NOTE_MAX_BYTES）。
+
+    **分類順序**（Codex R1 medium）：先看 resolver 的 status——`.fledge` 是 symlink、權限不足時
+    `fledge_fd` 同樣是 None 但那是 unavailable，不是「不存在」。有 fd 之後只有 FileNotFoundError
+    是 absent；其餘 OSError（state.md 是 symlink 的 ELOOP、EACCES、讀取中途失敗）都是 unavailable。
+    不能沿用 `_read_state_text()`——它把所有失敗壓成空字串。"""
+    if td.status == STATUS_UNAVAILABLE:
+        return NoteResult(STATUS_UNAVAILABLE, None, None)
+    if td.fledge_fd is None:
+        return NoteResult(STATUS_ABSENT, None, None)
+    try:
+        fd = os.open(STATE_FILENAME, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=td.fledge_fd)
+    except FileNotFoundError:
+        return NoteResult(STATUS_ABSENT, None, None)
+    except OSError:
+        return NoteResult(STATUS_UNAVAILABLE, None, None)
+    try:
+        st = os.fstat(fd)
+        if not stat_module.S_ISREG(st.st_mode):
+            return NoteResult(STATUS_UNAVAILABLE, None, None)   # FIFO／目錄／裝置檔
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            raw = fh.read(NOTE_MAX_BYTES)
+    except OSError:
+        return NoteResult(STATUS_UNAVAILABLE, None, None)
+    finally:
+        os.close(fd)
+    return NoteResult(STATUS_OK, _decode(raw), date.fromtimestamp(st.st_mtime).isoformat())
 
 
 def build_overview(config: AppConfig, *, today: date | None = None) -> dict[str, Any]:
