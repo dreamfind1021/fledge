@@ -184,10 +184,15 @@ describe("待辦面板的顏色對比", () => {
   // `.tk-act(?!s)` 排除 .tk-acts：那是滑過才顯形的容器，0↔1 是顯示／隱藏不是淡化，刻意用 opacity
   // `.tasks-col[^{]*`／`.tasks-split[^{]*`（票 19 Task 10）：版面規則只管 display/flex/padding，
   // 絕不准用 opacity 蓋掉整欄——那會讓一整欄安靜消失又量不出對比度
+  // `^\s*`（task 10 fix round 1）：Task 10 review 抓到的漏洞——原本 `^` 不容許縮排，
+  // @container 區塊裡的規則全部縮排兩格，`.tasks-col-list` 等版面規則因此完全沒被掃到，
+  // 上面那句「與版面」形同虛設。容許前導空白後，中／寬兩個等級的規則才真的進 rules
   it("狀態記號、已完成列、專案樹、跨專案票列、動作鍵、一行輸入、下一步、右欄與版面不得用 opacity 淡化", () => {
-    const rules = [...tasksCss.matchAll(/^(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*|\.tk-xrow[^{]*|\.tk-proj[^{]*|\.tk-act(?!s)[^{]*|\.tasks-new-input[^{]*|\.tasks-next[^{]*|\.d-[^{]*|\.lb-detail[^{]*|\.tasks-col[^{]*|\.tasks-split[^{]*)\{([^}]*)\}/gm)];
-    // regex 沒命中會讓迴圈跑零次而測試全綠——先確認真的有抓到規則
-    expect(rules.length).toBeGreaterThanOrEqual(4);
+    const rules = [...tasksCss.matchAll(/^\s*(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*|\.tk-xrow[^{]*|\.tk-proj[^{]*|\.tk-act(?!s)[^{]*|\.tasks-new-input[^{]*|\.tasks-next[^{]*|\.d-[^{]*|\.lb-detail[^{]*|\.tasks-col[^{]*|\.tasks-split[^{]*)\{([^}]*)\}/gm)];
+    // regex 沒命中會讓迴圈跑零次而測試全綠——先確認真的有抓到規則。
+    // 門檻從 4 提到 70（task 10 fix round 1）：容許縮排前只掃得到 66 條（@container 內的
+    // 9 條版面規則全部漏掉），現在是 75 條——用 70 卡住，anchor 退回 `^` 會直接讓這條炸
+    expect(rules.length).toBeGreaterThanOrEqual(70);
     for (const [, selector, body] of rules) {
       expect(`${selector.trim()} { ${body.trim()} }`).not.toMatch(/\bopacity\s*:/);
     }
