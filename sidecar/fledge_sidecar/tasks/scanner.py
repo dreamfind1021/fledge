@@ -14,6 +14,7 @@ import stat as stat_module
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any, Iterator
 
 from fledge_sidecar.app_config import AppConfig
@@ -29,6 +30,7 @@ FLEDGE_DIRNAME = ".fledge"
 TASKS_DIRNAME = "tasks"
 STATE_FILENAME = "state.md"
 STATE_HEAD_LINES = 20  # 只讀前 20 行（design §5.1）
+RECENT_DAYS = 7   # 「最近 N 天新增」的 N（spec §4.1）。前端用 payload 的 recent_days 插值，不另抄一份
 
 # tasks_status 三態（design §6.3）。**不可壓成一個數字**——把「讀不到」顯示成「沒有」，
 # 正是這個功能存在的理由的反面。
@@ -288,6 +290,27 @@ def count_open(tasks_fd: int) -> OpenCounts:
     return count_rows(scan_tasks(tasks_fd))
 
 
+def _number_key(row: dict[str, Any]) -> tuple[bool, int, str]:
+    """編號升冪；沒編號的排最後、依檔名。"""
+    return (row["number"] is None, row["number"] or 0, row["name"])
+
+
+def pick_highlights(rows: list[dict[str, Any]], today: date) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """總覽用的兩組票（spec §4.1）。
+
+    `doing_tasks`：effective status 為 doing，編號升冪。
+    `recent_tasks`：`created` 合法且 ≥ today − RECENT_DAYS、不是 done、不在 doing 裡；
+    created 降冪、同日編號升冪。`parked` **會**進 recent（軸是時間不是狀態）。
+    `created` 壞掉的票（parser 已清成空字串）不進——判不出日期就不宣稱它是新的。
+    邊界含等號：剛好 7 天算「最近」。"""
+    cutoff = (today - timedelta(days=RECENT_DAYS)).isoformat()
+    doing = sorted((r for r in rows if r["status"] == "doing"), key=_number_key)
+    recent = [r for r in rows if r["status"] not in ("done", "doing") and r["created"] and r["created"] >= cutoff]
+    recent.sort(key=_number_key)                                   # 先編號，再穩定排 created 降冪
+    recent.sort(key=lambda r: r["created"], reverse=True)
+    return doing, recent
+
+
 def _read_state_text(fledge_fd: int | None) -> str:
     """讀 `.fledge/state.md` 的前 64KB 文字。讀不到一律回空字串——兩個抽取函式共用。"""
     if fledge_fd is None:
@@ -345,7 +368,7 @@ def read_handoff_command(fledge_fd: int | None) -> str:
     return ""                      # 沒有圍籬，或開了沒關
 
 
-def build_overview(config: AppConfig) -> dict[str, Any]:
+def build_overview(config: AppConfig, *, today: date | None = None) -> dict[str, Any]:
     """第一層總覽（design §5.1）：`scan_all` 的**所有**已知專案各一列，沒有待辦的顯示 0。
 
     不隱藏 0 條的專案——隱藏了使用者就不知道那個專案可以開票。
@@ -355,21 +378,33 @@ def build_overview(config: AppConfig) -> dict[str, Any]:
     必須分得開（design §6.3），回 0 會讓前端無從分辨。`absent` 兩者都是 0。
 
     `doing` 是 `unfinished` 的子集合，給總覽的刻度上色用（票 02）。
+
+    票 19：每列多回 `parked` 計數與 `doing_tasks`／`recent_tasks` 兩組票（同 GET /tasks 的列形狀、含 path），
+    頂層多回 `recent_days`。`today` 可注入給測試；路由不傳＝sidecar 本地日期。
+    一次 `scan_tasks()` 同時算計數與挑票，不多跑 I/O。
     """
+    today = today or date.today()
     projects, permission_error = scan_all(config)
     rows: list[dict[str, Any]] = []
     for entry in projects:
         with open_tasks_dir(entry["path"], config, projects=projects) as td:
             if td.status == STATUS_OK and td.fd is not None:
-                counts = count_open(td.fd)
+                scanned = scan_tasks(td.fd)
+                counts = count_rows(scanned)
                 unfinished: int | None = counts.unfinished
                 doing: int | None = counts.doing
                 parked: int | None = counts.parked
+                doing_tasks, recent_tasks = pick_highlights(scanned, today)
+                for r in (*doing_tasks, *recent_tasks):
+                    r["path"] = task_path(td.project, r["name"])
+                highlights: tuple[list | None, list | None] = (doing_tasks, recent_tasks)
             elif td.status == STATUS_ABSENT:
                 unfinished = doing = parked = 0
+                highlights = ([], [])
             else:
                 # 三個欄位同一套規則：讀不到都是 None，不是 0（design §6.3）
                 unfinished = doing = parked = None
+                highlights = (None, None)
             rows.append({
                 "path": entry["path"],
                 "name": entry.get("name", ""),
@@ -377,10 +412,12 @@ def build_overview(config: AppConfig) -> dict[str, Any]:
                 "unfinished": unfinished,
                 "doing": doing,
                 "parked": parked,
+                "doing_tasks": highlights[0],
+                "recent_tasks": highlights[1],
                 "tasks_status": td.status,
                 "next_step": read_next_step(td.fledge_fd),
             })
-    return {"projects": rows, "permission_error": permission_error}
+    return {"projects": rows, "permission_error": permission_error, "recent_days": RECENT_DAYS}
 
 
 def _create_file(name: str, tasks_fd: int) -> int:

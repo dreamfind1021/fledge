@@ -105,6 +105,7 @@ def test_overview_reports_unavailable_not_zero(tmp_path, monkeypatch):
         # doing 走同一套規則。只讓其中一個回 null，前端就得為每個欄位各記一套判斷
         assert row["doing"] is None
         assert row["parked"] is None                              # 第三個數同一套規則
+        assert row["doing_tasks"] is None and row["recent_tasks"] is None   # 讀不到不是空清單
     finally:
         os.chmod(tasks, 0o755)
 

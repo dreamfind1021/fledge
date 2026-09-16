@@ -1130,3 +1130,65 @@ def test_update_content_lock_is_global_not_per_ticket(tmp_path, monkeypatch):
     results = _race(d, [op_a, op_b])
     assert all(r is not None for r in results), f"不同票應該兩邊都成功：{results}"
     assert max(max_inside) == 1, f"兩張不同票的臨界區同時進行過（尖峰 {max(max_inside)} 個）——鎖不是全域的"
+
+
+# ── 總覽的進行中／近期新增票（票 19，spec §4.1）────────────────────────
+
+from datetime import date as _date
+
+T19 = "---\nstatus: {status}\nsource: ai\ncreated: {created}\n---\n\n# {title}\n"
+
+
+def _write(tasks, name, status, created, title="t"):
+    (tasks / name).write_text(T19.format(status=status, created=created, title=title), encoding="utf-8")
+
+
+def test_pick_highlights_doing_by_number_and_recent_by_created_desc(tmp_path):
+    """doing_tasks 依編號升冪；recent_tasks 依 created 降冪、同日依編號升冪；
+    recent 不含 done、不含已在 doing 裡的、不含 created 壞掉的；邊界日（剛好 7 天）算進去。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    today = _date(2026, 9, 15)
+    _write(tasks, "06-a.md", "doing", "2026-09-10")
+    _write(tasks, "02-b.md", "doing", "2026-09-05")
+    _write(tasks, "03-c.md", "todo", "2026-09-09")
+    _write(tasks, "04-d.md", "todo", "2026-09-12")
+    _write(tasks, "05-e.md", "parked", "2026-09-12")      # parked 會進 recent（不是 done）
+    _write(tasks, "07-f.md", "todo", "2026-09-08")        # 邊界：today − 7 ＝ 09-08，算進去
+    _write(tasks, "08-g.md", "todo", "2026-09-07")        # 過期一天，不算
+    _write(tasks, "09-h.md", "done", "2026-09-14")        # done 不算
+    (tasks / "10-i.md").write_text("---\nstatus: todo\ncreated: not-a-date\n---\n\n# i\n", encoding="utf-8")   # created 壞掉不算
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        doing, recent = scanner.pick_highlights(scanner.scan_tasks(td.fd), today)
+    assert [r["number"] for r in doing] == [2, 6]
+    assert [r["number"] for r in recent] == [4, 5, 3, 7]   # 09-12 兩張依編號、09-09、09-08
+
+
+def test_recent_cutoff_is_inclusive(tmp_path):
+    """把 >= 改成 > 這條要紅。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    _write(tasks, "01-a.md", "todo", "2026-09-08")
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        _, recent = scanner.pick_highlights(scanner.scan_tasks(td.fd), _date(2026, 9, 15))
+    assert [r["number"] for r in recent] == [1]
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        _, recent = scanner.pick_highlights(scanner.scan_tasks(td.fd), _date(2026, 9, 16))
+    assert recent == []
+
+
+def test_overview_carries_highlights_with_path_and_three_states(tmp_path):
+    """ok → 兩個 list（每列同 GET /tasks 的形狀、含 path）；absent → []；頂層 recent_days。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    _write(tasks, "01-a.md", "doing", "2026-09-14")
+    ov = scanner.build_overview(config, today=_date(2026, 9, 15))
+    assert ov["recent_days"] == scanner.RECENT_DAYS == 7
+    row = next(r for r in ov["projects"] if r["path"] == str(proj))
+    assert [r["name"] for r in row["doing_tasks"]] == ["01-a.md"]
+    assert row["doing_tasks"][0]["path"] == scanner.task_path(str(proj), "01-a.md")
+    assert set(row["doing_tasks"][0]) >= {"name", "number", "title", "status", "source", "created", "anomalies", "fingerprint", "body", "editable", "path"}
+    assert row["recent_tasks"] == []                      # 那張是 doing，不重複進 recent
+    config2, proj2 = _setup(tmp_path / "second", project="empty")
+    row2 = next(r for r in scanner.build_overview(config2)["projects"] if r["path"] == str(proj2))
+    assert row2["doing_tasks"] == [] and row2["recent_tasks"] == []
