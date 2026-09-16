@@ -96,6 +96,13 @@ describe("待辦面板的顏色對比", () => {
     ["指令已複製的勾", ".tasks-cmd-act.is-done", "color", surface2],
     // 專案樹（票 19，spec §5.2）進行中橘點：非文字元件，門檻同記號 3:1
     ["樹的進行中橘點", ".tree-n i", "background", bg],
+    // 票 19 清單（spec §5.4／§5.6）：擱置是第四種輪廓（虛線空心方）；編輯中清單唯讀（D12）
+    // 停用的記號與動作鍵是圖示（lucide svg 吃 currentColor），非文字 3:1；下一步右上的「›」
+    // 是唯一的字符、spec 指定 --faint，同樣按非文字驗
+    ["parked 虛線框", ".tk-mark.is-parked::before", "border", bg],
+    ["停用的狀態記號", ".tk-mark:disabled", "color", bg],
+    ["停用的動作鍵", ".tk-act:disabled", "color", bg],
+    ["下一步的 › 記號", ".tasks-next-more", "color", bg],
   ])("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(3);
   });
@@ -103,6 +110,9 @@ describe("待辦面板的顏色對比", () => {
   // 票上的文字門檻 4.5:1。已完成的標題淡化到某個 token 就停，再淡就不合格
   it.each([
     ["已完成的標題", ".tk.is-done .tk-title", "color", bg],
+    // 票 19：擱置的標題淡化到 --dim 就停（與已完成同一條線）；編輯中停用的一行輸入是文字，不能掉到 --faint
+    ["擱置的標題", ".tk.is-parked .tk-title", "color", bg],
+    ["停用的一行輸入", ".tasks-new-input:disabled", "color", bg],
     ["來源 AI", ".tk-src.is-ai", "color", bg],
     ["來源 我", ".tk-src.is-me", "color", bg],
     // 所有專案頁的跨專案票列（票 19，spec §5.3）：列文字在 --bg 上；專案標籤有自己的 --surface-2 底
@@ -110,11 +120,8 @@ describe("待辦面板的顏色對比", () => {
     ["跨專案票列的專案標籤", ".tk-proj", "color", surface2],
     ["第二層分區標籤", ".tasks-sec-lab", "color", bg],
     ["第二層分區計數", ".tasks-sec-n", "color", bg],
-    // 展開預覽（spec §6.1／§6.4）新增的選擇器：不能只讓「16 tests passed」是因為
-    // 這幾條規則根本沒被掃到——沒有內文、不可編輯說明、正文與連結都要各自過 4.5:1
+    // 票內文的 markdown（右欄與編輯器預覽共用）：正文與連結都要各自過 4.5:1
     [".tk-md 內文", ".tk-md", "color", bg],
-    ["沒有內文的提示", ".tk-empty", "color", bg],
-    ["不可編輯的說明", ".tk-noedit", "color", bg],
     [".tk-md 連結", ".tk-md a", "color", bg],
     // 整頁編輯器（spec §6.2／§6.4，task 10 review FIX 4）：坐落在 --surface 上的文字
     [".ed-title 正常文字", ".ed-title", "color", surface],
@@ -157,8 +164,11 @@ describe("待辦面板的顏色對比", () => {
 
   // opacity 禁令。上面那組是從 token 值算的，算不到 opacity 疊出來的實際顏色，
   // 所以「不准用 opacity」本身要是一條規則，否則上面那組會給出安心的假象。
-  it("狀態記號、已完成列、專案樹與跨專案票列不得用 opacity 淡化", () => {
-    const rules = [...tasksCss.matchAll(/^(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*|\.tk-xrow[^{]*|\.tk-proj[^{]*)\{([^}]*)\}/gm)];
+  // 停用態也在禁令裡：index.contrast.test.ts 的全域白名單豁免 :disabled（WCAG 1.4.3），這裡不豁免——
+  // 編輯中清單唯讀是靠換 token 淡化的，一用 opacity 上面那組就驗不到實際顏色。
+  // `.tk-act(?!s)` 排除 .tk-acts：那是滑過才顯形的容器，0↔1 是顯示／隱藏不是淡化，刻意用 opacity
+  it("狀態記號、已完成列、專案樹、跨專案票列、動作鍵、一行輸入與下一步不得用 opacity 淡化", () => {
+    const rules = [...tasksCss.matchAll(/^(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*|\.tk-xrow[^{]*|\.tk-proj[^{]*|\.tk-act(?!s)[^{]*|\.tasks-new-input[^{]*|\.tasks-next[^{]*)\{([^}]*)\}/gm)];
     // regex 沒命中會讓迴圈跑零次而測試全綠——先確認真的有抓到規則
     expect(rules.length).toBeGreaterThanOrEqual(4);
     for (const [, selector, body] of rules) {

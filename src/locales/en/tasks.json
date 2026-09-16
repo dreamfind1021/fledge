@@ -95,8 +95,6 @@
     "collapseDone": "Hide done",
     "openInEditor": "Open the file in your editor",
     "statusCycle": "{{current}}, change status to {{next}}",
-    "expandTicket": "Expand to read body",
-    "collapseTicket": "Collapse body",
     "toolbarHeading": "Heading",
     "toolbarBold": "Bold",
     "toolbarCode": "Inline code",

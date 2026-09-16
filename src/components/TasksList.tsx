@@ -1,66 +1,55 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Pencil, SquarePen, Trash2, TriangleAlert } from "lucide-react";
-import { renderMarkdownLite } from "../lib/markdownLite";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Copy, Pause, Pencil, SquarePen, Trash2, TriangleAlert, Undo2 } from "lucide-react";
 import { writeClipboard } from "../lib/clipboard";
 import type { TaskDraft } from "../lib/taskDraft";
-import type { TaskRow, TasksListResponse } from "../lib/sidecar";
+import type { TaskRow, TaskStatus, TasksListResponse } from "../lib/sidecar";
 
 type T = (k: string, o?: Record<string, unknown>) => string;
 
-// 點一下的循環（design §5.2）。三種狀態少到不需要下拉選單。
+// 點一下的循環（design §5.2）：三態不變。parked 不在環裡，但點它的記號回 todo（＝取回），
+// 所以 `NEXT_STATUS[status]` 對四種值都有定義，不再需要 `?? "todo"` 的 fallback（spec §5.6）。
 // 住在這裡是因為狀態按鈕的可及名稱要講出「點下去會變成什麼」——Tasks.tsx 從這裡 import。
-export const NEXT_STATUS: Record<string, string> = { todo: "doing", doing: "done", done: "todo" };
+export const NEXT_STATUS: Record<TaskStatus, TaskStatus> = { todo: "doing", doing: "done", done: "todo", parked: "todo" };
 
 // created 是 YYYY-MM-DD，判不出來時 sidecar 回空字串。只顯示月-日：backlog 幾乎都是當年的，
 // 年份佔四個字寬卻幾乎不帶資訊。認不得的格式一律不畫，不做猜測性的切字。
 const monthDay = (d: string) => (/^\d{4}-\d{2}-\d{2}$/.test(d) ? d.slice(5) : "");
 
-function Ticket({ task, expanded, onToggle, onCycle, onDelete, onOpen, onEdit, rescueDraft, t }: {
-  task: TaskRow;
-  expanded: boolean;
-  onToggle: () => void;
-  onCycle: (task: TaskRow) => void;
-  onDelete: (task: TaskRow) => void;
-  onOpen: (task: TaskRow) => void;
-  onEdit: (task: TaskRow) => void;
-  rescueDraft: TaskDraft | null;
-  t: T;
+function Ticket({ task, active, readOnly, onSelect, onCycle, onPark, onDelete, onOpen, onEdit, t }: {
+  task: TaskRow; active: boolean; readOnly: boolean;
+  onSelect: (task: TaskRow) => void; onCycle: (task: TaskRow) => void; onPark: (task: TaskRow) => void;
+  onDelete: (task: TaskRow) => void; onOpen: (task: TaskRow) => void; onEdit: (task: TaskRow) => void; t: T;
 }) {
   const [openFlag, setOpenFlag] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  // 這張票的救援草稿是否已複製——票寫壞（editable:false）時編輯入口沒了，
-  // 這是唯一救得回內容的地方，複製回饋不能像 onClick 直丟一樣悄悄失敗。
-  const [rescueCopied, setRescueCopied] = useState(false);
-  // 展開狀態改由父層（Tasks.tsx 的 expandedName）控制，不再是本地 state——
-  // 從編輯器返回時這個 Ticket 會重新 mount，本地 state 會被重置成收起，
-  // 「保持展開」（spec §6.2）就做不到。
+  // 編輯中清單唯讀（D12）連已經展開的刪除確認也要收掉：否則先展開確認、再進編輯，確認鍵仍能送 DELETE
+  // ——甚至刪掉正在編輯的票（Codex plan R1 high）
+  useEffect(() => { if (readOnly) setConfirming(false); }, [readOnly]);
   const date = monthDay(task.created);
   // runtime JSON 沒驗證：缺欄、非布林一律當不可編輯，fail-safe 落在不給編輯那側（spec §3）
   const editable = task.editable === true;
   // 列上原有的按鈕不得因此被觸發兩次行為（spec §6.1）：每顆都 stopPropagation
   const stop = (fn: () => void) => (e: React.MouseEvent) => { e.stopPropagation(); fn(); };
+  const parked = task.status === "parked";
   return (
     <div className={`tk is-${task.status}`}>
-      <div className="tk-row" role="button" tabIndex={0}
-        aria-label={expanded ? t("a11y.collapseTicket") : t("a11y.expandTicket")}
-        aria-expanded={expanded}
-        onClick={onToggle}
+      {/* 點列＝選中（右欄顯示它），不再原地展開（spec §5.4）。同一張再點由父層變 null */}
+      <div className={`tk-row${active ? " active" : ""}`} role="button" tabIndex={0}
+        aria-label={t(active ? "a11y.deselectTicket" : "a11y.selectTicket")} aria-pressed={active}
+        onClick={() => onSelect(task)}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;   // 巢狀按鈕自己的鍵盤啟動不該被列吃掉：
                                                         // 在冒泡途中 preventDefault 會取消瀏覽器合成 click，
                                                         // 那顆按鈕的 onClick 連觸發的機會都沒有
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); }
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(task); }
         }}>
-        {/* 狀態記號＝狀態按鈕：點一下循環 todo → doing → done → todo（design §5.2）。
-            三態要有三種**輪廓**：空心方／實心方／打勾。只差顏色不夠——doing 與 done 若都是
+        {/* 狀態記號＝狀態按鈕：點一下循環 todo → doing → done → todo（design §5.2）；parked 點了回 todo。
+            四態要有四種**輪廓**：空心方／實心方／打勾／虛線空心方。只差顏色不夠——doing 與 done 若都是
             實心方塊，色覺障礙或單色顯示下就分不開（Codex 審查 medium）。
             可及名稱必須帶「現在是什麼」＋「點下去會變什麼」：aria-label 會蓋掉 title 與內文，
             光寫「切換狀態」會讓報讀使用者完全聽不出這張票的狀態。 */}
-        <button className={`tk-mark is-${task.status}`}
-          aria-label={t("a11y.statusCycle", {
-            current: t(`status.${task.status}`),
-            next: t(`status.${NEXT_STATUS[task.status] ?? "todo"}`),
-          })}
+        <button className={`tk-mark is-${task.status}`} disabled={readOnly}
+          aria-label={t("a11y.statusCycle", { current: t(`status.${task.status}`), next: t(`status.${NEXT_STATUS[task.status]}`) })}
           title={t(`status.${task.status}`)} onClick={stop(() => onCycle(task))}>
           {task.status === "done" ? <Check size={12} strokeWidth={3} /> : null}
         </button>
@@ -74,56 +63,33 @@ function Ticket({ task, expanded, onToggle, onCycle, onDelete, onOpen, onEdit, r
         )}
         {task.source ? <span className={`tk-src is-${task.source}`}>{t(`source.${task.source}`)}</span> : null}
         {date ? <span className="tk-date">{date}</span> : null}
-        {/* 動作滑過才顯形（用 opacity，不是 display：位置得留著，否則整列會在 hover 時跳動）。
+        {/* 四顆動作（spec §5.4）。編輯中（readOnly）全部 disabled：清單唯讀（D12）。
+            滑過才顯形（用 opacity，不是 display：位置得留著，否則整列會在 hover 時跳動）。
             CSS 另有 :focus-within，鍵盤 Tab 進來一樣看得到。 */}
         <span className="tk-acts">
           {editable && (
-            <button className="tk-act" aria-label={t("list.edit")} title={t("list.edit")} onClick={stop(() => onEdit(task))}>
+            <button className="tk-act" disabled={readOnly} aria-label={t("list.edit")} title={t("list.edit")} onClick={stop(() => onEdit(task))}>
               <Pencil size={13} strokeWidth={2} />
             </button>
           )}
           {/* 要寫內文就開檔案（design §5.2）——刻意不做票詳情編輯表單 */}
-          <button className="tk-act" aria-label={t("a11y.openInEditor")} title={t("a11y.openInEditor")}
-            onClick={stop(() => onOpen(task))}>
+          <button className="tk-act" disabled={readOnly} aria-label={t("a11y.openInEditor")} title={t("a11y.openInEditor")} onClick={stop(() => onOpen(task))}>
             <SquarePen size={13} strokeWidth={2} />
           </button>
-          <button className="tk-act is-danger" aria-label={t("list.delete")} title={t("list.delete")}
-            onClick={stop(() => setConfirming(true))}>
+          <button className="tk-act" disabled={readOnly} aria-label={t(parked ? "list.unpark" : "list.park")} title={t(parked ? "list.unpark" : "list.park")}
+            onClick={stop(() => onPark(task))}>
+            {parked ? <Undo2 size={13} strokeWidth={2} /> : <Pause size={13} strokeWidth={2} />}
+          </button>
+          <button className="tk-act is-danger" disabled={readOnly} aria-label={t("list.delete")} title={t("list.delete")} onClick={stop(() => setConfirming(true))}>
             <Trash2 size={13} strokeWidth={2} />
           </button>
         </span>
       </div>
-      {expanded && (
-        <div className="tk-body">
-          {task.body
-            ? <div className="tk-md">{renderMarkdownLite(task.body)}</div>
-            : <div className="tk-empty">{t("list.noBody")}</div>}
-          {!editable && <div className="tk-noedit">{t("list.notEditable")}</div>}
-          {/* 票寫壞了但檔名還在清單裡：草稿不是孤兒，不會出現在孤兒草稿列，這裡是唯一救得回
-              內容的地方（Codex 全鏈路審查 high）。不給丟棄——這張票還在，檔案可能還救得回來，
-              在壞檔旁邊放一顆一鍵刪除使用者文字唯一副本的按鈕，跟「救援」的目的正相反。 */}
-          {!editable && rescueDraft && (
-            <div className="tk-banner is-draft">
-              <span className="btext">{t("list.draftFound")}</span>
-              {rescueCopied && <span className="btext">{t("list.copied")}</span>}
-              <span className="bacts">
-                <button className="bbtn"
-                  onClick={() => writeClipboard(`# ${rescueDraft.title}\n\n${rescueDraft.body}`).then((ok) => ok && setRescueCopied(true))}>
-                  {t("list.copyMine")}
-                </button>
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-      {/* 以下兩個區塊（刪除確認、異常說明）與現有程式碼完全相同，原封保留 */}
-      {confirming && (
+      {confirming && !readOnly && (
         // 先跳確認（design §5.2）：檔案直接消失，而 .fledge/ 不進 git，刪了救不回
         <div className="tk-confirm">
           <span>{t("list.confirmDelete")}</span>
-          <button className="tk-confirm-yes" onClick={() => { setConfirming(false); onDelete(task); }}>
-            {t("list.delete")}
-          </button>
+          <button className="tk-confirm-yes" disabled={readOnly} onClick={() => { setConfirming(false); onDelete(task); }}>{t("list.delete")}</button>
           <button className="tk-confirm-no" onClick={() => setConfirming(false)}>{t("list.cancel")}</button>
         </div>
       )}
@@ -139,9 +105,11 @@ function Ticket({ task, expanded, onToggle, onCycle, onDelete, onOpen, onEdit, r
   );
 }
 
-// 第二層：進行中 → 待辦 → 已完成（摺疊）。**做完不刪檔案**——
+// 第二層：進行中 → 待辦 → 擱置 → 已完成，四區都可摺疊（spec §5.4）。**做完不刪檔案**——
 // 上一版的第一條結構性缺陷就是「完成即移除在燒資產」。
 const COPIED_FEEDBACK_MS = 2000;
+// 摺疊標頭的 a11y key 是 `a11y.expandDoing`／`a11y.collapseDoing` 這種型式：區名首字大寫接在後面
+const cap = (s: string) => s[0].toUpperCase() + s.slice(1);
 
 // 票 21：state.md 末尾的「貼進新對話的指令」（handoff skill 寫的，一般收工不會有）。
 // 預設摺疊只露第一行——這一頁的主角是票清單，指令只在要換對話那一刻才用到。
@@ -188,27 +156,32 @@ function HandoffCommand({ text, t }: { text: string; t: T }) {
 }
 
 export function TasksList({
-  data, projectName, failed, notice, onBack, onCreate, onCycle, onDelete, onOpen, onEdit,
-  expandedName, onExpand, orphanDrafts, draftsByName, onOrphanDiscard, t,
+  data, projectName, failed, notice, selectedName, onSelectTicket, showNote, onToggleNote, readOnly,
+  orphanDrafts, onOrphanDiscard, onBack, onCreate, onCycle, onPark, onDelete, onOpen, onEdit, t,
 }: {
   data: TasksListResponse | null;
   projectName: string;
   failed: boolean;
   notice: string;
+  selectedName: string | null;               // 反白哪張票（右欄正在顯示的）
+  onSelectTicket: (name: string) => void;    // 點列；同一張再點＝父層負責變 null
+  showNote: boolean;
+  onToggleNote: () => void;
+  readOnly: boolean;                         // 編輯中：一行輸入、狀態記號、四顆動作全部 disabled
+  orphanDrafts: Array<{ name: string; draft: TaskDraft }>;
+  onOrphanDiscard: (name: string) => void;
   onBack: () => void;
   onCreate: (title: string) => Promise<void>;
   onCycle: (task: TaskRow) => void;
+  onPark: (task: TaskRow) => void;           // parked→todo、其餘→parked，目標由父層決定
   onDelete: (task: TaskRow) => void;
   onOpen: (task: TaskRow) => void;
   onEdit: (task: TaskRow) => void;
-  expandedName: string | null;
-  onExpand: (name: string | null) => void;
-  orphanDrafts: Array<{ name: string; draft: TaskDraft }>;
-  draftsByName: Map<string, TaskDraft>;
-  onOrphanDiscard: (name: string) => void;
   t: T;
 }) {
-  const [showDone, setShowDone] = useState(false);
+  // 四區各自摺疊：進行中／待辦預設展開，擱置／已完成預設收起（spec §5.4）
+  const [open, setOpen] = useState({ doing: true, todo: true, parked: false, done: false });
+  const toggle = (k: keyof typeof open) => setOpen((o) => ({ ...o, [k]: !o[k] }));
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [createFailed, setCreateFailed] = useState(false);
@@ -253,45 +226,47 @@ export function TasksList({
   }
 
   const doing = data.tasks.filter((x) => x.status === "doing");
+  const parked = data.tasks.filter((x) => x.status === "parked");
   const done = data.tasks.filter((x) => x.status === "done");
-  // 用「兩者皆非」而不是 === "todo"：三個分區加起來必須覆蓋整份清單，
-  // 否則哪天多一個狀態值，那些票會從畫面上無聲消失。
-  const todo = data.tasks.filter((x) => x.status !== "doing" && x.status !== "done");
+  // 用「三者皆非」而不是 === "todo"：四個分區加起來必須覆蓋整份清單，多一個狀態值時那些票才不會無聲消失
+  const todo = data.tasks.filter((x) => x.status !== "doing" && x.status !== "parked" && x.status !== "done");
   const row = (x: TaskRow) => (
-    <Ticket key={x.name} task={x} expanded={expandedName === x.name}
-      onToggle={() => onExpand(expandedName === x.name ? null : x.name)}
-      rescueDraft={draftsByName.get(x.name) ?? null}
-      onCycle={onCycle} onDelete={onDelete} onOpen={onOpen} onEdit={onEdit} t={t} />
+    <Ticket key={x.name} task={x} active={selectedName === x.name} readOnly={readOnly}
+      onSelect={(task) => onSelectTicket(task.name)}
+      onCycle={onCycle} onPark={onPark} onDelete={onDelete} onOpen={onOpen} onEdit={onEdit} t={t} />
   );
-  const section = (label: string, n: number) => (
-    <div className="tasks-sec">
-      <span className="tasks-sec-lab">{label}</span>
-      <span className="tasks-sec-line" />
-      <span className="tasks-sec-n">{n}</span>
-    </div>
+  // 空的區整段不畫——留一個 0 的標頭只是噪音
+  const fold = (k: keyof typeof open, label: string, items: TaskRow[]) => items.length > 0 && (
+    <>
+      <button className="tasks-sec is-toggle" onClick={() => toggle(k)}
+        aria-label={t(open[k] ? `a11y.collapse${cap(k)}` : `a11y.expand${cap(k)}`)} aria-expanded={open[k]}>
+        {open[k] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <span className="tasks-sec-lab">{label}</span><span className="tasks-sec-line" /><span className="tasks-sec-n">{items.length}</span>
+      </button>
+      {open[k] && items.map(row)}
+    </>
   );
 
   return (
     <div className="tasks-pane">
       {back}
-      {head(t("list.summary", { doing: doing.length, todo: todo.length, done: done.length }))}
+      {head(t("list.summary", { doing: doing.length, todo: todo.length, parked: parked.length, done: done.length }))}
       {data.next_step ? (
-        <div className="tasks-next">
-          <div className="tasks-next-lab">{t("overview.nextStep")}</div>
+        // 整塊可點 → 右欄顯示離場筆記（spec §5.4 第 3 點）。右上只有一個「›」，沒有文字（使用者要求）
+        <div className={`tasks-next${showNote ? " is-on" : ""}`} role="button" tabIndex={0}
+          aria-label={t(showNote ? "a11y.hideNote" : "a11y.showNote")} aria-pressed={showNote}
+          onClick={onToggleNote}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggleNote(); } }}>
+          <div className="tasks-next-lab">{t("overview.nextStep")}<span className="tasks-next-more" aria-hidden="true">›</span></div>
           <div className="tasks-next-tx">{data.next_step}</div>
         </div>
       ) : null}
       {/* key 綁專案：換專案時摺疊與「已複製」都歸零，不把上一個專案的展開態帶過來 */}
       {data.handoff_command ? <HandoffCommand key={data.project} text={data.handoff_command} t={t} /> : null}
       <form className="tasks-new" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-        <input
-          className="tasks-new-input"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder={t("list.newPlaceholder")}
-          aria-label={t("list.newPlaceholder")}
-        />
-        <button className="tasks-new-btn" type="submit" disabled={!draft.trim() || busy}>{t("list.add")}</button>
+        <input className="tasks-new-input" value={draft} disabled={readOnly} onChange={(e) => setDraft(e.target.value)}
+          placeholder={t("list.newPlaceholder")} aria-label={t("list.newPlaceholder")} />
+        <button className="tasks-new-btn" type="submit" disabled={readOnly || !draft.trim() || busy}>{t("list.add")}</button>
       </form>
       {createFailed ? <div className="tasks-note is-error">{t("list.createError")}</div> : null}
       {notice ? <div className="tasks-note is-error">{t(notice)}</div> : null}
@@ -310,25 +285,12 @@ export function TasksList({
           </span>
         </div>
       ))}
-      {data.tasks.length === 0 ? (
-        <div className="tasks-note">{t("list.empty")}</div>
-      ) : (
+      {data.tasks.length === 0 ? <div className="tasks-note">{t("list.empty")}</div> : (
         <>
-          {/* 空的區整段不畫——留一個 0 的標頭只是噪音 */}
-          {doing.length > 0 && <>{section(t("list.doing"), doing.length)}{doing.map(row)}</>}
-          {todo.length > 0 && <>{section(t("list.todo"), todo.length)}{todo.map(row)}</>}
-          {done.length > 0 && (
-            <>
-              <button className="tasks-sec is-toggle" onClick={() => setShowDone((s) => !s)}
-                aria-label={showDone ? t("a11y.collapseDone") : t("a11y.expandDone")}>
-                {showDone ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                <span className="tasks-sec-lab">{t("list.done")}</span>
-                <span className="tasks-sec-line" />
-                <span className="tasks-sec-n">{done.length}</span>
-              </button>
-              {showDone && done.map(row)}
-            </>
-          )}
+          {fold("doing", t("list.doing"), doing)}
+          {fold("todo", t("list.todo"), todo)}
+          {fold("parked", t("list.parked"), parked)}
+          {fold("done", t("list.done"), done)}
         </>
       )}
     </div>

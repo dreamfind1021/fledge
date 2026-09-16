@@ -49,15 +49,20 @@
 .tasks-back { align-self: flex-start; display: inline-flex; align-items: center; gap: 3px; background: transparent; border: none; color: var(--dim); font-size: 12px; font-family: var(--font-ui); cursor: pointer; padding: 3px 6px 3px 2px; border-radius: 6px; margin-bottom: 8px; }
 .tasks-back:hover { color: var(--text); background: var(--surface); }
 
-/* 下一步：這一層最重要的一句話，字級與顏色都要撐得住 */
-.tasks-next { border-left: 3px solid var(--primary); padding: 2px 0 2px 16px; margin: 20px 0 24px 2px; }
-.tasks-next-lab { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--primary); margin-bottom: 3px; }
+/* 下一步：這一層最重要的一句話，字級與顏色都要撐得住。中欄列距（D9）：比整頁時緊。
+   整塊可點（票 19）：點了右欄顯示離場筆記；顯示中反白，與票列反白同一套 */
+.tasks-next { border-left: 3px solid var(--primary); padding: 2px 12px 2px 16px; margin: 14px 0 16px 2px; cursor: pointer; border-radius: 0 8px 8px 0; }
+.tasks-next:hover { background: var(--surface); }
+.tasks-next.is-on { background: var(--active); }
+.tasks-next-lab { display: flex; align-items: center; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--primary); margin-bottom: 3px; }
 .tasks-next-tx { font-size: 14px; line-height: 1.6; color: var(--text); }
+/* 右上只有一個「›」，沒有文字；--faint 是非文字用途（3:1 門檻） */
+.tasks-next-more { margin-left: auto; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); font-size: 14px; line-height: 1; }
 
 /* 貼進新對話的指令（票 21）：視覺語言沿用 .tasks-next（左緣條＋小標籤），但左緣用 --divider、
    標籤用 --dim——「下一步」是這一層最重要的一句，指令是它的附屬，不該跟它搶第一眼。
-   margin-top 為負是要貼在 .tasks-next 的 24px 下緣裡，讓兩塊讀起來是同一組 */
-.tasks-cmd { border-left: 3px solid var(--divider); padding: 2px 0 2px 16px; margin: -8px 0 24px 2px; }
+   margin-top 為負是要貼在 .tasks-next 的 16px 下緣裡，讓兩塊讀起來是同一組（D9） */
+.tasks-cmd { border-left: 3px solid var(--divider); padding: 2px 0 2px 16px; margin: -4px 0 16px 2px; }
 .tasks-cmd-lab { font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--dim); margin-bottom: 6px; }
 /* 整個框是按鈕（點了展開／收合），跟 .tk-row 同一套 */
 .tasks-cmd-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 8px 9px 11px; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--border); cursor: pointer; }
@@ -74,7 +79,7 @@
 .tasks-cmd-act.is-done { color: var(--session); }
 
 /* 分區標頭 */
-.tasks-sec { display: flex; align-items: center; gap: 7px; width: 100%; margin: 28px 0 8px; padding: 0 2px; background: transparent; border: none; font-family: var(--font-ui); color: var(--dim); }
+.tasks-sec { display: flex; align-items: center; gap: 7px; width: 100%; margin: 16px 0 4px; padding: 0 2px; background: transparent; border: none; font-family: var(--font-ui); color: var(--dim); }
 .tasks-sec-lab { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); }
 .tasks-sec-line { flex: 1; height: 1px; background: var(--divider); }
 .tasks-sec-n { font-family: var(--font-mono); font-size: 11px; font-weight: 600; color: var(--dim); }
@@ -83,12 +88,14 @@
 
 /* ── 一張票 ── */
 .tk { border-radius: var(--row-radius); }
-.tk-row { position: relative; display: flex; align-items: center; gap: 10px; padding: 9px 12px 9px 10px; border-radius: var(--row-radius); font-size: 13px; }
+.tk-row { position: relative; display: flex; align-items: center; gap: 10px; padding: 6px 10px 6px 8px; border-radius: var(--row-radius); font-size: 13px; }
 .tk-row:hover { background: var(--surface); }
 /* 進行中：極淡的橘底＋左緣光條。放在 hover 規則之後，hover 再由下一條蓋回去 */
 .tk.is-doing .tk-row { background: color-mix(in srgb, var(--primary) 6%, transparent); }
 .tk.is-doing .tk-row::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 2px; background: var(--primary); }
 .tk.is-doing .tk-row:hover { background: var(--surface); }
+/* 選中的票列（右欄正在顯示它）。放在 hover 與進行中之後：選中要壓過兩者 */
+.tk-row.active, .tk.is-doing .tk-row.active { background: var(--active); }
 
 /* 狀態記號＝狀態按鈕。按鈕本體 20px 是為了點得到，看得見的方塊由 ::before 畫成 11px */
 .tk-mark { position: relative; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin: -4px 0; padding: 0; background: transparent; border: none; border-radius: 5px; cursor: pointer; color: var(--faint); }
@@ -100,12 +107,15 @@
 .tk-mark.is-doing::before { background: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent); }
 .tk-mark.is-todo:hover::before { border-color: var(--dim); }
 .tk-mark:hover { color: var(--dim); }
+/* 擱置（第四種輪廓＝虛線空心方，spec §5.6）；四態靠輪廓分，不靠顏色 */
+.tk-mark.is-parked::before { content: ""; position: absolute; inset: 4.5px; border-radius: 3px; border: 1.5px dashed var(--faint); }
 
 /* 票號：你跟 AI 講話是講「第 7 條」，所以它在這裡是主要識別，不是註腳 */
 .tk-num { width: 28px; flex-shrink: 0; text-align: right; font-family: var(--font-mono); font-size: 14px; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; }
 .tk.is-doing .tk-num { color: var(--primary); font-weight: 700; }
 .tk-title { flex: 1; min-width: 0; font-size: 13.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tk.is-done .tk-title { color: var(--dim); }
+.tk.is-parked .tk-title { color: var(--dim); }
 /* 已完成的淡化只做到 --dim（7.13:1），**不用 opacity**。
    opacity 會把顏色往底色拉、無聲打掉對比度：原本 done 的記號 .65 → 2.13:1（門檻 3）、
    票號 .5 → 1.74:1、來源 .6 的 AI 紫 → 3.57:1（門檻 4.5），三條都不合格而 CSS 上看不出來。
@@ -128,9 +138,8 @@
 .tk-flagbody .tk-file { font-family: var(--font-mono); font-size: 11px; color: var(--faint); margin-bottom: 4px; }
 .tk-flagbody ul { margin: 0; padding-left: 16px; }
 
-/* ── 展開後的內文預覽（spec §6.1）── */
+/* ── 票內文的 markdown 樣式：右欄與編輯器預覽共用 ── */
 .tk-row { cursor: pointer; }
-.tk-body { margin: 2px 10px 10px 30px; padding: 12px 14px 14px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); }
 .tk-md { font-size: 13px; line-height: 1.75; color: var(--dim); }
 .tk-md > *:first-child { margin-top: 0; }
 .tk-md > *:last-child { margin-bottom: 0; }
@@ -144,9 +153,6 @@
 .tk-md li { margin: 3px 0; }
 .tk-md blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .tk-md a { color: var(--primary); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--primary) 40%, transparent); }
-/* 說明文字用 --dim 不用 --faint：--faint 是色階裡最淡的一階，保留給非文字用途（spec §6.4） */
-.tk-empty, .tk-noedit { font-size: 12.5px; color: var(--dim); font-style: italic; }
-.tk-noedit { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--divider); }
 
 /* 動作：滑過或鍵盤走到才顯形。用 opacity 不用 display——位置得留著，否則整列會在 hover 時跳動 */
 .tk-acts { flex-shrink: 0; display: flex; gap: 2px; opacity: 0; transition: opacity .12s ease; }
@@ -154,12 +160,18 @@
 .tk-act { display: inline-flex; align-items: center; padding: 3px; background: transparent; border: none; color: var(--faint); cursor: pointer; border-radius: 4px; }
 .tk-act:hover { color: var(--text); background: var(--hover); }
 .tk-act.is-danger:hover { color: var(--error); background: color-mix(in srgb, var(--error) 15%, transparent); }
+/* 編輯中清單唯讀（D12）：停用不用 opacity，換 token ＋ 拿掉 hover（含刪除那顆的紅底）。
+   放在所有 :hover 規則之後，cascade 才壓得過 */
+.tk-mark:disabled, .tk-act:disabled { cursor: default; color: var(--faint); }
+.tk-mark:disabled:hover, .tk-act:disabled:hover { background: transparent; color: var(--faint); }
 
 /* ── 一行輸入建票：貼齊清單，看起來像清單的一格，不是另一條工具列 ── */
 .tasks-new { display: flex; gap: 8px; margin: 0 0 6px; padding-left: 2px; }
 .tasks-new-input { flex: 1; min-width: 0; background: transparent; border: 1px dashed var(--border); border-radius: 8px; padding: 8px 12px; color: var(--text); font-size: 12.5px; font-family: var(--font-ui); }
 .tasks-new-input::placeholder { color: var(--faint); }
 .tasks-new-input:focus { outline: none; border-style: solid; border-color: var(--focus); }
+/* 編輯中清單唯讀（D12）：文字降到 --dim（仍是文字，4.5:1）、虛線改點線 */
+.tasks-new-input:disabled { color: var(--dim); border-style: dotted; }
 .tasks-new-btn { flex-shrink: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0 14px; color: var(--text); font-size: 12px; font-weight: 600; font-family: var(--font-ui); cursor: pointer; }
 .tasks-new-btn:hover:not(:disabled) { background: var(--hover); }
 .tasks-new-btn:disabled { color: var(--faint); cursor: default; }

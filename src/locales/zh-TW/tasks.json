@@ -95,8 +95,6 @@
     "collapseDone": "收起已完成",
     "openInEditor": "用編輯器打開檔案",
     "statusCycle": "{{current}}，點一下切換成 {{next}}",
-    "expandTicket": "展開看內文",
-    "collapseTicket": "收起內文",
     "toolbarHeading": "標題",
     "toolbarBold": "粗體",
     "toolbarCode": "行內程式碼",

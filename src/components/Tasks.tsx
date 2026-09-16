@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useTranslation } from "react-i18next";
 import {
   TaskConflictError, createTask, deleteTask, fetchTasks, fetchTasksOverview, openFile, updateTask,
-  type TaskRow, type TasksListResponse, type TasksOverview as TasksOverviewData,
+  type TaskRow, type TaskStatus, type TasksListResponse, type TasksOverview as TasksOverviewData,
 } from "../lib/sidecar";
 import { clearDraft, listDrafts } from "../lib/taskDraft";
 import { NEXT_STATUS, TasksList } from "./TasksList";
@@ -56,7 +56,8 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     setReloadKey((k) => k + 1);
   }, []);
 
-  const cycle = useCallback((task: TaskRow) => {
+  // 改狀態的共用底層（spec §5.6）：循環（記號）與擱置／取回（動作鍵）都走這裡，目標狀態由呼叫端決定
+  const setStatus = useCallback((task: TaskRow, next: TaskStatus) => {
     if (port == null || selected == null) return;
     // 同一張票同時只讓一個改狀態的請求在路上。少了這道鎖，快速連點會用**同一個
     // fingerprint** 送出兩次 PATCH：第一次成功後檔案的 fingerprint 就變了，第二次必然
@@ -66,7 +67,7 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     if (inFlight.current.has(key)) return;
     inFlight.current.add(key);
     setNotice("");
-    updateTask(port, selected, task.name, NEXT_STATUS[task.status] ?? "todo", task.fingerprint)
+    updateTask(port, selected, task.name, next, task.fingerprint)
       // 用回傳的票取代本地狀態（含新 fingerprint）。少了這步，改一次之後本地的 fingerprint
       // 就過期了，下一次改狀態或刪除會被錯誤地判成 409（design §7.2）。
       .then((updated) => setList((cur) => (cur && cur.tasks
@@ -75,6 +76,9 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
       .catch(onActionError)
       .finally(() => inFlight.current.delete(key));
   }, [port, selected, onActionError]);
+  const cycle = useCallback((task: TaskRow) => setStatus(task, NEXT_STATUS[task.status]), [setStatus]);
+  // 擱置／取回：parked→todo、其餘→parked（spec §5.6）
+  const park = useCallback((task: TaskRow) => setStatus(task, task.status === "parked" ? "todo" : "parked"), [setStatus]);
 
   // 刪票時一併清草稿（spec §7.6：使用者自己刪的才清；票是外部消失的孤兒草稿不動）
   const remove = useCallback((task: TaskRow) => {
@@ -152,11 +156,6 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   const allDrafts = selected && list ? listDrafts(selected) : [];
   const orphanDrafts = allDrafts.filter((d) =>
     list?.tasks_status !== "absent" && !list?.tasks?.some((x) => x.name === d.name));
-  // 票還活著但寫壞了（update_content 非原子寫入中途失敗 → can_round_trip 失敗 → editable:
-  // false）：TasksList 正確地藏起編輯入口，但草稿的檔名還在清單裡、不是孤兒，不會出現在上面
-  // 那份孤兒草稿列——沒有這份對照表，草稿會卡在 localStorage 裡，介面上完全看不到也複製不出來。
-  // K6「寫壞檔＋沒有草稿不可能同時發生」的安全網在這個情境下事實上打不開（Codex 全鏈路審查 high）。
-  const draftsByName = new Map(allDrafts.map((d) => [d.name, d.draft]));
 
   // 票 19 過渡期：樹先掛上讓導覽有入口，狀態機留給 Task 9
   const shell = (inner: ReactNode) => (
@@ -190,10 +189,12 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   return shell(selected == null
     ? <TasksOverview data={overview} failed={failed} onSelect={select} t={t} />
     : <TasksList data={list} projectName={projectName} failed={failed} notice={notice}
-        expandedName={expandedName} onExpand={setExpandedName}
-        orphanDrafts={orphanDrafts} draftsByName={draftsByName}
+        selectedName={expandedName} onSelectTicket={(name) => setExpandedName((cur) => (cur === name ? null : name))}
+        showNote={false} onToggleNote={() => {}}
+        readOnly={editing != null}
+        orphanDrafts={orphanDrafts}
         onOrphanDiscard={(name) => { clearDraft(selected, name); setReloadKey((k) => k + 1); }}
         onBack={back} onCreate={create}
-        onCycle={cycle} onDelete={remove} onOpen={openInEditor} onEdit={edit}
+        onCycle={cycle} onPark={park} onDelete={remove} onOpen={openInEditor} onEdit={edit}
         t={t} />);
 }
