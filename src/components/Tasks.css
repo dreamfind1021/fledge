@@ -17,6 +17,30 @@
 .tasks-sum { margin-left: auto; font-family: var(--font-mono); font-size: 11.5px; color: var(--faint); }
 .tasks-sum .is-warn { color: var(--warning); }
 
+/* ── 專案樹（票 19，spec §5.2）：只有專案名＋數字。視覺沿用記憶面板左欄（.mem-index／.lrow） ── */
+.tree { width: 232px; flex-shrink: 0; border-right: 1px solid var(--divider); display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 14px 8px 24px; }
+.tree-head { display: flex; align-items: baseline; gap: 8px; padding: 0 9px 10px; }
+.tree-head h1 { font-size: 17px; font-weight: 800; margin: 0; }
+.tree-head .s { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--dim); white-space: nowrap; }
+.tree-head .s .is-warn { color: var(--warning); }
+.tree-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 9px; border: none; background: transparent; border-radius: 6px; font-size: 12.5px; font-family: var(--font-ui); color: var(--text); text-align: left; cursor: pointer; }
+.tree-item:hover { background: var(--surface); }
+.tree-item.active { background: var(--active); }
+.tree-item.is-all { font-weight: 700; margin-bottom: 4px; }
+.tree-item.is-all svg { color: var(--dim); }
+.tree-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 數字用 --dim（文字，4.5:1）；橘點是非文字；+N 是文字所以也 --dim，不用 --faint */
+.tree-n { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.tree-n i { width: 6px; height: 6px; border-radius: 2px; background: var(--primary); }
+.tree-n .pk { color: var(--dim); font-size: 10px; }
+.tree-una { font-size: 11px; font-weight: 600; color: var(--warning); }
+.tree-item.is-dim .tree-name { color: var(--dim); font-weight: 500; }
+.tree-grp { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); padding: 14px 9px 5px; }
+/* 窄等級：樹攤成一頁（＝現在的總覽），列寬拉滿；頂端與「所有專案」藏掉（已經在這一頁了） */
+.tree.as-page { width: auto; border-right: none; padding: 0 0 20px; }
+.tree.as-page .tree-head, .tree.as-page .tree-item.is-all { display: none; }
+.tree.as-page .tree-item { padding: 9px 12px; font-size: 13.5px; }
+
 /* ── 第一層總覽 ── */
 .tasks-overview { display: flex; flex-direction: column; gap: 1px; }
 .tov-row { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; padding: 11px 12px; border: none; background: transparent; border-radius: var(--row-radius); font-size: 13px; font-family: var(--font-ui); text-align: left; color: var(--text); cursor: pointer; }
