@@ -1230,6 +1230,20 @@ def test_read_note_symlinked_fledge_is_unavailable_not_absent(tmp_path):
     assert r.content is None
 
 
+def test_read_note_reads_state_when_tasks_dir_is_broken_but_fledge_opens(tmp_path):
+    """tasks/ 壞掉（是一般檔案）→ resolver 回 unavailable 但 fledge_fd 有值；
+    總覽照樣用那個 fd 讀 next_step，note 也要讀得到——不然畫面上有「下一步」、點進去卻說讀不到。"""
+    config, proj = _setup(tmp_path)
+    (proj / ".fledge").mkdir()
+    (proj / ".fledge" / "tasks").write_text("not a dir", encoding="utf-8")
+    (proj / ".fledge" / "state.md").write_text("# p\n\n**下一步**：x\n", encoding="utf-8")
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert td.status == scanner.STATUS_UNAVAILABLE and td.fledge_fd is not None   # 前提：情境真的長這樣
+        r = scanner.read_note(td)
+    assert r.status == scanner.STATUS_OK
+    assert r.content.startswith("# p")
+
+
 def test_read_note_symlinked_state_md_is_unavailable(tmp_path):
     """state.md 本身是 symlink → O_NOFOLLOW 擋下（ELOOP）→ unavailable，不讀目標。"""
     config, proj = _setup(tmp_path)

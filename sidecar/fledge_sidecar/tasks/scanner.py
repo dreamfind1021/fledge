@@ -388,14 +388,18 @@ def note_path(project: str) -> str:
 def read_note(td: TasksDir) -> NoteResult:
     """讀 state.md 全文（前 NOTE_MAX_BYTES）。
 
-    **分類順序**（Codex R1 medium）：先看 resolver 的 status——`.fledge` 是 symlink、權限不足時
-    `fledge_fd` 同樣是 None 但那是 unavailable，不是「不存在」。有 fd 之後只有 FileNotFoundError
+    **分類順序**（Task 3 審查 R1）：`fledge_fd is None` 不代表「不存在」——要看 `td.status`
+    才知道是 resolver 拒絕（symlink、權限不足 → unavailable）還是真的沒有 `.fledge`
+    （→ absent）。`fledge_fd` 有值就直接往下讀、**不再看 `td.status`**：`tasks/` 壞掉
+    （例如被換成一般檔案）會讓 resolver 回 `unavailable`，但 state.md 住在 `.fledge/`、
+    跟 `tasks/` 無關，總覽的 `next_step` 也是用同一個 `fledge_fd` 讀——兩者要一致，
+    否則畫面上有「下一步」可看，點進去卻說讀不到。有 fd 之後只有 FileNotFoundError
     是 absent；其餘 OSError（state.md 是 symlink 的 ELOOP、EACCES、讀取中途失敗）都是 unavailable。
     不能沿用 `_read_state_text()`——它把所有失敗壓成空字串。"""
-    if td.status == STATUS_UNAVAILABLE:
-        return NoteResult(STATUS_UNAVAILABLE, None, None)
     if td.fledge_fd is None:
-        return NoteResult(STATUS_ABSENT, None, None)
+        # resolver 開不了 .fledge/：symlink／權限不足是 unavailable、不存在才是 absent（Codex R1）。
+        # fledge_fd 有值就往下讀——tasks/ 壞掉不影響 state.md，總覽也是用同一個 fd 讀 next_step
+        return NoteResult(STATUS_UNAVAILABLE if td.status == STATUS_UNAVAILABLE else STATUS_ABSENT, None, None)
     try:
         fd = os.open(STATE_FILENAME, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=td.fledge_fd)
     except FileNotFoundError:
