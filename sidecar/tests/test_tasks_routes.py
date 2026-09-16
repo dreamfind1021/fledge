@@ -76,6 +76,8 @@ def test_overview_lists_every_known_project_with_counts(tmp_path, monkeypatch):
     # 票 02：payload 帶 doing 給總覽的刻度上色用
     assert rows["has-tasks"]["doing"] == 0                  # 那張票是 todo
     assert rows["no-fledge"]["doing"] == 0
+    assert rows["has-tasks"]["parked"] == 0
+    assert rows["no-fledge"]["parked"] == 0
 
 
 def test_overview_reports_unavailable_not_zero(tmp_path, monkeypatch):
@@ -102,6 +104,7 @@ def test_overview_reports_unavailable_not_zero(tmp_path, monkeypatch):
         assert row["unfinished"] != 0
         # doing 走同一套規則。只讓其中一個回 null，前端就得為每個欄位各記一套判斷
         assert row["doing"] is None
+        assert row["parked"] is None                              # 第三個數同一套規則
     finally:
         os.chmod(tasks, 0o755)
 

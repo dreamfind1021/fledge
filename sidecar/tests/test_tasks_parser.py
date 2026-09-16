@@ -255,3 +255,16 @@ def test_can_round_trip_never_raises():
     ]
     for raw in payloads:
         assert P.can_round_trip(raw) in (True, False)
+
+
+def test_parked_is_a_valid_status_and_not_flagged():
+    """spec §3.2：`parked` 是合法值，不 fallback、不標 status_invalid。"""
+    t = P.parse_task("05-x.md", "---\nstatus: parked\nsource: me\ncreated: 2026-09-13\n---\n\n# x\n")
+    assert t.status == "parked"
+    assert P.ANOMALY_STATUS_INVALID not in t.anomalies
+    assert P.effective_status("---\nstatus: parked\n---\n") == "parked"
+
+
+def test_valid_status_has_exactly_four_values():
+    """五處合約的錨點：多一個少一個都要有人來改這條。"""
+    assert P.VALID_STATUS == ("todo", "doing", "done", "parked")

@@ -645,6 +645,35 @@ def test_absent_project_reports_zero_doing(tmp_path):
     assert row["doing"] == 0
 
 
+def test_parked_is_counted_separately_and_not_in_unfinished(tmp_path):
+    """spec §3.3：`parked` 不進 `unfinished` 也不進 `doing`，自己一個數。
+    三個數互不重疊；把 parked 加回 unfinished 這條要紅。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    for i, st in enumerate(["todo", "parked", "doing", "parked", "done"], start=1):
+        (tasks / f"{i:02d}-x.md").write_text(TICKET.format(status=st, title=f"t{i}"), encoding="utf-8")
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        counts = scanner.count_open(td.fd)
+        assert counts.unfinished == 2
+        assert counts.doing == 1
+        assert counts.parked == 2
+
+
+def test_overview_row_carries_parked_with_same_null_rules(tmp_path):
+    """`parked` 與 `unfinished` 同一套規則：ok 實數、absent 0。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    (tasks / "01-a.md").write_text(TICKET.format(status="parked", title="a"), encoding="utf-8")
+    (tasks / "02-b.md").write_text(TICKET.format(status="todo", title="b"), encoding="utf-8")
+    row = next(r for r in scanner.build_overview(config)["projects"] if r["path"] == str(proj))
+    assert row["unfinished"] == 1
+    assert row["parked"] == 1
+    config2, proj2 = _setup(tmp_path / "second", project="empty")   # 不建 .fledge/tasks/ ＝ absent
+    row2 = next(r for r in scanner.build_overview(config2)["projects"] if r["path"] == str(proj2))
+    assert row2["tasks_status"] == scanner.STATUS_ABSENT
+    assert row2["parked"] == 0
+
+
 # ── update_content ＋ _row 加欄位（spec §3、§5.3、§5.4）────────────────────
 
 STD = "---\nstatus: todo\nsource: me\ncreated: 2026-09-01\n---\n\n# old title\n\nold body\n"

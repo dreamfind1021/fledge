@@ -21,7 +21,7 @@ import re
 from dataclasses import dataclass
 
 # 檔案裡的欄位名與值一律英文（design §2.2）；畫面顯示走 i18n 翻譯
-VALID_STATUS = ("todo", "doing", "done")
+VALID_STATUS = ("todo", "doing", "done", "parked")   # parked：擱置（票 19，spec §3）
 DEFAULT_STATUS = "todo"
 VALID_SOURCE = ("me", "ai")
 

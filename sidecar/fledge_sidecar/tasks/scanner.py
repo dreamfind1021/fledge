@@ -256,12 +256,25 @@ class OpenCounts:
     """未完成票的計數。`doing` 是 `unfinished` 的**子集合**，不是另一個維度——
     總覽的刻度總數仍然是 `unfinished`，`doing` 只決定其中幾根要上色。
 
-    分開回兩個數而不是回 `todo`：前端畫刻度需要的是「總共幾根」與「其中幾根進行中」。
-    多回一個 `todo` 會有三個數字互相牽制，而 runtime JSON 沒有驗證——
-    `doing + todo != unfinished` 時前端得決定要信哪個，多一組不一致換不到任何東西。"""
+    `parked`（擱置，票 19）是**獨立維度**：不在 `unfinished` 裡、跟它沒有子集合關係。
+    「不多回一個會互相牽制的數字」的理由仍成立——`parked` 與 `unfinished` 互斥、不牽制。"""
 
     unfinished: int
     doing: int
+    parked: int
+
+
+def count_rows(rows: list[dict[str, Any]]) -> OpenCounts:
+    """從已掃好的列算計數。拆出來是為了 `build_overview` 只掃一次就能同時算計數與挑票。"""
+    unfinished = doing = parked = 0
+    for row in rows:
+        if row["status"] in ("todo", "doing"):
+            unfinished += 1
+            if row["status"] == "doing":
+                doing += 1
+        elif row["status"] == "parked":
+            parked += 1
+    return OpenCounts(unfinished=unfinished, doing=doing, parked=parked)
 
 
 def count_open(tasks_fd: int) -> OpenCounts:
@@ -271,15 +284,8 @@ def count_open(tasks_fd: int) -> OpenCounts:
     票不會因為讀不懂就從計數裡消失（契約 3）。
 
     **fallback 的票只進 `unfinished`、不進 `doing`**：把它算成進行中，等於在畫面上宣稱
-    「有人在動這張票」，而我們連它的 status 都沒讀出來。同一次掃描數完兩個數，
-    不多跑一趟 I/O。"""
-    unfinished = doing = 0
-    for row in scan_tasks(tasks_fd):
-        if row["status"] in ("todo", "doing"):
-            unfinished += 1
-            if row["status"] == "doing":
-                doing += 1
-    return OpenCounts(unfinished=unfinished, doing=doing)
+    「有人在動這張票」，而我們連它的 status 都沒讀出來。"""
+    return count_rows(scan_tasks(tasks_fd))
 
 
 def _read_state_text(fledge_fd: int | None) -> str:
@@ -358,18 +364,19 @@ def build_overview(config: AppConfig) -> dict[str, Any]:
                 counts = count_open(td.fd)
                 unfinished: int | None = counts.unfinished
                 doing: int | None = counts.doing
+                parked: int | None = counts.parked
             elif td.status == STATUS_ABSENT:
-                unfinished = doing = 0
+                unfinished = doing = parked = 0
             else:
-                # 兩個欄位同一套規則：讀不到都是 None，不是 0（design §6.3）。
-                # 只讓其中一個回 None，前端就得為每個欄位各記一套判斷
-                unfinished = doing = None
+                # 三個欄位同一套規則：讀不到都是 None，不是 0（design §6.3）
+                unfinished = doing = parked = None
             rows.append({
                 "path": entry["path"],
                 "name": entry.get("name", ""),
                 "account": entry.get("account", ""),
                 "unfinished": unfinished,
                 "doing": doing,
+                "parked": parked,
                 "tasks_status": td.status,
                 "next_step": read_next_step(td.fledge_fd),
             })
