@@ -736,6 +736,9 @@ def update_note(fledge_fd: int, content: str, *, expected_fingerprint: str) -> N
     超過 `NOTE_MAX_BYTES` 一律 not_editable（D15）：GET 只讀前 64KB，寫回去會把後面截掉。
     大小看 `_read_all` 讀到的整檔，不看 GET 那份——GET 的 fingerprint 在超過時本來就不會
     等於整檔的，但擋在大小這關比擋在 409 誠實：那不是「別人改過」，是「這份不給改」。
+    **新內容**超過上限也擋（`invalid_content`，spec §10.2）：GET 只讀前 NOTE_MAX_BYTES，寫進去就
+    再也讀不完整——下一次 GET 回 editable False、fingerprint 對不上，再存一次就 400。不變式是
+    「PUT 寫進去的，GET 一定讀得完整、也能再編輯」；問題在新內容不在既有檔，所以碼不是 not_editable。
 
     寫入不是原子的（spec §10.6 第 9 條）——與 `update_status`／`update_content` 同一個等級，
     在已 pin 的 fd 上 `lseek`＋`_write_all`＋`ftruncate`。硬中斷可能留半檔，安全網是外部編輯器
@@ -758,8 +761,9 @@ def update_note(fledge_fd: int, content: str, *, expected_fingerprint: str) -> N
             if fingerprint(raw) != expected_fingerprint:
                 return None
             new_raw = content.encode("utf-8")
-            # 後置條件：寫下去的東西自己要讀得回來（同 update_content 對 new_raw 的檢查）
-            if not _note_can_round_trip(new_raw):
+            # 後置條件：寫下去的東西自己要讀得回來（同 update_content 對 new_raw 的檢查）——
+            # 大小也算：GET 只讀前 NOTE_MAX_BYTES，超過的寫進去就再也讀不完整（見 docstring）
+            if len(new_raw) > NOTE_MAX_BYTES or not _note_can_round_trip(new_raw):
                 raise ValueError("invalid_content")
             try:
                 os.lseek(fd, 0, os.SEEK_SET)
@@ -772,6 +776,8 @@ def update_note(fledge_fd: int, content: str, *, expected_fingerprint: str) -> N
             os.close(fd)
     # 回傳更新後的筆記（含新 fingerprint）——前端用它取代本地狀態，否則存一次之後本地的
     # fingerprint 就過期、下一次儲存會被誤判 409（同 update_status 的理由）。
+    # editable=True 不是寫死的樂觀值：上面的後置條件已保證 new_raw ≤ NOTE_MAX_BYTES 且
+    # round-trip 得過，正是 read_note 判 editable 的同一個條件——重讀一定也是 True。
     return NoteResult(STATUS_OK, content, date.fromtimestamp(st.st_mtime).isoformat(),
                       fingerprint=fingerprint(new_raw), editable=True)
 

@@ -775,6 +775,33 @@ def test_put_note_not_editable_and_invalid_content_codes(tmp_path, monkeypatch):
     assert state.read_bytes() == NOTE.encode("utf-8")
 
 
+def test_put_note_content_over_limit_is_400(tmp_path, monkeypatch):
+    """新內容超過 NOTE_MAX_BYTES → 400 invalid_content，磁碟不動、GET 仍回舊內容（fix round 2）。"""
+    c, proj, state, fp = _with_note(tmp_path, monkeypatch)
+    r = c.put("/tasks/note", json={"project": str(proj), "content": "a" * (64 * 1024 + 1), "fingerprint": fp})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_content"
+    again = c.get("/tasks/note", params={"project": str(proj)}).json()
+    assert again["content"] == NOTE and again["fingerprint"] == fp and again["editable"] is True
+
+
+def test_put_note_writes_when_tasks_dir_is_broken_but_fledge_opens(tmp_path, monkeypatch):
+    """寫入路徑的「有 fledge_fd 就往下、不看 tasks/ 狀態」（spec §10.2；讀取路徑的雙胞胎在 scanner 測試）：
+    `.fledge/tasks` 是一般檔案 → resolver 回 unavailable，但 state.md 住在 `.fledge/`，GET／PUT 都要能動。"""
+    root = _project_root(tmp_path)
+    proj = root / "p1"
+    (proj / ".fledge").mkdir(parents=True)
+    (proj / ".fledge" / "tasks").write_text("not a dir", encoding="utf-8")
+    state = proj / ".fledge" / "state.md"
+    state.write_text(NOTE, encoding="utf-8")
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    assert c.get("/tasks", params={"project": str(proj)}).json()["tasks_status"] == "unavailable"   # 前提：情境真的長這樣
+    g = c.get("/tasks/note", params={"project": str(proj)}).json()
+    assert g["status"] == "ok" and g["editable"] is True
+    r = c.put("/tasks/note", json={"project": str(proj), "content": "# p\n\n**下一步**：new\n", "fingerprint": g["fingerprint"]})
+    assert r.status_code == 200 and r.json()["status"] == "ok"
+    assert state.read_text(encoding="utf-8") == "# p\n\n**下一步**：new\n"
+
+
 def test_put_note_read_failure_returns_500(tmp_path, monkeypatch):
     """spec §10.2：寫入 I/O 失敗 → 500 write_failed，不是 400（與 PUT /tasks/content 同一條）。"""
     import errno

@@ -1407,6 +1407,19 @@ def test_update_note_rejects_content_that_cannot_round_trip(tmp_path, content):
     assert state.read_bytes() == raw
 
 
+def test_update_note_rejects_content_over_limit(tmp_path):
+    """不變式：PUT 寫進去的，GET 一定讀得完整、也能再編輯。GET 只讀前 NOTE_MAX_BYTES，超過的新內容
+    寫進去就再也讀不完整——下一次 GET 回 editable False、fingerprint 也對不上（fix round 2 審查重現）。
+    新內容是問題所在，不是既有檔 → invalid_content，不是 not_editable。"""
+    config, proj, state, raw = _note(tmp_path)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        with pytest.raises(ValueError) as exc_info:
+            scanner.update_note(td.fledge_fd, "a" * (scanner.NOTE_MAX_BYTES + 1),
+                                expected_fingerprint=scanner.fingerprint(raw))
+    assert str(exc_info.value) == "invalid_content"
+    assert state.read_bytes() == raw
+
+
 def test_update_note_does_not_create_missing_file(tmp_path):
     """spec §10.2「不建檔」：state.md 不存在 → FileNotFoundError（路由 404），建立離場筆記是
     resume-note skill 的事。`_open_existing` 沒有 O_CREAT，這條把它釘住。"""
