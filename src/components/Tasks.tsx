@@ -63,8 +63,10 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   }, [port, isActive, selected, reloadKey]);
 
   // 離場筆記：點「下一步」才打，不快取（spec §4.4）
-  // 編輯中早退（§10.4）：進編輯的 bump 讓 cleanup 的 cancelled 淘汰在途的筆記 GET；新 body 不再 setNote(null)，
-  // 否則會把 NoteEditor 卸掉（TaskDetail 只在 note.status === "ok" 時掛它）。
+  // 重跑不先清空（§10.4、票 25）——先清的話儲存後的就地更新會被閃成載入中，focus 重讀也會閃；較舊的回應由
+  // cancelled 淘汰，不需要先清。只有關筆記／切專案（下面第一條）才清，第一次打開 note 本來就是 null、照常顯示載入中。
+  // 編輯中早退（§10.4）：進編輯的 bump 讓 cleanup 的 cancelled 淘汰在途的筆記 GET；新 body 不 setNote(null)
+  // 也不發請求，否則會把 NoteEditor 卸掉（TaskDetail 只在 note.status === "ok" 時掛它）。
   // editing 刻意不進依賴陣列——與上面清單 effect 同一個決定：editing 只當閘門、不當觸發。結束編輯要不要重讀
   // 由 savedNote／leaveEditor 主動 bump 決定，不讓 editing 翻回 false 本身變成第二個觸發源。
   const noteOpen = pane?.kind === "note";
@@ -72,7 +74,6 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     if (port == null || selected == null || !noteOpen) { setNote(null); return; }
     if (editing) return;
     let cancelled = false;
-    setNote(null);
     fetchTasksNote(port, selected)
       .then((n) => { if (!cancelled) setNote(n); })
       .catch(() => { if (!cancelled) setNote({ status: "unavailable", content: null, mtime: null, path: null, fingerprint: null, editable: false }); });

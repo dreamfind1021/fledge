@@ -1137,5 +1137,37 @@ describe("Tasks 面板", () => {
       expect(screen.getByDisplayValue("ticket typed")).toBeTruthy();                                    // 票的編輯器還在
       expect(fetchTasksOverview).toHaveBeenCalledTimes(o);                                              // 沒有 bump
     });
+
+    // 筆記 effect 重跑不先清空（§10.4、票 25）：就地更新與舊內容留到新回應落地，較舊的回應由 cancelled 淘汰
+    it("儲存後右欄立刻顯示新內容且不閃載入中；重讀回來仍是新內容", async () => {
+      withNote();
+      updateTasksNote.mockResolvedValue(note({ content: "# new", fingerprint: "n2" }));
+      const ta = await startEditingNote();
+      // 扣住的要是 bump 帶出的那次重讀——所以在按儲存之前就排好
+      let resolveRefetch!: (v: TasksNote) => void;
+      fetchTasksNote.mockImplementationOnce(() => new Promise((r) => { resolveRefetch = r; }));
+      fireEvent.change(ta, { target: { value: "# new" } });
+      fireEvent.click(screen.getByText(en.list.save));
+      await within(detail()).findByText("# new");                                                       // 就地更新
+      await waitFor(() => expect(fetchTasksNote).toHaveBeenCalledTimes(2));                             // 重讀在途
+      expect(within(detail()).queryByText(en.detail.loading)).toBeNull();                               // 不閃載入中
+      expect(within(detail()).getByText("# new")).toBeTruthy();
+      resolveRefetch(note({ content: "# new", fingerprint: "n2" }));
+      await tick();
+      expect(within(detail()).getByText("# new")).toBeTruthy();
+    });
+
+    it("看筆記時 focus 重讀：舊內容留著、不閃載入中；回來才換成新內容", async () => {
+      withNote();
+      await openNote();
+      let resolveRefetch!: (v: TasksNote) => void;
+      fetchTasksNote.mockImplementationOnce(() => new Promise((r) => { resolveRefetch = r; }));
+      fireEvent(window, new Event("focus"));
+      await waitFor(() => expect(fetchTasksNote).toHaveBeenCalledTimes(2));
+      expect(within(detail()).getByText("# note")).toBeTruthy();                                        // 舊內容留著
+      expect(within(detail()).queryByText(en.detail.loading)).toBeNull();
+      resolveRefetch(note({ content: "# note v2", fingerprint: "n2" }));
+      await within(detail()).findByText("# note v2");
+    });
   });
 });
