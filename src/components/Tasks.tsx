@@ -101,20 +101,19 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   // 編輯鍵帶票：右欄沒選票、或正在看 A 卻按 B 的編輯，都要先把 pane 指到那張票（Codex plan R1 high）。
   // 編輯中所有編輯鍵都 disabled，所以這裡不會撞到「編輯中再編輯」
   const edit = useCallback((task: TaskRow) => { setPane({ kind: "ticket", name: task.name }); setEditing(true); bump(); }, [bump]);
+  // 編輯結束（儲存／離開／切走）都 bump 一次重讀（D12）。
+  // 就地更新只剩這一處：儲存後右欄要立刻顯示新內容；編輯中沒有在途 GET，沒有 Codex R5 那個
+  // 「舊快照蓋掉就地更新」的窗口（改狀態那份已砍掉，見 setStatus）。
   // 用回傳的票取代清單裡對應那筆（含新 fingerprint／新內容）。只在清單仍是發出請求時那個
   // 專案時才就地更新：回應晚到、使用者已切到 B，B 的同名票不能被 A 的回應蓋掉（Codex R2）。
-  const replaceTask = useCallback((origin: string, updated: TaskRow) => {
+  const saved = useCallback((updated: TaskRow, origin: string) => {
     setList((cur) => (cur && cur.project === origin && cur.tasks
       ? { ...cur, tasks: cur.tasks.map((x) => (x.name === updated.name ? updated : x)) }
       : cur));
-  }, []);
-  // 編輯結束（儲存／離開／切走）都 bump 一次重讀（D12）。onSaved 的就地更新帶專案歸屬（Codex R2）
-  const saved = useCallback((updated: TaskRow, origin: string) => {
-    replaceTask(origin, updated);
     pendingNav.current = null;       // 使用者選擇留下並儲存，之前被攔的導覽作廢
     setEditing(false);
     bump();
-  }, [bump, replaceTask]);
+  }, [bump]);
   // reload=true 只有 TaskEditor 的「捨棄我的版本」會傳（plan R2 F4）：把清單打成 loading
   // (setList(null)) 再重讀——不這樣做的話舊清單還在畫面上，使用者可以立刻再點編輯、
   // 帶著舊 fingerprint 再送一次，保證又是一次 409。
@@ -130,7 +129,8 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     bump();
   }, [bump]);
 
-  // 寫入：成功就 bump（D12）；改狀態的就地更新帶專案歸屬（Codex R2）
+  // 寫入：成功就 bump（D12）。改狀態不就地更新——真相只來自 bump 的重讀（Codex R5：PATCH 回應與
+  // 舊 GET 同批次落地時舊快照會蓋掉就地更新，要等下一次 GET 才修正；砍掉就地那份，沒有東西可蓋）。
   // 失敗處理共用：409 是「已被改過」，其餘一律通用錯誤。兩者都重讀，讓畫面回到真實狀態。
   const onActionError = useCallback((e: unknown) => {
     setNotice(e instanceof TaskConflictError ? "list.conflict" : "list.actionError");
@@ -149,12 +149,13 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     inFlight.current.add(key);
     setNotice("");
     updateTask(port, origin, task.name, next, task.fingerprint)
-      // 用回傳的票取代本地狀態（含新 fingerprint）。少了這步，改一次之後本地的 fingerprint
-      // 就過期了，下一次改狀態或刪除會被錯誤地判成 409（design §7.2）。
-      .then((updated) => { replaceTask(origin, updated); bump(); })
+      // 回傳的票不用來改畫面：新 fingerprint 由 bump 的重讀帶回來（design §7.2 的「下一次操作
+      // 不得用過期 fingerprint」靠重讀成立）。鎖在 PATCH 落定就放，重讀落地前那幾十毫秒再點
+      // 會帶舊 fingerprint 送出→409 提示＋重讀，畫面仍回到真實狀態（spec §8 已知限制 7）。
+      .then(() => bump())
       .catch(onActionError)
       .finally(() => inFlight.current.delete(key));
-  }, [port, selected, editing, onActionError, bump, replaceTask]);
+  }, [port, selected, editing, onActionError, bump]);
   const cycle = useCallback((task: TaskRow) => setStatus(task, NEXT_STATUS[task.status]), [setStatus]);
   // 擱置／取回：parked→todo、其餘→parked（spec §5.6）
   const park = useCallback((task: TaskRow) => setStatus(task, task.status === "parked" ? "todo" : "parked"), [setStatus]);

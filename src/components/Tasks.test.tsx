@@ -263,17 +263,19 @@ describe("Tasks 面板", () => {
 
   it("點狀態循環到下一個狀態，並帶該票的 fingerprint", async () => {
     await openList();
+    // 改狀態不就地更新（Codex R5）：畫面變 doing 靠的是寫入後的重讀，mock 要回已改過的那張
+    fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket({ status: "doing", fingerprint: "f2" })], next_step: "", handoff_command: "" });
     fireEvent.click(screen.getByLabelText(statusLabel(en.status.todo, en.status.doing)));
     await waitFor(() => expect(updateTask).toHaveBeenCalledWith(1234, "/p/a", "01-a.md", "doing", "f"));
     // 斷言記號按鈕本身的 title，不是 getByText——後者會命中「進行中」分區標頭而不是這張票
     await waitFor(() => expect(screen.getByTitle(en.status.doing)).toBeTruthy());
   });
 
-  // design §7.2：成功回應要帶回新 fingerprint、前端要用它取代本地狀態，
-  // 否則第二次操作會被錯誤地判成 409。單次點擊的測試抓不到這個。
-  it("連續兩次切狀態，第二次用的是回傳的新 fingerprint", async () => {
+  // design §7.2：第二次操作不得帶過期 fingerprint。改狀態不就地更新（Codex R5），
+  // 新 fingerprint 只能由寫入後的重讀帶回來；單次點擊的測試抓不到這個。
+  it("連續兩次切狀態，第二次用的是重讀帶回的新 fingerprint", async () => {
     await openList();
-    // 寫入成功後會重讀（D12）：mock 要回已改過的那張，否則 GET 把 todo／舊 fingerprint 蓋回來，第二顆按鈕就不見了
+    // 寫入成功後會重讀（D12）：mock 要回已改過的那張——這條 GET 就是畫面與 fingerprint 的唯一來源
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket({ status: "doing", fingerprint: "f2" })], next_step: "", handoff_command: "" });
     fireEvent.click(screen.getByLabelText(statusLabel(en.status.todo, en.status.doing)));
     await waitFor(() => expect(screen.getByTitle(en.status.doing)).toBeTruthy());
@@ -320,7 +322,7 @@ describe("Tasks 面板", () => {
     let release!: (t: TaskRow) => void;
     updateTask.mockImplementation(() => new Promise<TaskRow>((res) => { release = res; }));
     await openList();
-    // 同上：放行後的重讀要回已改過的那張，不然 doing→done 那顆按鈕會被重讀蓋掉
+    // 同上：放行後的重讀要回已改過的那張——doing→done 那顆按鈕只會在重讀落地後出現（不就地更新）
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [ticket({ status: "doing", fingerprint: "f2" })], next_step: "", handoff_command: "" });
 
     const btn = screen.getByLabelText(statusLabel(en.status.todo, en.status.doing));
@@ -732,8 +734,9 @@ describe("Tasks 面板", () => {
       render(<Tasks port={1234} isActive />);
       await openProject();
       const before = () => [fetchTasksOverview.mock.calls.length, fetchTasks.mock.calls.length];
-      // 每一步都等重讀真的落地（mock 的清單永遠是一張 todo，重讀回來 title 就回到 To do），
-      // 否則下一顆按鈕可能按在就地更新後、重讀前的畫面上（parked 會摺起來、按不到）
+      // 每一步都等重讀真的落地（mock 的清單永遠是一張 todo，重讀回來 title 就是 To do）。
+      // 改狀態不就地更新（Codex R5），畫面只在重讀落地時變；不等落地，下一顆按鈕就可能按在
+      // 上一次重讀還沒回來的畫面上，計數對不上
       const settled = async (o: number, l: number) => {
         await waitFor(() => expect(before()).toEqual([o + 1, l + 1]));
         await screen.findByTitle(en.status.todo);
@@ -782,7 +785,9 @@ describe("Tasks 面板", () => {
       await waitFor(() => expect(updateTask).toHaveBeenLastCalledWith(1234, "/p/a", "01-a.md", "todo", "f2"));
     });
 
-    it("寫入回應帶專案歸屬：在 a 改狀態後切到 b，晚到的回應不動 b 的清單", async () => {
+    // 原本守的是就地更新的專案歸屬（Codex R2）。改狀態不再就地更新（Codex R5）後，這條守的是
+    // 「A 的晚到 PATCH 回應無論如何不碰 B 的清單」——有人把就地更新加回來又沒帶專案守衛，這裡會紅
+    it("在 a 改狀態後切到 b，晚到的 PATCH 回應不動 b 的清單", async () => {
       let resolvePatch!: (v: TaskRow) => void;
       updateTask.mockImplementationOnce(() => new Promise((r) => { resolvePatch = r; }));
       fetchTasksOverview.mockResolvedValue({ projects: [proj(), proj({ path: "/p/b", name: "b" })], permission_error: false, recent_days: 7 });
@@ -797,6 +802,22 @@ describe("Tasks 面板", () => {
       await waitFor(() => expect(fetchTasks).toHaveBeenCalledTimes(3));                     // bump 已發出（被扣住）
       expect(screen.queryByText("A 的票（已改）")).toBeNull();                            // B 的清單沒被 A 的回應污染
       expect(screen.getByText("B 的票")).toBeTruthy();
+    });
+
+    // Codex R5：就地更新與較舊的在途 GET 在同一個 React 批次落地時，舊快照會蓋掉就地更新。
+    // 砍掉改狀態的就地更新後沒有東西可被蓋——PATCH 回應本身不改畫面，真相只來自 bump 的重讀。
+    it("改狀態不就地更新：PATCH 回應不改畫面，重讀回來才變", async () => {
+      render(<Tasks port={1234} isActive />);
+      await openProject();
+      let resolveReload!: (v: TasksListResponse) => void;
+      fetchTasks.mockImplementationOnce(() => new Promise((r) => { resolveReload = r; }));   // 扣住 bump 觸發的重讀
+      fireEvent.click(screen.getByTitle(en.status.todo));
+      await waitFor(() => expect(fetchTasks).toHaveBeenCalledTimes(2));                    // PATCH 已回、bump 已發出
+      expect(updateTask).toHaveBeenCalledTimes(1);
+      expect(screen.getByTitle(en.status.todo)).toBeTruthy();                              // 畫面還是 todo：沒有就地更新
+      expect(screen.queryByTitle(en.status.doing)).toBeNull();
+      resolveReload({ project: "/p/a", tasks_status: "ok", tasks: [ticket({ status: "doing", fingerprint: "f2" })], next_step: "", handoff_command: "" });
+      await screen.findByTitle(en.status.doing);                                            // 重讀落地才變
     });
   });
 
