@@ -1328,6 +1328,23 @@ def test_read_note_editable_is_false_when_put_would_refuse(tmp_path, existing):
     assert state.read_bytes() == existing
 
 
+def test_read_note_editable_is_false_for_hard_linked_state_md(tmp_path):
+    """Codex（增補審查）：PUT 走 `_open_existing(write=True)` 的 T4（`st_nlink != 1` → 拒），GET 的
+    `editable` 若不看 nlink，硬連結的 state.md 會 GET True、PUT 永遠 400——違反「editable ＝ PUT 會收」。
+    對稱驗 PUT 真的拒、檔案不動，把兩邊釘在一起。"""
+    config, proj, state, raw = _note(tmp_path)
+    os.link(state, tmp_path / "elsewhere.md")               # nlink = 2
+    assert os.stat(state).st_nlink == 2                       # 前提：情境真的長這樣
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+        assert r.status == scanner.STATUS_OK and r.fingerprint == scanner.fingerprint(raw)
+        assert r.editable is False
+        with pytest.raises((ValueError, OSError)):
+            scanner.update_note(td.fledge_fd, "x", expected_fingerprint=r.fingerprint)
+    assert state.read_bytes() == raw
+    assert (tmp_path / "elsewhere.md").read_bytes() == raw
+
+
 def test_update_note_replaces_content_and_returns_new_fingerprint(tmp_path):
     """D13：原地覆寫（inode 不變）、新內容比舊的短要 ftruncate 掉尾巴；回傳的 fingerprint
     要等於重讀的——沒有這條，前端存一次之後本地 fingerprint 就過期、下一次存會被誤判 409。"""

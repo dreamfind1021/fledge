@@ -130,6 +130,6 @@
     "stay": "Stay",
     "conflict": "The resume note was changed elsewhere. Reload and edit again.",
     "reload": "Reload",
-    "notEditable": "This note can't be edited here (over 64KB or contains CRLF); open it in your editor instead"
+    "notEditable": "This note can't be edited here (over 64KB, contains CRLF, isn't UTF-8, or is a hard link); open it in your editor instead"
   }
 }

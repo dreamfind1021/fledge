@@ -670,6 +670,20 @@ def test_get_note_editable_false_for_crlf_file(tmp_path, monkeypatch):
     assert body["fingerprint"] is not None and body["content"] is not None
 
 
+def test_get_note_editable_false_for_hard_link_and_put_is_400(tmp_path, monkeypatch):
+    """硬連結的 state.md：GET `editable` False（與 PUT 的 T4 同一個判斷）、PUT 400 invalid_target、內容不動。"""
+    import os
+
+    c, proj, state, fp = _with_note(tmp_path, monkeypatch)
+    os.link(state, tmp_path / "elsewhere.md")
+    g = c.get("/tasks/note", params={"project": str(proj)})
+    assert g.status_code == 200
+    assert g.json()["editable"] is False and g.json()["fingerprint"] == fp
+    r = c.put("/tasks/note", json={"project": str(proj), "content": "x\n", "fingerprint": fp})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_target"
+    assert c.get("/tasks/note", params={"project": str(proj)}).json()["content"] == NOTE
+
+
 def test_put_note_ok_shape(tmp_path, monkeypatch):
     """接線：對組好的 app 打 PUT /tasks/note 斷言 200＋與 GET 同形（不可寫成「非 404」，見檔頭）。"""
     c, proj, state, fp = _with_note(tmp_path, monkeypatch)
