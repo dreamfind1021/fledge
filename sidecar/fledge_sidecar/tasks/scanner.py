@@ -379,7 +379,7 @@ class NoteResult:
     content: str | None
     mtime: str | None       # YYYY-MM-DD
     fingerprint: str | None  # ok 時算在**讀到的位元組**上（與票同一個函式）；超過上限時是前 64KB 的
-    editable: bool          # ok 且檔案大小 ≤ NOTE_MAX_BYTES（D15）——超過只給外部打開，寫回去會截尾
+    editable: bool          # ＝ PUT 的接受條件：ok 且大小 ≤ NOTE_MAX_BYTES（D15）且 _note_can_round_trip
 
 
 def note_path(project: str) -> str:
@@ -400,7 +400,9 @@ def read_note(td: TasksDir) -> NoteResult:
     不能沿用 `_read_state_text()`——它把所有失敗壓成空字串。
 
     票 19 增補（spec §10.2）：ok 時多算 `fingerprint`／`editable`，給介面內編輯用；非 ok 一律
-    `None`／`False`。"""
+    `None`／`False`。**`editable` 就是 `update_note` 的接受條件，兩邊同一個判斷**：大小 ≤ 上限
+    且 `_note_can_round_trip`。GET 說 True 而 PUT 回 not_editable 就是宣稱高於實際保證——UI 會
+    畫出「編輯」、使用者編完才吃 400（fix round 1 裁定）。"""
     if td.fledge_fd is None:
         # resolver 開不了 .fledge/：symlink／權限不足是 unavailable、不存在才是 absent（Codex R1）。
         # fledge_fd 有值就往下讀——tasks/ 壞掉不影響 state.md，總覽也是用同一個 fd 讀 next_step
@@ -425,8 +427,11 @@ def read_note(td: TasksDir) -> NoteResult:
     # fingerprint 算在讀到的位元組上：≤ 上限時就是整檔；超過時是前 64KB——那份 editable 是 False，
     # PUT 也會用整檔重算再拒絕，所以這個「不完整」的 fingerprint 不會被拿去寫。大小用同一次 fstat
     # 的 st_size 而不是 len(raw)：len(raw) 在超過時永遠等於上限，分不出「剛好」與「超過」。
+    # 先判大小再判 round-trip：超過時 raw 只是前 64KB，可能切在多位元組字元中間，那個結果沒有意義
+    # （短路後根本不算）。`_note_can_round_trip` 對任意位元組不拋例外，讀取路徑的契約不變。
     return NoteResult(STATUS_OK, _decode(raw), date.fromtimestamp(st.st_mtime).isoformat(),
-                      fingerprint=fingerprint(raw), editable=st.st_size <= NOTE_MAX_BYTES)
+                      fingerprint=fingerprint(raw),
+                      editable=st.st_size <= NOTE_MAX_BYTES and _note_can_round_trip(raw))
 
 
 def build_overview(config: AppConfig, *, today: date | None = None) -> dict[str, Any]:

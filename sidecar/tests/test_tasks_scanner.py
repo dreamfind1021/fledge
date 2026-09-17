@@ -1311,6 +1311,23 @@ def test_read_note_carries_fingerprint_and_editable(tmp_path):
     assert r.status == scanner.STATUS_ABSENT and r.fingerprint is None and r.editable is False
 
 
+@pytest.mark.parametrize("existing", [b"# p\r\n\r\nx\r\n", b"# p\n\xff\n"])
+def test_read_note_editable_is_false_when_put_would_refuse(tmp_path, existing):
+    """`editable` 的意思是「PUT 會收」（claim ＝ guarantee，fix round 1 裁定 (b)）：既有檔含 CRLF 或
+    非 UTF-8 時 PUT 回 not_editable，GET 就不能說 True——否則 UI 畫出「編輯」、使用者編完才吃 400。
+    content／fingerprint 照給（還是讀得到、只是不給改）；最後對稱驗 PUT 真的拒絕，釘住兩邊同一個判斷。"""
+    config, proj, state, raw = _note(tmp_path, existing)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+        assert r.status == scanner.STATUS_OK
+        assert r.content is not None and r.fingerprint == scanner.fingerprint(existing)
+        assert r.editable is False
+        with pytest.raises(ValueError) as exc_info:
+            scanner.update_note(td.fledge_fd, "new", expected_fingerprint=r.fingerprint)
+    assert str(exc_info.value) == "not_editable"
+    assert state.read_bytes() == existing
+
+
 def test_update_note_replaces_content_and_returns_new_fingerprint(tmp_path):
     """D13：原地覆寫（inode 不變）、新內容比舊的短要 ftruncate 掉尾巴；回傳的 fingerprint
     要等於重讀的——沒有這條，前端存一次之後本地 fingerprint 就過期、下一次存會被誤判 409。"""

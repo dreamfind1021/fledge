@@ -659,6 +659,17 @@ def test_get_note_returns_fingerprint_and_editable(tmp_path, monkeypatch):
     assert body["fingerprint"] == hashlib.sha256(b"a" * (64 * 1024)).hexdigest()
 
 
+def test_get_note_editable_false_for_crlf_file(tmp_path, monkeypatch):
+    """`editable` ＝「PUT 會收」：CRLF 檔 PUT 回 not_editable，GET 的 editable 就是 False；內容與 fingerprint 照給。"""
+    crlf = b"# p\r\n\r\nx\r\n"
+    c, proj, state, fp = _with_note(tmp_path, monkeypatch, text=crlf)
+    r = c.get("/tasks/note", params={"project": str(proj)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok" and body["editable"] is False
+    assert body["fingerprint"] is not None and body["content"] is not None
+
+
 def test_put_note_ok_shape(tmp_path, monkeypatch):
     """接線：對組好的 app 打 PUT /tasks/note 斷言 200＋與 GET 同形（不可寫成「非 404」，見檔頭）。"""
     c, proj, state, fp = _with_note(tmp_path, monkeypatch)
