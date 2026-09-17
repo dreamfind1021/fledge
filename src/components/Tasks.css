@@ -219,7 +219,7 @@
 .btn.is-quiet:disabled { border-color: var(--dim); }
 .btn.is-primary:disabled { background: transparent; border-color: var(--dim); color: var(--dim); }
 /* 提示條 */
-.tk-banner { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 10px; padding: 9px 12px; border-radius: 8px; font-size: 12px; line-height: 1.65; color: var(--dim); }
+.tk-banner { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 9px; margin: 0 0 10px; padding: 9px 12px; border-radius: 8px; font-size: 12px; line-height: 1.65; color: var(--dim); }
 .tk-banner .btext { flex: 1; }
 .tk-banner .bacts { display: flex; gap: 6px; flex-shrink: 0; }
 .tk-banner.is-draft { background: color-mix(in srgb, var(--warning) 9%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border)); }
@@ -245,7 +245,8 @@
 
 /* ══ 版面（票 19，spec §5.1）：mobile-first——預設是「窄」，760 疊「中」，1040 疊「寬」。
    判斷用面板自己的寬度不看視窗：側邊欄可收合（240→56px），同一視窗寬下主區差 184px。
-   實測：待真機實測（合併前由使用者在 dev app 三個寬度各看一次，數字補回此行）。 ══ */
+   實測：待真機實測（合併前由使用者在 dev app 三個寬度各看一次，數字補回此行；
+   1040 邊界要看 409 衝突橫幅的兩顆按鈕）。 ══ */
 .tasks-split { display: flex; height: 100%; }
 .tasks-col { flex: 1; min-width: 0; overflow-y: auto; padding: 16px 24px 32px; }
 .tasks-col-detail { padding: 0; }                      /* .lb-detail 自己有內距 */
@@ -264,10 +265,12 @@
   .lb-detail .tasks-back { display: inline-flex; }     /* 中：右欄仍是整欄，要能回清單 */
 }
 
+/* 清單基準＝扣掉樹之後剩餘寬度的 46%（spec §5.1）；232 與 .tree 的 width 同值，layout 測試守兩處一致。
+   1040 時：樹 232、清單 372、右欄 436 */
 @container tasks (min-width: 1040px) {
   .tasks-split[data-pane="open"] .tasks-col-list { display: block; }
   .tasks-split[data-pane="none"] .tasks-col-detail { display: block; }
-  .tasks-col-list { flex: 0 0 46%; min-width: 360px; border-right: 1px solid var(--divider); padding: 16px 18px 32px; }
+  .tasks-col-list { flex: 0 0 calc((100% - 232px) * .46); min-width: 360px; border-right: 1px solid var(--divider); padding: 16px 18px 32px; }
   .tasks-col-detail { flex: 1; }
   .lb-detail .tasks-back { display: none; }            /* 寬：清單就在旁邊，不需要返回 */
 }

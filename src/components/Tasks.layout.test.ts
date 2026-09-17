@@ -54,10 +54,23 @@ describe("待辦面板三欄版面", () => {
     expect(decl(b, ".lb-detail .tasks-back", "display")).toBe("none");
   });
 
-  // 樹 232 ＋ 清單最小 360 ＋ 右欄至少 380 ≤ 1040：有人把任何一個數字調大都應該被擋下來
+  // 樹 232 ＋ 清單取 max(min-width, 剩餘×比例) ＋ 右欄至少 380 ≤ 1040；
+  // 只加 min-width 會漏掉比例撐大清單的情況——Codex 守門抓到的假綠
   it("寬等級的最小寬度預算在 1040 內", () => {
     const tree = px(decl(css, ".tree", "width"));
-    const listMin = px(decl(block(1040), ".tasks-col-list", "min-width"));
-    expect(tree + listMin + 380).toBeLessThanOrEqual(1040);
+    const b = block(1040);
+    const flex = decl(b, ".tasks-col-list", "flex");
+    const minWidth = px(decl(b, ".tasks-col-list", "min-width"));
+    // flex-basis 必須是 calc((100% - Tpx) * F) 的形式，才能算出扣掉樹之後的剩餘寬度
+    const calcMatch = flex.match(/calc\(\(100% - (\d+(?:\.\d+)?)px\)\s*\*\s*(\d*\.\d+|\d+)\)/);
+    if (!calcMatch) throw new Error(`.tasks-col-list 的 flex-basis 不是預期的 calc((100% - Tpx) * F) 形式：${flex}`);
+    const treeInCalc = parseFloat(calcMatch[1]);
+    const ratio = parseFloat(calcMatch[2]);
+    // calc 裡的樹寬要跟 .tree 的 width 同一個數字（單一事實來源，避免兩處各自維護漂移）
+    expect(treeInCalc, `calc 裡的樹寬 ${treeInCalc} 應等於 .tree 的 width ${tree}`).toBe(tree);
+    const basisAt1040 = (1040 - treeInCalc) * ratio;
+    const list = Math.max(minWidth, basisAt1040);
+    const total = tree + list + 380;
+    expect(total, `樹 ${tree} ＋ 清單 ${list}（basis ${basisAt1040} / min-width ${minWidth}）＋ 右欄 380 ＝ ${total} 應 ≤ 1040`).toBeLessThanOrEqual(1040);
   });
 });
