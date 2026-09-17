@@ -15,6 +15,8 @@ type Pane = null | { kind: "ticket"; name: string } | { kind: "note" };
 
 // 待辦面板（票 19，spec §5.7）：樹｜清單｜票內容。所有 HTTP 一律經 src/lib/sidecar.ts。
 // 直接 fetch 會漏掉 X-Fledge-Token，dev 看似正常、打包版整個死掉（plan §1.0）。
+// 右欄兩種可編輯內容（票、離場筆記）共用同一個 editing 旗標與離開流程（§10.4）：清單唯讀、focus 重讀擋、
+// 抓取 effect 早退、導覽走 leaveRequest——全部只看 editing，不看 pane 是哪一種。
 export function Tasks({ port, isActive }: { port: number | null; isActive: boolean }) {
   const { t } = useTranslation("tasks");
   const [selected, setSelected] = useState<string | null>(null);
@@ -61,9 +63,14 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   }, [port, isActive, selected, reloadKey]);
 
   // 離場筆記：點「下一步」才打，不快取（spec §4.4）
+  // 編輯中早退（§10.4）：進編輯的 bump 讓 cleanup 的 cancelled 淘汰在途的筆記 GET；新 body 不再 setNote(null)，
+  // 否則會把 NoteEditor 卸掉（TaskDetail 只在 note.status === "ok" 時掛它）。
+  // editing 刻意不進依賴陣列——與上面清單 effect 同一個決定：editing 只當閘門、不當觸發。結束編輯要不要重讀
+  // 由 savedNote／leaveEditor 主動 bump 決定，不讓 editing 翻回 false 本身變成第二個觸發源。
   const noteOpen = pane?.kind === "note";
   useEffect(() => {
     if (port == null || selected == null || !noteOpen) { setNote(null); return; }
+    if (editing) return;
     let cancelled = false;
     setNote(null);
     fetchTasksNote(port, selected)
@@ -101,6 +108,19 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   // 編輯鍵帶票：右欄沒選票、或正在看 A 卻按 B 的編輯，都要先把 pane 指到那張票（Codex plan R1 high）。
   // 編輯中所有編輯鍵都 disabled，所以這裡不會撞到「編輯中再編輯」
   const edit = useCallback((task: TaskRow) => { setPane({ kind: "ticket", name: task.name }); setEditing(true); bump(); }, [bump]);
+  // 筆記的編輯（§10.4）：pane 已經是 note（編輯鍵只在筆記檢視、且 note.editable 時才有）。同 §5.8 第 0 點，
+  // bump 讓 cleanup 淘汰在途的筆記 GET；新 body 因 editing 早退不發請求
+  const editNote = useCallback(() => { setEditing(true); bump(); }, [bump]);
+  // 筆記儲存成功（§10.4）：就地 setNote、被攔的導覽作廢、結束編輯、bump 重讀——與 saved 同一套。
+  // 不比對發出時的專案（Codex R2 那條是給 setList 的 updater 用的）：這裡閉包裡的 selected 與任何 origin 參數
+  // 一樣都是發出時的舊值，比不出「已經離開」，寫了只是假安全網。晚到的 200 根本不到父層由 NoteEditor 的 alive
+  // 旗標保證（onLeave 之後絕不 onSaved，與 TaskEditor 的 abort 同一條保證），所以這裡和 saved 一樣無條件
+  const savedNote = useCallback((n: TasksNote) => {
+    setNote(n);
+    pendingNav.current = null;
+    setEditing(false);
+    bump();
+  }, [bump]);
   // 編輯結束（儲存／離開／切走）都 bump 一次重讀（D12）。
   // 就地更新只剩這一處：儲存後右欄要立刻顯示新內容；編輯中沒有在途 GET，沒有 Codex R5 那個
   // 「舊快照蓋掉就地更新」的窗口（改狀態那份已砍掉，見 setStatus）。
@@ -114,9 +134,11 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     setEditing(false);
     bump();
   }, [bump]);
-  // reload=true 只有 TaskEditor 的「捨棄我的版本」會傳（plan R2 F4）：把清單打成 loading
-  // (setList(null)) 再重讀——不這樣做的話舊清單還在畫面上，使用者可以立刻再點編輯、
-  // 帶著舊 fingerprint 再送一次，保證又是一次 409。
+  // reload=true 只有 TaskEditor 的「捨棄我的版本」與 NoteEditor 的「重新載入」會傳（plan R2 F4、§10.4）：
+  // 把 pane 自己那份資料打成 loading（票→setList(null)、筆記→setNote(null)）再重讀——不這樣做的話舊資料
+  // 還在畫面上，使用者可以立刻再點編輯、帶著舊 fingerprint 再送一次，保證又是一次 409。
+  // pane 進依賴陣列而不用 ref：編輯中 pane 不會變（導覽都被 nav 攔成 pendingNav，等離開流程跑完才套用），
+  // 編輯器拿到的永遠是當下 pane 的那個 closure；多一個 ref 只是為了同一個值再存一份。
   // viaRequest：這次離開是不是在完成 nav() 發出的 leaveRequest。只有是，才套用被攔下的導覽；
   // 編輯器自發的返回／取消／捨棄是「離開 → pane 不變」（spec §5.7），pendingNav 一律清掉不執行——
   // nav 觸發的 leave 寫草稿失敗後殘留的 pendingNav 不得被編輯器自發的離開消耗（Codex R5 medium）
@@ -124,10 +146,10 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     setEditing(false);
     const fn = pendingNav.current;
     pendingNav.current = null;
-    if (reload) setList(null);       // 「捨棄我的版本」：清單進 loading，重讀完才能再操作（plan R2 F4）
+    if (reload) { if (pane?.kind === "note") setNote(null); else setList(null); }   // 進 loading，重讀完才能再操作
     if (viaRequest && fn) fn();
     bump();
-  }, [bump]);
+  }, [bump, pane]);
 
   // 寫入：成功就 bump（D12）。改狀態不就地更新——真相只來自 bump 的重讀（Codex R5：PATCH 回應與
   // 舊 GET 同批次落地時舊快照會蓋掉就地更新，要等下一次 GET 才修正；砍掉就地那份，沒有東西可蓋）。
@@ -247,12 +269,10 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
                 // key 綁專案＋檢視＋票：換票／換成筆記／切專案整個重掛，本地的確認／異常／已複製狀態不會沿用（Codex plan R2 high）
                 <TaskDetail key={`${selected}\n${pane?.kind ?? "empty"}\n${pane?.kind === "ticket" ? pane.name : ""}`}
                   port={port} project={selected} projectName={projectName}
-                  view={view} editing={editing && view.kind === "ticket"} leaveRequest={leaveRequest}
+                  view={view} editing={editing && (view.kind === "ticket" || view.kind === "note")} leaveRequest={leaveRequest}
                   backLabel={projectName} onBack={closePane}
                   onCycle={cycle} onPark={park} onDelete={remove} onOpen={(x) => openInEditor(x.path)} onEdit={edit}
-                  onOpenNote={openInEditor}
-                  // §10.4 接線前的佔位：筆記編輯還沒進狀態機，這兩個回呼暫時不做事
-                  onEditNote={() => {}} onSavedNote={() => {}}
+                  onOpenNote={openInEditor} onEditNote={editNote} onSavedNote={savedNote}
                   onSaved={(u) => saved(u, selected)} onLeave={leaveEditor} t={t} />
               )}
             </div>

@@ -17,6 +17,7 @@ const fetchTasksNote = vi.fn<(port: number, project: string) => Promise<TasksNot
 const updateTaskContent = vi.fn<
   (p: number, proj: string, name: string, title: string, body: string, fp: string, signal?: AbortSignal) => Promise<TaskRow>
 >();
+const updateTasksNote = vi.fn<(p: number, proj: string, content: string, fp: string) => Promise<TasksNote>>();
 
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
@@ -29,6 +30,7 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   fetchTasksNote: (port: number, project: string) => fetchTasksNote(port, project),
   updateTaskContent: (p: number, proj: string, n: string, ti: string, bo: string, fp: string, sig?: AbortSignal) =>
     updateTaskContent(p, proj, n, ti, bo, fp, sig),
+  updateTasksNote: (p: number, proj: string, c: string, fp: string) => updateTasksNote(p, proj, c, fp),
 }));
 
 // 孤兒草稿的複製走這支（回 boolean、不 throw），寫法沿用 TaskEditor.test.tsx 已驗證過的樣子。
@@ -47,6 +49,9 @@ const ticket = (over: Partial<TaskRow> = {}): TaskRow => ({
   name: "01-a.md", number: 1, title: "第一件", status: "todo", source: "me",
   created: "2026-08-29", anomalies: [], fingerprint: "f", path: "/p/a/.fledge/tasks/01-a.md",
   body: "", editable: true, ...over,
+});
+const note = (over: Partial<TasksNote> = {}): TasksNote => ({
+  status: "ok", content: "# note", mtime: "2026-09-14", path: "/p/a/.fledge/state.md", fingerprint: "n1", editable: true, ...over,
 });
 
 const tree = () => within(screen.getByTestId("tree"));
@@ -68,8 +73,9 @@ describe("Tasks 面板", () => {
     updateTask.mockResolvedValue(ticket({ status: "doing", fingerprint: "f2" }));
     deleteTask.mockResolvedValue(undefined);
     openFile.mockResolvedValue({ status: "ok" });
-    fetchTasksNote.mockResolvedValue({ status: "ok", content: "# note", mtime: "2026-09-14", path: "/p/a/.fledge/state.md", fingerprint: "n1", editable: true });
+    fetchTasksNote.mockResolvedValue(note());
     updateTaskContent.mockResolvedValue(ticket({ fingerprint: "f2" }));
+    updateTasksNote.mockResolvedValue(note({ fingerprint: "n2" }));
     writeClipboard.mockReset().mockResolvedValue(true);
   });
   afterEach(cleanup);   // vitest 未開 globals → testing-library 不會自動 cleanup
@@ -965,6 +971,171 @@ describe("Tasks 面板", () => {
       fireEvent.click(screen.getByText(en.list.save));
       await waitFor(() => expect(document.querySelector(".d-title")?.textContent).toBe("改過的標題"));
       await waitFor(() => expect(fetchTasksOverview).toHaveBeenCalledTimes(o + 1));
+    });
+  });
+
+  describe("筆記編輯（spec §10.4）", () => {
+    const list = () => document.querySelector(".tasks-col-list") as HTMLElement;
+    const detail = () => document.querySelector(".tasks-col-detail") as HTMLElement;
+    // 「下一步」區塊只在 next_step 非空時才畫；清單回發出請求時那個專案（切到 b 時 b 的清單要是 b 的）
+    const withNote = () =>
+      fetchTasks.mockImplementation((_p, project) => Promise.resolve({ project, tasks_status: "ok", tasks: [ticket()], next_step: "do x", handoff_command: "" }));
+    // 開專案 → 點「下一步」→ 等筆記落地（editable 才有編輯鍵）
+    const openNote = async () => {
+      render(<Tasks port={1234} isActive />);
+      await openProject();
+      fireEvent.click(screen.getByLabelText(en.a11y.showNote));
+      await screen.findByLabelText(en.a11y.editNote);
+    };
+    const startEditingNote = async () => {
+      await openNote();
+      fireEvent.click(screen.getByLabelText(en.a11y.editNote));
+      return (await screen.findByLabelText(en.note.editorBody)) as HTMLTextAreaElement;
+    };
+    const tick = () => new Promise((r) => setTimeout(r, 0));
+
+    it("點編輯 → 右欄變 NoteEditor（帶原內容）、清單唯讀；進入編輯不重抓（bump 只淘汰在途 GET），編輯中 focus 也不抓", async () => {
+      withNote();
+      await openNote();
+      const o = fetchTasksOverview.mock.calls.length, l = fetchTasks.mock.calls.length, n = fetchTasksNote.mock.calls.length;
+      fireEvent.click(screen.getByLabelText(en.a11y.editNote));
+      const ta = (await screen.findByLabelText(en.note.editorBody)) as HTMLTextAreaElement;
+      expect(ta.value).toBe("# note");
+      expect((screen.getByPlaceholderText(en.list.newPlaceholder) as HTMLInputElement).disabled).toBe(true);
+      expect((screen.getByTitle(en.status.todo) as HTMLButtonElement).disabled).toBe(true);
+      // 進入編輯的 bump 與 editing=true 同一批落地：effect 重跑但 body 因 editing 早退——三條都不多抓
+      await tick();
+      expect([fetchTasksOverview.mock.calls.length, fetchTasks.mock.calls.length, fetchTasksNote.mock.calls.length]).toEqual([o, l, n]);
+      fireEvent(window, new Event("focus"));
+      await tick();
+      expect([fetchTasksOverview.mock.calls.length, fetchTasks.mock.calls.length, fetchTasksNote.mock.calls.length]).toEqual([o, l, n]);
+    });
+
+    it("儲存 → updateTasksNote 帶筆記的 fingerprint；成功後右欄回筆記檢視顯示新內容、editing 結束、總覽與清單各重抓一次", async () => {
+      withNote();
+      updateTasksNote.mockResolvedValue(note({ content: "# new", fingerprint: "n2" }));
+      const ta = await startEditingNote();
+      // 儲存後的重讀要回已儲存的版本——否則 GET 會把「# new」蓋回舊的（同票的儲存測試）
+      fetchTasksNote.mockResolvedValue(note({ content: "# new", fingerprint: "n2" }));
+      const o = fetchTasksOverview.mock.calls.length, l = fetchTasks.mock.calls.length;
+      fireEvent.change(ta, { target: { value: "# new" } });
+      fireEvent.click(screen.getByText(en.list.save));
+      await waitFor(() => expect(updateTasksNote).toHaveBeenCalledWith(1234, "/p/a", "# new", "n1"));
+      await within(detail()).findByText("# new");
+      expect(screen.queryByLabelText(en.note.editorBody)).toBeNull();                                   // editing 結束
+      expect((screen.getByPlaceholderText(en.list.newPlaceholder) as HTMLInputElement).disabled).toBe(false);
+      await waitFor(() => expect([fetchTasksOverview.mock.calls.length, fetchTasks.mock.calls.length]).toEqual([o + 1, l + 1]));
+    });
+
+    it("編輯中髒 → 點樹上別的專案 → 未儲存橫幅、仍在 a；仍要離開 → 切到 b、字丟掉、不寫草稿", async () => {
+      fetchTasksOverview.mockResolvedValue({ projects: [proj(), proj({ path: "/p/b", name: "b" })], permission_error: false, recent_days: 7 });
+      withNote();
+      const ta = await startEditingNote();
+      fireEvent.change(ta, { target: { value: "typed" } });
+      fireEvent.click(tree().getByText("b"));
+      await screen.findByText(en.note.unsaved);
+      expect(fetchTasks).not.toHaveBeenCalledWith(1234, "/p/b");                                        // 仍在 a
+      expect(screen.getByDisplayValue("typed")).toBeTruthy();
+      fireEvent.click(screen.getByText(en.list.leaveAnyway));
+      await waitFor(() => expect(fetchTasks).toHaveBeenLastCalledWith(1234, "/p/b"));
+      expect(screen.queryByLabelText(en.note.editorBody)).toBeNull();
+      expect(screen.queryByDisplayValue("typed")).toBeNull();                                            // D14：丟掉
+      expect(localStorage.length).toBe(0);                                                               // 筆記不存草稿
+      expect(fetchTasksNote).not.toHaveBeenCalledWith(1234, "/p/b");                                    // 切專案 pane 歸零，不抓 b 的筆記
+    });
+
+    it("編輯中不髒 → 點別張票 → 直接切換到票檢視，無橫幅", async () => {
+      withNote();
+      await startEditingNote();
+      fireEvent.click(screen.getByText("第一件"));
+      await waitFor(() => expect(document.querySelector(".d-title")?.textContent).toBe("第一件"));
+      expect(screen.queryByText(en.note.unsaved)).toBeNull();
+      expect(screen.queryByLabelText(en.note.editorBody)).toBeNull();
+    });
+
+    it("409 → 衝突橫幅 → 重新載入：右欄筆記進 loading（清單不清）、fetchTasksNote 多一次、落地後回筆記檢視可再編輯", async () => {
+      withNote();
+      updateTasksNote.mockRejectedValue(new TaskConflictError());
+      const ta = await startEditingNote();
+      fireEvent.change(ta, { target: { value: "x" } });
+      fireEvent.click(screen.getByText(en.list.save));
+      await screen.findByText(en.note.conflict);
+      const n = fetchTasksNote.mock.calls.length;
+      // 兩條重讀都扣住：清單那條扣住才看得出 leaveEditor 清的是 note 不是 list（清單重讀落地太快會遮掉 setList(null)）
+      let resolveNote!: (v: TasksNote) => void, resolveList!: (v: TasksListResponse) => void;
+      fetchTasksNote.mockImplementationOnce(() => new Promise((r) => { resolveNote = r; }));
+      fetchTasks.mockImplementationOnce(() => new Promise((r) => { resolveList = r; }));
+      fireEvent.click(screen.getByText(en.note.reload));
+      await within(detail()).findByText(en.detail.loading);                                             // 清的是 note
+      expect(within(list()).queryByText(en.overview.loading)).toBeNull();                               // 不是 list
+      expect(within(list()).getByText("第一件")).toBeTruthy();
+      expect(within(detail()).queryByLabelText(en.a11y.editNote)).toBeNull();                           // 重讀前沒有編輯鍵可按
+      resolveList({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "do x", handoff_command: "" });
+      resolveNote(note({ content: "# theirs", fingerprint: "n9" }));
+      await within(detail()).findByText("# theirs");
+      expect(fetchTasksNote).toHaveBeenCalledTimes(n + 1);
+      expect(within(detail()).getByLabelText(en.a11y.editNote)).toBeTruthy();
+      expect(screen.queryByLabelText(en.note.editorBody)).toBeNull();
+    });
+
+    // 筆記 effect 開頭就 setNote(null)：任何筆記 GET 在途時右欄都是「載入中」、沒有編輯鍵——所以
+    // 「進編輯前的在途筆記 GET 晚回」這條路從 UI 走不到。這裡釘的是同一個守衛（筆記 effect 在 editing
+    // 早退）目前真正擋住的路：進入編輯的那次 bump 本身不得重跑筆記 effect（否則 setNote(null) 卸掉編輯器、
+    // 重抓後以伺服器內容重掛，打的字丟掉）
+    it("進入編輯的 bump 不會卸掉 NoteEditor：打的字仍在、筆記沒有多抓", async () => {
+      withNote();
+      const ta = await startEditingNote();
+      fireEvent.change(ta, { target: { value: "typing" } });
+      await tick();
+      expect(screen.getByDisplayValue("typing")).toBeTruthy();
+      expect(fetchTasksNote).toHaveBeenCalledTimes(1);                                                  // 只有開筆記那一次
+    });
+
+    // NoteEditor 不 abort（與 TaskEditor 不同），儲存在途時「仍要離開」後晚到的 200 仍會回呼 onSaved。
+    // 這時 selected 已是 b：晚到的回應不得把 a 的筆記塞進 b 的筆記檢視、不得 bump
+    it("儲存中仍要離開到 b → 晚到的 200 不會把 a 的筆記塞進 b、不重抓", async () => {
+      fetchTasksOverview.mockResolvedValue({ projects: [proj(), proj({ path: "/p/b", name: "b" })], permission_error: false, recent_days: 7 });
+      withNote();
+      fetchTasksNote.mockImplementation((_p, project) => Promise.resolve(note({ content: project === "/p/b" ? "# b note" : "# note", path: `${project}/.fledge/state.md` })));
+      let resolveSave!: (v: TasksNote) => void;
+      updateTasksNote.mockImplementationOnce(() => new Promise((r) => { resolveSave = r; }));
+      const ta = await startEditingNote();
+      fireEvent.change(ta, { target: { value: "# new" } });
+      fireEvent.click(screen.getByText(en.list.save));
+      await waitFor(() => expect(updateTasksNote).toHaveBeenCalledTimes(1));
+      fireEvent.click(tree().getByText("b"));                                                           // 儲存中：內容仍髒 → 橫幅
+      fireEvent.click(await screen.findByText(en.list.leaveAnyway));
+      await waitFor(() => expect(fetchTasks).toHaveBeenLastCalledWith(1234, "/p/b"));
+      fireEvent.click(await screen.findByLabelText(en.a11y.showNote));                                  // 在 b 打開 b 的筆記
+      await within(detail()).findByText("# b note");
+      const o = fetchTasksOverview.mock.calls.length, l = fetchTasks.mock.calls.length, n = fetchTasksNote.mock.calls.length;
+      resolveSave(note({ content: "# new", fingerprint: "n2" }));                                       // a 的 200 晚到
+      await tick();
+      expect(within(detail()).getByText("# b note")).toBeTruthy();
+      expect(screen.queryByText("# new")).toBeNull();
+      expect([fetchTasksOverview.mock.calls.length, fetchTasks.mock.calls.length, fetchTasksNote.mock.calls.length]).toEqual([o, l, n]);
+    });
+
+    // 同一個專案：只比對 origin 專案擋不住——晚到的 200 會 setEditing(false)，把使用者之後重新進入的
+    // 編輯（這裡是票的編輯器）不經離開流程直接卸掉（Codex R1 的形狀）。守的要是「這次編輯還在不在」
+    it("儲存中仍要離開到同專案的票、再進票的編輯 → 晚到的 200 不會把新的編輯踢出去", async () => {
+      withNote();
+      let resolveSave!: (v: TasksNote) => void;
+      updateTasksNote.mockImplementationOnce(() => new Promise((r) => { resolveSave = r; }));
+      const ta = await startEditingNote();
+      fireEvent.change(ta, { target: { value: "# new" } });
+      fireEvent.click(screen.getByText(en.list.save));
+      await waitFor(() => expect(updateTasksNote).toHaveBeenCalledTimes(1));
+      fireEvent.click(screen.getByText("第一件"));                                                      // 儲存中點票 → 橫幅
+      fireEvent.click(await screen.findByText(en.list.leaveAnyway));
+      await waitFor(() => expect(document.querySelector(".d-title")?.textContent).toBe("第一件"));
+      fireEvent.click(within(detail()).getByLabelText(en.list.edit));                                   // 重新進入編輯（票）
+      fireEvent.change(await screen.findByLabelText(en.list.editorBody), { target: { value: "ticket typed" } });
+      const o = fetchTasksOverview.mock.calls.length;
+      resolveSave(note({ content: "# new", fingerprint: "n2" }));                                       // 筆記的 200 晚到
+      await tick();
+      expect(screen.getByDisplayValue("ticket typed")).toBeTruthy();                                    // 票的編輯器還在
+      expect(fetchTasksOverview).toHaveBeenCalledTimes(o);                                              // 沒有 bump
     });
   });
 });
