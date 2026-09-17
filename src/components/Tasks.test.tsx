@@ -1169,5 +1169,25 @@ describe("Tasks 面板", () => {
       resolveRefetch(note({ content: "# note v2", fingerprint: "n2" }));
       await within(detail()).findByText("# note v2");
     });
+
+    // effect 重跑不清空之後這條路從 UI 走得到了：focus 的筆記 GET 在途時編輯鍵還在。進入編輯的 bump 讓 cleanup 的
+    // cancelled 淘汰它；沒有 bump 的話晚到的**非 ok** 回應會 setNote → TaskDetail 的掛載條件（status === "ok"）不成立
+    // → NoteEditor 不經 leave() 被卸掉、editing 卻留在 true：清單唯讀、focus 關著、導覽只會加 leaveRequest，面板
+    // 整個卡死（Codex R4 的形狀；票的同款在上面「進編輯前的在途 GET 帶回缺票的清單」）。回 ok 的話 NoteEditor 掛載
+    // 快照讓它照樣綠，釘不到 bump——一定要用非 ok
+    it("進編輯前的在途筆記 GET 晚回且非 ok：NoteEditor 仍在、字仍在（進入時的 bump 淘汰它）", async () => {
+      withNote();
+      await openNote();
+      let resolveStale!: (v: TasksNote) => void;
+      fetchTasksNote.mockImplementationOnce(() => new Promise((r) => { resolveStale = r; }));
+      fireEvent(window, new Event("focus"));                                                            // 在途筆記 GET
+      await waitFor(() => expect(fetchTasksNote).toHaveBeenCalledTimes(2));
+      fireEvent.click(screen.getByLabelText(en.a11y.editNote));
+      fireEvent.change(await screen.findByLabelText(en.note.editorBody), { target: { value: "typing" } });
+      resolveStale({ status: "absent", content: null, mtime: null, path: null, fingerprint: null, editable: false });
+      await tick();
+      expect(screen.getByDisplayValue("typing")).toBeTruthy();
+      expect(screen.queryByLabelText(en.note.editorBody)).not.toBeNull();
+    });
   });
 });
