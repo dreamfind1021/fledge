@@ -109,7 +109,8 @@
     "expandParked": "展開擱置",
     "collapseParked": "收起擱置",
     "selectTicket": "在右邊顯示這張票",
-    "deselectTicket": "取消選取"
+    "deselectTicket": "取消選取",
+    "editNote": "編輯離場筆記"
   },
   "tree": {
     "allProjects": "所有專案"
@@ -122,5 +123,13 @@
     "loading": "載入中…",
     "source": "來源 {{who}}",
     "created": "建立 {{date}}"
+  },
+  "note": {
+    "editorBody": "離場筆記內文",
+    "unsaved": "有未儲存的修改",
+    "stay": "留下",
+    "conflict": "離場筆記已被改過，重新載入後再編輯",
+    "reload": "重新載入",
+    "notEditable": "這份筆記的格式不能在這裡編輯（超過 64KB 或含 CRLF），請用編輯器打開"
   }
 }

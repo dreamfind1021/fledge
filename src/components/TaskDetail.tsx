@@ -6,6 +6,7 @@ import type { TaskDraft } from "../lib/taskDraft";
 import type { TaskRow, TasksNote } from "../lib/sidecar";
 import { NEXT_STATUS } from "./TasksList";
 import { TaskEditor } from "./TaskEditor";
+import { NoteEditor } from "./NoteEditor";
 
 type T = (k: string, o?: Record<string, unknown>) => string;
 
@@ -21,14 +22,16 @@ const pad2 = (n: number | null, dash: string) => (n == null ? dash : String(n).p
 // 「清單找不到票就清右欄」那條規則住在 Tasks.tsx（編輯中不適用，Codex R4）。
 export function TaskDetail({
   port, project, projectName, view, editing, leaveRequest, backLabel, onBack,
-  onCycle, onPark, onDelete, onOpen, onEdit, onOpenNote, onSaved, onLeave, t,
+  onCycle, onPark, onDelete, onOpen, onEdit, onOpenNote, onEditNote, onSaved, onSavedNote, onLeave, t,
 }: {
   port: number; project: string; projectName: string;
   view: DetailView; editing: boolean; leaveRequest: number;
   backLabel: string; onBack: () => void;
   onCycle: (task: TaskRow) => void; onPark: (task: TaskRow) => void; onDelete: (task: TaskRow) => void;
   onOpen: (task: TaskRow) => void; onEdit: (task: TaskRow) => void; onOpenNote: (path: string) => void;
-  onSaved: (updated: TaskRow) => void; onLeave: (reload: boolean, viaRequest: boolean) => void;
+  onEditNote: () => void;
+  onSaved: (updated: TaskRow) => void; onSavedNote: (note: TasksNote) => void;
+  onLeave: (reload: boolean, viaRequest: boolean) => void;
   t: T;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -46,6 +49,16 @@ export function TaskDetail({
 
   if (view.kind === "note") {
     const { note } = view;
+    // editing 對兩種 pane 都成立（票 19 增補 §10.4）。只在筆記讀到時掛編輯器——editable 由編輯鍵把關，
+    // 這裡不再驗；key 綁專案：換專案整個重掛，內容與「髒」不會沿用
+    if (editing && note?.status === "ok") {
+      return (
+        <div className="lb-detail is-editing">
+          <NoteEditor key={project} port={port} project={project} note={note}
+            onSaved={onSavedNote} onLeave={onLeave} leaveRequest={leaveRequest} t={t} />
+        </div>
+      );
+    }
     return (
       <div className="lb-detail">
         {back}
@@ -57,13 +70,21 @@ export function TaskDetail({
               <span>{t("detail.noteUpdated", { date: note.mtime ?? "" })}</span>
               {note.path && (
                 <span className="d-acts">
+                  {/* 編輯在「用編輯器打開」左邊，與票的資訊列同序（§10.3）；editable 的定義是「PUT 會收」 */}
+                  {note.editable && (
+                    <button className="tk-act" aria-label={t("a11y.editNote")} title={t("a11y.editNote")} onClick={() => onEditNote()}><Pencil size={13} strokeWidth={2} /></button>
+                  )}
                   <button className="tk-act" aria-label={t("a11y.openInEditor")} title={t("a11y.openInEditor")} onClick={() => onOpenNote(note.path!)}>
                     <SquarePen size={13} strokeWidth={2} />
                   </button>
                 </span>
               )}
             </div>
-            <div className="d-body"><div className="tk-md">{renderMarkdownLite(note.content)}</div></div>
+            <div className="d-body">
+              <div className="tk-md">{renderMarkdownLite(note.content)}</div>
+              {/* 一句涵蓋超過 64KB 與 CRLF／非 UTF-8——三種原因畫面上不分開講（§10.3） */}
+              {!note.editable && <div className="tk-noedit">{t("note.notEditable")}</div>}
+            </div>
           </>
         ) : <div className="tasks-note is-error">{t("detail.noteUnavailable")}</div>}
       </div>

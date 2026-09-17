@@ -1148,6 +1148,11 @@ export interface TasksNote {
   content: string | null;   // 前 64KB
   mtime: string | null;     // YYYY-MM-DD
   path: string | null;      // 只在 ok 時有值，給「用編輯器打開」
+  /** ok 時是讀到的位元組算出的指紋（與票同一個函式），PUT 要帶回去；非 ok 為 null（票 19 增補 §10.2） */
+  fingerprint: string | null;
+  /** 定義就是「PUT /tasks/note 會收」：ok 且 ≤ 64KB 且嚴格 UTF-8 且無 CR——GET 與 PUT 同一個判斷。
+   *  false 的三種原因畫面上不分開講（`note.notEditable` 一句涵蓋） */
+  editable: boolean;
 }
 
 /** 離場筆記全文（票 19）。點「下一步」才打，不快取。 */
@@ -1244,4 +1249,20 @@ export async function updateTaskContent(
     throw new Error("updateTaskContent: malformed response");
   }
   return row as TaskRow;
+}
+
+/**
+ * 離場筆記介面內編輯（票 19 增補 §10.2）：寫入走與票內容同一套規則，成功回 GET 同一個形狀
+ * （含新 `fingerprint`），呼叫端必須用它取代本地狀態。409 → `TaskConflictError`；其他非 2xx
+ * 一律一般 Error——NoteEditor 只分「衝突／其他」，判別碼不進畫面（CLAUDE.md §4.6.13）。
+ */
+export async function updateTasksNote(port: number, project: string, content: string, fingerprint: string): Promise<TasksNote> {
+  const resp = await fetch(`${base(port)}/tasks/note`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ project, content, fingerprint }),
+  });
+  if (resp.status === 409) throw new TaskConflictError();
+  if (!resp.ok) throw new Error(`updateTasksNote failed: ${resp.status}`);
+  return (await resp.json()) as TasksNote;
 }

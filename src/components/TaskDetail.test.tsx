@@ -18,7 +18,10 @@ const noop = () => {};
 const base = (over: Partial<Parameters<typeof TaskDetail>[0]> = {}) => ({
   port: 1, project: "/p/a", projectName: "a", view: { kind: "empty" as const }, editing: false, leaveRequest: 0,
   backLabel: "a", onBack: noop, onCycle: noop, onPark: noop, onDelete: noop, onOpen: noop, onEdit: noop,
-  onOpenNote: noop, onSaved: noop, onLeave: noop, t, ...over,
+  onOpenNote: noop, onEditNote: noop, onSaved: noop, onSavedNote: noop, onLeave: noop, t, ...over,
+});
+const okNote = (over: Partial<TasksNote> = {}): TasksNote => ({
+  status: "ok", content: "# p\n\n## 停在哪\n\n- x", mtime: "2026-09-14", path: "/p/a/.fledge/state.md", fingerprint: "n1", editable: true, ...over,
 });
 
 describe("TaskDetail", () => {
@@ -104,19 +107,44 @@ describe("TaskDetail", () => {
 
   it("筆記：ok 畫全文與更新日，開檔鍵帶 path；absent／unavailable 畫讀不到；null 畫載入中", () => {
     const onOpenNote = vi.fn();
-    const note: TasksNote = { status: "ok", content: "# p\n\n## 停在哪\n\n- x", mtime: "2026-09-14", path: "/p/a/.fledge/state.md" };
-    const { container, rerender } = render(<TaskDetail {...base({ view: { kind: "note", note }, onOpenNote })} />);
+    const { container, rerender } = render(<TaskDetail {...base({ view: { kind: "note", note: okNote() }, onOpenNote })} />);
     expect(container.querySelector(".d-crumb")?.textContent).toBe("a / .fledge/state.md");
     expect(container.querySelector(".d-title")?.textContent).toBe(en.detail.noteTitle);
     expect(screen.getByText(en.detail.noteUpdated.replace("{{date}}", "2026-09-14"))).toBeTruthy();
     expect(container.querySelector(".d-body h2")?.textContent).toBe("停在哪");
     fireEvent.click(screen.getByLabelText(en.a11y.openInEditor));
     expect(onOpenNote).toHaveBeenCalledWith("/p/a/.fledge/state.md");
-    rerender(<TaskDetail {...base({ view: { kind: "note", note: { status: "absent", content: null, mtime: null, path: null } } })} />);
+    rerender(<TaskDetail {...base({ view: { kind: "note", note: { status: "absent", content: null, mtime: null, path: null, fingerprint: null, editable: false } } })} />);
     expect(screen.getByText(en.detail.noteUnavailable)).toBeTruthy();
     expect(screen.queryByLabelText(en.a11y.openInEditor)).toBeNull();
     rerender(<TaskDetail {...base({ view: { kind: "note", note: null } })} />);
     expect(screen.getByText(en.detail.loading)).toBeTruthy();
+  });
+
+  // 票 19 增補 §10.3：筆記檢視的編輯鍵排在「用編輯器打開」左邊，與票的資訊列同序
+  it("筆記：editable → 編輯鍵在（排在開檔鍵前面）、點了 onEditNote；沒有 note.notEditable", () => {
+    const onEditNote = vi.fn();
+    const { container } = render(<TaskDetail {...base({ view: { kind: "note", note: okNote() }, onEditNote })} />);
+    const acts = [...container.querySelectorAll(".d-meta .d-acts button")].map((b) => b.getAttribute("aria-label"));
+    expect(acts).toEqual([en.a11y.editNote, en.a11y.openInEditor]);
+    fireEvent.click(screen.getByLabelText(en.a11y.editNote));
+    expect(onEditNote).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(en.note.notEditable)).toBeNull();
+  });
+
+  it("筆記：editable:false → 沒編輯鍵、有 note.notEditable、開檔鍵仍在", () => {
+    render(<TaskDetail {...base({ view: { kind: "note", note: okNote({ editable: false }) } })} />);
+    expect(screen.queryByLabelText(en.a11y.editNote)).toBeNull();
+    expect(screen.getByText(en.note.notEditable)).toBeTruthy();
+    expect(screen.getByLabelText(en.a11y.openInEditor)).toBeTruthy();
+  });
+
+  it("editing 且 view 是 note → 畫 NoteEditor（有 note.editorBody、.lb-detail.is-editing），不畫 d-title", () => {
+    const { container } = render(<TaskDetail {...base({ view: { kind: "note", note: okNote() }, editing: true })} />);
+    expect(container.querySelector(".lb-detail.is-editing .full-editor")).not.toBeNull();
+    expect(screen.getByLabelText(en.note.editorBody)).toBeTruthy();
+    expect(container.querySelector(".d-title")).toBeNull();
+    expect(screen.queryByLabelText(en.a11y.editNote)).toBeNull();
   });
 
   it("返回鍵在 DOM 裡並回呼（顯示與否由 CSS 決定）", () => {

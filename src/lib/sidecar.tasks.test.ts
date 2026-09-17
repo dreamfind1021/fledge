@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TaskConflictError, fetchTasksNote, updateTaskContent } from "./sidecar";
+import { TaskConflictError, fetchTasksNote, updateTaskContent, updateTasksNote } from "./sidecar";
 
 const stub = (status: number, json: () => Promise<unknown>) =>
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: status < 400, status, json }));
@@ -46,7 +46,7 @@ describe("fetchTasksNote（票 19，spec §4.4）", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("打 /tasks/note?project=，帶 auth header，回 JSON 原樣", async () => {
-    const body = { status: "ok", content: "# p", mtime: "2026-09-16", path: "/p/.fledge/state.md" };
+    const body = { status: "ok", content: "# p", mtime: "2026-09-16", path: "/p/.fledge/state.md", fingerprint: "n1", editable: true };
     stub(200, () => Promise.resolve(body));
     const r = await fetchTasksNote(1, "/p x");
     expect(r).toEqual(body);
@@ -57,5 +57,30 @@ describe("fetchTasksNote（票 19，spec §4.4）", () => {
   it("非 2xx → 拋", async () => {
     stub(400, () => Promise.resolve({ error: "unknown_project" }));
     await expect(fetchTasksNote(1, "/p")).rejects.toThrow("400");
+  });
+});
+
+describe("updateTasksNote（票 19 增補，spec §10.2）", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  const ok = { status: "ok", content: "new", mtime: "2026-09-17", path: "/p/.fledge/state.md", fingerprint: "n2", editable: true };
+
+  it("PUT /tasks/note，JSON body 帶 project／content／fingerprint，帶 auth header，回 JSON 原樣", async () => {
+    stub(200, () => Promise.resolve(ok));
+    const r = await updateTasksNote(1, "/p x", "new", "n1");
+    expect(r).toEqual(ok);
+    const [url, opts] = vi.mocked(fetch).mock.calls[0];
+    expect(String(url)).toBe("http://127.0.0.1:1/tasks/note");
+    expect(opts?.method).toBe("PUT");
+    expect(JSON.parse(String(opts?.body))).toEqual({ project: "/p x", content: "new", fingerprint: "n1" });
+    expect((opts?.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+    expect(opts?.headers).toBeDefined();   // authHeaders()：漏了 dev 看似正常、打包版整個死掉
+  });
+  it("409 → TaskConflictError", async () => {
+    stub(409, () => Promise.resolve({ error: "stale" }));
+    await expect(updateTasksNote(1, "/p", "new", "n1")).rejects.toBeInstanceOf(TaskConflictError);
+  });
+  it("其他非 2xx → 含 status 的一般 Error", async () => {
+    stub(400, () => Promise.resolve({ error: "not_editable" }));
+    await expect(updateTasksNote(1, "/p", "new", "n1")).rejects.toThrow("400");
   });
 });

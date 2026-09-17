@@ -109,7 +109,8 @@
     "expandParked": "Expand parked",
     "collapseParked": "Collapse parked",
     "selectTicket": "Show this task on the right",
-    "deselectTicket": "Deselect"
+    "deselectTicket": "Deselect",
+    "editNote": "Edit resume note"
   },
   "tree": {
     "allProjects": "All projects"
@@ -122,5 +123,13 @@
     "loading": "Loading…",
     "source": "Source {{who}}",
     "created": "Created {{date}}"
+  },
+  "note": {
+    "editorBody": "Resume note body",
+    "unsaved": "You have unsaved changes",
+    "stay": "Stay",
+    "conflict": "The resume note was changed elsewhere. Reload and edit again.",
+    "reload": "Reload",
+    "notEditable": "This note can't be edited here (over 64KB or contains CRLF); open it in your editor instead"
   }
 }

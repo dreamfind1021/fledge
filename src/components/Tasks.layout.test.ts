@@ -50,8 +50,19 @@ describe("待辦面板三欄版面", () => {
   it("寬（≥1040）：清單與右欄同時顯示、右欄的返回藏掉", () => {
     const b = block(1040);
     expect(decl(b, '.tasks-split[data-pane="open"] .tasks-col-list', "display")).toBe("block");
-    expect(decl(b, '.tasks-split[data-pane="none"] .tasks-col-detail', "display")).toBe("block");
+    expect(decl(b, '.tasks-split[data-pane="none"] .tasks-col-detail', "display")).toBe("flex");   // 顯示，且不得蓋掉置中用的 flex column
     expect(decl(b, ".lb-detail .tasks-back", "display")).toBe("none");
+  });
+
+  // 空狀態置中（票 19 增補 §10.3）：.lb-detail.is-empty 自己是 flex 置中，但它得先撐滿右欄才有東西可以置中——
+  // demo 置中是因為 demo 的 .lb-detail 本身撐滿欄；正式版少了這兩條，提示黏在右欄頂端
+  // 空狀態只出現在 data-pane="none"，而寬等級那條 display 規則蓋得掉基礎規則——只驗基礎規則會假綠
+  // （headless Chrome 實測：那條留 block 時提示仍黏在頂端 22px，改 flex 才落到 600px 高的中間）
+  it("右欄是 flex column、.lb-detail 撐滿（空狀態置中的前提）", () => {
+    expect(decl(css, ".tasks-col-detail", "display")).toBe("flex");
+    expect(decl(css, ".tasks-col-detail", "flex-direction")).toBe("column");
+    expect(decl(css, ".lb-detail", "flex")).toBe("1");
+    expect(decl(block(1040), '.tasks-split[data-pane="none"] .tasks-col-detail', "display")).toBe("flex");
   });
 
   // 樹 232 ＋ 清單取 max(min-width, 剩餘×比例) ＋ 右欄至少 380 ≤ 1040；

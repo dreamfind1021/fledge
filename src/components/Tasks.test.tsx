@@ -68,7 +68,7 @@ describe("Tasks 面板", () => {
     updateTask.mockResolvedValue(ticket({ status: "doing", fingerprint: "f2" }));
     deleteTask.mockResolvedValue(undefined);
     openFile.mockResolvedValue({ status: "ok" });
-    fetchTasksNote.mockResolvedValue({ status: "ok", content: "# note", mtime: "2026-09-14", path: "/p/a/.fledge/state.md" });
+    fetchTasksNote.mockResolvedValue({ status: "ok", content: "# note", mtime: "2026-09-14", path: "/p/a/.fledge/state.md", fingerprint: "n1", editable: true });
     updateTaskContent.mockResolvedValue(ticket({ fingerprint: "f2" }));
     writeClipboard.mockReset().mockResolvedValue(true);
   });

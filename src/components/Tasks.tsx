@@ -68,7 +68,7 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
     setNote(null);
     fetchTasksNote(port, selected)
       .then((n) => { if (!cancelled) setNote(n); })
-      .catch(() => { if (!cancelled) setNote({ status: "unavailable", content: null, mtime: null, path: null }); });
+      .catch(() => { if (!cancelled) setNote({ status: "unavailable", content: null, mtime: null, path: null, fingerprint: null, editable: false }); });
     return () => { cancelled = true; };
   }, [port, selected, noteOpen, reloadKey]);
 
@@ -251,6 +251,8 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
                   backLabel={projectName} onBack={closePane}
                   onCycle={cycle} onPark={park} onDelete={remove} onOpen={(x) => openInEditor(x.path)} onEdit={edit}
                   onOpenNote={openInEditor}
+                  // §10.4 接線前的佔位：筆記編輯還沒進狀態機，這兩個回呼暫時不做事
+                  onEditNote={() => {}} onSavedNote={() => {}}
                   onSaved={(u) => saved(u, selected)} onLeave={leaveEditor} t={t} />
               )}
             </div>
