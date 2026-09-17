@@ -13,7 +13,11 @@ export function NoteEditor({ port, project, note, onSaved, onLeave, leaveRequest
   onLeave: (reload: boolean, viaRequest: boolean) => void;
   leaveRequest: number; t: T;
 }) {
-  const [content, setContent] = useState(note.content ?? "");
+  // 基準（內文與 fingerprint）在掛載時快照一次：父層之後 rerender 傳來的 note 不改變「髒」的判定，
+  // 送出的也永遠是「內容所基於的那版」的 fingerprint（spec §7.2 同一條原則；key 綁專案，換專案整個重掛）
+  const base = useRef(note.content ?? "");
+  const [baseFp] = useState(note.fingerprint);
+  const [content, setContent] = useState(base.current);
   const [saving, setSaving] = useState(false);
   // 三種橫幅互斥、同一個 state：unsaved（離開前確認）／conflict（409）／error（其他失敗）
   const [banner, setBanner] = useState<null | "unsaved" | "conflict" | "error">(null);
@@ -21,14 +25,22 @@ export function NoteEditor({ port, project, note, onSaved, onLeave, leaveRequest
   // 409 的復原是「先複製、再重新載入」，第二步就這樣消失（TaskEditor 已經踩過同一個坑）
   const [copied, setCopied] = useState(false);
   // 沒有草稿要 flush，「髒」直接從內容算，不另開 state
-  const dirty = content !== (note.content ?? "");
+  const dirty = content !== base.current;
 
   // 這次離開是誰發起的（onLeave 第二個參數）——與 TaskEditor **完全相同**的機制（spec §5.7、Codex R5）：
   // 父層的 leaveRequest → "request"，父層才套用被攔下的導覽；自己的取消 → "self"，父層只結束編輯。
   // 來源只在「發起」時寫入，「仍要離開」沿用上一次的（它不經 leave()），只有新的自發動作才改回 "self"。
   // 少了這個區分，nav 觸發的 leave 停在橫幅之後，父層殘留的 pendingNav 會被之後使用者自己按的取消消耗掉
   const leaveSource = useRef<"request" | "self">("self");
-  const forceLeave = (reload = false) => onLeave(reload, leaveSource.current === "request");
+  // 與 TaskEditor 同一條對父層的保證——onLeave 之後絕不 onSaved／不動 state；父層 savedNote 的
+  // editing=false／pendingNav 作廢是無條件的，靠這條。TaskEditor 用 AbortController 讓晚到的回應根本
+  // 不到達，這裡 updateTasksNote 沒有 signal，改用旗標擋在 then／catch 入口；卸載也關掉（closeTab 不經 leave）。
+  // 在呼叫 onLeave **之前**關：父層就算多留這個元件一拍，保證也成立。
+  // effect 本體要**開**、不能只在 cleanup 關：main.tsx 包 StrictMode，dev 下 effect mount→cleanup→mount 雙跑，
+  // 只關不開會讓 dev app 每一次儲存都靜默丟掉 onSaved（測試「StrictMode 下儲存成功仍呼叫 onSaved」守這條）
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const forceLeave = (reload = false) => { alive.current = false; onLeave(reload, leaveSource.current === "request"); };
   // 不髒 → 直接走；髒 → 停下來問，什麼都不寫（D14）
   const leave = () => { if (!dirty) { forceLeave(false); return; } setBanner("unsaved"); };
   const selfLeave = () => { leaveSource.current = "self"; leave(); };
@@ -49,10 +61,10 @@ export function NoteEditor({ port, project, note, onSaved, onLeave, leaveRequest
 
   const save = () => {
     setCopied(false); setBanner(null); setSaving(true);   // 新的儲存嘗試開始，舊的橫幅與「已複製」作廢
-    // 送出的是「內容所基於的那版」的 fingerprint（note 是掛載時的那份，key 綁專案、換專案整個重掛）
-    updateTasksNote(port, project, content, note.fingerprint!)
-      .then((n) => { setSaving(false); onSaved(n); })
+    updateTasksNote(port, project, content, baseFp!)
+      .then((n) => { if (!alive.current) return; setSaving(false); onSaved(n); })   // 已離開：晚到的 200 不到父層
       .catch((e: unknown) => {
+        if (!alive.current) return;
         setSaving(false);
         if (e instanceof TaskConflictError) { setBanner("conflict"); return; }
         // 判別碼不進畫面（CLAUDE.md §4.6.13）：console 留診斷，畫面只給固定字串
