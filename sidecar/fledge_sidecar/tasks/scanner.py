@@ -377,7 +377,9 @@ class NoteResult:
 
     status: str
     content: str | None
-    mtime: str | None   # YYYY-MM-DD
+    mtime: str | None       # YYYY-MM-DD
+    fingerprint: str | None  # ok 時算在**讀到的位元組**上（與票同一個函式）；超過上限時是前 64KB 的
+    editable: bool          # ok 且檔案大小 ≤ NOTE_MAX_BYTES（D15）——超過只給外部打開，寫回去會截尾
 
 
 def note_path(project: str) -> str:
@@ -395,28 +397,36 @@ def read_note(td: TasksDir) -> NoteResult:
     跟 `tasks/` 無關，總覽的 `next_step` 也是用同一個 `fledge_fd` 讀——兩者要一致，
     否則畫面上有「下一步」可看，點進去卻說讀不到。有 fd 之後只有 FileNotFoundError
     是 absent；其餘 OSError（state.md 是 symlink 的 ELOOP、EACCES、讀取中途失敗）都是 unavailable。
-    不能沿用 `_read_state_text()`——它把所有失敗壓成空字串。"""
+    不能沿用 `_read_state_text()`——它把所有失敗壓成空字串。
+
+    票 19 增補（spec §10.2）：ok 時多算 `fingerprint`／`editable`，給介面內編輯用；非 ok 一律
+    `None`／`False`。"""
     if td.fledge_fd is None:
         # resolver 開不了 .fledge/：symlink／權限不足是 unavailable、不存在才是 absent（Codex R1）。
         # fledge_fd 有值就往下讀——tasks/ 壞掉不影響 state.md，總覽也是用同一個 fd 讀 next_step
-        return NoteResult(STATUS_UNAVAILABLE if td.status == STATUS_UNAVAILABLE else STATUS_ABSENT, None, None)
+        return NoteResult(STATUS_UNAVAILABLE if td.status == STATUS_UNAVAILABLE else STATUS_ABSENT,
+                          None, None, fingerprint=None, editable=False)
     try:
         fd = os.open(STATE_FILENAME, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=td.fledge_fd)
     except FileNotFoundError:
-        return NoteResult(STATUS_ABSENT, None, None)
+        return NoteResult(STATUS_ABSENT, None, None, fingerprint=None, editable=False)
     except OSError:
-        return NoteResult(STATUS_UNAVAILABLE, None, None)
+        return NoteResult(STATUS_UNAVAILABLE, None, None, fingerprint=None, editable=False)
     try:
         st = os.fstat(fd)
         if not stat_module.S_ISREG(st.st_mode):
-            return NoteResult(STATUS_UNAVAILABLE, None, None)   # FIFO／目錄／裝置檔
+            return NoteResult(STATUS_UNAVAILABLE, None, None, fingerprint=None, editable=False)   # FIFO／目錄／裝置檔
         with os.fdopen(fd, "rb", closefd=False) as fh:
             raw = fh.read(NOTE_MAX_BYTES)
     except OSError:
-        return NoteResult(STATUS_UNAVAILABLE, None, None)
+        return NoteResult(STATUS_UNAVAILABLE, None, None, fingerprint=None, editable=False)
     finally:
         os.close(fd)
-    return NoteResult(STATUS_OK, _decode(raw), date.fromtimestamp(st.st_mtime).isoformat())
+    # fingerprint 算在讀到的位元組上：≤ 上限時就是整檔；超過時是前 64KB——那份 editable 是 False，
+    # PUT 也會用整檔重算再拒絕，所以這個「不完整」的 fingerprint 不會被拿去寫。大小用同一次 fstat
+    # 的 st_size 而不是 len(raw)：len(raw) 在超過時永遠等於上限，分不出「剛好」與「超過」。
+    return NoteResult(STATUS_OK, _decode(raw), date.fromtimestamp(st.st_mtime).isoformat(),
+                      fingerprint=fingerprint(raw), editable=st.st_size <= NOTE_MAX_BYTES)
 
 
 def build_overview(config: AppConfig, *, today: date | None = None) -> dict[str, Any]:
@@ -676,6 +686,89 @@ def update_content(
         finally:
             os.close(fd)
     return _row(parse_task(name, _decode(new_raw)), fingerprint(new_raw), new_raw)
+
+
+def _note_can_round_trip(raw: bytes) -> bool:
+    """筆記版的 round-trip 資格——spec §10.2 寫的是「`can_round_trip` 不過 → not_editable」，
+    但 `parser.can_round_trip` 驗的是**票的形狀**（frontmatter ＋ `# 標題` ＋ 內文重組後逐位元組
+    相等），而 resume-note skill 寫的 state.md 以 `# <專案名> — …` 起頭、沒有 frontmatter，
+    照抄會讓每一份真實筆記都被判 not_editable，功能等於沒做。這裡改驗**同一個性質**在筆記形狀
+    上的等價條件。
+
+    前端拿到的是整份 `_decode(raw)`，「寫回去不弄丟東西」只有兩個條件：
+    - 嚴格 UTF-8 解得開——否則 `errors="replace"` 換進去的 U+FFFD 會被永久寫回磁碟
+      （與票的 `can_round_trip` 第一步相同）
+    - 沒有 `\\r`——textarea 的 API value 會把 CRLF／CR 正規化成 LF，使用者只改一個字存回去，
+      整份換行會靜默翻掉（票的 CRLF 判 not_editable 是同一條規則）
+
+    **不列舉 `splitlines()` 的其他分行字元**（\\x0b、\\u2028…）：票要擋是因為 parser 逐行拆過
+    再重組，筆記全文不經過那一步、寫什麼讀回什麼，擋了只是多一條沒有對應風險的規則。"""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return "\r" not in text
+
+
+def update_note(fledge_fd: int, content: str, *, expected_fingerprint: str) -> NoteResult | None:
+    """改離場筆記全文（票 19 增補，spec §10.2、D13）。fingerprint 不符回 None（路由轉 409）並拒絕寫入。
+
+    **與票內容走同一套規則、不另造協定（D13）**：流程與 `update_content` 逐段對應——
+    `_open_existing(write=True)` 釘 fd（T1–T4：純檔名、一般檔、`O_NOFOLLOW`、不是 hard link）
+    → `_WRITE_LOCK` → 讀全檔 → round-trip 資格 → fingerprint → 原地覆寫。
+    **檔案身分自始至終是同一個 fd，檔名完全不碰。**
+
+    `_open_existing` 沒有 `O_CREAT`：state.md 不存在就 `FileNotFoundError`（路由 404）。
+    **這裡刻意不建檔**——建立離場筆記是 resume-note skill 的事（spec §10.2）。
+
+    保真範圍與票不同：票只換圍籬之後的內容、frontmatter 一字不動；筆記沒有那個結構，
+    **整份原樣寫入**，所以資格檢查用 `_note_can_round_trip`，不用票形狀的 `can_round_trip`
+    （理由見該函式）。值域檢查也不沿用 `_validate_content_domain`：它對空 title 必拋
+    （筆記沒有 title），而它對 body 的 `strip("\\n")` 要求是因為票的寫入端自己補首尾換行——
+    筆記原樣寫入，首尾換行是內容的一部分，不能拒。等價的 body 檢查就只剩「沒有 `\\r`」，
+    已包在 `_note_can_round_trip(new_raw)` 這個後置條件裡。
+
+    超過 `NOTE_MAX_BYTES` 一律 not_editable（D15）：GET 只讀前 64KB，寫回去會把後面截掉。
+    大小看 `_read_all` 讀到的整檔，不看 GET 那份——GET 的 fingerprint 在超過時本來就不會
+    等於整檔的，但擋在大小這關比擋在 409 誠實：那不是「別人改過」，是「這份不給改」。
+
+    寫入不是原子的（spec §10.6 第 9 條）——與 `update_status`／`update_content` 同一個等級，
+    在已 pin 的 fd 上 `lseek`＋`_write_all`＋`ftruncate`。硬中斷可能留半檔，安全網是外部編輯器
+    與 git（spec §10.6 第 9 條原話）；**這裡刻意不重新發明寫入協定**（`update_status` 的
+    docstring 記著三輪審查打在自製協定上的教訓）。
+
+    ValueError 的訊息是 error code，路由直接用：`not_editable`／`invalid_content`／
+    `_open_existing` 的既有訊息（歸 `invalid_target`）。
+    """
+    with _WRITE_LOCK:
+        fd = _open_existing(fledge_fd, STATE_FILENAME, write=True)
+        try:
+            try:
+                raw = _read_all(fd)
+            except OSError as exc:
+                # 同 update_content：fd 已過 T1–T4，讀失敗只可能是 I/O → 500，不是 400 invalid_target
+                raise TaskWriteError(str(exc)) from exc
+            if len(raw) > NOTE_MAX_BYTES or not _note_can_round_trip(raw):
+                raise ValueError("not_editable")
+            if fingerprint(raw) != expected_fingerprint:
+                return None
+            new_raw = content.encode("utf-8")
+            # 後置條件：寫下去的東西自己要讀得回來（同 update_content 對 new_raw 的檢查）
+            if not _note_can_round_trip(new_raw):
+                raise ValueError("invalid_content")
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                _write_all(fd, new_raw)
+                os.ftruncate(fd, len(new_raw))
+                st = os.fstat(fd)
+            except OSError as exc:
+                raise TaskWriteError(str(exc)) from exc
+        finally:
+            os.close(fd)
+    # 回傳更新後的筆記（含新 fingerprint）——前端用它取代本地狀態，否則存一次之後本地的
+    # fingerprint 就過期、下一次儲存會被誤判 409（同 update_status 的理由）。
+    return NoteResult(STATUS_OK, content, date.fromtimestamp(st.st_mtime).isoformat(),
+                      fingerprint=fingerprint(new_raw), editable=True)
 
 
 def delete_task(tasks_fd: int, name: str, *, expected_fingerprint: str) -> bool:

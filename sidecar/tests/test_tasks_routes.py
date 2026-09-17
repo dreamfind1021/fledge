@@ -614,9 +614,9 @@ def test_note_absent_and_unavailable_have_null_content_and_path(tmp_path, monkey
     (linked / ".fledge").symlink_to(elsewhere, target_is_directory=True)
     c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
     a = c.get("/tasks/note", params={"project": str(root / "bare")}).json()
-    assert a == {"status": "absent", "content": None, "mtime": None, "path": None}
+    assert a == {"status": "absent", "content": None, "mtime": None, "path": None, "fingerprint": None, "editable": False}
     u = c.get("/tasks/note", params={"project": str(linked)}).json()
-    assert u == {"status": "unavailable", "content": None, "mtime": None, "path": None}
+    assert u == {"status": "unavailable", "content": None, "mtime": None, "path": None, "fingerprint": None, "editable": False}
 
 
 def test_note_requires_token_when_auth_enforced(tmp_path, monkeypatch):
@@ -626,3 +626,167 @@ def test_note_requires_token_when_auth_enforced(tmp_path, monkeypatch):
     monkeypatch.delenv("FLEDGE_TEST_UNAUTH", raising=False)
     monkeypatch.setenv("FLEDGE_TOKEN", "secret")
     assert TestClient(create_app()).get("/tasks/note", params={"project": "/x"}).status_code == 401
+
+
+# ── GET /tasks/note 多回 fingerprint／editable、PUT /tasks/note（票 19 增補，spec §10.2）──
+
+NOTE = "# p\n\n**下一步**：old，後面拖一段長尾巴讓新內容比它短\n"
+
+
+def _with_note(tmp_path, monkeypatch, *, text=NOTE):
+    """造一個有 state.md 的專案，回 (client, proj, state 路徑, GET 回的 fingerprint)。"""
+    root = _project_root(tmp_path)
+    proj = root / "p1"
+    (proj / ".fledge").mkdir(parents=True)
+    state = proj / ".fledge" / "state.md"
+    state.write_bytes(text.encode("utf-8") if isinstance(text, str) else text)
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    fp = c.get("/tasks/note", params={"project": str(proj)}).json()["fingerprint"]
+    return c, proj, state, fp
+
+
+def test_get_note_returns_fingerprint_and_editable(tmp_path, monkeypatch):
+    """spec §10.2：ok 時 `fingerprint` 是 sha256(讀到的位元組)、`editable` 看大小 ≤ 64KB（D15）。"""
+    import hashlib
+
+    c, proj, state, fp = _with_note(tmp_path, monkeypatch)
+    body = c.get("/tasks/note", params={"project": str(proj)}).json()
+    assert body["fingerprint"] == hashlib.sha256(NOTE.encode("utf-8")).hexdigest()
+    assert body["editable"] is True
+    state.write_bytes(b"a" * (65 * 1024))
+    body = c.get("/tasks/note", params={"project": str(proj)}).json()
+    assert body["status"] == "ok" and body["editable"] is False
+    assert body["fingerprint"] == hashlib.sha256(b"a" * (64 * 1024)).hexdigest()
+
+
+def test_put_note_ok_shape(tmp_path, monkeypatch):
+    """接線：對組好的 app 打 PUT /tasks/note 斷言 200＋與 GET 同形（不可寫成「非 404」，見檔頭）。"""
+    c, proj, state, fp = _with_note(tmp_path, monkeypatch)
+    new = "# p\n\n**下一步**：new\n"
+    r = c.put("/tasks/note", json={"project": str(proj), "content": new, "fingerprint": fp})
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == {"status", "content", "mtime", "path", "fingerprint", "editable"}
+    assert body["status"] == "ok" and body["content"] == new and body["editable"] is True
+    assert body["path"] == str(state) and len(body["mtime"]) == 10
+    assert body["fingerprint"] != fp
+    assert state.read_text(encoding="utf-8") == new
+    again = c.get("/tasks/note", params={"project": str(proj)}).json()
+    assert again["content"] == new and again["fingerprint"] == body["fingerprint"]
+    # 用新 fingerprint 再存一次要成功——回傳的 fingerprint 必須是磁碟上的那份
+    r2 = c.put("/tasks/note", json={"project": str(proj), "content": "# p\n", "fingerprint": body["fingerprint"]})
+    assert r2.status_code == 200 and state.read_text(encoding="utf-8") == "# p\n"
+
+
+def test_put_note_stale_is_409(tmp_path, monkeypatch):
+    c, proj, state, fp = _with_note(tmp_path, monkeypatch)
+    before = state.read_bytes()
+    r = c.put("/tasks/note", json={"project": str(proj), "content": "x\n", "fingerprint": "wrong"})
+    assert r.status_code == 409 and r.json()["error"] == "stale"
+    assert state.read_bytes() == before
+
+
+def test_put_note_absent_is_404(tmp_path, monkeypatch):
+    """spec §10.2「不建檔」：沒有 state.md（不論 .fledge/ 在不在）→ 404 not_found，且不會建出檔案。"""
+    root = _project_root(tmp_path)
+    (root / "has_fledge" / ".fledge").mkdir(parents=True)
+    (root / "bare").mkdir()
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    for name in ("has_fledge", "bare"):
+        r = c.put("/tasks/note", json={"project": str(root / name), "content": "# new\n", "fingerprint": "f"})
+        assert r.status_code == 404 and r.json()["error"] == "not_found", name
+    assert not (root / "has_fledge" / ".fledge" / "state.md").exists()
+    assert not (root / "bare" / ".fledge").exists()
+
+
+def test_put_note_unavailable_fledge_is_400(tmp_path, monkeypatch):
+    """`.fledge/` 是 symlink → resolver 回 unavailable、fledge_fd None → 400 fledge_dir_unavailable，目標不動。"""
+    root = _project_root(tmp_path)
+    linked = root / "linked"
+    linked.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "state.md").write_bytes(b"secret\n")
+    (linked / ".fledge").symlink_to(elsewhere, target_is_directory=True)
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    r = c.put("/tasks/note", json={"project": str(linked), "content": "pwned\n", "fingerprint": "f"})
+    assert r.status_code == 400 and r.json()["error"] == "fledge_dir_unavailable"
+    assert (elsewhere / "state.md").read_bytes() == b"secret\n"
+
+
+def test_put_note_unknown_project_is_400(tmp_path, monkeypatch):
+    c = _client(tmp_path, monkeypatch, roots=[])
+    r = c.put("/tasks/note", json={"project": str(tmp_path / "nope"), "content": "x\n", "fingerprint": "f"})
+    assert r.status_code == 400 and r.json()["error"] == "unknown_project"
+
+
+def test_put_note_requires_fingerprint(tmp_path, monkeypatch):
+    c, proj, state, fp = _with_note(tmp_path, monkeypatch)
+    before = state.read_bytes()
+    r = c.put("/tasks/note", json={"project": str(proj), "content": "x\n"})
+    assert r.status_code == 400 and r.json()["error"] == "fingerprint_required"
+    r = c.put("/tasks/note", json={"project": str(proj), "content": "x\n", "fingerprint": ""})
+    assert r.status_code == 400 and r.json()["error"] == "fingerprint_required"
+    assert state.read_bytes() == before
+
+
+def test_put_note_symlinked_state_is_400(tmp_path, monkeypatch):
+    """T3：state.md 是 symlink → 400 invalid_target（不是 500），目標檔不動。給目標的正確 fingerprint，
+    證明擋下它的是 O_NOFOLLOW 不是 fingerprint。"""
+    import hashlib
+
+    root = _project_root(tmp_path)
+    proj = root / "p1"
+    (proj / ".fledge").mkdir(parents=True)
+    target = tmp_path / "target.md"
+    target.write_bytes(b"secret\n")
+    (proj / ".fledge" / "state.md").symlink_to(target)
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    fp = hashlib.sha256(b"secret\n").hexdigest()
+    r = c.put("/tasks/note", json={"project": str(proj), "content": "pwned\n", "fingerprint": fp})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_target"
+    assert target.read_bytes() == b"secret\n"
+
+
+def test_put_note_not_editable_and_invalid_content_codes(tmp_path, monkeypatch):
+    """spec §10.2 的 400 碼表是封閉列舉：超過 64KB → not_editable；新內容含 \\r → invalid_content。"""
+    import hashlib
+
+    big = b"a" * (65 * 1024)
+    c, proj, state, fp = _with_note(tmp_path, monkeypatch, text=big)
+    r = c.put("/tasks/note", json={"project": str(proj), "content": "x\n", "fingerprint": hashlib.sha256(big).hexdigest()})
+    assert r.status_code == 400 and r.json()["error"] == "not_editable"
+    assert state.read_bytes() == big
+    state.write_bytes(NOTE.encode("utf-8"))
+    fp = c.get("/tasks/note", params={"project": str(proj)}).json()["fingerprint"]
+    r = c.put("/tasks/note", json={"project": str(proj), "content": "a\r\nb\n", "fingerprint": fp})
+    assert r.status_code == 400 and r.json()["error"] == "invalid_content"
+    assert state.read_bytes() == NOTE.encode("utf-8")
+
+
+def test_put_note_read_failure_returns_500(tmp_path, monkeypatch):
+    """spec §10.2：寫入 I/O 失敗 → 500 write_failed，不是 400（與 PUT /tasks/content 同一條）。"""
+    import errno
+
+    from fledge_sidecar.tasks import scanner
+
+    c, proj, state, fp = _with_note(tmp_path, monkeypatch)
+
+    def boom(fd):
+        raise OSError(errno.EIO, "io error")
+
+    monkeypatch.setattr(scanner, "_read_all", boom)
+    r = c.put("/tasks/note", json={"project": str(proj), "content": "x\n", "fingerprint": fp})
+    assert r.status_code == 500 and r.json()["error"] == "write_failed"
+
+
+def test_put_note_requires_token_when_auth_enforced(tmp_path, monkeypatch):
+    """認證拒絕另立一條（design §9.1）。**TokenAuthMiddleware 在路由分派之前就回 401**，
+    所以這條在 PUT 路由存在之前就會綠——它守的是 middleware 沒被繞過，不是路由接線。"""
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"version": 1, "accounts": {}, "roots": [], "kms_root": ""}), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    monkeypatch.delenv("FLEDGE_TEST_UNAUTH", raising=False)
+    monkeypatch.setenv("FLEDGE_TOKEN", "secret")
+    r = TestClient(create_app()).put("/tasks/note", json={"project": "/x", "content": "x", "fingerprint": "f"})
+    assert r.status_code == 401

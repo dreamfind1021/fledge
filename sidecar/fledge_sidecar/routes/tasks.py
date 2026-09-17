@@ -1,4 +1,4 @@
-"""待辦面板路由（design §7）。六個端點。
+"""待辦面板路由（design §7）。七個端點。
 
 錯誤一律回 error code，不回 user-facing 中文 prose（`CLAUDE.md` §4.6.13）。
 路徑邊界一律經 `tasks/scanner.py` 的 resolver，本檔不自己組路徑（design §7.1）。
@@ -43,22 +43,69 @@ def overview() -> JSONResponse:
     return JSONResponse(scanner.build_overview(AppConfig.load()))
 
 
+def _note_payload(r: scanner.NoteResult, project: str) -> dict:
+    """`GET`／`PUT /tasks/note` 共用的回應形狀（spec §10.2：PUT 成功回 GET 的形狀）。
+
+    `path` 只在 ok 時給——給了 absent 的 path 等於邀請前端去開一個不存在的檔。"""
+    return {
+        "status": r.status,
+        "content": r.content,
+        "mtime": r.mtime,
+        "path": scanner.note_path(project) if r.status == scanner.STATUS_OK else None,
+        "fingerprint": r.fingerprint,
+        "editable": r.editable,
+    }
+
+
 @router.get("/note")
 def note(project: str = "") -> JSONResponse:
     """離場筆記全文（票 19，spec §4.4）。只讀；點「下一步」才打，不隨總覽回。
 
-    三態分類在 `scanner.read_note` 裡，本函式不自己判 fd。`path` 只在 ok 時給——
-    給了 absent 的 path 等於邀請前端去開一個不存在的檔。"""
+    三態分類在 `scanner.read_note` 裡，本函式不自己判 fd。票 19 增補（spec §10.2）多回
+    `fingerprint`／`editable`，給 `PUT /tasks/note` 用。"""
     with scanner.open_tasks_dir(project, AppConfig.load()) as td:
         if td.status == scanner.STATUS_UNKNOWN_PROJECT:
             return JSONResponse({"error": "unknown_project"}, status_code=400)
-        r = scanner.read_note(td)
-        return JSONResponse({
-            "status": r.status,
-            "content": r.content,
-            "mtime": r.mtime,
-            "path": scanner.note_path(td.project) if r.status == scanner.STATUS_OK else None,
-        })
+        return JSONResponse(_note_payload(scanner.read_note(td), td.project))
+
+
+@router.put("/note")
+def update_note(project: str = Body(""), content: str = Body(""), fingerprint: str = Body("")) -> JSONResponse:
+    """改離場筆記全文（票 19 增補，spec §10.2、D13）。必須帶 `fingerprint`，不符回 409 並拒絕寫入。
+
+    前置檢查**不走 `_target`**——那個要求 `td.fd`（tasks/ 目錄），而 state.md 住在 `.fledge/`、
+    與 `tasks/` 無關；這裡看的是 `fledge_fd`，與 `read_note` 同一條規則（§4.4）：`fledge_fd is None`
+    時 `absent` → 404 `not_found`、`unavailable` → 400 `fledge_dir_unavailable`；有 `fledge_fd` 就往下，
+    不看 `tasks/` 狀態。
+
+    **不建檔**：state.md 不存在就 404，建立離場筆記是 resume-note skill 的事。
+    400 的 error code 直接來自 `update_note` 的 ValueError 訊息：`not_editable`（超過 64KB 或
+    round-trip 不過）、`invalid_content`（值域不符）、其餘歸 `invalid_target`；錯誤映射與
+    `PUT /tasks/content` 逐條相同。
+    """
+    if not fingerprint:
+        return JSONResponse({"error": "fingerprint_required"}, status_code=400)
+    with scanner.open_tasks_dir(project, AppConfig.load()) as td:
+        if td.status == scanner.STATUS_UNKNOWN_PROJECT:
+            return JSONResponse({"error": "unknown_project"}, status_code=400)
+        if td.fledge_fd is None:
+            if td.status == scanner.STATUS_UNAVAILABLE:
+                return JSONResponse({"error": "fledge_dir_unavailable"}, status_code=400)
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        try:
+            r = scanner.update_note(td.fledge_fd, content, expected_fingerprint=fingerprint)
+        except (scanner.TaskWriteError, PermissionError):
+            return JSONResponse({"error": "write_failed"}, status_code=500)
+        except ValueError as exc:
+            code = str(exc) if str(exc) in ("not_editable", "invalid_content") else "invalid_target"
+            return JSONResponse({"error": code}, status_code=400)
+        except FileNotFoundError:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        except OSError:
+            return JSONResponse({"error": "invalid_target"}, status_code=400)
+        if r is None:
+            return JSONResponse({"error": "stale"}, status_code=409)
+        return JSONResponse(_note_payload(r, td.project))
 
 
 @router.get("")

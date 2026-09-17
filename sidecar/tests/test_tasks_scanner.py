@@ -1268,3 +1268,149 @@ def test_read_note_truncates_at_64kb(tmp_path):
 
 def test_note_path_is_built_by_sidecar(tmp_path):
     assert scanner.note_path("/p/x") == "/p/x/.fledge/state.md"
+
+
+# ── 離場筆記介面內編輯（票 19 增補，spec §10.2、D13／D15）────────────────
+
+def _note(tmp_path, text="# p\n\n**下一步**：old，後面拖一段長尾巴讓新內容比它短\n"):
+    """造一個有 state.md 的專案，回 (config, proj, state 路徑, 原始位元組)。"""
+    config, proj = _setup(tmp_path)
+    (proj / ".fledge").mkdir()
+    state = proj / ".fledge" / "state.md"
+    raw = text.encode("utf-8") if isinstance(text, str) else text
+    state.write_bytes(raw)
+    return config, proj, state, raw
+
+
+def test_read_note_carries_fingerprint_and_editable(tmp_path):
+    """spec §10.2：ok 時 `fingerprint` 與票同一個函式、算在**讀到的位元組**上；`editable` 看
+    檔案大小 ≤ NOTE_MAX_BYTES（D15，邊界含等號）。超過上限的檔只讀前 64KB → fingerprint 是那
+    64KB 的、editable False。非 ok 兩欄一律 None／False。"""
+    config, proj, state, raw = _note(tmp_path)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+    assert r.status == scanner.STATUS_OK
+    assert r.fingerprint == scanner.fingerprint(raw) and r.editable is True
+
+    exact = b"a" * scanner.NOTE_MAX_BYTES                     # 剛好 64KB：仍可編輯
+    state.write_bytes(exact)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+    assert r.editable is True and r.fingerprint == scanner.fingerprint(exact)
+
+    big = b"b" * (65 * 1024)
+    state.write_bytes(big)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+    assert r.status == scanner.STATUS_OK and r.editable is False
+    assert r.fingerprint == scanner.fingerprint(big[: scanner.NOTE_MAX_BYTES])
+
+    state.unlink()
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+    assert r.status == scanner.STATUS_ABSENT and r.fingerprint is None and r.editable is False
+
+
+def test_update_note_replaces_content_and_returns_new_fingerprint(tmp_path):
+    """D13：原地覆寫（inode 不變）、新內容比舊的短要 ftruncate 掉尾巴；回傳的 fingerprint
+    要等於重讀的——沒有這條，前端存一次之後本地 fingerprint 就過期、下一次存會被誤判 409。"""
+    config, proj, state, raw = _note(tmp_path)
+    ino = os.stat(state).st_ino
+    new = "# p\n\n**下一步**：new\n"
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        before = scanner.read_note(td)
+        r = scanner.update_note(td.fledge_fd, new, expected_fingerprint=before.fingerprint)
+        after = scanner.read_note(td)
+    assert r is not None and r.status == scanner.STATUS_OK
+    assert r.content == new and r.editable is True
+    assert r.fingerprint == scanner.fingerprint(new.encode("utf-8")) == after.fingerprint
+    assert r.fingerprint != before.fingerprint
+    assert r.mtime == after.mtime
+    assert state.read_bytes() == new.encode("utf-8")          # 沒有舊尾巴殘留
+    assert os.stat(state).st_ino == ino                        # 同一個檔案，不是 rename 出來的新檔
+
+
+def test_update_note_stale_fingerprint_returns_none_and_leaves_file(tmp_path):
+    config, proj, state, raw = _note(tmp_path)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert scanner.update_note(td.fledge_fd, "x\n", expected_fingerprint="wrong") is None
+    assert state.read_bytes() == raw
+
+
+def test_update_note_refuses_symlinked_state_md(tmp_path):
+    """T3：state.md 是 symlink → `_open_existing` 的 O_NOFOLLOW 擋下（ELOOP，OSError 但**不是**
+    TaskWriteError——那是 400 類不是 500 類）。故意給目標檔的正確 fingerprint：
+    要證明擋下它的是 symlink 檢查、不是 fingerprint 比對。"""
+    config, proj = _setup(tmp_path)
+    (proj / ".fledge").mkdir()
+    target = tmp_path / "target.md"
+    target.write_bytes(b"secret\n")
+    (proj / ".fledge" / "state.md").symlink_to(target)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        with pytest.raises((OSError, ValueError)) as exc_info:
+            scanner.update_note(td.fledge_fd, "pwned\n", expected_fingerprint=scanner.fingerprint(b"secret\n"))
+    assert not isinstance(exc_info.value, scanner.TaskWriteError)
+    assert target.read_bytes() == b"secret\n"
+
+
+def test_update_note_refuses_oversize(tmp_path):
+    """D15：超過 NOTE_MAX_BYTES 只給外部打開——GET 只讀前 64KB，寫回去會截尾。
+    給整檔的正確 fingerprint：要證明擋下它的是大小、不是 fingerprint。"""
+    big = b"a" * (65 * 1024)
+    config, proj, state, raw = _note(tmp_path, big)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        with pytest.raises(ValueError) as exc_info:
+            scanner.update_note(td.fledge_fd, "short\n", expected_fingerprint=scanner.fingerprint(big))
+    assert str(exc_info.value) == "not_editable"
+    assert state.read_bytes() == big
+
+
+@pytest.mark.parametrize("existing", [b"# p\r\n\r\nx\r\n", b"# p\n\xff\xfe\n"])
+def test_update_note_existing_crlf_or_invalid_utf8_is_not_editable(tmp_path, existing):
+    """筆記版的 round-trip 資格（spec §10.2「can_round_trip 不過 → not_editable」的等價物）：
+    前端拿到的是整份 `_decode(raw)`，寫回去不弄丟東西的條件只有兩個——嚴格 UTF-8 解得開
+    （否則 U+FFFD 會被永久寫回）、沒有 `\\r`（textarea 會把 CRLF 正規化成 LF，存回去整份
+    換行會靜默翻掉；票的 CRLF 判 not_editable 是同一條規則）。"""
+    config, proj, state, raw = _note(tmp_path, existing)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        with pytest.raises(ValueError) as exc_info:
+            scanner.update_note(td.fledge_fd, "# p\n", expected_fingerprint=scanner.fingerprint(existing))
+    assert str(exc_info.value) == "not_editable"
+    assert state.read_bytes() == existing
+
+
+@pytest.mark.parametrize("content", ["a\r\nb\n", "a\rb\n"])
+def test_update_note_rejects_content_that_cannot_round_trip(tmp_path, content):
+    """新內容含 `\\r` → ValueError('invalid_content')，檔案不動（值域同票，spec §10.2）。"""
+    config, proj, state, raw = _note(tmp_path)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        with pytest.raises(ValueError) as exc_info:
+            scanner.update_note(td.fledge_fd, content, expected_fingerprint=scanner.fingerprint(raw))
+    assert str(exc_info.value) == "invalid_content"
+    assert state.read_bytes() == raw
+
+
+def test_update_note_does_not_create_missing_file(tmp_path):
+    """spec §10.2「不建檔」：state.md 不存在 → FileNotFoundError（路由 404），建立離場筆記是
+    resume-note skill 的事。`_open_existing` 沒有 O_CREAT，這條把它釘住。"""
+    config, proj = _setup(tmp_path)
+    (proj / ".fledge").mkdir()
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        with pytest.raises(FileNotFoundError):
+            scanner.update_note(td.fledge_fd, "# new\n", expected_fingerprint="whatever")
+    assert not (proj / ".fledge" / "state.md").exists()
+
+
+def test_update_note_read_failure_is_task_write_error(tmp_path, monkeypatch):
+    """與 `update_content` 同一條：fd 已過 T1–T4，`_read_all` 失敗只可能是 I/O → TaskWriteError（500），
+    不可落到 generic OSError 回 400 invalid_target。"""
+    config, proj, state, raw = _note(tmp_path)
+
+    def boom(fd):
+        raise OSError(errno.EIO, "io error")
+
+    monkeypatch.setattr(scanner, "_read_all", boom)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        with pytest.raises(scanner.TaskWriteError):
+            scanner.update_note(td.fledge_fd, "x\n", expected_fingerprint=scanner.fingerprint(raw))
+    assert state.read_bytes() == raw
