@@ -1,4 +1,4 @@
-"""待辦面板路由（design §7）。七個端點。
+"""待辦面板路由（design §7）。八個端點。
 
 錯誤一律回 error code，不回 user-facing 中文 prose（`CLAUDE.md` §4.6.13）。
 路徑邊界一律經 `tasks/scanner.py` 的 resolver，本檔不自己組路徑（design §7.1）。

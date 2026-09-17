@@ -72,7 +72,7 @@ The full form (for when a phase is done and the next hasn't started) adds five s
 
 ## Day to day
 
-1. **Start of the day**: open the Tasks tab — project tree on the left, ticket list in the middle, ticket content on the right; click "Next step" and the right side shows the whole resume note, the one the AI wrote when you last wrapped up.
+1. **Start of the day**: open the Tasks tab — project tree on the left, ticket list in the middle, ticket content on the right; click "Next step" and the right side shows the whole resume note, the one the AI wrote when you last wrapped up; you can edit it right there and hit Save.
 2. **Pick a project**: the middle column becomes that project's ticket list; click a ticket and its content shows on the right. Edit the body right there (a small markdown subset, with drafts so switching tabs loses nothing), or hit "open in editor" to use your own.
 3. **Open a session and work**: click the project in the sidebar. When something comes up that needs handling later, tell Claude "**open a task** for this". It writes a file in the format above; switch back to the panel and it's there.
 4. **Ask for status**: "**what's on the list**", "**what's still open**" — Claude reads only the frontmatter and titles; it never dumps every task's body into context.
