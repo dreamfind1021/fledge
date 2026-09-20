@@ -101,7 +101,7 @@ Fledge doesn't touch this layer at all. Claude Code, Codex, and the other CLIs a
 
 Two things, both under the project's `.fledge/`, neither in git:
 
-- **The resume note** `.fledge/state.md` — when you wrap up, say "write the resume note" and the AI records where you're stuck, what's next, and what tripped you up. Next time, the task panel's overview pulls that "next step" line out and shows it beside the project.
+- **The resume note** `.fledge/state.md` — when you wrap up, say "write the resume note" and the AI records where you're stuck, what's next, and what tripped you up. Next time, that "next step" line sits at the top of the project's task list in the panel; click it and the whole note shows in the right column, where you can edit and save it directly. If the note ends with a "paste into a new conversation" block, the list shows it as a one-click copy.
 - **Tasks** `.fledge/tasks/NN-title.md` — one file per item. Whether you create one from the panel or from a conversation, it lands in the same stack of files.
 
 This layer needs two skills before the AI can use it (`resume-note` and `fledge-tasks`, both shipped in [`skills/`](skills/)). Without them the panel still works fully; the AI just doesn't know the format, so it can't open tasks or write notes.
@@ -131,11 +131,11 @@ One paragraph per feature. Step-by-step details live in [`guides/`](guides/).
 
 **Memory**
 
-- **Task panel** — every project's open count and "next step" on one screen. Drill in to add, cycle, or delete tasks, or edit the body right in the panel (with drafts, so switching tabs loses nothing). → [`guides/tasks-and-resume-note.en.md`](guides/tasks-and-resume-note.en.md)
+- **Task panel** — project tree on the left, task list in the middle, task body on the right, all on one screen; the "All projects" page gathers every project's in-progress and recently added tasks. Add, cycle, park (later, not counted as open), or delete tasks; task bodies and the resume note are edited right in the right column (tasks keep a draft, so switching tabs loses nothing). → [`guides/tasks-and-resume-note.en.md`](guides/tasks-and-resume-note.en.md)
 - **Memory panel** — aggregates Claude Code memory and the second brain across all accounts and projects; full-text search, grouped browsing; Fledge suggests cross-project links for you to confirm or dismiss. Opening a project floats its related topics at the bottom right of the terminal. Always read-only toward the sources. → [`guides/memory-and-second-brain.en.md`](guides/memory-and-second-brain.en.md)
 
 <p align="center">
-  <img src="assets/screenshot-tasks.png" alt="Task panel — cross-project overview and a single project's tasks" width="49%">
+  <img src="assets/screenshot-tasks-list.png" alt="Task panel — project tree, task list, and task body in three columns" width="49%">
   <img src="assets/screenshot-memory.png" alt="Memory panel — memory across accounts and projects, the second brain, cross-project links" width="49%">
   <br><sub>Left: task panel · Right: memory panel</sub>
 </p>
@@ -246,7 +246,6 @@ For packaging into `.app`/`.dmg`, see [`scripts/`](scripts/); CI is in [`.github
 - **A stable signing identity** — so Full Disk Access stops silently expiring on every update.
 - **Apple signing + notarization** — currently unsigned.
 - **Light theme** — the token layer is ready; the light palette hasn't passed visual review.
-- **Task panel** — a persistent project tree on wide screens so you don't have to go back to the overview to switch projects; a "parked" status; a copyable "paste into a new conversation" block from the resume note.
 - **Pricing gaps in the dashboard** — long-context tiers and fast-mode pricing aren't counted yet, so costs are underestimated.
 - **Re-check the backup list** — confirm that everything under `~/.claude` that should be included actually is.
 - **In-app skill install** — designed; waiting on a safe write mechanism.

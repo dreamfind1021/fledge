@@ -101,7 +101,7 @@ Fledge 一開始只是一個啟動器。專案多到一定程度，每次開工�
 
 兩樣東西，都住在專案的 `.fledge/` 底下、都不進 git：
 
-- **離場筆記** `.fledge/state.md`——收工時說一聲「寫離場筆記」，AI 把「卡在哪、下一步、踩到的坑」寫進去。下次回來，待辦面板的總覽直接把「下一步」那一行抽出來放在專案旁邊。
+- **離場筆記** `.fledge/state.md`——收工時說一聲「寫離場筆記」，AI 把「卡在哪、下一步、踩到的坑」寫進去。下次回來，待辦面板裡那個專案的票清單最上面就是「下一步」那一行；點它，整份筆記在右欄顯示，可以直接改、直接存。筆記末尾若有「貼進新對話的指令」，清單上會多一格，一鍵複製。
 - **待辦票** `.fledge/tasks/NN-標題.md`——一件事一個檔案。在面板上建、在對話裡建，同一疊檔案。
 
 這一層要裝兩支 skill 才接得上 AI（`resume-note` 與 `fledge-tasks`，都附在 [`skills/`](skills/)）。沒裝的話面板照常可用，只是 AI 不知道格式，開不了票也寫不了筆記。
@@ -131,11 +131,11 @@ Fledge **不替 AI 記東西，也不把記憶塞進 session**。真的在「記
 
 **記憶**
 
-- **待辦面板**——所有專案的未完成條數與「下一步」放在同一個畫面。點進去可以建票、切狀態、刪票，也可以直接在面板裡編輯內文（有草稿，切頁不丟字）。→ [`guides/tasks-and-resume-note.md`](guides/tasks-and-resume-note.md)
+- **待辦面板**——左欄專案樹、中欄票清單、右欄票內容，一個畫面看完；「所有專案」頁把各專案進行中與最近新增的票放在一起。可以建票、切狀態、擱置（之後再說、不算未完成）、刪票；票的內文和離場筆記都在右欄直接編輯（票有草稿，切頁不丟字）。→ [`guides/tasks-and-resume-note.md`](guides/tasks-and-resume-note.md)
 - **記憶面板**——聚合所有帳號、所有專案的 Claude Code memory 與第二大腦，全文搜尋、分組瀏覽；Fledge 會建議跨專案的連結，由你確認或忽略。開專案時終端機右下角浮出相關主題。對來源永遠唯讀。→ [`guides/memory-and-second-brain.md`](guides/memory-and-second-brain.md)
 
 <p align="center">
-  <img src="assets/screenshot-tasks.png" alt="待辦面板——跨專案總覽與單一專案的票" width="49%">
+  <img src="assets/screenshot-tasks-list.png" alt="待辦面板——專案樹、票清單、票內容三欄" width="49%">
   <img src="assets/screenshot-memory.png" alt="記憶面板——所有帳號與專案的記憶、第二大腦、跨專案連結" width="49%">
   <br><sub>左：待辦面板 · 右：記憶面板</sub>
 </p>
@@ -246,7 +246,6 @@ npm run tauri dev            # 開發模式啟動 App
 - **固定簽章身分**——讓完整磁碟取用權限不會每次更新就失效。
 - **Apple 簽章 ＋ notarization**——目前未簽章。
 - **淺色主題**——token 層已預留，淺色的色階還沒過視覺審查。
-- **待辦面板**——寬螢幕左側常駐專案樹、不用回總覽切專案；多一個「擱置」狀態；離場筆記末尾的「貼進新對話的指令」直接可複製。
 - **數據面板的定價缺口**——長 context 分層計價、fast mode 兩倍價目前沒算進去，會低估。
 - **核對備份清單**——確認 `~/.claude` 底下每一項該收的都收了。
 - **in-app 安裝 skill**——設計已有，等寫入的安全機制做完。
