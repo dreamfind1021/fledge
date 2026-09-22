@@ -132,6 +132,38 @@ def test_glob_matches_are_actually_packed(tmp_path: Path):
     assert "settings.json.bak.20260727-1432" in listing
 
 
+# ── 票 17：2026-09-21 備份時標 `?` 的五個頂層目錄 ─────────────────────────────
+
+
+def test_ticket17_top_level_dirs_are_classified(tmp_path: Path):
+    """五個目錄判定後都不得再觸發未分類警示——否則使用者會學會無視它。
+
+    收（使用者寫的、丟了回不來）：`agents`／`output-styles`／`skills-archive`；
+    `usage-data` 是 `/insights` 的衍生物，但 30 天 session 清理後舊 facets 算不回來，
+    使用者選擇當工作歷史保留（ADR-0004 的「使用者選擇保留」那一類）。
+    不收：`feedback` 是 SendFeedback 的本機草稿佇列，送出即消失。"""
+    home, config_dir = _fake_home(tmp_path)
+    for d in ("agents", "output-styles", "skills-archive", "usage-data", "feedback"):
+        (config_dir / d).mkdir()
+    (config_dir / "output-styles" / "style.md").write_text("x", encoding="utf-8")
+    (config_dir / "feedback" / "drafts").mkdir()
+    (config_dir / "feedback" / "drafts" / "d.json").write_text("{}", encoding="utf-8")
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    assert "清單上沒有" not in proc.stdout
+    for d in ("agents", "output-styles", "skills-archive", "usage-data"):
+        assert f"收  {d}" in proc.stdout
+    assert "收  feedback" not in proc.stdout
+    # 列出來不等於真的收進去：驗包裡有資產、沒有草稿佇列
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    listing = subprocess.run(
+        ["tar", "tzf", str(bundle)], capture_output=True, text=True, timeout=60
+    ).stdout
+    assert "accounts/default/output-styles/style.md" in listing
+    assert "feedback" not in listing
+
+
 # ── HOME 含特殊字元（票 11）──────────────────────────────────────────────────
 
 

@@ -39,7 +39,13 @@ fi
 
 # ── 備份清單（ADR-0004 的判定結果）───────────────────────────────────────────
 # 資產：使用者寫的東西、以及使用者選擇保留的工作歷史
-ASSET_DIRS=(skills commands scripts plugins projects file-history image-cache paste-cache jobs)
+#
+# 票 17（2026-09-21）補判定：`agents`／`output-styles` 與 skills、commands 同類，是使用者
+# 寫的內容；`skills-archive` 是使用者自建的舊版 skill 封存（不在 Claude Code 載入路徑）。
+# `usage-data` 是 `/insights` 的衍生物，照理可重算——但 30 天 session 清理後舊 facets 就
+# 算不回來，且重跑要花 token，使用者選擇當工作歷史保留（與 file-history 同一類）。
+ASSET_DIRS=(skills commands scripts plugins projects file-history image-cache paste-cache jobs
+            agents output-styles skills-archive usage-data)
 ASSET_FILES=(CLAUDE.md settings.json settings.local.json .claude.json history.jsonl)
 
 # 需要萬用字元展開的資產。**不能直接塞進 ASSET_FILES**：下面三處用法（掃描的 -e 測試、
@@ -69,10 +75,13 @@ expand_globs() {
 
 # 明確判定「不收」的。列在這裡不是為了跳過（不在 ASSET_* 就不會收），而是為了讓
 # 「出現了清單上沒有的新東西」能被偵測出來——Claude Code 加目錄時要有人重新判定。
+# `feedback` 是 SendFeedback 工具的本機草稿佇列（`feedback/drafts/`），使用者核准送出後即
+# 消失——暫存佇列不是資產（票 17）。
 KNOWN_SKIP=(
   cache telemetry backups tasks session-env sessions shell-snapshots chrome daemon downloads
   stats-cache.json mcp-needs-auth-cache.json daemon.log daemon-auth-status.json
   daemon-auth-cooldown .last-cleanup .last-update-result.json .DS_Store .claude.json.backup
+  feedback
 )
 
 # 帳號目錄之外的資產。清單放在共用檔而非寫死在這裡：sidecar 的 containment 防呆要讀
