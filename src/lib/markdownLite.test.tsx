@@ -12,6 +12,12 @@ describe("markdownLite・白名單語法", () => {
   afterEach(cleanup);
 
   it("標題", () => expect(html("## 標題")).toBe("<h2>標題</h2>"));
+  // 票 25：state.md 第一行固定是 `# 專案 — 狀態`，不認的話每份離場筆記都露出一個 `#`
+  it("一級標題；# 後沒有空白不算，### 不在子集裡照樣原樣", () => {
+    expect(html("# 標題\n\n內文")).toBe("<h1>標題</h1><p>內文</p>");
+    expect(html("#標題")).toBe("<p>#標題</p>");
+    expect(html("### 三級")).toBe("<p>### 三級</p>");
+  });
   it("粗體與斜體", () => expect(html("a **b** *c*")).toBe("<p>a <strong>b</strong> <em>c</em></p>"));
   it("行內程式碼裡的星號不解析", () => expect(html("`**x**`")).toBe("<p><code>**x**</code></p>"));
   it("程式碼區塊", () => expect(html("```\nline\n```")).toBe("<pre><code>line</code></pre>"));

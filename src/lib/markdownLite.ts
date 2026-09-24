@@ -1,6 +1,7 @@
 import { createElement, type ReactNode } from "react";
 
 // markdown 小子集（spec §9）。只認工具列會插入的八種語法，其餘原樣當文字。
+// 例外是 `# `（票 25）：工具列不插，但離場筆記 state.md 的第一行固定是 `# 專案 — 狀態`，不認就每份都露出 `#`。
 //
 // **輸出 React 元素，不組 HTML 字串**（§9.4 第三條）：React 自己處理屬性值與文字內容的
 // escape，`href` 裡的引號不可能跳脫屬性。自己組字串就得自己寫兩套 encoder，而且會忘。
@@ -63,6 +64,7 @@ export function renderMarkdownLite(src: string): ReactNode[] {
       out.push(createElement("pre", { key: k() }, createElement("code", null, buf.join("\n"))));
       continue;
     }
+    if (line.startsWith("# ")) { flushPara(); out.push(createElement("h1", { key: k() }, ...inline(line.slice(2)))); i++; continue; }
     if (line.startsWith("## ")) { flushPara(); out.push(createElement("h2", { key: k() }, ...inline(line.slice(3)))); i++; continue; }
     if (line.startsWith("- ")) {
       flushPara();

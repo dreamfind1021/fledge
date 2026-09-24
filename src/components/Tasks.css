@@ -146,7 +146,8 @@
 .tk-md > *:first-child { margin-top: 0; }
 .tk-md > *:last-child { margin-bottom: 0; }
 .tk-md p { margin: 0 0 10px; }
-.tk-md strong, .tk-md em, .tk-md h2 { color: var(--text); }
+.tk-md strong, .tk-md em, .tk-md h1, .tk-md h2 { color: var(--text); }
+.tk-md h1 { font-size: 15px; font-weight: 800; line-height: 1.5; margin: 18px 0 10px; }
 .tk-md h2 { font-size: 13.5px; font-weight: 700; margin: 16px 0 8px; }
 .tk-md code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
 .tk-md pre { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 9px 11px; overflow-x: auto; margin: 0 0 10px; }

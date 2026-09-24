@@ -50,6 +50,7 @@ const ticket = (over: Partial<TaskRow> = {}): TaskRow => ({
   created: "2026-08-29", anomalies: [], fingerprint: "f", path: "/p/a/.fledge/tasks/01-a.md",
   body: "", editable: true, ...over,
 });
+// content 用 `# ` 開頭（同真實 state.md）；右欄渲染成 h1，畫面上查的是去掉 `# ` 的文字（票 25）
 const note = (over: Partial<TasksNote> = {}): TasksNote => ({
   status: "ok", content: "# note", mtime: "2026-09-14", path: "/p/a/.fledge/state.md", fingerprint: "n1", editable: true, ...over,
 });
@@ -1021,7 +1022,7 @@ describe("Tasks 面板", () => {
       fireEvent.change(ta, { target: { value: "# new" } });
       fireEvent.click(screen.getByText(en.list.save));
       await waitFor(() => expect(updateTasksNote).toHaveBeenCalledWith(1234, "/p/a", "# new", "n1"));
-      await within(detail()).findByText("# new");
+      await within(detail()).findByText("new");
       expect(screen.queryByLabelText(en.note.editorBody)).toBeNull();                                   // editing 結束
       expect((screen.getByPlaceholderText(en.list.newPlaceholder) as HTMLInputElement).disabled).toBe(false);
       await waitFor(() => expect([fetchTasksOverview.mock.calls.length, fetchTasks.mock.calls.length]).toEqual([o + 1, l + 1]));
@@ -1072,7 +1073,7 @@ describe("Tasks 面板", () => {
       expect(within(detail()).queryByLabelText(en.a11y.editNote)).toBeNull();                           // 重讀前沒有編輯鍵可按
       resolveList({ project: "/p/a", tasks_status: "ok", tasks: [ticket()], next_step: "do x", handoff_command: "" });
       resolveNote(note({ content: "# theirs", fingerprint: "n9" }));
-      await within(detail()).findByText("# theirs");
+      await within(detail()).findByText("theirs");
       expect(fetchTasksNote).toHaveBeenCalledTimes(n + 1);
       expect(within(detail()).getByLabelText(en.a11y.editNote)).toBeTruthy();
       expect(screen.queryByLabelText(en.note.editorBody)).toBeNull();
@@ -1107,12 +1108,12 @@ describe("Tasks 面板", () => {
       fireEvent.click(await screen.findByText(en.list.leaveAnyway));
       await waitFor(() => expect(fetchTasks).toHaveBeenLastCalledWith(1234, "/p/b"));
       fireEvent.click(await screen.findByLabelText(en.a11y.showNote));                                  // 在 b 打開 b 的筆記
-      await within(detail()).findByText("# b note");
+      await within(detail()).findByText("b note");
       const o = fetchTasksOverview.mock.calls.length, l = fetchTasks.mock.calls.length, n = fetchTasksNote.mock.calls.length;
       resolveSave(note({ content: "# new", fingerprint: "n2" }));                                       // a 的 200 晚到
       await tick();
-      expect(within(detail()).getByText("# b note")).toBeTruthy();
-      expect(screen.queryByText("# new")).toBeNull();
+      expect(within(detail()).getByText("b note")).toBeTruthy();
+      expect(screen.queryByText("new")).toBeNull();
       expect([fetchTasksOverview.mock.calls.length, fetchTasks.mock.calls.length, fetchTasksNote.mock.calls.length]).toEqual([o, l, n]);
     });
 
@@ -1148,13 +1149,13 @@ describe("Tasks 面板", () => {
       fetchTasksNote.mockImplementationOnce(() => new Promise((r) => { resolveRefetch = r; }));
       fireEvent.change(ta, { target: { value: "# new" } });
       fireEvent.click(screen.getByText(en.list.save));
-      await within(detail()).findByText("# new");                                                       // 就地更新
+      await within(detail()).findByText("new");                                                       // 就地更新
       await waitFor(() => expect(fetchTasksNote).toHaveBeenCalledTimes(2));                             // 重讀在途
       expect(within(detail()).queryByText(en.detail.loading)).toBeNull();                               // 不閃載入中
-      expect(within(detail()).getByText("# new")).toBeTruthy();
+      expect(within(detail()).getByText("new")).toBeTruthy();
       resolveRefetch(note({ content: "# new", fingerprint: "n2" }));
       await tick();
-      expect(within(detail()).getByText("# new")).toBeTruthy();
+      expect(within(detail()).getByText("new")).toBeTruthy();
     });
 
     it("看筆記時 focus 重讀：舊內容留著、不閃載入中；回來才換成新內容", async () => {
@@ -1164,10 +1165,10 @@ describe("Tasks 面板", () => {
       fetchTasksNote.mockImplementationOnce(() => new Promise((r) => { resolveRefetch = r; }));
       fireEvent(window, new Event("focus"));
       await waitFor(() => expect(fetchTasksNote).toHaveBeenCalledTimes(2));
-      expect(within(detail()).getByText("# note")).toBeTruthy();                                        // 舊內容留著
+      expect(within(detail()).getByText("note")).toBeTruthy();                                        // 舊內容留著
       expect(within(detail()).queryByText(en.detail.loading)).toBeNull();
       resolveRefetch(note({ content: "# note v2", fingerprint: "n2" }));
-      await within(detail()).findByText("# note v2");
+      await within(detail()).findByText("note v2");
     });
 
     // effect 重跑不清空之後這條路從 UI 走得到了：focus 的筆記 GET 在途時編輯鍵還在。進入編輯的 bump 讓 cleanup 的

@@ -127,6 +127,8 @@ describe("待辦面板的顏色對比", () => {
     // 票內文的 markdown（右欄與編輯器預覽共用）：正文與連結都要各自過 4.5:1
     [".tk-md 內文", ".tk-md", "color", bg],
     [".tk-md 連結", ".tk-md a", "color", bg],
+    // 票 25：離場筆記的 `# 標題` 坐落在右欄 .d-body 的 --surface 上
+    [".tk-md 一級標題", ".tk-md h1", "color", surface],
     // 整頁編輯器（spec §6.2／§6.4，task 10 review FIX 4）：坐落在 --surface 上的文字
     [".ed-title 正常文字", ".ed-title", "color", surface],
     [".ed-area 正常文字", ".ed-area", "color", surface],
