@@ -282,7 +282,8 @@ export function TasksList({
               onClick={() => writeClipboard(`# ${draft.title}\n\n${draft.body}`).then((ok) => ok && setCopiedDraft(name))}>
               {t("list.copyMine")}
             </button>
-            <button className="bbtn" onClick={() => onOrphanDiscard(name)}>{t("list.draftDiscard")}</button>
+            {/* 編輯中清單唯讀（spec §5.8）：丟棄是不可回復的寫入，一樣停用；複製不寫任何東西，照常可按 */}
+            <button className="bbtn" disabled={readOnly} onClick={() => onOrphanDiscard(name)}>{t("list.draftDiscard")}</button>
           </span>
         </div>
       ))}

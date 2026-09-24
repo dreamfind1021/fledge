@@ -139,6 +139,8 @@ describe("待辦面板的顏色對比", () => {
     ["返回列的票號", ".full-num", "color", bg],
     ["提示條文字", ".tk-banner", "color", bg],
     ["提示條按鈕文字", ".tk-banner .bbtn", "color", bg],
+    // 票 25：孤兒草稿的丟棄鍵在編輯中停用；停用的仍是文字，淡化到 --dim 就停
+    ["停用的提示條按鈕文字", ".tk-banner .bbtn:disabled", "color", bg],
     // 票 21 貼進新對話的指令：標籤坐落在 .tasks-pane 的 --bg；<pre> 在框自己的 --surface-2 上
     ["指令區塊標籤", ".tasks-cmd-lab", "color", bg],
     ["指令內文", ".tasks-cmd-pre", "color", surface2],

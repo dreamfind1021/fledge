@@ -124,6 +124,17 @@ describe("TasksList", () => {
     expect(onToggleNote).toHaveBeenCalled();
   });
 
+  it("readOnly：孤兒草稿的丟棄鍵 disabled（不可回復的寫入），複製仍可按", () => {
+    const onOrphanDiscard = vi.fn();
+    const orphanDrafts = [{ name: "09-gone.md", draft: { title: "舊草稿", body: "b", fingerprint: "f", savedAt: 0 } }];
+    render(<TasksList {...props({ readOnly: true, orphanDrafts, onOrphanDiscard })} />);
+    const discard = screen.getByText(en.list.draftDiscard) as HTMLButtonElement;
+    expect(discard.disabled).toBe(true);
+    fireEvent.click(discard);
+    expect(onOrphanDiscard).not.toHaveBeenCalled();
+    expect((screen.getByText(en.list.copyMine) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("窄等級的返回鍵在 DOM 裡（顯示與否由 CSS 決定）", () => {
     const onBack = vi.fn();
     render(<TasksList {...props({ onBack })} />);

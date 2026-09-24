@@ -225,7 +225,8 @@
 .tk-banner.is-draft { background: color-mix(in srgb, var(--warning) 9%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border)); }
 .tk-banner.is-conflict { background: color-mix(in srgb, var(--error) 9%, transparent); border: 1px solid color-mix(in srgb, var(--error) 38%, var(--border)); }
 .tk-banner .bbtn { border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600; font-family: var(--font-ui); background: transparent; color: var(--text); cursor: pointer; white-space: nowrap; }
-.tk-banner .bbtn:hover { background: var(--hover); }
+.tk-banner .bbtn:hover:not(:disabled) { background: var(--hover); }
+.tk-banner .bbtn:disabled { color: var(--dim); cursor: default; }
 
 /* ── 右欄（票 19，spec §5.5）── */
 .lb-detail { flex: 1; padding: 22px 26px 40px; }
