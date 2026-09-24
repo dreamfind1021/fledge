@@ -54,6 +54,25 @@ describe("TasksTree", () => {
     expect(b.querySelector(".tree-n .pk")).toBeNull();
   });
 
+  // 票 25：runtime JSON 沒驗證。壞值只退掉記號，不把整列降級成警告，數字與頂端總數照舊來自 unfinished。
+  // 1.5 與 "2" 是會分辨的那兩個：天真的 `(n ?? 0) > 0` 對 -1／null 本來就不畫，只有這兩個會畫出記號
+  it.each([
+    ["-1", -1],
+    ["null", null],
+    ["非整數 1.5", 1.5],
+    ["字串 \"2\"", "2" as unknown as number],
+  ])("doing／parked 壞值 %s → 不畫橘點與 +N，數字與總數不變", (_label, bad) => {
+    const { container } = render(<TasksTree data={data([
+      proj({ path: "/p/a", name: "a", unfinished: 3, doing: bad, parked: bad }),
+    ])} selected={null} onSelect={() => {}} t={t} />);
+    const a = container.querySelector(".tree-item:not(.is-all)")!;
+    expect(a.querySelector(".tree-n i")).toBeNull();
+    expect(a.querySelector(".tree-n .pk")).toBeNull();
+    expect(a.querySelector(".tree-n")?.textContent).toBe("3");
+    expect(a.querySelector(".tree-una")).toBeNull();
+    expect(container.querySelector(".tree-head .s")?.textContent).toBe(en.overview.summary.replace("{{n}}", "3"));
+  });
+
   it("所有專案在最上面；selected 為 null 時它反白，否則對應專案反白", () => {
     const { container, rerender } = render(<TasksTree data={data([proj()])} selected={null} onSelect={() => {}} t={t} />);
     const all = container.querySelector(".tree-item.is-all")!;
