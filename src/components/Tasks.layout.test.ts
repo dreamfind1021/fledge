@@ -84,4 +84,15 @@ describe("待辦面板三欄版面", () => {
     const total = tree + list + 380;
     expect(total, `樹 ${tree} ＋ 清單 ${list}（basis ${basisAt1040} / min-width ${minWidth}）＋ 右欄 380 ＝ ${total} 應 ≤ 1040`).toBeLessThanOrEqual(1040);
   });
+
+  // 票 25：寬等級剛過 1040 時中欄內容只剩 336px，英文摘要單獨就 304px。兩邊一起縮會各折成兩行；
+  // 改成排不下時摘要整段換到標題下方。headless Chrome 實測（1040～1200、400／500／700，中英文、
+  // 四種專案名）：改前專案名最多折三行、摘要折兩行；改後兩者都一行，排得下時摘要右緣仍貼齊（0～1px）
+  it("頁首排不下時摘要整段換到標題下方，不在字中間折", () => {
+    expect(decl(css, ".tasks-head", "flex-wrap")).toBe("wrap");
+    expect(decl(css, ".tasks-sum", "white-space")).toBe("nowrap");
+    // 靠右由 h1 撐滿達成：摘要若用 margin-left: auto，換行後會單獨掛在第二行右邊
+    expect(decl(css, ".tasks-head h1", "flex")).toBe("1 1 auto");
+    expect(() => decl(css, ".tasks-sum", "margin-left")).toThrow();
+  });
 });

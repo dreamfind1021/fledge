@@ -9,11 +9,13 @@
 /* C1：動作按鈕平常不顯形，鍵盤走到才亮——沒有這圈焦點框，Tab 使用者等於失去刪除與開檔 */
 .tasks-root :focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
-/* 頁首：標題 ＋ 靠右的摘要 */
-.tasks-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 16px; padding: 0 2px; }
-.tasks-head h1 { font-size: 20px; font-weight: 800; margin: 0; }
+/* 頁首：標題 ＋ 靠右的摘要。排不下時摘要整段換到標題下方，不在字中間折（票 25：寬等級剛過 1040 時
+   中欄只剩 336px，英文摘要單獨就要 300px 上下，兩邊一起縮會各折成兩行）。
+   靠右改由 h1 撐滿剩餘寬度達成，不用摘要的 margin-left: auto——後者換行後會讓摘要單獨掛在第二行右邊 */
+.tasks-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 16px; padding: 0 2px; }
+.tasks-head h1 { flex: 1 1 auto; font-size: 20px; font-weight: 800; margin: 0; }
 .tasks-pane .tasks-head h1 { font-size: 20px; }
-.tasks-sum { margin-left: auto; font-family: var(--font-mono); font-size: 11.5px; color: var(--faint); }
+.tasks-sum { white-space: nowrap; font-family: var(--font-mono); font-size: 11.5px; color: var(--faint); }
 .tasks-sum .is-warn { color: var(--warning); }
 
 /* ── 專案樹（票 19，spec §5.2）：只有專案名＋數字。視覺沿用記憶面板左欄（.mem-index／.lrow） ── */
