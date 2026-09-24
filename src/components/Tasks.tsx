@@ -107,8 +107,11 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
 
   // 進入編輯：同時 bump 一次——effect 重跑、cleanup 取消在途 GET、新 body 因 editing 直接返回（Codex R4）
   // 編輯鍵帶票：右欄沒選票、或正在看 A 卻按 B 的編輯，都要先把 pane 指到那張票（Codex plan R1 high）。
-  // 編輯中所有編輯鍵都 disabled，所以這裡不會撞到「編輯中再編輯」
-  const edit = useCallback((task: TaskRow) => { setPane({ kind: "ticket", name: task.name }); setEditing(true); bump(); }, [bump]);
+  // 編輯中所有編輯鍵都 disabled；守衛是按鈕之外的第二道，與 setStatus／create／remove 同一套（票 25）
+  const edit = useCallback((task: TaskRow) => {
+    if (port == null || editing) return;
+    setPane({ kind: "ticket", name: task.name }); setEditing(true); bump();
+  }, [port, editing, bump]);
   // 筆記的編輯（§10.4）：pane 已經是 note（編輯鍵只在筆記檢視、且 note.editable 時才有）。同 §5.8 第 0 點，
   // bump 讓 cleanup 淘汰在途的筆記 GET；新 body 因 editing 早退不發請求
   const editNote = useCallback(() => { setEditing(true); bump(); }, [bump]);
