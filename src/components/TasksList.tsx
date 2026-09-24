@@ -90,7 +90,7 @@ function Ticket({ task, active, readOnly, onSelect, onCycle, onPark, onDelete, o
         // 先跳確認（design §5.2）：檔案直接消失，而 .fledge/ 不進 git，刪了救不回
         <div className="tk-confirm">
           <span>{t("list.confirmDelete")}</span>
-          <button className="tk-confirm-yes" disabled={readOnly} onClick={() => { setConfirming(false); onDelete(task); }}>{t("list.delete")}</button>
+          <button className="tk-confirm-yes" onClick={() => { setConfirming(false); onDelete(task); }}>{t("list.delete")}</button>
           <button className="tk-confirm-no" onClick={() => setConfirming(false)}>{t("list.cancel")}</button>
         </div>
       )}
