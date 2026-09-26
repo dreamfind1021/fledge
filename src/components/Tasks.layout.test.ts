@@ -28,11 +28,11 @@ const decls = (text: string, selector: string, prop: string) => {
   return rules.flatMap((r) => [...r[2].matchAll(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, "g"))].map((m) => m[1].trim()));
 };
 // 同一個選擇器（權重相同）後面的蓋前面：取最後一條。只取第一條會漏掉檔尾的覆寫（Codex final R1）
-// 取某個 @keyframes 的內容（例如 "from { … }"）。找不到就炸
+// 取某個 @keyframes 的內容（例如 "from { … }"）。找不到就炸；同名的以最後一個為準（瀏覽器也是，同 decl）
 const keyframes = (name: string) => {
-  const m = full.match(new RegExp(`@keyframes\\s+${name}\\s*\\{((?:[^{}]*\\{[^{}]*\\})*[^{}]*)\\}`));
-  if (!m) throw new Error(`Tasks.css 找不到 @keyframes ${name}`);
-  return m[1];
+  const all = [...full.matchAll(new RegExp(`@keyframes\\s+${name}\\s*\\{((?:[^{}]*\\{[^{}]*\\})*[^{}]*)\\}`, "g"))];
+  if (all.length === 0) throw new Error(`Tasks.css 找不到 @keyframes ${name}`);
+  return all[all.length - 1][1];
 };
 const decl = (text: string, selector: string, prop: string) => {
   const all = decls(text, selector, prop);
