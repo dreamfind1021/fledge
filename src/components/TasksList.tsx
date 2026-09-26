@@ -242,7 +242,7 @@ export function TasksList({
       <button className="tasks-sec is-toggle" onClick={() => toggle(k)}
         aria-label={t(open[k] ? `a11y.collapse${cap(k)}` : `a11y.expand${cap(k)}`)} aria-expanded={open[k]}>
         {open[k] ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <span className="tasks-sec-lab">{label}</span><span className="tasks-sec-line" /><span className="tasks-sec-n">{items.length}</span>
+        <span className="tasks-sec-lab">{label}</span><span className="tasks-sec-n">{items.length}</span>
       </button>
       {open[k] && items.map(row)}
     </>

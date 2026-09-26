@@ -46,7 +46,7 @@ function XRow({ x, onSelect, t }: { x: XTicket; onSelect: (path: string, name: s
 function Section({ label, n, children }: { label: string; n: number; children: ReactNode }) {
   return (
     <>
-      <div className="tasks-sec"><span className="tasks-sec-lab">{label}</span><span className="tasks-sec-line" /><span className="tasks-sec-n">{n}</span></div>
+      <div className="tasks-sec"><span className="tasks-sec-lab">{label}</span><span className="tasks-sec-n">{n}</span></div>
       {children}
     </>
   );

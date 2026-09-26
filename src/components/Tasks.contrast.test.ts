@@ -132,6 +132,16 @@ describe("待辦面板的顏色對比", () => {
   const active = token("active");
   // 抽屜卡片（spec §11.5）：右欄內容坐落在 .tasks-col-detail 的底色上。從 CSS 讀，不寫死 token
   const drawer = paintColor(".tasks-col-detail", "background");
+  // 清單的磚塊與元件（spec §11.5）：全部從 CSS 讀
+  const tile = paintColor(".tk-row", "background");
+  const tileHover = paintColor(".tk-row:hover", "background");
+  const tileDoing = paintColor(".tk.is-doing .tk-row", "background");
+  const cmdRow = paintColor(".tasks-cmd-row", "background");
+  const pill = paintColor(".tasks-sec-n", "background");
+  const newBtn = paintColor(".tasks-new-btn", "background");
+  const nextBase = paintColor(".tasks-next", "background");
+  const nextHover = paintColor(".tasks-next:hover", "background");
+  const nextOn = paintColor(".tasks-next.is-on", "background");
 
   // helper 自己的防線：數字取自 spec §11.9（另以 Python 獨立算過）
   it("resolveColor：var、color-mix、漸層第一站；認不得就炸", () => {
@@ -143,26 +153,29 @@ describe("待辦面板的顏色對比", () => {
 
   // 記號是可操作的 UI 元件，非文字門檻 3:1（WCAG 1.4.11）
   it.each([
-    ["todo 空心框", ".tk-mark.is-todo::before", "border", bg],
-    ["doing 實心方", ".tk-mark.is-doing::before", "background", bg],
-    ["done 打勾（繼承 .tk-mark 的 color）", ".tk-mark", "color", bg],
+    ["todo 空心框", ".tk-mark.is-todo::before", "border", tile],
+    ["todo 空心框（選中）", ".tk-mark.is-todo::before", "border", active],
+    ["doing 實心方", ".tk-mark.is-doing::before", "background", tileDoing],
+    ["done 打勾（繼承 .tk-mark 的 color）", ".tk-mark", "color", tile],
     // 整頁編輯器（spec §6.2／§6.4）停用態的邊框：平常文字已經是 --dim，改文字色沒有用，
     // 訊號改放邊框上（task 10 review FIX 2）——都坐落在 .full-editor 的 --surface 上
     [".ed-btn 停用邊框", ".ed-btn:disabled", "border", surface],
     ["Preview／Cancel 停用邊框", ".btn.is-quiet:disabled", "border-color", surface],
     ["Save 停用邊框", ".btn.is-primary:disabled", "border-color", surface],
     // 票 21 指令框尾的複製圖示（lucide svg 吃 currentColor）與已複製的勾，坐落在框的 --surface-2 上
-    ["指令複製圖示", ".tasks-cmd-act", "color", surface2],
-    ["指令已複製的勾", ".tasks-cmd-act.is-done", "color", surface2],
+    ["指令複製圖示", ".tasks-cmd-act", "color", cmdRow],
+    ["指令已複製的勾", ".tasks-cmd-act.is-done", "color", cmdRow],
     // 專案樹（票 19，spec §5.2）進行中橘點：非文字元件，門檻同記號 3:1
     ["樹的進行中橘點", ".tree-n i", "background", bg],
     // 票 19 清單（spec §5.4／§5.6）：擱置是第四種輪廓（虛線空心方）；編輯中清單唯讀（D12）
     // 停用的記號與動作鍵是圖示（lucide svg 吃 currentColor），非文字 3:1；下一步右上的「›」
     // 是唯一的字符、spec 指定 --faint，同樣按非文字驗
-    ["parked 虛線框", ".tk-mark.is-parked::before", "border", bg],
-    ["停用的狀態記號", ".tk-mark:disabled", "color", bg],
-    ["停用的動作鍵", ".tk-act:disabled", "color", bg],
-    ["下一步的 › 記號", ".tasks-next-more", "color", bg],
+    ["parked 虛線框", ".tk-mark.is-parked::before", "border", tile],
+    ["停用的狀態記號", ".tk-mark:disabled", "color", tile],
+    ["停用的動作鍵", ".tk-act:disabled", "color", tile],
+    ["下一步的 › 記號", ".tasks-next-more", "color", nextBase],
+    ["下一步的 ›（滑過）", ".tasks-next-more", "color", nextHover],
+    ["下一步的 ›（選中）", ".tasks-next-more", "color", nextOn],
     // 右欄（票 19，spec §5.5）：動作鍵是圖示，非文字 3:1。
     // 票 26＋27 起 .d-body 沒有邊框，動作鍵與 × 都坐落在抽屜卡片（drawer）上
     ["右欄動作鍵", ".d-acts .tk-act", "color", drawer],
@@ -173,17 +186,17 @@ describe("待辦面板的顏色對比", () => {
 
   // 票上的文字門檻 4.5:1。已完成的標題淡化到某個 token 就停，再淡就不合格
   it.each([
-    ["已完成的標題", ".tk.is-done .tk-title", "color", bg],
+    ["已完成的標題", ".tk.is-done .tk-title", "color", tile],
     // 票 19：擱置的標題淡化到 --dim 就停（與已完成同一條線）；編輯中停用的一行輸入是文字，不能掉到 --faint
-    ["擱置的標題", ".tk.is-parked .tk-title", "color", bg],
+    ["擱置的標題", ".tk.is-parked .tk-title", "color", tile],
     ["停用的一行輸入", ".tasks-new-input:disabled", "color", bg],
-    ["來源 AI", ".tk-src.is-ai", "color", bg],
-    ["來源 我", ".tk-src.is-me", "color", bg],
+    ["來源 AI", ".tk-src.is-ai", "color", tile],
+    ["來源 我", ".tk-src.is-me", "color", tile],
     // 所有專案頁的跨專案票列（票 19，spec §5.3）：列文字在 --bg 上；專案標籤有自己的 --surface-2 底
-    ["跨專案票列文字", ".tk-xrow", "color", bg],
+    ["跨專案票列文字", ".tk-xrow", "color", tile],
     ["跨專案票列的專案標籤", ".tk-proj", "color", surface2],
     ["第二層分區標籤", ".tasks-sec-lab", "color", bg],
-    ["第二層分區計數", ".tasks-sec-n", "color", bg],
+    ["第二層分區計數", ".tasks-sec-n", "color", pill],
     // 票內文的 markdown（右欄與編輯器預覽共用）：正文與連結都要各自過 4.5:1
     [".tk-md 內文", ".tk-md", "color", drawer],
     [".tk-md 連結", ".tk-md a", "color", drawer],
@@ -208,7 +221,7 @@ describe("待辦面板的顏色對比", () => {
     ["停用的提示條按鈕文字（抽屜）", ".tk-banner .bbtn:disabled", "color", drawer],
     // 票 21 貼進新對話的指令：標籤坐落在 .tasks-pane 的 --bg；<pre> 在框自己的 --surface-2 上
     ["指令區塊標籤", ".tasks-cmd-lab", "color", bg],
-    ["指令內文", ".tasks-cmd-pre", "color", surface2],
+    ["指令內文", ".tasks-cmd-pre", "color", cmdRow],
     // 專案樹（票 19，spec §5.2）：brief 的「新規則自動納入」是錯的，這幾條要補（task 5 review FIX）
     ["樹頂端摘要文字", ".tree-head .s", "color", bg],
     ["樹頂端摘要讀不到警告", ".tree-head .s .is-warn", "color", bg],
@@ -230,6 +243,23 @@ describe("待辦面板的顏色對比", () => {
     // 同樣要過 4.5:1——沒有測試釘住的話，反白列上淡化過頭的標題會被漏掉（task 7 review 遺留）
     ["已完成的標題（反白底 --active）", ".tk.is-done .tk-title", "color", active],
     ["擱置的標題（反白底 --active）", ".tk.is-parked .tk-title", "color", active],
+    // 磚塊上的淡字（spec §11.9）：一般、滑過、進行中都過 4.5；選中（--active）只有 --dim 以上過
+    ["票號（磚）", ".tk-num", "color", tile],
+    ["票號（滑過）", ".tk-num", "color", tileHover],
+    ["日期（磚）", ".tk-date", "color", tile],
+    ["日期（滑過）", ".tk-date", "color", tileHover],
+    ["日期（進行中磚）", ".tk-date", "color", tileDoing],
+    ["來源 AI（滑過）", ".tk-src.is-ai", "color", tileHover],
+    ["來源 AI（選中）", ".tk-src.is-ai", "color", active],
+    ["來源 AI（進行中磚）", ".tk-src.is-ai", "color", tileDoing],
+    ["進行中票號", ".tk.is-doing .tk-num", "color", tileDoing],
+    ["選中列票號", ".tk:not(.is-doing) .tk-row.active .tk-num", "color", active],
+    ["選中列日期", ".tk-row.active .tk-date", "color", active],
+    ["停用的新增鍵", ".tasks-new-btn:disabled", "color", newBtn],
+    ["下一步標籤", ".tasks-next-lab", "color", nextBase],
+    ["下一步標籤（滑過）", ".tasks-next-lab", "color", nextHover],
+    ["下一步標籤（選中）", ".tasks-next-lab", "color", nextOn],
+    ["下一步內文（選中）", ".tasks-next-tx", "color", nextOn],
   ])("%s 對背景至少 4.5:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(4.5);
   });
@@ -248,17 +278,18 @@ describe("待辦面板的顏色對比", () => {
   // 停用態也在禁令裡：index.contrast.test.ts 的全域白名單豁免 :disabled（WCAG 1.4.3），這裡不豁免——
   // 編輯中清單唯讀是靠換 token 淡化的，一用 opacity 上面那組就驗不到實際顏色。
   // `.tk-act(?!s)` 排除 .tk-acts：那是滑過才顯形的容器，0↔1 是顯示／隱藏不是淡化，刻意用 opacity
+  // `.tasks-cmd(?!-acts)(?![^{]*cmd-acts)`／`.tk-row(?![^{]*tk-acts)`（票 26＋27）：同理排除 .tasks-cmd-acts 與 `.tk-row:hover .tk-acts` 那兩條滑過顯形
   // `.tasks-col[^{]*`／`.tasks-split[^{]*`（票 19 Task 10）：版面規則只管 display/flex/padding，
   // 絕不准用 opacity 蓋掉整欄——那會讓一整欄安靜消失又量不出對比度
   // `^\s*`（task 10 fix round 1）：Task 10 review 抓到的漏洞——原本 `^` 不容許縮排，
   // @container 區塊裡的規則全部縮排兩格，`.tasks-col-list` 等版面規則因此完全沒被掃到，
   // 上面那句「與版面」形同虛設。容許前導空白後，中／寬兩個等級的規則才真的進 rules
-  it("狀態記號、已完成列、專案樹、跨專案票列、動作鍵、一行輸入、下一步、右欄與版面不得用 opacity 淡化", () => {
-    const rules = [...tasksCss.matchAll(/^\s*(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*|\.tk-xrow[^{]*|\.tk-proj[^{]*|\.tk-act(?!s)[^{]*|\.tasks-new-input[^{]*|\.tasks-next[^{]*|\.d-[^{]*|\.lb-detail[^{]*|\.tasks-col[^{]*|\.tasks-split[^{]*)\{([^}]*)\}/gm)];
+  it("狀態記號、票列磚塊、分區、下一步、指令框、一行輸入、專案樹、跨專案票列、動作鍵、右欄與版面不得用 opacity 淡化", () => {
+    const rules = [...tasksCss.matchAll(/^\s*(\.tk-mark[^{]*|\.tk\.is-done[^{]*|\.tree[^{]*|\.tk-xrow[^{]*|\.tk-proj[^{]*|\.tk-act(?!s)[^{]*|\.tasks-new-input[^{]*|\.tasks-new-btn[^{]*|\.tasks-next[^{]*|\.tasks-sec[^{]*|\.tasks-cmd(?!-acts)(?![^{]*cmd-acts)[^{]*|\.tk-row(?![^{]*tk-acts)[^{]*|\.d-[^{]*|\.lb-detail[^{]*|\.tasks-col[^{]*|\.tasks-split[^{]*)\{([^}]*)\}/gm)];
     // regex 沒命中會讓迴圈跑零次而測試全綠——先確認真的有抓到規則。
     // 門檻從 4 提到 70（task 10 fix round 1）：容許縮排前只掃得到 66 條（@container 內的
-    // 9 條版面規則全部漏掉），現在是 75 條——用 70 卡住，anchor 退回 `^` 會直接讓這條炸
-    expect(rules.length).toBeGreaterThanOrEqual(70);
+    // 9 條版面規則全部漏掉），現在是 104 條——用 100 卡住（票 26＋27 擴正則後重算），anchor 退回 `^` 會直接讓這條炸
+    expect(rules.length).toBeGreaterThanOrEqual(100);
     for (const [, selector, body] of rules) {
       expect(`${selector.trim()} { ${body.trim()} }`).not.toMatch(/\bopacity\s*:/);
     }
