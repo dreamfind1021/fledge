@@ -313,7 +313,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `src/locales/*/memory.json`（key 增刪） | 另一語言 catalog 同步（`memory-parity.test.ts` 會擋）、`Memory.tsx`+記憶元件群/`RelatedFloat.tsx`/`Sidebar.tsx`/`TabBar.tsx`/`Settings.tsx` 的 t() 引用 |
 | `sidecar/.../tasks/parser.py`（欄位或異常代碼變更） | `tasks/scanner.py`（`_row` 的 API 形狀）、`src/lib/sidecar.ts` 的 `TaskRow`、`src/locales/*/tasks.json` 的 `anomaly.*`、`TasksList.tsx` |
 | `sidecar/.../tasks/scanner.py`（resolver 或 payload 變更） | `routes/tasks.py`（八端點共用它）、`src/lib/sidecar.ts` 型別、`Tasks.tsx` 及四個子元件 |
-| `src/lib/markdownLite.ts`（語法或安全性變更） | `TasksList.tsx`（展開列的內文預覽）、`TaskEditor.tsx`（編輯器預覽） |
+| `src/lib/markdownLite.ts`（語法或安全性變更） | `TaskDetail.tsx`（右欄的票內文與離場筆記）、`TaskEditor.tsx`（編輯器預覽） |
 | `sidecar/.../routes/projects.py` 的 `POST /api/open` | 「用系統預設程式打開檔案」的**唯一入口**（票 01）。邊界與檔案樹**共用** `is_within_any_root`（roots ∪ manual）——規則寫兩份必然漂移。順序固定 expand → realpath → containment，**resolve 一定要在 containment 之前**，否則 root 裡的一條 symlink 就能指到外面而檢查照樣過。只開一般檔案（目錄／fifo／device 一律拒），`open` 用 list 形式且路徑前加 `--`（以 `-` 開頭的檔名否則會被當旗標）。exec 抽成 `_run_open` 是為了讓測試斷言「擋掉的路徑真的沒有 exec」——只驗 HTTP 403 證明不了那件事 | `openFile` |
 | `sidecar/.../routes/tasks.py`（endpoint/payload 變更） | `src/lib/sidecar.ts` 的 tasks fetchers、`Tasks.tsx` 及四個子元件、`test_tasks_routes.py`、`TaskDetail.tsx`、`TasksTree.tsx` |
 | `src/lib/sidecar.ts` 的 `TasksNote`（欄位變更） | `NoteEditor.tsx`（基準快照讀 `content`／`fingerprint`）、`TaskDetail.tsx`（`editable` 決定編輯鍵）、`NoteEditor.test.tsx`／`TaskDetail.test.tsx`／`Tasks.test.tsx` 的 fixtures（三處各自手寫這個形狀）、`routes/tasks.py`（同一個 payload 的另一端） |
