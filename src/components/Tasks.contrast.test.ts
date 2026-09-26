@@ -68,6 +68,56 @@ const paintToken = (selector: string, prop: string) => {
   }
   throw new Error(`${selector} 的 ${prop} 沒有用 var(--token)`);
 };
+// 完整宣告值（票 26＋27）。paintToken 只抓第一個 var(--x)：背景是 color-mix 或漸層時，
+// 「琥珀 38% 混 surface-2」會被讀成純琥珀、算出假的高對比。背景一律走 paintColor。
+const declValue = (selector: string, prop: string) => {
+  const re = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`);
+  for (const body of bodiesFor(selector)) {
+    const m = body.match(re);
+    if (m) return m[1].trim();
+  }
+  throw new Error(`${selector} 沒有宣告 ${prop}`);
+};
+// 依頂層逗號切（括號內的逗號不切）
+const splitTop = (s: string) => {
+  const out: string[] = [];
+  let depth = 0, cur = "";
+  for (const ch of s) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (ch === "," && depth === 0) { out.push(cur.trim()); cur = ""; } else cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
+};
+const inner = (s: string, fn: string) => s.slice(fn.length + 1, -1);   // "fn(...)" 的括號內
+const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+const hex = (c: number[]) => "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("").toUpperCase();
+// color-mix(in srgb, …) 對不透明色＝sRGB 編碼值的線性插值；本檔只混不透明色
+const resolveColor = (expr: string): string => {
+  const e = expr.trim();
+  const v = e.match(/^var\(--([a-z0-9-]+)\)$/);
+  if (v) return token(v[1]);
+  if (e.startsWith("linear-gradient(")) {
+    const first = splitTop(inner(e, "linear-gradient"))[1];                  // [0] 是角度
+    return resolveColor(first.replace(/\s+\d+(?:\.\d+)?%$/, ""));
+  }
+  if (e.startsWith("color-mix(")) {
+    const [space, a, b] = splitTop(inner(e, "color-mix"));
+    if (space !== "in srgb") throw new Error(`只算 srgb：${e}`);
+    const part = (s: string) => {
+      const m = s.match(/^(var\(--[a-z0-9-]+\))(?:\s+(\d+(?:\.\d+)?)%)?$/);
+      if (!m) throw new Error(`認不得的 color-mix 成分：${s}`);
+      return { c: resolveColor(m[1]), p: m[2] == null ? null : parseFloat(m[2]) / 100 };
+    };
+    const A = part(a), B = part(b);
+    const pa = A.p ?? (B.p == null ? 0.5 : 1 - B.p);
+    const ca = rgb(A.c), cb = rgb(B.c);
+    return hex(ca.map((x, i) => x * pa + cb[i] * (1 - pa)));
+  }
+  throw new Error(`認不得的顏色：${e}`);
+};
+const paintColor = (selector: string, prop: string) => resolveColor(declValue(selector, prop));
 
 describe("待辦面板的顏色對比", () => {
   const bg = token("bg");
@@ -80,6 +130,16 @@ describe("待辦面板的顏色對比", () => {
   // 專案樹（票 19）反白列的底是 --active，不是 --bg——同一個選擇器坐落在兩種底色上，
   // 各自要驗一次（.tree-item 平常在 --bg，選到 .active 後底色換成 --active、文字色不變）
   const active = token("active");
+  // 抽屜卡片（spec §11.5）：右欄內容坐落在 .tasks-col-detail 的底色上。從 CSS 讀，不寫死 token
+  const drawer = paintColor(".tasks-col-detail", "background");
+
+  // helper 自己的防線：數字取自 spec §11.9（另以 Python 獨立算過）
+  it("resolveColor：var、color-mix、漸層第一站；認不得就炸", () => {
+    expect(resolveColor("var(--surface)")).toBe(token("surface"));
+    expect(resolveColor("color-mix(in srgb, var(--primary) 38%, var(--surface-2))")).toBe("#705541");
+    expect(resolveColor("linear-gradient(135deg, color-mix(in srgb, var(--primary) 16%, var(--sidebar)), var(--sidebar) 70%)")).toBe("#342C28");
+    expect(() => resolveColor("rgba(0,0,0,.5)")).toThrow();
+  });
 
   // 記號是可操作的 UI 元件，非文字門檻 3:1（WCAG 1.4.11）
   it.each([
@@ -104,10 +164,9 @@ describe("待辦面板的顏色對比", () => {
     ["停用的動作鍵", ".tk-act:disabled", "color", bg],
     ["下一步的 › 記號", ".tasks-next-more", "color", bg],
     // 右欄（票 19，spec §5.5）：動作鍵是圖示，非文字 3:1。
-    // .d-body 的邊框用 --border（rgba 半透明疊色，不是實色 hex）——token() 只認 #RRGGBB，
-    // 這條規則量不出來，略過（brief §Step 7 CSS 是條件式「if the helper supports border」）
-    ["右欄動作鍵", ".d-acts .tk-act", "color", bg],
-    ["右欄的 ×", ".d-close", "color", bg],
+    // 票 26＋27 起 .d-body 沒有邊框，動作鍵與 × 都坐落在抽屜卡片（drawer）上
+    ["右欄動作鍵", ".d-acts .tk-act", "color", drawer],
+    ["右欄的 ×", ".d-close", "color", drawer],
   ])("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(3);
   });
@@ -126,10 +185,10 @@ describe("待辦面板的顏色對比", () => {
     ["第二層分區標籤", ".tasks-sec-lab", "color", bg],
     ["第二層分區計數", ".tasks-sec-n", "color", bg],
     // 票內文的 markdown（右欄與編輯器預覽共用）：正文與連結都要各自過 4.5:1
-    [".tk-md 內文", ".tk-md", "color", bg],
-    [".tk-md 連結", ".tk-md a", "color", bg],
-    // 票 25：離場筆記的 `# 標題` 坐落在右欄 .d-body 的 --surface 上
-    [".tk-md 一級標題", ".tk-md h1", "color", surface],
+    [".tk-md 內文", ".tk-md", "color", drawer],
+    [".tk-md 連結", ".tk-md a", "color", drawer],
+    // 票 25：離場筆記的 `# 標題`；票 26＋27 起右欄內容直接坐落在抽屜卡片（drawer）上
+    [".tk-md 一級標題", ".tk-md h1", "color", drawer],
     // 整頁編輯器（spec §6.2／§6.4，task 10 review FIX 4）：坐落在 --surface 上的文字
     [".ed-title 正常文字", ".ed-title", "color", surface],
     [".ed-area 正常文字", ".ed-area", "color", surface],
@@ -137,13 +196,16 @@ describe("待辦面板的顏色對比", () => {
     [".ed-title 停用文字", ".ed-title:disabled", "color", surface],
     [".ed-area 停用文字", ".ed-area:disabled", "color", surface],
     ["Save 停用文字", ".btn.is-primary:disabled", "color", surface],
-    // 返回列與提示條坐落在 .tasks-pane，沿用 --bg
-    ["返回列的專案名", ".full-back", "color", bg],
-    ["返回列的票號", ".full-num", "color", bg],
+    // 返回列（編輯器頁首）坐落在抽屜卡片上；提示條在清單（--bg）與抽屜兩處都會出現，各驗一次
+    ["返回列的專案名", ".full-back", "color", drawer],
+    ["返回列的票號", ".full-num", "color", drawer],
     ["提示條文字", ".tk-banner", "color", bg],
+    ["提示條文字（抽屜）", ".tk-banner", "color", drawer],
     ["提示條按鈕文字", ".tk-banner .bbtn", "color", bg],
+    ["提示條按鈕文字（抽屜）", ".tk-banner .bbtn", "color", drawer],
     // 票 25：孤兒草稿的丟棄鍵在編輯中停用；停用的仍是文字，淡化到 --dim 就停
     ["停用的提示條按鈕文字", ".tk-banner .bbtn:disabled", "color", bg],
+    ["停用的提示條按鈕文字（抽屜）", ".tk-banner .bbtn:disabled", "color", drawer],
     // 票 21 貼進新對話的指令：標籤坐落在 .tasks-pane 的 --bg；<pre> 在框自己的 --surface-2 上
     ["指令區塊標籤", ".tasks-cmd-lab", "color", bg],
     ["指令內文", ".tasks-cmd-pre", "color", surface2],
@@ -158,12 +220,12 @@ describe("待辦面板的顏色對比", () => {
     ["樹分組標籤", ".tree-grp", "color", bg],
     ["樹列文字（一般底 --bg）", ".tree-item", "color", bg],
     ["樹列文字（反白底 --active）", ".tree-item", "color", active],
-    // 右欄（票 19，spec §5.5）：.tk-empty／.tk-noedit 坐落在 .d-body 的 --surface 上，
+    // 右欄（票 19，spec §5.5）：.tk-empty／.tk-noedit 坐落在抽屜卡片上（票 26＋27 起 .d-body 透明），
     // 不是 --bg（task 7 拿掉時的白名單死條目留在別處，這裡是它們在右欄的落點）
-    [".tk-empty 無內文提示", ".tk-empty", "color", surface],
-    [".tk-noedit 不可編輯說明", ".tk-noedit", "color", surface],
-    ["右欄麵包屑", ".d-crumb", "color", bg],
-    ["右欄資訊列", ".d-meta", "color", bg],
+    [".tk-empty 無內文提示", ".tk-empty", "color", drawer],
+    [".tk-noedit 不可編輯說明", ".tk-noedit", "color", drawer],
+    ["右欄麵包屑", ".d-crumb", "color", drawer],
+    ["右欄資訊列", ".d-meta", "color", drawer],
     // 選中的票列反白底是 --active（見 .tk-row.active）：已完成／擱置的標題淡化在那個底上
     // 同樣要過 4.5:1——沒有測試釘住的話，反白列上淡化過頭的標題會被漏掉（task 7 review 遺留）
     ["已完成的標題（反白底 --active）", ".tk.is-done .tk-title", "color", active],

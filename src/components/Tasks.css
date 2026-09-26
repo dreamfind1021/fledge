@@ -19,7 +19,7 @@
 .tasks-sum .is-warn { color: var(--warning); }
 
 /* ── 專案樹（票 19，spec §5.2）：只有專案名＋數字。視覺沿用記憶面板左欄（.mem-index／.lrow） ── */
-.tree { width: 232px; flex-shrink: 0; border-right: 1px solid var(--divider); display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 14px 8px 24px; }
+.tree { width: 232px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; overflow-y: auto; padding: 14px 8px 24px; }
 .tree-head { display: flex; align-items: baseline; gap: 8px; padding: 0 9px 10px; }
 .tree-head h1 { font-size: 17px; font-weight: 800; margin: 0; }
 .tree-head .s { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--dim); white-space: nowrap; }
@@ -245,18 +245,19 @@
 /* × 關右欄（spec §11.3）：只在寬等級顯示（見 1040 區塊）；中、窄由返回鍵負責 */
 .d-close { display: none; position: absolute; top: 16px; right: 18px; width: 26px; height: 26px; align-items: center; justify-content: center; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--dim); cursor: pointer; }
 .d-close:hover { color: var(--text); background: var(--hover); }
-.d-body { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.d-body { padding: 6px 0 0; }   /* 內容直接坐在抽屜卡片上（spec §11.5） */
 .tk-empty, .tk-noedit { font-size: 12.5px; color: var(--dim); font-style: italic; }
-.tk-noedit { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--divider); }
+.tk-noedit { margin-top: 12px; }
 .lb-detail .tk-confirm, .lb-detail .tk-flagbody { margin: 0 0 12px; }
 
 /* ══ 版面（票 19，spec §5.1）：mobile-first——預設是「窄」，760 疊「中」，1040 疊「寬」。
    判斷用面板自己的寬度不看視窗：側邊欄可收合（240→56px），同一視窗寬下主區差 184px。
    實測：待真機實測（合併前由使用者在 dev app 三個寬度各看一次，數字補回此行；
    1040 邊界要看 409 衝突橫幅的兩顆按鈕）。 ══ */
-.tasks-split { display: flex; height: 100%; }
+.tasks-split { display: flex; height: 100%; box-sizing: border-box; padding: 12px 12px 12px 0; gap: 12px; background: var(--bg); }
 .tasks-col { flex: 1; min-width: 0; overflow-y: auto; padding: 16px 24px 32px; }
-.tasks-col-detail { padding: 0; }   /* .lb-detail 自己有內距 */
+/* 抽屜卡片（spec §11.5）：所有寬度都是浮起的圓角卡片；.lb-detail 自己有內距 */
+.tasks-col-detail { padding: 0; background: var(--surface); border-radius: 18px; box-shadow: var(--shadow); }
 /* 窄：常駐樹收起，「所有專案」頁先攤開樹（＝現在的總覽）再接跨專案的票 */
 .tasks-split > .tree { display: none; }
 .tasks-col-all .tree.as-page { display: flex; }
@@ -273,7 +274,7 @@
 }
 
 /* 清單基準＝扣掉樹之後剩餘寬度的 46%（spec §5.1）；232 與 .tree 的 width 同值，layout 測試守兩處一致。
-   1040 時：樹 232、清單 372、右欄 436 */
+   1040 時：右 padding 12、樹 232、gap 12、清單 366、gap 12、右欄 406 */
 @container tasks (min-width: 1040px) {
   .tasks-split[data-pane="open"] .tasks-col-list { display: block; }
   /* 抽屜（票 26＋27，spec §11.3）：沒選票時右欄整欄不存在、清單撐滿；選了票照 46%，
@@ -283,7 +284,7 @@
   .tasks-split[data-pane="open"] .tasks-col-list .tk-acts { display: none; }
   .d-close { display: inline-flex; }
   .d-crumb { padding-right: 34px; }
-  .tasks-col-list { flex: 0 0 calc((100% - 232px) * .46); min-width: 360px; border-right: 1px solid var(--divider); padding: 16px 18px 32px; }
+  .tasks-col-list { flex: 0 0 calc((100% - 232px) * .46); min-width: 360px; padding: 16px 18px 32px; }
   .tasks-col-detail { flex: 1; }
   .lb-detail .tasks-back { display: none; }            /* 寬：清單就在旁邊，不需要返回 */
 }

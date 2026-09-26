@@ -62,24 +62,25 @@ describe("待辦面板三欄版面", () => {
     expect(decl(css, ".d-close", "display")).toBe("none");
   });
 
-  // 樹 232 ＋ 清單取 max(min-width, 剩餘×比例) ＋ 右欄至少 380 ≤ 1040；
-  // 只加 min-width 會漏掉比例撐大清單的情況——Codex 守門抓到的假綠
-  it("寬等級的最小寬度預算在 1040 內", () => {
+  // 樹 232 ＋ gap ＋ 清單取 max(min-width, 剩餘×比例) ＋ gap ＋ 右欄至少 380 ＋ 右 padding ≤ 1040（spec §11.3）；
+  // 只加 min-width 會漏掉比例撐大清單的情況——Codex 守門抓到的假綠。
+  // flex-basis 的百分比對的是 .tasks-split 的內容寬（扣掉 padding，不扣 gap）
+  it("寬等級的最小寬度預算在 1040 內（含 .tasks-split 的 padding 與兩道 gap）", () => {
     const tree = px(decl(css, ".tree", "width"));
+    const gap = px(decl(css, ".tasks-split", "gap"));
+    const padRight = px(decl(css, ".tasks-split", "padding").split(/\s+/)[1]);
     const b = block(1040);
     const flex = decl(b, ".tasks-col-list", "flex");
     const minWidth = px(decl(b, ".tasks-col-list", "min-width"));
-    // flex-basis 必須是 calc((100% - Tpx) * F) 的形式，才能算出扣掉樹之後的剩餘寬度
     const calcMatch = flex.match(/calc\(\(100% - (\d+(?:\.\d+)?)px\)\s*\*\s*(\d*\.\d+|\d+)\)/);
     if (!calcMatch) throw new Error(`.tasks-col-list 的 flex-basis 不是預期的 calc((100% - Tpx) * F) 形式：${flex}`);
     const treeInCalc = parseFloat(calcMatch[1]);
     const ratio = parseFloat(calcMatch[2]);
-    // calc 裡的樹寬要跟 .tree 的 width 同一個數字（單一事實來源，避免兩處各自維護漂移）
     expect(treeInCalc, `calc 裡的樹寬 ${treeInCalc} 應等於 .tree 的 width ${tree}`).toBe(tree);
-    const basisAt1040 = (1040 - treeInCalc) * ratio;
+    const basisAt1040 = (1040 - padRight - treeInCalc) * ratio;
     const list = Math.max(minWidth, basisAt1040);
-    const total = tree + list + 380;
-    expect(total, `樹 ${tree} ＋ 清單 ${list}（basis ${basisAt1040} / min-width ${minWidth}）＋ 右欄 380 ＝ ${total} 應 ≤ 1040`).toBeLessThanOrEqual(1040);
+    const total = tree + gap + list + gap + 380 + padRight;
+    expect(total, `樹 ${tree} ＋ gap ${gap} ＋ 清單 ${list} ＋ gap ${gap} ＋ 右欄 380 ＋ padding ${padRight} ＝ ${total} 應 ≤ 1040`).toBeLessThanOrEqual(1040);
   });
 
   // 票 25：寬等級剛過 1040 時中欄內容只剩 336px，英文摘要單獨就 304px。兩邊一起縮會各折成兩行；
@@ -99,5 +100,12 @@ describe("待辦面板三欄版面", () => {
     expect(decl(css, ".tk-title", "overflow-wrap")).toBe("anywhere");
     expect(() => decl(css, ".tk-title", "text-overflow")).toThrow();
     expect(decl(css, ".tk-row", "align-items")).toBe("flex-start");
+  });
+
+  // spec §11.5：分隔靠底色與間距，不靠線
+  it("欄與欄之間沒有分隔線", () => {
+    expect(() => decl(css, ".tree", "border-right")).toThrow();
+    expect(() => decl(block(1040), ".tasks-col-list", "border-right")).toThrow();
+    expect(() => decl(css, ".d-body", "border")).toThrow();
   });
 });
