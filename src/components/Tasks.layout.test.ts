@@ -108,4 +108,11 @@ describe("待辦面板三欄版面", () => {
     expect(() => decl(block(1040), ".tasks-col-list", "border-right")).toThrow();
     expect(() => decl(css, ".d-body", "border")).toThrow();
   });
+
+  // spec §11.6：軌道寬、最小填充寬（放得下兩位數）、擱置槽固定寬（軌道上下對齊）只寫在 CSS，TS 只給百分比
+  it("專案樹軌道：軌道 64px、填充最小 22px、擱置槽最小 18px", () => {
+    expect(decl(css, ".tree-trk", "width")).toBe("64px");
+    expect(decl(css, ".tree-fill", "min-width")).toBe("22px");
+    expect(decl(css, ".tree-n .pk", "min-width")).toBe("18px");
+  });
 });

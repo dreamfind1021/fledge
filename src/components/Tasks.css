@@ -30,10 +30,15 @@
 .tree-item.is-all { font-weight: 700; margin-bottom: 4px; }
 .tree-item.is-all svg { color: var(--dim); }
 .tree-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 數字用 --dim（文字，4.5:1）；橘點是非文字；+N 是文字所以也 --dim，不用 --faint */
-.tree-n { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
-.tree-n i { width: 6px; height: 6px; border-radius: 2px; background: var(--primary); }
-.tree-n .pk { color: var(--dim); font-size: 10px; }
+/* 固定軌道（票 26，spec §11.6）：填充長度＝未完成／樹上最大值，進行中段暗琥珀，數字在軌道裡。
+   軌道數字用 --text（對軌道／填充／進行中段都過 4.5:1，--text-2 對進行中段只有 4.11）；0 與 +N 是文字，--dim */
+.tree-n { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.tree-trk { position: relative; display: inline-block; flex-shrink: 0; width: 64px; height: 16px; border-radius: 8px; background: color-mix(in srgb, var(--surface) 70%, var(--bg)); overflow: hidden; }
+.tree-item.active .tree-trk { background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
+.tree-fill { position: absolute; left: 0; top: 0; bottom: 0; min-width: 22px; border-radius: 8px; background: color-mix(in srgb, var(--surface-2) 70%, var(--faint)); overflow: hidden; }
+.tree-doing { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--primary) 38%, var(--surface-2)); }
+.tree-num { position: absolute; top: 0; bottom: 0; right: 6px; display: flex; align-items: center; font-size: 10.5px; font-weight: 600; color: var(--text); }
+.tree-n .pk { display: inline-block; min-width: 18px; color: var(--dim); font-size: 10px; }
 .tree-una { font-size: 11px; font-weight: 600; color: var(--warning); }
 .tree-item.is-dim .tree-name { color: var(--dim); font-weight: 500; }
 .tree-grp { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); padding: 14px 9px 5px; }

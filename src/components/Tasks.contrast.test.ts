@@ -142,6 +142,11 @@ describe("待辦面板的顏色對比", () => {
   const nextBase = paintColor(".tasks-next", "background");
   const nextHover = paintColor(".tasks-next:hover", "background");
   const nextOn = paintColor(".tasks-next.is-on", "background");
+  // 專案樹軌道（spec §11.6）：數字坐落在軌道、填充、進行中段三種底色上，選中列的軌道另一個色
+  const track = paintColor(".tree-trk", "background");
+  const trackActive = paintColor(".tree-item.active .tree-trk", "background");
+  const fill = paintColor(".tree-fill", "background");
+  const doingSeg = paintColor(".tree-doing", "background");
 
   // helper 自己的防線：數字取自 spec §11.9（另以 Python 獨立算過）
   it("resolveColor：var、color-mix、漸層第一站；認不得就炸", () => {
@@ -165,8 +170,6 @@ describe("待辦面板的顏色對比", () => {
     // 票 21 指令框尾的複製圖示（lucide svg 吃 currentColor）與已複製的勾，坐落在框的 --surface-2 上
     ["指令複製圖示", ".tasks-cmd-act", "color", cmdRow],
     ["指令已複製的勾", ".tasks-cmd-act.is-done", "color", cmdRow],
-    // 專案樹（票 19，spec §5.2）進行中橘點：非文字元件，門檻同記號 3:1
-    ["樹的進行中橘點", ".tree-n i", "background", bg],
     // 票 19 清單（spec §5.4／§5.6）：擱置是第四種輪廓（虛線空心方）；編輯中清單唯讀（D12）
     // 停用的記號與動作鍵是圖示（lucide svg 吃 currentColor），非文字 3:1；下一步右上的「›」
     // 是唯一的字符、spec 指定 --faint，同樣按非文字驗
@@ -260,6 +263,10 @@ describe("待辦面板的顏色對比", () => {
     ["下一步標籤（滑過）", ".tasks-next-lab", "color", nextHover],
     ["下一步標籤（選中）", ".tasks-next-lab", "color", nextOn],
     ["下一步內文（選中）", ".tasks-next-tx", "color", nextOn],
+    ["樹的軌道數字（軌道）", ".tree-num", "color", track],
+    ["樹的軌道數字（選中列軌道）", ".tree-num", "color", trackActive],
+    ["樹的軌道數字（填充）", ".tree-num", "color", fill],
+    ["樹的軌道數字（進行中段）", ".tree-num", "color", doingSeg],
   ])("%s 對背景至少 4.5:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(4.5);
   });

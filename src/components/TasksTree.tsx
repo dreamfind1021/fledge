@@ -21,8 +21,13 @@ export const summarize = (projects: TasksProjectRow[]) => ({
 // 反面不成立：next_step 為空不代表這個專案沒動靜。
 export const speaks = (p: TasksProjectRow) => p.tasks_status !== "absent" || Boolean(p.next_step);
 
-// 擱置與進行中的張數：壞值退回 0（不畫記號），不把整列降級成警告——刻度總數來自 unfinished 仍可信
+// 擱置的張數：壞值退回 0（擱置槽空著），不把整列降級成警告——刻度總數來自 unfinished 仍可信
 const safeCount = (n: number | null) => (Number.isInteger(n) && (n as number) >= 0 ? (n as number) : 0);
+
+// 進行中張數（spec §11.6 第 3 點）：只有 0..n 的整數才算。doing 是 unfinished 的子集，超過 n 代表資料壞了——
+// 只退拆分（不畫進行中段）、不退整列（數字與頂端總數照舊來自 unfinished）。沿用舊總覽 doingCount 的判斷
+const doingOf = (p: TasksProjectRow, n: number) =>
+  Number.isInteger(p.doing) && (p.doing as number) >= 0 && (p.doing as number) <= n ? (p.doing as number) : 0;
 
 // 專案樹（spec §5.2）：只有專案名＋數字，沒有第二行（D2）。
 // asPage：窄等級把樹攤成一頁（等於現在的總覽），列寬拉滿、藏頂端與「所有專案」。
@@ -37,6 +42,8 @@ export function TasksTree({ data, selected, onSelect, t, asPage = false }: {
   const rows = projects.filter(speaks);
   const chips = projects.filter((p) => !speaks(p));
   const { total, unreadable } = summarize(projects);
+  // 軌道的尺度：使用中各列有效數字的最大值（spec §11.6 第 1 點）。n > 0 才畫軌道，所以不會除以 0
+  const max = Math.max(0, ...rows.map((p) => okCount(p) ?? 0));
 
   const item = (p: TasksProjectRow, dim: boolean) => {
     const n = okCount(p);
@@ -46,9 +53,17 @@ export function TasksTree({ data, selected, onSelect, t, asPage = false }: {
         <span className="tree-name">{p.name}</span>
         {dim ? null : n !== null ? (
           <span className="tree-n">
-            {safeCount(p.doing) > 0 ? <i /> : null}
-            {n}
-            {safeCount(p.parked) > 0 ? <span className="pk">+{safeCount(p.parked)}</span> : null}
+            {n > 0 ? (
+              // 固定軌道（D22）：填充長度＝n／樹上最大值；最小寬、軌道寬由 CSS 決定，這裡只給百分比
+              <span className="tree-trk">
+                <span className="tree-fill" style={{ width: `${(n / max) * 100}%` }}>
+                  {doingOf(p, n) > 0 ? <span className="tree-doing" style={{ width: `${(doingOf(p, n) / n) * 100}%` }} /> : null}
+                </span>
+                <span className="tree-num">{n}</span>
+              </span>
+            ) : n}
+            {/* 擱置槽每列都在（空的也在），軌道才上下對齊 */}
+            <span className="pk">{safeCount(p.parked) > 0 ? `+${safeCount(p.parked)}` : ""}</span>
           </span>
         ) : p.tasks_status === "absent" ? null : (
           // unavailable、認不得的狀態、ok 但數字是壞的，全部走這一支：fail-safe 落在警告那一側

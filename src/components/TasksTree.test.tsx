@@ -42,33 +42,65 @@ describe("TasksTree", () => {
     expect(row("d").querySelector(".tree-una")).not.toBeNull();
   });
 
-  it("有進行中亮橘點、有擱置跟 +N；沒有就沒有", () => {
+  // spec §11.6：填充長度＝n／樹上最大值；進行中段＝d／n；擱置槽每列都在
+  it("軌道：填充寬＝n／最大值、進行中段＝d／n、數字在軌道裡、擱置槽每列都在", () => {
     const { container } = render(<TasksTree data={data([
-      proj({ path: "/p/a", name: "a", unfinished: 3, doing: 1, parked: 2 }),
-      proj({ path: "/p/b", name: "b", unfinished: 1 }),
+      proj({ path: "/p/a", name: "a", unfinished: 4, doing: 1, parked: 2 }),
+      proj({ path: "/p/b", name: "b", unfinished: 2 }),
     ])} selected={null} onSelect={() => {}} t={t} />);
     const [a, b] = [...container.querySelectorAll(".tree-item:not(.is-all)")];
-    expect(a.querySelector(".tree-n i")).not.toBeNull();
+    expect((a.querySelector(".tree-fill") as HTMLElement).style.width).toBe("100%");
+    expect((b.querySelector(".tree-fill") as HTMLElement).style.width).toBe("50%");
+    expect((a.querySelector(".tree-doing") as HTMLElement).style.width).toBe("25%");
+    expect(b.querySelector(".tree-doing")).toBeNull();
+    expect(a.querySelector(".tree-trk .tree-num")?.textContent).toBe("4");
     expect(a.querySelector(".tree-n .pk")?.textContent).toBe("+2");
-    expect(b.querySelector(".tree-n i")).toBeNull();
-    expect(b.querySelector(".tree-n .pk")).toBeNull();
+    expect(b.querySelector(".tree-n .pk")?.textContent).toBe("");            // 槽在、是空的
   });
 
-  // 票 25：runtime JSON 沒驗證。壞值只退掉記號，不把整列降級成警告，數字與頂端總數照舊來自 unfinished。
-  // 1.5 與 "2" 是會分辨的那兩個：天真的 `(n ?? 0) > 0` 對 -1／null 本來就不畫，只有這兩個會畫出記號
+  it("0 張：不畫軌道、只寫 0；最大值只看有數字的列（讀不到、absent、ok 但壞值都不算）", () => {
+    const { container } = render(<TasksTree data={data([
+      proj({ path: "/p/a", name: "a", unfinished: 2 }),
+      proj({ path: "/p/z", name: "z", unfinished: 0 }),
+      proj({ path: "/p/c", name: "c", tasks_status: "unavailable", unfinished: null, doing: null, parked: null, doing_tasks: null, recent_tasks: null }),
+      proj({ path: "/p/d", name: "d", unfinished: 9.5 }),          // ok 但壞值 → 讀不到；比 a 大，天真的 max 會把它算進去
+      proj({ path: "/p/m", name: "m", tasks_status: "absent", unfinished: 0, next_step: "go" }),
+    ])} selected={null} onSelect={() => {}} t={t} />);
+    const row = (name: string) => [...container.querySelectorAll(".tree-item")].find((x) => x.querySelector(".tree-name")?.textContent === name)!;
+    expect((row("a").querySelector(".tree-fill") as HTMLElement).style.width).toBe("100%");
+    expect(row("z").querySelector(".tree-trk")).toBeNull();
+    expect(row("z").querySelector(".tree-n")?.textContent).toBe("0");
+    expect(row("m").querySelector(".tree-n")).toBeNull();
+  });
+
+  // Review Focus 2：一個專案很大時，小專案的填充照比例很小，最小寬交給 CSS 的 min-width（layout 測試守）
+  it("最大值 200、自己 1 張 → 填充 0.5%（最小寬由 CSS 保證），數字照寫", () => {
+    const { container } = render(<TasksTree data={data([
+      proj({ path: "/p/a", name: "a", unfinished: 200 }),
+      proj({ path: "/p/b", name: "b", unfinished: 1 }),
+    ])} selected={null} onSelect={() => {}} t={t} />);
+    const b = [...container.querySelectorAll(".tree-item:not(.is-all)")][1];
+    expect((b.querySelector(".tree-fill") as HTMLElement).style.width).toBe("0.5%");
+    expect(b.querySelector(".tree-num")?.textContent).toBe("1");
+  });
+
+  // runtime JSON 沒驗證。doing 只有 0..n 的整數才算（doing 是 unfinished 的子集，超過 n 代表資料壞了）；
+  // 壞值只退拆分、不把整列降級成警告，數字與頂端總數照舊來自 unfinished（spec §11.6 第 3、4 點）。
+  // 1.5、"2"、5（> n）是會分辨的：天真的 `(d ?? 0) > 0` 對它們都會畫出進行中段
   it.each([
     ["-1", -1],
     ["null", null],
     ["非整數 1.5", 1.5],
     ["字串 \"2\"", "2" as unknown as number],
-  ])("doing／parked 壞值 %s → 不畫橘點與 +N，數字與總數不變", (_label, bad) => {
+    ["大於未完成數 5", 5],
+  ])("doing／parked 壞值 %s → 不畫進行中段、擱置槽空的，數字與總數不變", (_label, bad) => {
     const { container } = render(<TasksTree data={data([
-      proj({ path: "/p/a", name: "a", unfinished: 3, doing: bad, parked: bad }),
+      proj({ path: "/p/a", name: "a", unfinished: 3, doing: bad, parked: bad === 5 ? -1 : bad }),
     ])} selected={null} onSelect={() => {}} t={t} />);
     const a = container.querySelector(".tree-item:not(.is-all)")!;
-    expect(a.querySelector(".tree-n i")).toBeNull();
-    expect(a.querySelector(".tree-n .pk")).toBeNull();
-    expect(a.querySelector(".tree-n")?.textContent).toBe("3");
+    expect(a.querySelector(".tree-doing")).toBeNull();
+    expect(a.querySelector(".tree-n .pk")?.textContent).toBe("");
+    expect(a.querySelector(".tree-num")?.textContent).toBe("3");
     expect(a.querySelector(".tree-una")).toBeNull();
     expect(container.querySelector(".tree-head .s")?.textContent).toBe(en.overview.summary.replace("{{n}}", "3"));
   });
