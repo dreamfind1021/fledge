@@ -28,6 +28,12 @@ const decls = (text: string, selector: string, prop: string) => {
   return rules.flatMap((r) => [...r[2].matchAll(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, "g"))].map((m) => m[1].trim()));
 };
 // 同一個選擇器（權重相同）後面的蓋前面：取最後一條。只取第一條會漏掉檔尾的覆寫（Codex final R1）
+// 取某個 @keyframes 的內容（例如 "from { … }"）。找不到就炸
+const keyframes = (name: string) => {
+  const m = full.match(new RegExp(`@keyframes\\s+${name}\\s*\\{((?:[^{}]*\\{[^{}]*\\})*[^{}]*)\\}`));
+  if (!m) throw new Error(`Tasks.css 找不到 @keyframes ${name}`);
+  return m[1];
+};
 const decl = (text: string, selector: string, prop: string) => {
   const all = decls(text, selector, prop);
   if (all.length === 0) throw new Error(`${selector} 沒有宣告 ${prop}`);
@@ -65,6 +71,17 @@ describe("待辦面板三欄版面", () => {
     expect(decl(b, '.tasks-split[data-pane="open"] .tasks-col-list .tk-acts', "display")).toBe("none");   // D18
     expect(decl(b, ".lb-detail .tasks-back", "display")).toBe("none");
     expect(decl(b, ".d-close", "display")).toBe("inline-flex");
+  });
+
+  // 抽屜進場（真機驗收時使用者要求，推翻 spec D20）：三個等級都在右欄從隱藏變顯示時播一次。
+  // 值是使用者在 demo 選的（滑入 16px＋淡入、0.14 秒）；沒有 fill-mode、keyframes 只有 from——
+  // 終點就是右欄平常的樣子，淡入的 opacity 不會殘留到停下來之後（對比度量的是停下來的顏色）
+  it("抽屜打開時播進場動畫：滑入 16px＋淡入、0.14 秒，終點是右欄平常的樣子", () => {
+    expect(decl(css, '.tasks-split[data-pane="open"] .tasks-col-detail', "animation")).toBe("tk-drawer-in 140ms ease-out");
+    const kf = keyframes("tk-drawer-in");
+    expect(decl(kf, "from", "transform")).toBe("translateX(16px)");
+    expect(decl(kf, "from", "opacity")).toBe("0");
+    expect(kf).not.toMatch(/\bto\s*\{|100%/);
   });
 
   // × 只在寬等級（D19）：中、窄等級由返回鍵關右欄

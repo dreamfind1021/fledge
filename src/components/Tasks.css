@@ -265,6 +265,12 @@
 .tasks-col { flex: 1; min-width: 0; overflow-y: auto; padding: 16px 24px 32px; }
 /* 抽屜卡片（spec §11.5）：所有寬度都是浮起的圓角卡片；.lb-detail 自己有內距 */
 .tasks-col-detail { padding: 0; background: var(--surface); border-radius: 18px; box-shadow: var(--shadow); }
+/* 抽屜進場（真機驗收時使用者要求，推翻 spec D20；數值在 demo 選定）：右欄從隱藏變顯示時瀏覽器播一次，
+   開著時換票不重播。關閉不做動畫——要延後卸載 TaskDetail，會碰到切專案／離開編輯的狀態邏輯。
+   淡入的 opacity 只存在 0.14 秒內：keyframes 只有 from、沒有 fill-mode，終點就是右欄平常的樣子，
+   停下來的對比度不受影響。系統開「減少動態」時 index.css 全域把動畫縮到 0.01ms */
+.tasks-split[data-pane="open"] .tasks-col-detail { animation: tk-drawer-in 140ms ease-out; }
+@keyframes tk-drawer-in { from { opacity: 0; transform: translateX(16px); } }
 /* 窄：常駐樹收起，「所有專案」頁先攤開樹（＝現在的總覽）再接跨專案的票 */
 .tasks-split > .tree { display: none; }
 .tasks-col-all .tree.as-page { display: flex; }
