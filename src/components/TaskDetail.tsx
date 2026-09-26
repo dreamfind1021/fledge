@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, ChevronLeft, Pause, Pencil, SquarePen, Trash2, TriangleAlert, Undo2 } from "lucide-react";
+import { Check, ChevronLeft, Pause, Pencil, SquarePen, Trash2, TriangleAlert, Undo2, X } from "lucide-react";
 import { renderMarkdownLite } from "../lib/markdownLite";
 import { writeClipboard } from "../lib/clipboard";
 import type { TaskDraft } from "../lib/taskDraft";
@@ -11,7 +11,6 @@ import { NoteEditor } from "./NoteEditor";
 type T = (k: string, o?: Record<string, unknown>) => string;
 
 export type DetailView =
-  | { kind: "empty" }
   | { kind: "loading" }
   | { kind: "ticket"; task: TaskRow; rescueDraft: TaskDraft | null }
   | { kind: "note"; note: TasksNote | null };
@@ -43,9 +42,14 @@ export function TaskDetail({
   const identity = view.kind === "ticket" ? `ticket:${view.task.name}` : view.kind;
   useEffect(() => { setConfirming(false); setOpenFlag(false); setCopied(false); }, [identity, editing]);
   const back = <button className="tasks-back" onClick={onBack}><ChevronLeft size={14} strokeWidth={2} />{backLabel}</button>;
+  // × 與返回鍵同一個 onBack（spec §11.3）：寬等級顯示 ×、藏返回鍵；中、窄反過來——由 Tasks.css 決定
+  const close = (
+    <button className="d-close" aria-label={t("a11y.closeDetail")} title={t("a11y.closeDetail")} onClick={onBack}>
+      <X size={15} strokeWidth={2} />
+    </button>
+  );
 
-  if (view.kind === "empty") return <div className="lb-detail is-empty"><div className="d-hint">{t("detail.hint")}</div></div>;
-  if (view.kind === "loading") return <div className="lb-detail">{back}<div className="tasks-note">{t("detail.loading")}</div></div>;
+  if (view.kind === "loading") return <div className="lb-detail">{close}{back}<div className="tasks-note">{t("detail.loading")}</div></div>;
 
   if (view.kind === "note") {
     const { note } = view;
@@ -61,7 +65,7 @@ export function TaskDetail({
     }
     return (
       <div className="lb-detail">
-        {back}
+        {close}{back}
         <div className="d-crumb">{projectName} / .fledge/state.md</div>
         <h2 className="d-title">{t("detail.noteTitle")}</h2>
         {note == null ? <div className="tasks-note">{t("detail.loading")}</div> : note.status === "ok" && note.content != null ? (
@@ -105,7 +109,7 @@ export function TaskDetail({
   const parked = task.status === "parked";
   return (
     <div className="lb-detail">
-      {back}
+      {close}{back}
       <div className="d-crumb">{projectName} / {pad2(task.number, t("list.noNumber"))}</div>
       <h2 className="d-title">{task.title}</h2>
       <div className="d-meta">

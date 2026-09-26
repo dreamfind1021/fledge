@@ -107,6 +107,7 @@ describe("待辦面板的顏色對比", () => {
     // .d-body 的邊框用 --border（rgba 半透明疊色，不是實色 hex）——token() 只認 #RRGGBB，
     // 這條規則量不出來，略過（brief §Step 7 CSS 是條件式「if the helper supports border」）
     ["右欄動作鍵", ".d-acts .tk-act", "color", bg],
+    ["右欄的 ×", ".d-close", "color", bg],
   ])("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
     expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(3);
   });
@@ -161,7 +162,6 @@ describe("待辦面板的顏色對比", () => {
     // 不是 --bg（task 7 拿掉時的白名單死條目留在別處，這裡是它們在右欄的落點）
     [".tk-empty 無內文提示", ".tk-empty", "color", surface],
     [".tk-noedit 不可編輯說明", ".tk-noedit", "color", surface],
-    ["右欄提示（空狀態）", ".d-hint", "color", bg],
     ["右欄麵包屑", ".d-crumb", "color", bg],
     ["右欄資訊列", ".d-meta", "color", bg],
     // 選中的票列反白底是 --active（見 .tk-row.active）：已完成／擱置的標題淡化在那個底上

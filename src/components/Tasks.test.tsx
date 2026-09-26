@@ -709,9 +709,12 @@ describe("Tasks 面板", () => {
       render(<Tasks port={1234} isActive />);
       await openProject();
       fireEvent.click(screen.getByText("第一件"));
+      const detail = () => document.querySelector(".tasks-col-detail") as HTMLElement;
+      await waitFor(() => expect(detail().querySelector(".lb-detail")).not.toBeNull());
       fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "ok", tasks: [], next_step: "", handoff_command: "" });
       fireEvent(window, new Event("focus"));
-      await waitFor(() => expect(screen.getByText(en.detail.hint)).toBeTruthy());
+      await waitFor(() => expect(detail().querySelector(".lb-detail")).toBeNull());
+      expect(document.querySelector(".tasks-split")?.getAttribute("data-pane")).toBe("none");
     });
 
     // tasks_status 變 unavailable 時 list.tasks 是 null：「找不到票」的 effect 若只認陣列，右欄的
@@ -720,10 +723,39 @@ describe("Tasks 面板", () => {
       render(<Tasks port={1234} isActive />);
       await openProject();
       fireEvent.click(screen.getByText("第一件"));
+      const detail = () => document.querySelector(".tasks-col-detail") as HTMLElement;
+      await waitFor(() => expect(detail().querySelector(".lb-detail")).not.toBeNull());
       fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "unavailable", tasks: null, next_step: "", handoff_command: "" });
       fireEvent(window, new Event("focus"));
-      await waitFor(() => expect(screen.getByText(en.detail.hint)).toBeTruthy());
+      await waitFor(() => expect(detail().querySelector(".lb-detail")).toBeNull());
       expect(screen.queryByText(en.detail.loading)).toBeNull();
+    });
+
+    // spec §11.3：× 與返回鍵同一個 onBack（closePane）
+    it("點 × → 右欄沒有內容、data-pane 回 none、清單的選中反白消失", async () => {
+      render(<Tasks port={1234} isActive />);
+      await openProject();
+      fireEvent.click(screen.getByText("第一件"));
+      const detail = () => document.querySelector(".tasks-col-detail") as HTMLElement;
+      await waitFor(() => expect(detail().querySelector(".d-title")?.textContent).toBe("第一件"));
+      fireEvent.click(within(detail()).getByLabelText(en.a11y.closeDetail));
+      expect(detail().querySelector(".lb-detail")).toBeNull();
+      expect(document.querySelector(".tasks-split")?.getAttribute("data-pane")).toBe("none");
+      expect(document.querySelector(".tasks-col-list .tk-row.active")).toBeNull();
+    });
+
+    it("抽屜開著時切到別的專案 → 右欄關掉，不殘留上一個專案的票", async () => {
+      fetchTasksOverview.mockResolvedValue({ projects: [proj(), proj({ path: "/p/b", name: "b" })], permission_error: false, recent_days: 7 });
+      fetchTasks.mockImplementation((_p, project) => Promise.resolve({ project, tasks_status: "ok", tasks: [ticket()], next_step: "", handoff_command: "" }));
+      render(<Tasks port={1234} isActive />);
+      await openProject();
+      fireEvent.click(screen.getByText("第一件"));
+      const detail = () => document.querySelector(".tasks-col-detail") as HTMLElement;
+      await waitFor(() => expect(detail().querySelector(".lb-detail")).not.toBeNull());
+      fireEvent.click(tree().getByText("b"));
+      await waitFor(() => expect(fetchTasks).toHaveBeenLastCalledWith(1234, "/p/b"));
+      expect(detail().querySelector(".lb-detail")).toBeNull();
+      expect(document.querySelector(".tasks-split")?.getAttribute("data-pane")).toBe("none");
     });
   });
 

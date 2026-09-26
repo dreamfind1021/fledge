@@ -47,22 +47,19 @@ describe("待辦面板三欄版面", () => {
     expect(decl(b, ".lb-detail .tasks-back", "display")).toBe("inline-flex");
   });
 
-  it("寬（≥1040）：清單與右欄同時顯示、右欄的返回藏掉", () => {
+  it("寬（≥1040）：選了票時清單與右欄同時顯示、右欄的返回藏掉、× 出現；沒選票時右欄不存在、清單撐滿（spec §11.3）", () => {
     const b = block(1040);
     expect(decl(b, '.tasks-split[data-pane="open"] .tasks-col-list', "display")).toBe("block");
-    expect(decl(b, '.tasks-split[data-pane="none"] .tasks-col-detail', "display")).toBe("flex");   // 顯示，且不得蓋掉置中用的 flex column
+    expect(decl(b, '.tasks-split[data-pane="none"] .tasks-col-detail', "display")).toBe("none");
+    expect(decl(b, '.tasks-split[data-pane="none"] .tasks-col-list', "flex")).toBe("1 1 auto");
+    expect(decl(b, '.tasks-split[data-pane="open"] .tasks-col-list .tk-acts', "display")).toBe("none");   // D18
     expect(decl(b, ".lb-detail .tasks-back", "display")).toBe("none");
+    expect(decl(b, ".d-close", "display")).toBe("inline-flex");
   });
 
-  // 空狀態置中（票 19 增補 §10.3）：.lb-detail.is-empty 自己是 flex 置中，但它得先撐滿右欄才有東西可以置中——
-  // demo 置中是因為 demo 的 .lb-detail 本身撐滿欄；正式版少了這兩條，提示黏在右欄頂端
-  // 空狀態只出現在 data-pane="none"，而寬等級那條 display 規則蓋得掉基礎規則——只驗基礎規則會假綠
-  // （headless Chrome 實測：那條留 block 時提示仍黏在頂端 22px，改 flex 才落到 600px 高的中間）
-  it("右欄是 flex column、.lb-detail 撐滿（空狀態置中的前提）", () => {
-    expect(decl(css, ".tasks-col-detail", "display")).toBe("flex");
-    expect(decl(css, ".tasks-col-detail", "flex-direction")).toBe("column");
-    expect(decl(css, ".lb-detail", "flex")).toBe("1");
-    expect(decl(block(1040), '.tasks-split[data-pane="none"] .tasks-col-detail', "display")).toBe("flex");
+  // × 只在寬等級（D19）：中、窄等級由返回鍵關右欄
+  it("× 預設不顯示", () => {
+    expect(decl(css, ".d-close", "display")).toBe("none");
   });
 
   // 樹 232 ＋ 清單取 max(min-width, 剩餘×比例) ＋ 右欄至少 380 ≤ 1040；

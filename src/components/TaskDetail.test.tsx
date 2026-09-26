@@ -16,7 +16,7 @@ const ticket = (over: Partial<TaskRow> = {}): TaskRow => ({
 });
 const noop = () => {};
 const base = (over: Partial<Parameters<typeof TaskDetail>[0]> = {}) => ({
-  port: 1, project: "/p/a", projectName: "a", view: { kind: "empty" as const }, editing: false, leaveRequest: 0,
+  port: 1, project: "/p/a", projectName: "a", view: { kind: "loading" as const }, editing: false, leaveRequest: 0,
   backLabel: "a", onBack: noop, onCycle: noop, onPark: noop, onDelete: noop, onOpen: noop, onEdit: noop,
   onOpenNote: noop, onEditNote: noop, onSaved: noop, onSavedNote: noop, onLeave: noop, t, ...over,
 });
@@ -28,12 +28,26 @@ describe("TaskDetail", () => {
   beforeEach(async () => { await i18n.changeLanguage("en"); writeClipboard.mockReset().mockResolvedValue(true); });
   afterEach(cleanup);
 
-  it("empty 畫提示；loading 畫載入中", () => {
-    const a = render(<TaskDetail {...base()} />);
-    expect(a.getByText(en.detail.hint)).toBeTruthy();
-    cleanup();
-    const b = render(<TaskDetail {...base({ view: { kind: "loading" } })} />);
-    expect(b.getByText(en.detail.loading)).toBeTruthy();
+  it("loading 畫載入中；× 在並回呼 onBack", () => {
+    const onBack = vi.fn();
+    render(<TaskDetail {...base({ view: { kind: "loading" }, onBack })} />);
+    expect(screen.getByText(en.detail.loading)).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(en.a11y.closeDetail));
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  // spec §11.3：× 只在有返回鍵的畫面；編輯器左上的「‹」是離開編輯，不是關右欄，所以編輯器畫面沒有 ×
+  it("× 在票與筆記檢視都有、點了呼叫 onBack；編輯器畫面沒有 ×", () => {
+    const onBack = vi.fn();
+    const { rerender } = render(<TaskDetail {...base({ view: { kind: "ticket", task: ticket(), rescueDraft: null }, onBack })} />);
+    fireEvent.click(screen.getByLabelText(en.a11y.closeDetail));
+    rerender(<TaskDetail {...base({ view: { kind: "note", note: okNote() }, onBack })} />);
+    fireEvent.click(screen.getByLabelText(en.a11y.closeDetail));
+    expect(onBack).toHaveBeenCalledTimes(2);
+    rerender(<TaskDetail {...base({ view: { kind: "ticket", task: ticket(), rescueDraft: null }, editing: true, onBack })} />);
+    expect(screen.queryByLabelText(en.a11y.closeDetail)).toBeNull();
+    rerender(<TaskDetail {...base({ view: { kind: "note", note: okNote() }, editing: true, onBack })} />);
+    expect(screen.queryByLabelText(en.a11y.closeDetail)).toBeNull();
   });
 
   it("票：麵包屑補零票號、標題、資訊列（狀態記號是循環按鈕）、動作在資訊列右側、內文 render", () => {

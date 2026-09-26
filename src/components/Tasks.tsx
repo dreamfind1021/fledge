@@ -239,8 +239,9 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
   const orphanDrafts = allDrafts.filter((d) => list?.tasks_status !== "absent" && !list?.tasks?.some((x) => x.name === d.name));
   const rescueDraft = task ? (allDrafts.find((d) => d.name === task.name)?.draft ?? null) : null;
 
-  const view: DetailView =
-    pane == null ? { kind: "empty" }
+  // 抽屜（票 26＋27，spec §11.7）：pane 為 null 時右欄沒有內容，不掛 TaskDetail
+  const view: DetailView | null =
+    pane == null ? null
     : pane.kind === "note" ? { kind: "note", note }
     : task ? { kind: "ticket", task, rescueDraft }
     : { kind: "loading" };
@@ -269,9 +270,9 @@ export function Tasks({ port, isActive }: { port: number | null; isActive: boole
                 t={t} />
             </div>
             <div className="tasks-col tasks-col-detail">
-              {port != null && (
+              {port != null && pane != null && view != null && (
                 // key 綁專案＋檢視＋票：換票／換成筆記／切專案整個重掛，本地的確認／異常／已複製狀態不會沿用（Codex plan R2 high）
-                <TaskDetail key={`${selected}\n${pane?.kind ?? "empty"}\n${pane?.kind === "ticket" ? pane.name : ""}`}
+                <TaskDetail key={`${selected}\n${pane.kind}\n${pane.kind === "ticket" ? pane.name : ""}`}
                   port={port} project={selected} projectName={projectName}
                   view={view} editing={editing && (view.kind === "ticket" || view.kind === "note")} leaveRequest={leaveRequest}
                   backLabel={projectName} onBack={closePane}

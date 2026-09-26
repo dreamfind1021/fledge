@@ -110,13 +110,13 @@
     "collapseParked": "Collapse parked",
     "selectTicket": "Show this task on the right",
     "deselectTicket": "Deselect",
-    "editNote": "Edit resume note"
+    "editNote": "Edit resume note",
+    "closeDetail": "Close"
   },
   "tree": {
     "allProjects": "All projects"
   },
   "detail": {
-    "hint": "Pick a task on the left to read it here. Editing happens here too—the list stays put.",
     "noteTitle": "Resume note",
     "noteUpdated": "Updated {{date}}",
     "noteUnavailable": "Can't read the resume note",
