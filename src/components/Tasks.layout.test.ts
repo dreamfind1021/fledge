@@ -4,27 +4,37 @@ import { describe, expect, it } from "vitest";
 // scrollWidth/clientWidth 恆為 0，只能驗 CSS 的**規則存在性**與**數值預算**；
 // 真正的版面由 headless Chrome／dev app 三個寬度各看一次，數字記在 Tasks.css 註解。
 const RAW = import.meta.glob("/src/**/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
-const css = (() => {
+const full = (() => {
   const text = RAW["/src/components/Tasks.css"];
   if (typeof text !== "string") throw new Error("glob 沒讀到 Tasks.css");
   return text.replace(/\/\*[\s\S]*?\*\//g, "");
 })();
+// 基礎（窄）等級＝拿掉所有 @media／@container 區塊：decl 取最後一條宣告，區塊內的覆寫只在那個寬度生效，
+// 混進來會把基礎值蓋掉（Codex final R1）
+const css = full.replace(/@[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
 
 // 取某個 @container 區塊（依 min-width 值）。找不到就炸——靜默跳過等於防線沒上場
 const block = (minWidth: number) => {
   const re = new RegExp(`@container\\s+tasks\\s*\\(\\s*min-width\\s*:\\s*${minWidth}px\\s*\\)\\s*\\{([\\s\\S]*?)\\n\\}`);
-  const m = css.match(re);
+  const m = full.match(re);
   if (!m) throw new Error(`Tasks.css 找不到 @container tasks (min-width: ${minWidth}px)`);
   return m[1];
 };
-const decl = (text: string, selector: string, prop: string) => {
-  const rule = [...text.matchAll(/([^{}]+)\{([^}]*)\}/g)]
-    .find((m) => m[1].split(",").map((x) => x.trim()).includes(selector));
-  if (!rule) throw new Error(`找不到規則 ${selector}`);
-  const m = rule[2].match(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`));
-  if (!m) throw new Error(`${selector} 沒有宣告 ${prop}`);
-  return m[1].trim();
+// 某個選擇器在 text 裡所有規則的 prop 宣告（依出現順序）。規則一條都沒有就炸
+const decls = (text: string, selector: string, prop: string) => {
+  const rules = [...text.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .filter((m) => m[1].split(",").map((x) => x.trim()).includes(selector));
+  if (rules.length === 0) throw new Error(`找不到規則 ${selector}`);
+  return rules.flatMap((r) => [...r[2].matchAll(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, "g"))].map((m) => m[1].trim()));
 };
+// 同一個選擇器（權重相同）後面的蓋前面：取最後一條。只取第一條會漏掉檔尾的覆寫（Codex final R1）
+const decl = (text: string, selector: string, prop: string) => {
+  const all = decls(text, selector, prop);
+  if (all.length === 0) throw new Error(`${selector} 沒有宣告 ${prop}`);
+  return all[all.length - 1];
+};
+// 「不准宣告」用這個：規則本身必須存在。用 toThrow 的話規則整條不見也會通過，等於沒驗（Codex final R1）
+const hasDecl = (text: string, selector: string, prop: string) => decls(text, selector, prop).length > 0;
 const px = (v: string) => { const m = v.match(/(\d+(?:\.\d+)?)px/); if (!m) throw new Error(`取不出 px：${v}`); return parseFloat(m[1]); };
 
 describe("待辦面板三欄版面", () => {
@@ -91,22 +101,22 @@ describe("待辦面板三欄版面", () => {
     expect(decl(css, ".tasks-sum", "white-space")).toBe("nowrap");
     // 靠右由 h1 撐滿達成：摘要若用 margin-left: auto，換行後會單獨掛在第二行右邊
     expect(decl(css, ".tasks-head h1", "flex")).toBe("1 1 auto");
-    expect(() => decl(css, ".tasks-sum", "margin-left")).toThrow();
+    expect(hasDecl(css, ".tasks-sum", "margin-left")).toBe(false);
   });
 
   // 票 26＋27 D17：票名放不下就折行，不截斷；沒有空白的長字串（英文長 token、URL）也要在列內折斷
   it("票名不截斷：可折行、長字串可斷、列內元素對齊第一行", () => {
     expect(decl(css, ".tk-title", "white-space")).toBe("normal");
     expect(decl(css, ".tk-title", "overflow-wrap")).toBe("anywhere");
-    expect(() => decl(css, ".tk-title", "text-overflow")).toThrow();
+    expect(hasDecl(css, ".tk-title", "text-overflow")).toBe(false);
     expect(decl(css, ".tk-row", "align-items")).toBe("flex-start");
   });
 
   // spec §11.5：分隔靠底色與間距，不靠線
   it("欄與欄之間沒有分隔線", () => {
-    expect(() => decl(css, ".tree", "border-right")).toThrow();
-    expect(() => decl(block(1040), ".tasks-col-list", "border-right")).toThrow();
-    expect(() => decl(css, ".d-body", "border")).toThrow();
+    expect(hasDecl(css, ".tree", "border-right")).toBe(false);
+    expect(hasDecl(block(1040), ".tasks-col-list", "border-right")).toBe(false);
+    expect(hasDecl(css, ".d-body", "border")).toBe(false);
   });
 
   // spec §11.6：軌道寬、最小填充寬（放得下兩位數）、擱置槽固定寬（軌道上下對齊）只寫在 CSS，TS 只給百分比

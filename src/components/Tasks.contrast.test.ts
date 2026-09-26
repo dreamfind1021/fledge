@@ -52,7 +52,8 @@ const contrast = (a: string, b: string) => {
 const tasksCss = read("/src/components/Tasks.css");
 // 同一個選擇器可能出現在多條規則裡（例如 .tk-mark.is-doing::before 既在合併的
 // content 規則裡、也有自己那條），所以要掃過全部、挑真的宣告了那個屬性的那條。
-const stripped = tasksCss.replace(/\/\*[\s\S]*?\*\//g, "");
+// 只看基礎等級：@media／@container 區塊內的覆寫只在那個寬度生效，混進「取最後一條」會把基礎值蓋掉
+const stripped = tasksCss.replace(/\/\*[\s\S]*?\*\//g, "").replace(/@[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
 const bodiesFor = (selector: string) => {
   const out = [...stripped.matchAll(/([^{}]+)\{([^}]*)\}/g)]
     .filter((m) => m[1].split(",").map((x: string) => x.trim()).includes(selector))
@@ -61,22 +62,18 @@ const bodiesFor = (selector: string) => {
   return out;
 };
 const paintToken = (selector: string, prop: string) => {
-  const re = new RegExp(`(?:^|;)\\s*${prop}\\s*:[^;]*?var\\(--([a-z0-9-]+)\\)`);
-  for (const body of bodiesFor(selector)) {
-    const m = body.match(re);
-    if (m) return m[1];
-  }
-  throw new Error(`${selector} 的 ${prop} 沒有用 var(--token)`);
+  const m = declValue(selector, prop).match(/var\(--([a-z0-9-]+)\)/);
+  if (!m) throw new Error(`${selector} 的 ${prop} 沒有用 var(--token)`);
+  return m[1];
 };
 // 完整宣告值（票 26＋27）。paintToken 只抓第一個 var(--x)：背景是 color-mix 或漸層時，
-// 「琥珀 38% 混 surface-2」會被讀成純琥珀、算出假的高對比。背景一律走 paintColor。
+// 「琥珀 38% 混 surface-2」會被讀成純琥珀、算出假的高對比。背景一律走 paintColor／paintColors。
+// 同一個選擇器（權重相同）後面的蓋前面：取最後一條宣告。只取第一條會漏掉後面的覆寫（Codex final R1）
 const declValue = (selector: string, prop: string) => {
-  const re = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`);
-  for (const body of bodiesFor(selector)) {
-    const m = body.match(re);
-    if (m) return m[1].trim();
-  }
-  throw new Error(`${selector} 沒有宣告 ${prop}`);
+  const re = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, "g");
+  const all = bodiesFor(selector).flatMap((body) => [...body.matchAll(re)].map((m) => m[1].trim()));
+  if (all.length === 0) throw new Error(`${selector} 沒有宣告 ${prop}`);
+  return all[all.length - 1];
 };
 // 依頂層逗號切（括號內的逗號不切）
 const splitTop = (s: string) => {
@@ -98,10 +95,8 @@ const resolveColor = (expr: string): string => {
   const e = expr.trim();
   const v = e.match(/^var\(--([a-z0-9-]+)\)$/);
   if (v) return token(v[1]);
-  if (e.startsWith("linear-gradient(")) {
-    const first = splitTop(inner(e, "linear-gradient"))[1];                  // [0] 是角度
-    return resolveColor(first.replace(/\s+\d+(?:\.\d+)?%$/, ""));
-  }
+  // 漸層不是一個顏色：只取一站會漏掉其他站變亮的退化（Codex final R1）——一律走 stops／paintColors
+  if (e.startsWith("linear-gradient(")) throw new Error(`漸層要用 stops() 逐站驗：${e}`);
   if (e.startsWith("color-mix(")) {
     const [space, a, b] = splitTop(inner(e, "color-mix"));
     if (space !== "in srgb") throw new Error(`只算 srgb：${e}`);
@@ -111,6 +106,7 @@ const resolveColor = (expr: string): string => {
       return { c: resolveColor(m[1]), p: m[2] == null ? null : parseFloat(m[2]) / 100 };
     };
     const A = part(a), B = part(b);
+    if (A.p != null && B.p != null) throw new Error(`兩邊都寫百分比不支援（要正規化或變半透明）：${e}`);
     const pa = A.p ?? (B.p == null ? 0.5 : 1 - B.p);
     const ca = rgb(A.c), cb = rgb(B.c);
     return hex(ca.map((x, i) => x * pa + cb[i] * (1 - pa)));
@@ -118,6 +114,19 @@ const resolveColor = (expr: string): string => {
   throw new Error(`認不得的顏色：${e}`);
 };
 const paintColor = (selector: string, prop: string) => resolveColor(declValue(selector, prop));
+// 背景的每一個色站（非漸層＝一站）。文字可能落在漸層任何位置，所以每站都要過門檻。
+// 只驗色站、不取樣中段：目前的漸層都是「暗底混一點琥珀 → 同一個暗底」，中段亮度夾在兩站之間；
+// 改成亮暗交錯的漸層時要補取樣
+const stops = (expr: string): string[] => {
+  const e = expr.trim();
+  if (!e.startsWith("linear-gradient(")) return [resolveColor(e)];
+  const parts = splitTop(inner(e, "linear-gradient"));
+  const colors = /^(-?\d+(?:\.\d+)?(?:deg|turn|rad|grad)|to\s)/.test(parts[0]) ? parts.slice(1) : parts;   // 開頭可能是角度／方向
+  return colors.map((c) => resolveColor(c.replace(/(?:\s+\d+(?:\.\d+)?%)+$/, "")));                    // 去掉站位
+};
+const paintColors = (selector: string, prop: string) => stops(declValue(selector, prop));
+// 前景對一組色站的最差對比
+const worst = (fg: string, backdrop: string | string[]) => Math.min(...[backdrop].flat().map((b) => contrast(fg, b)));
 
 describe("待辦面板的顏色對比", () => {
   const bg = token("bg");
@@ -139,9 +148,10 @@ describe("待辦面板的顏色對比", () => {
   const cmdRow = paintColor(".tasks-cmd-row", "background");
   const pill = paintColor(".tasks-sec-n", "background");
   const newBtn = paintColor(".tasks-new-btn", "background");
-  const nextBase = paintColor(".tasks-next", "background");
-  const nextHover = paintColor(".tasks-next:hover", "background");
-  const nextOn = paintColor(".tasks-next.is-on", "background");
+  // 下一步是漸層：標籤、內文、› 可能落在任何一站，三態各取全部色站
+  const nextBase = paintColors(".tasks-next", "background");
+  const nextHover = paintColors(".tasks-next:hover", "background");
+  const nextOn = paintColors(".tasks-next.is-on", "background");
   // 專案樹軌道（spec §11.6）：數字坐落在軌道、填充、進行中段三種底色上，選中列的軌道另一個色
   const track = paintColor(".tree-trk", "background");
   const trackActive = paintColor(".tree-item.active .tree-trk", "background");
@@ -149,11 +159,15 @@ describe("待辦面板的顏色對比", () => {
   const doingSeg = paintColor(".tree-doing", "background");
 
   // helper 自己的防線：數字取自 spec §11.9（另以 Python 獨立算過）
-  it("resolveColor：var、color-mix、漸層第一站；認不得就炸", () => {
+  it("resolveColor：var、color-mix；stops：漸層每一站；認不得就炸", () => {
     expect(resolveColor("var(--surface)")).toBe(token("surface"));
     expect(resolveColor("color-mix(in srgb, var(--primary) 38%, var(--surface-2))")).toBe("#705541");
-    expect(resolveColor("linear-gradient(135deg, color-mix(in srgb, var(--primary) 16%, var(--sidebar)), var(--sidebar) 70%)")).toBe("#342C28");
+    expect(stops("linear-gradient(135deg, color-mix(in srgb, var(--primary) 16%, var(--sidebar)), var(--sidebar) 70%)")).toEqual(["#342C28", token("sidebar")]);
+    expect(stops("var(--surface)")).toEqual([token("surface")]);
+    expect(() => resolveColor("linear-gradient(135deg, var(--surface), var(--bg))")).toThrow();
     expect(() => resolveColor("rgba(0,0,0,.5)")).toThrow();
+    // 兩邊都寫百分比：CSS 要正規化、總和不足 100% 還會變半透明——這裡不支援，要炸而不是靜默忽略第二個（Codex final R1）
+    expect(() => resolveColor("color-mix(in srgb, var(--primary) 30%, var(--surface) 30%)")).toThrow();
   });
 
   // 記號是可操作的 UI 元件，非文字門檻 3:1（WCAG 1.4.11）
@@ -184,7 +198,7 @@ describe("待辦面板的顏色對比", () => {
     ["右欄動作鍵", ".d-acts .tk-act", "color", drawer],
     ["右欄的 ×", ".d-close", "color", drawer],
   ])("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
-    expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(3);
+    expect(worst(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(3);
   });
 
   // 票上的文字門檻 4.5:1。已完成的標題淡化到某個 token 就停，再淡就不合格
@@ -268,7 +282,7 @@ describe("待辦面板的顏色對比", () => {
     ["樹的軌道數字（填充）", ".tree-num", "color", fill],
     ["樹的軌道數字（進行中段）", ".tree-num", "color", doingSeg],
   ])("%s 對背景至少 4.5:1", (_label, selector, prop, backdrop) => {
-    expect(contrast(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(4.5);
+    expect(worst(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(4.5);
   });
 
   // 完成區的展開箭頭是 lucide 的 svg，用 currentColor 吃 .tasks-sec 的 color；
