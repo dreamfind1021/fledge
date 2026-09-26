@@ -86,7 +86,7 @@
 
 /* ── 一張票 ── */
 .tk { border-radius: var(--row-radius); }
-.tk-row { position: relative; display: flex; align-items: center; gap: 10px; padding: 6px 10px 6px 8px; border-radius: var(--row-radius); font-size: 13px; }
+.tk-row { position: relative; display: flex; align-items: flex-start; gap: 10px; padding: 6px 10px 6px 8px; border-radius: var(--row-radius); font-size: 13px; }
 .tk-row:hover { background: var(--surface); }
 /* 進行中：極淡的橘底＋左緣光條。放在 hover 規則之後，hover 再由下一條蓋回去 */
 .tk.is-doing .tk-row { background: color-mix(in srgb, var(--primary) 6%, transparent); }
@@ -97,6 +97,8 @@
 
 /* 狀態記號＝狀態按鈕。按鈕本體 20px 是為了點得到，看得見的方塊由 ::before 畫成 11px */
 .tk-mark { position: relative; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin: -4px 0; padding: 0; background: transparent; border: none; border-radius: 5px; cursor: pointer; color: var(--faint); }
+/* 票名可能折行（D17）：列對齊第一行，記號往下補 2px 對到第一行的中線 */
+.tk-row > .tk-mark { margin-top: 2px; }
 .tk-mark:hover { background: var(--hover); }
 /* 三種輪廓：空心方／實心方／打勾。**只差顏色不夠**——doing 與 done 若同為實心方塊，
    色覺障礙或單色顯示下分不開（WCAG 1.4.1）。done 用勾，連方框都不畫，輪廓差最遠。 */
@@ -109,9 +111,9 @@
 .tk-mark.is-parked::before { content: ""; position: absolute; inset: 4.5px; border-radius: 3px; border: 1.5px dashed var(--faint); }
 
 /* 票號：你跟 AI 講話是講「第 7 條」，所以它在這裡是主要識別，不是註腳 */
-.tk-num { width: 28px; flex-shrink: 0; text-align: right; font-family: var(--font-mono); font-size: 14px; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; }
+.tk-num { width: 28px; flex-shrink: 0; text-align: right; font-family: var(--font-mono); font-size: 14px; font-weight: 500; color: var(--faint); font-variant-numeric: tabular-nums; line-height: 1.45; }
 .tk.is-doing .tk-num { color: var(--primary); font-weight: 700; }
-.tk-title { flex: 1; min-width: 0; font-size: 13.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tk-title { flex: 1; min-width: 0; font-size: 13.5px; line-height: 1.5; color: var(--text); white-space: normal; overflow-wrap: anywhere; }
 .tk.is-done .tk-title { color: var(--dim); }
 .tk.is-parked .tk-title { color: var(--dim); }
 /* 已完成的淡化只做到 --dim（7.13:1），**不用 opacity**。
@@ -120,10 +122,10 @@
    要淡就換一個對比度算得出來的顏色 token。（Codex 第二輪 medium ＋ 同根因另三處）*/
 
 /* 來源只留文字色：畫面上已經有橘色的進行中在搶第一眼，再加兩個填色 chip 會吵 */
-.tk-src { flex-shrink: 0; min-width: 18px; text-align: right; font-size: 10px; font-weight: 700; letter-spacing: .03em; }
+.tk-src { flex-shrink: 0; min-width: 18px; text-align: right; font-size: 10px; font-weight: 700; letter-spacing: .03em; line-height: 20px; }
 .tk-src.is-ai { color: var(--ai); }
 .tk-src.is-me { color: var(--session); }
-.tk-date { flex-shrink: 0; font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.tk-date { flex-shrink: 0; font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; line-height: 20px; }
 /* 面板變窄時日期先讓位——標題比「這條積多久了」重要 */
 @media (max-width: 900px) { .tk-date { display: none; } }
 /* 跨專案的票列（所有專案頁）：整列是按鈕、記號純顯示、帶專案標籤 */

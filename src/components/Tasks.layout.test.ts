@@ -92,4 +92,12 @@ describe("待辦面板三欄版面", () => {
     expect(decl(css, ".tasks-head h1", "flex")).toBe("1 1 auto");
     expect(() => decl(css, ".tasks-sum", "margin-left")).toThrow();
   });
+
+  // 票 26＋27 D17：票名放不下就折行，不截斷；沒有空白的長字串（英文長 token、URL）也要在列內折斷
+  it("票名不截斷：可折行、長字串可斷、列內元素對齊第一行", () => {
+    expect(decl(css, ".tk-title", "white-space")).toBe("normal");
+    expect(decl(css, ".tk-title", "overflow-wrap")).toBe("anywhere");
+    expect(() => decl(css, ".tk-title", "text-overflow")).toThrow();
+    expect(decl(css, ".tk-row", "align-items")).toBe("flex-start");
+  });
 });
