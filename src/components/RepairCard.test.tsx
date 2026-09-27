@@ -7,6 +7,7 @@ import { SetupError, type CommonConfigOpResult, type CommonConfigPlan } from "..
 import { RepairCard } from "./RepairCard";
 
 const commonConfigPlan = vi.fn<(port: number, req: unknown) => Promise<CommonConfigPlan>>();
+const commonConfigSource = vi.fn<(port: number) => Promise<string | null>>();
 const commonConfigRepair =
   vi.fn<(port: number, req: unknown) => Promise<CommonConfigOpResult[]>>();
 
@@ -14,6 +15,7 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   commonConfigPlan: (port: number, req: unknown) => commonConfigPlan(port, req),
   commonConfigRepair: (port: number, req: unknown) => commonConfigRepair(port, req),
+  commonConfigSource: (port: number) => commonConfigSource(port),
 }));
 
 const ACCOUNTS = {
@@ -40,6 +42,7 @@ describe("RepairCard", () => {
     vi.clearAllMocks();
     commonConfigPlan.mockResolvedValue(planWith([]));
     commonConfigRepair.mockResolvedValue([]);
+    commonConfigSource.mockResolvedValue("work");
   });
   afterEach(cleanup);
 
@@ -62,11 +65,26 @@ describe("RepairCard", () => {
     await waitFor(() => expect(commonConfigPlan).toHaveBeenCalled());
     const req = commonConfigPlan.mock.calls[0][1] as { source: string; targets: string[];
                                                        entries: string[] };
-    // source＝第一個登記帳號（`repairScope` 的同一慣例）；`projects` 不在清單裡的話，
+    // source＝後端推斷的帳號（這裡 mock 成 work）；`projects` 不在清單裡的話，
     // 移機後那條斷鏈就永遠修不回來
     expect(req.source).toBe("work");
     expect(req.targets).toEqual(["personal"]);
     expect(req.entries).toContain("projects");
+  });
+
+  it("source 依後端推斷，掃描與修復用同一組角色", async () => {
+    commonConfigSource.mockResolvedValue("personal");   // ACCOUNTS 裡 work 排第一
+    commonConfigPlan.mockResolvedValue(planWith(["broken_link"]));
+    render(<RepairCard port={1234} accounts={ACCOUNTS} />);
+    fireEvent.click(await screen.findByRole("button", { name: zh.links.repair }));
+    await waitFor(() => expect(commonConfigRepair).toHaveBeenCalled());
+
+    const scanned = commonConfigPlan.mock.calls[0][1] as { source: string; targets: string[] };
+    const repaired = commonConfigRepair.mock.calls[0][1] as { source: string; targets: string[] };
+    expect(scanned.source).toBe("personal");
+    expect(scanned.targets).toEqual(["work"]);
+    expect(repaired.source).toBe("personal");
+    expect(repaired.targets).toEqual(["work"]);
   });
 
   it("修復後重測一次——畫面顯示的是修完的現況，不是按下去之前的", async () => {

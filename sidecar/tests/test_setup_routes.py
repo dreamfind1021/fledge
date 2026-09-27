@@ -462,3 +462,20 @@ def test_common_config_repair_rejects_unknown_inputs(tmp_path: Path, monkeypatch
         r = client.post("/api/setup/common-config/repair", json=payload)
         assert r.status_code == 400, payload
         assert r.json()["error"] == code, payload
+
+
+def test_common_config_source_follows_existing_links(tmp_path: Path, monkeypatch):
+    src, tgt = _config_with_accounts(tmp_path, monkeypatch)
+    (tgt / "skills").mkdir()
+    (src / "skills").symlink_to(tgt / "skills")     # 實體內容在 personal
+    body = TestClient(create_app()).get("/api/setup/common-config/source").json()
+    assert body == {"source": "personal"}
+
+
+def test_common_config_source_returns_code_when_config_file_is_corrupt(tmp_path: Path, monkeypatch):
+    cfg = tmp_path / "config.json"
+    cfg.write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
+    resp = TestClient(create_app()).get("/api/setup/common-config/source")
+    assert resp.status_code == 500
+    assert resp.json() == {"error": "config_unreadable"}

@@ -247,7 +247,8 @@
       "content_differs": "你有自己的版本，內容不同",
       "unexpected_type": "型別與預期不同",
       "source_missing": "{{source}} 沒有這一項",
-      "source_unsupported": "{{source}} 的這一項無法共用"
+      "source_unsupported": "{{source}} 的這一項無法共用",
+      "source_in_target": "{{source}} 的這一項是連到這裡的"
     },
     "ready": "已就緒",
     "willLink": "將建立連結",

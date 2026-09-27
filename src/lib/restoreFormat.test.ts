@@ -84,8 +84,9 @@ describe("destMessageKey", () => {
 });
 
 describe("repairScope", () => {
-  it("source＝第一個登記帳號，其餘是 target（與共通設置卡同一慣例）", () => {
-    expect(repairScope(["work", "personal", "extra"])).toEqual({
+  it("source＝後端推斷的那個帳號，其餘是 target——不看登記順序", () => {
+    // 新機還原後登記順序不一定是連結方向；只取第一個曾把方向選反（2026-09-27）
+    expect(repairScope(["personal", "work", "extra"], "work")).toEqual({
       source: "work",
       targets: ["personal", "extra"],
     });
@@ -93,7 +94,7 @@ describe("repairScope", () => {
 
   it("少於兩個帳號時沒有共通設置可修", () => {
     // 單一帳號沒有 target；照送會讓後端回 empty_targets，等於拿一個必然的錯誤去問後端
-    expect(repairScope(["work"])).toBeNull();
-    expect(repairScope([])).toBeNull();
+    expect(repairScope(["work"], "work")).toBeNull();
+    expect(repairScope([], "work")).toBeNull();
   });
 });

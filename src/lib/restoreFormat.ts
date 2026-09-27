@@ -45,12 +45,16 @@ export function destMessageKey(status: RestoreDestStatus): string | null {
   return status === "ok" ? null : DEST_KEY[status];
 }
 
-/** 修復斷鏈時要用的帳號角色。`source`＝實體檔持有者，取第一個登記帳號——與共通設置卡
- *  同一慣例（spec §6.3），兩處對「誰是 source」的認定不同會讓修復把連結指到另一個地方。
+/** 修復斷鏈時要用的帳號角色。`source`＝實體檔持有者，由呼叫端傳入後端推斷的結果
+ *  （`commonConfigSource`）——與共通設置卡同一份判準，兩處對「誰是 source」的認定不同會讓
+ *  修復把連結指到另一個地方。其餘登記帳號都是 target。
  *
  *  少於兩個帳號時回 `null`：單一帳號沒有 target，照送只會拿一個必然的 `empty_targets`
  *  去問後端。 */
-export function repairScope(accountKeys: string[]): { source: string; targets: string[] } | null {
+export function repairScope(
+  accountKeys: string[],
+  source: string,
+): { source: string; targets: string[] } | null {
   if (accountKeys.length < 2) return null;
-  return { source: accountKeys[0], targets: accountKeys.slice(1) };
+  return { source, targets: accountKeys.filter((k) => k !== source) };
 }

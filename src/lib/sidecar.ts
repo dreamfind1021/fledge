@@ -294,7 +294,8 @@ export const RESTORE_REPAIR_ENTRIES = [...COMMON_CONFIG_ENTRIES, "projects"] as 
 // 在前端的映射表上編譯失敗，而不是靜默掉到某個 fallback 文案。
 export type CommonConfigState =
   | "ok" | "wrong_link" | "broken_link" | "real_file" | "real_dir" | "empty_dir"
-  | "content_differs" | "unexpected_type" | "missing" | "source_missing" | "source_unsupported";
+  | "content_differs" | "unexpected_type" | "missing" | "source_missing" | "source_unsupported"
+  | "source_in_target";
 export type CommonConfigAction =
   | "skip" | "create_link" | "relink" | "copy" | "backup_and_link" | "backup_and_copy";
 export type CommonConfigOutcome =
@@ -345,6 +346,15 @@ async function setupPost<T>(port: number, path: string, body: object): Promise<T
   });
   if (!resp.ok) throw new SetupError(await readErrorCode(resp), resp.status);
   return resp.json();
+}
+
+/** 誰是 source（實體內容持有者）。後端依現有連結推斷，推不出來才退回第一個登記帳號。
+ *  共通設置卡與還原卡的修復都用這一份——兩處各猜各的，修復就會把連結指到另一邊。
+ *  沒有任何登記帳號時是 `null`。 */
+export async function commonConfigSource(port: number): Promise<string | null> {
+  const resp = await fetch(`${base(port)}/api/setup/common-config/source`, { headers: authHeaders() });
+  if (!resp.ok) throw new SetupError(await readErrorCode(resp), resp.status);
+  return ((await resp.json()) as { source: string | null }).source;
 }
 
 /** 唯讀預覽：回每個 (target, entry) 的目前狀態與建議動作，不動檔案系統。 */

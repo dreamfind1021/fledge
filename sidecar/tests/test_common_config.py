@@ -337,7 +337,7 @@ def test_action_for_handles_every_entry_state():
     # 漏一個 state＝plan() 在該狀態下 KeyError。以 EntryState 自身列舉而非手抄清單，
     # 日後新增狀態卻忘了補 _ACTION_BY_STATE 時這裡才會紅（映射表無法自我把關）。
     states = get_args(cc.EntryState)
-    assert len(states) == 11
+    assert len(states) == 12
     for state in states:
         for share in ("symlink", "copy"):
             action, needs_overwrite = cc._action_for(state, share)
@@ -1189,3 +1189,127 @@ def test_repair_refuses_when_source_dir_cannot_be_read(tmp_path: Path, monkeypat
     finally:
         src.chmod(0o700)          # 還原，否則 tmp_path 清不掉
     assert os.readlink(tgt / "skills") == str(_old_machine(tmp_path, "skills"))
+
+
+# ── source 其實住在 target 裡（2026-09-27 新機還原實際踩到） ──────────────────────
+# 還原回來的連結方向是 personal→work，精靈卻拿 personal 當 source：source 的 settings.json
+# 是一條指進 target 的連結，「先備份 target 再連過去」會拆掉 source 的內容，兩邊互指成迴圈，
+# apply 卻回報 created。
+
+
+def _reversed_restore(tmp_path: Path) -> tuple[dict[str, dict[str, str]], Path, Path]:
+    """work 持有實體檔、personal 以連結指向 work——舊機器的配置被還原回來的樣子。"""
+    accounts = _accounts(tmp_path)
+    work, personal = tmp_path / "claude", tmp_path / "claude-tc"
+    (work / "settings.json").write_text('{"a": 1}')
+    (work / "plugins").mkdir()
+    (work / "plugins" / "p.json").write_text("{}")
+    (personal / "settings.json").symlink_to(work / "settings.json")
+    (personal / "plugins").symlink_to(work / "plugins")
+    return accounts, work, personal
+
+
+@pytest.mark.parametrize("entry", ["settings.json", "plugins"])
+def test_plan_skips_entry_whose_source_resolves_into_target(tmp_path: Path, entry: str):
+    accounts, _, _ = _reversed_restore(tmp_path)
+    p = cc.plan(cc.build_account_graph(accounts, "personal", ["work"]), [entry])
+    op = p.operations[0]
+    assert (op.state, op.action, op.needs_overwrite) == ("source_in_target", "skip", False)
+
+
+@pytest.mark.parametrize("entry", ["settings.json", "plugins"])
+def test_apply_with_source_in_target_leaves_both_sides_untouched(tmp_path: Path, entry: str):
+    # 就算呼叫端授權覆蓋，也不能拆掉 source 實際的內容
+    accounts, work, personal = _reversed_restore(tmp_path)
+    p = cc.plan(cc.build_account_graph(accounts, "personal", ["work"]), [entry])
+
+    r = cc.apply(p, [("work", entry)]).results[0]
+
+    assert r.outcome == "skipped"
+    assert not (work / entry).is_symlink()
+    assert os.path.exists(personal / entry)         # 沒有形成迴圈
+    assert not list(work.glob("*.fledge-backup-*"))
+
+
+def test_source_chain_through_target_link_is_detected(tmp_path: Path):
+    # Codex R1 F1：A/skills → B/skills → dotfiles/skills。終點在帳號外，只看 realpath 會放行，
+    # 接著 B/skills 被判 wrong_link、relink 成指向 A/skills＝兩邊互指，還回報 relinked。
+    accounts = _accounts(tmp_path)
+    work, personal = tmp_path / "claude", tmp_path / "claude-tc"
+    dotfiles = tmp_path / "dotfiles"
+    (dotfiles / "skills").mkdir(parents=True)
+    (personal / "skills").symlink_to(dotfiles / "skills")
+    (work / "skills").symlink_to(personal / "skills")
+
+    p = cc.plan(cc.build_account_graph(accounts, "work", ["personal"]), ["skills"])
+    assert p.operations[0].state == "source_in_target"
+    r = cc.apply(p, []).results[0]
+    assert r.outcome == "skipped"
+    assert os.readlink(personal / "skills") == str(dotfiles / "skills")
+
+
+def test_source_parent_symlink_through_target_is_detected(tmp_path: Path):
+    # 經過 target 的不是 entry 本身而是路徑中段的目錄：A/settings.json → X/settings.json，
+    # X 是指向 B 的目錄連結
+    accounts = _accounts(tmp_path)
+    work, personal = tmp_path / "claude", tmp_path / "claude-tc"
+    (personal / "settings.json").write_text("{}")
+    (tmp_path / "alias").symlink_to(personal)
+    (work / "settings.json").symlink_to(tmp_path / "alias" / "settings.json")
+
+    p = cc.plan(cc.build_account_graph(accounts, "work", ["personal"]), ["settings.json"])
+    assert p.operations[0].state == "source_in_target"
+
+
+def test_source_link_outside_every_account_is_still_shareable(tmp_path: Path):
+    # 只擋「落在 target 裡」：source entry 指到帳號目錄以外（例如 dotfiles repo）是既有支援的用法
+    accounts = _accounts(tmp_path)
+    dotfiles = tmp_path / "dotfiles"
+    dotfiles.mkdir()
+    (dotfiles / "skills").mkdir()
+    (tmp_path / "claude" / "skills").symlink_to(dotfiles / "skills")
+    p = cc.plan(cc.build_account_graph(accounts, "work", ["personal"]), ["skills"])
+    assert p.operations[0].state == "missing"
+
+
+def test_infer_source_follows_existing_links(tmp_path: Path):
+    accounts, _, _ = _reversed_restore(tmp_path)
+    ordered = {"personal": accounts["personal"], "work": accounts["work"]}  # personal 排第一
+    assert cc.infer_source(ordered) == "work"
+
+
+def test_infer_source_falls_back_to_first_account_without_evidence(tmp_path: Path):
+    accounts = _accounts(tmp_path)
+    assert cc.infer_source(accounts) == "work"
+    ordered = {"personal": accounts["personal"], "work": accounts["work"]}
+    assert cc.infer_source(ordered) == "personal"
+
+
+def test_infer_source_ignores_loops_and_conflicting_evidence(tmp_path: Path):
+    accounts = _accounts(tmp_path)
+    work, personal = tmp_path / "claude", tmp_path / "claude-tc"
+    # 迴圈：互指的連結不構成任何一邊持有實體內容的證據
+    (work / "settings.json").symlink_to(personal / "settings.json")
+    (personal / "settings.json").symlink_to(work / "settings.json")
+    ordered = {"personal": accounts["personal"], "work": accounts["work"]}
+    assert cc.infer_source(ordered) == "personal"
+    # 兩邊各有項目連向對方：證據互相矛盾，不猜
+    (work / "skills").mkdir()
+    (personal / "skills").symlink_to(work / "skills")
+    (personal / "plugins").mkdir()
+    (work / "plugins").symlink_to(personal / "plugins")
+    assert cc.infer_source(ordered) == "personal"
+
+
+def test_infer_source_single_or_no_account(tmp_path: Path):
+    accounts = _accounts(tmp_path)
+    assert cc.infer_source({"work": accounts["work"]}) == "work"
+    assert cc.infer_source({}) is None
+
+
+def test_infer_source_skips_unusable_config_dir(tmp_path: Path):
+    # 壞掉的登記不該讓推斷整個失敗；它照樣不能當 source 的證據
+    accounts, _, _ = _reversed_restore(tmp_path)
+    ordered = {"ghost": {"config_dir": "relative/x"}, "personal": accounts["personal"],
+               "work": accounts["work"]}
+    assert cc.infer_source(ordered) == "work"

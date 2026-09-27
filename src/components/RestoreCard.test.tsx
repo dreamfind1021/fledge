@@ -29,6 +29,8 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   fetchMigrationStatus: (port: number) => fetchMigrationStatus(port),
   restorePlan: (port: number, bundle: string, dest?: string) => restorePlan(port, bundle, dest),
   commonConfigPlan: (port: number, req: unknown) => commonConfigPlan(port, req),
+  // 後端推不出 source 時回 null，卡片退回第一個登記帳號——本檔各案例沿用這個舊慣例
+  commonConfigSource: async () => null,
   commonConfigRepair: (port: number, req: unknown) => commonConfigRepair(port, req),
   createSession: (port: number, opts: CreateSessionOptions) => createSession(port, opts),
   closeSession: (port: number, id: string) => closeSession(port, id),

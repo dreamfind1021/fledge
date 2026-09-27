@@ -18,6 +18,7 @@ import { CommonConfigCard } from "./CommonConfigCard";
 
 const checkDir = vi.fn<(port: number, path: string) => Promise<DirStatus>>();
 const commonConfigPlan = vi.fn<(port: number, req: CommonConfigRequest) => Promise<CommonConfigPlan>>();
+const commonConfigSource = vi.fn<(port: number) => Promise<string | null>>();
 const commonConfigApply =
   vi.fn<(port: number, req: CommonConfigRequest & { overwrite: unknown[] }) => Promise<CommonConfigOpResult[]>>();
 
@@ -27,6 +28,7 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   commonConfigPlan: (port: number, req: CommonConfigRequest) => commonConfigPlan(port, req),
   commonConfigApply: (port: number, req: CommonConfigRequest & { overwrite: unknown[] }) =>
     commonConfigApply(port, req),
+  commonConfigSource: (port: number) => commonConfigSource(port),
 }));
 
 const accounts = {
@@ -69,6 +71,7 @@ describe("CommonConfigCard 共通設置卡", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("zh-TW"); // 固定語言，斷言才對得上 catalog
     checkDir.mockReset().mockResolvedValue("dir");
+    commonConfigSource.mockReset().mockResolvedValue("work");
     commonConfigPlan.mockReset().mockResolvedValue({
       source_dir: "/Users/x/.claude",
       operations: [op()],
@@ -605,6 +608,38 @@ describe("CommonConfigCard 共通設置卡", () => {
     expect(ui.queryByText(zh.cc.apply)).toBeNull(); // 精靈對這一項無事可做
   });
 
+  it("source 的內容其實在 target：標無法處理，不說已就緒", async () => {
+    commonConfigPlan.mockResolvedValue({
+      source_dir: "/Users/x/.claude",
+      operations: [op({ entry: "settings.json", state: "source_in_target", action: "skip" })],
+    });
+    const ui = renderCard();
+    await settled(ui);
+
+    const row = ui.container.querySelector(".b4-item")!;
+    expect(row.textContent).toContain(withSource(zh.cc.state.source_in_target));
+    expect(row.textContent).toContain(zh.cc.unavailable);
+    expect(row.textContent).not.toContain(zh.cc.ready);
+  });
+
+  it("source 依後端推斷，不看登記順序（新機還原後方向曾被選反）", async () => {
+    commonConfigSource.mockResolvedValue("personal");   // accounts 裡 work 排第一
+    const ui = renderCard();
+    await settled(ui);
+
+    // 探的是 target（work）的目錄，不是 source 的
+    expect(checkDir.mock.calls.map((c) => c[1])).toEqual(["~/.claude"]);
+    const req = commonConfigPlan.mock.calls[0][1];
+    expect(req.source).toBe("personal");
+    expect(req.targets).toEqual(["work"]);
+
+    ui.getByText(zh.cc.apply).click();
+    await waitFor(() => expect(commonConfigApply).toHaveBeenCalled());
+    const sent = commonConfigApply.mock.calls[0][1];
+    expect(sent.source).toBe("personal");
+    expect(sent.targets).toEqual(["work"]);
+  });
+
   it("略過：不打 apply，直接往下一頁", async () => {
     const onNext = vi.fn();
     const ui = renderCard({ onNext });
@@ -685,6 +720,7 @@ describe("CommonConfigCard 設定頁版（allowOverwrite）", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("zh-TW");
     checkDir.mockReset().mockResolvedValue("dir");
+    commonConfigSource.mockReset().mockResolvedValue("work");
     commonConfigPlan.mockReset().mockResolvedValue({ source_dir: "/Users/x/.claude", operations: [conflictOp()] });
     commonConfigApply.mockReset().mockResolvedValue([result({ entry: "CLAUDE.md", outcome: "copied" })]);
   });
@@ -795,6 +831,35 @@ describe("CommonConfigCard 設定頁版（allowOverwrite）", () => {
     commonConfigPlan.mockResolvedValue({ source_dir: "/Users/x/.claude", operations: [conflictOp()] });
     fireEvent.click(ui.getByText(zh.env.recheck));
     await waitFor(() => expect(ui.container.querySelector(".st-check input")).toBeTruthy());
+
+    expect(ui.container.querySelector<HTMLInputElement>(".st-check input")!.checked).toBe(false);
+    fireEvent.click(ui.getByText(zh.st.apply));
+    await waitFor(() => expect(commonConfigApply).toHaveBeenCalledTimes(1));
+    expect(commonConfigApply.mock.calls[0][1].overwrite).toEqual([]);
+  });
+
+  // Codex R1 F2：授權是「用這個 source 覆蓋那一項」。重測後推斷出別的 source，同一個
+  // (account, entry) 仍需授權也不能沿用——那會變成用使用者沒看過的內容去覆蓋
+  it("重新偵測後 source 換了：授權與上一輪結果都作廢", async () => {
+    const three = { ...accounts, extra: { config_dir: "~/.claude-x", label: "額外" } };
+    commonConfigPlan.mockResolvedValue({
+      source_dir: "/Users/x/.claude",
+      operations: [conflictOp({ account: "extra" })],
+    });
+    const ui = renderSettings({ accounts: three });
+    await settled(ui);
+    fireEvent.click(ui.container.querySelector<HTMLInputElement>(".st-check input")!);
+    expect(ui.container.querySelector<HTMLInputElement>(".st-check input")!.checked).toBe(true);
+
+    commonConfigSource.mockResolvedValue("personal");
+    commonConfigPlan.mockResolvedValue({
+      source_dir: "/Users/x/.claude-tc",
+      operations: [conflictOp({ account: "extra" })],
+    });
+    fireEvent.click(ui.getByText(zh.env.recheck));
+    await waitFor(() => expect(commonConfigPlan).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(ui.container.textContent).toContain(zh.st.replaceWith.replace("{{source}}", "personal")));
 
     expect(ui.container.querySelector<HTMLInputElement>(".st-check input")!.checked).toBe(false);
     fireEvent.click(ui.getByText(zh.st.apply));

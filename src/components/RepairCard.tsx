@@ -6,6 +6,7 @@ import {
   RESTORE_REPAIR_ENTRIES,
   commonConfigPlan,
   commonConfigRepair,
+  commonConfigSource,
   type CommonConfigOpResult,
 } from "../lib/sidecar";
 import "./RepairCard.css";
@@ -17,7 +18,8 @@ interface AccountInfo {
 
 type LinkScan =
   | { phase: "scanning" }
-  | { phase: "done"; broken: number }
+  /** `scope` 是這一輪掃描用的帳號角色；修復沿用它，不另外再猜一次 source */
+  | { phase: "done"; broken: number; scope: { source: string; targets: string[] } }
   | { phase: "not_applicable" }
   /** 連不上背景服務——**與「檢查中」是兩件事**（Codex 票 08 R3）：那個是進行中的工作，
    *  這個是根本沒開始，而且 sidecar 不恢復就永遠不會開始。說成前者會讓使用者以為只要
@@ -97,19 +99,28 @@ export function RepairCard({ port, accounts, rescanToken }: RepairCardProps) {
       setScan({ phase: "unavailable" });
       return;
     }
-    const scope = repairScope(Object.keys(accounts));
-    if (scope === null) {
+    const keys = Object.keys(accounts);
+    if (keys.length < 2) {
       setScan({ phase: "not_applicable" });
       return;
     }
     setScan({ phase: "scanning" });
     try {
+      // source 由後端看現場連結推斷，與共通設置卡同一份判準
+      const source = (await commonConfigSource(port)) ?? keys[0];
+      if (!mounted.current || myId !== scanReq.current) return;
+      const scope = repairScope(keys, source);
+      if (scope === null) {
+        setScan({ phase: "not_applicable" });
+        return;
+      }
       // 偵測用既有的 common-config/plan：它已經回逐項 state，不需要另做一個端點
       const plan = await commonConfigPlan(port, { ...scope, entries: RESTORE_REPAIR_ENTRIES });
       if (!mounted.current || myId !== scanReq.current) return;
       setScan({
         phase: "done",
         broken: plan.operations.filter((o) => o.state === "broken_link").length,
+        scope,
       });
     } catch (e) {
       console.error("[RepairCard] 檢查共通設置連結失敗", e);
@@ -139,9 +150,8 @@ export function RepairCard({ port, accounts, rescanToken }: RepairCardProps) {
   }, [rescanToken, scanLinks]);
 
   const onRepair = useCallback(async () => {
-    if (port == null) return;
-    const scope = repairScope(Object.keys(accounts));
-    if (scope === null) return;
+    if (port == null || scan?.phase !== "done") return;
+    const scope = scan.scope;
     setRepairing(true);
     setError(null);
     const myCtx = ctx;
@@ -159,7 +169,7 @@ export function RepairCard({ port, accounts, rescanToken }: RepairCardProps) {
       // 綁 ctx 的話，換帳號後按鈕會永遠停在「重新指向中…」
       if (mounted.current) setRepairing(false);
     }
-  }, [port, accountsSig, ctx, scanLinks, t]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [port, scan, ctx, scanLinks, t]);
 
   return (
     <>

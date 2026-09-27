@@ -81,6 +81,32 @@ def _resolved_config_dir(accounts: dict[str, dict[str, str]], key: str) -> str:
     return resolved
 
 
+def infer_source(accounts: dict[str, dict[str, str]]) -> str | None:
+    """從現場推斷哪個帳號持有實體內容：其他帳號的共通項連結指進誰，誰就是 source。
+
+    新機還原後連結方向沿用舊機，登記順序卻不一定相同——只看順序會把方向選反。證據只算
+    「追得到底」的連結：迴圈與斷鏈說明不了誰持有內容；兩邊互有連向對方的證據時也不猜。
+    推不出來時退回第一個登記帳號（spec §6.3 的原慣例）。純探測，無副作用。"""
+    dirs: dict[str, str] = {}
+    for key in accounts:
+        try:
+            dirs[key] = _resolved_config_dir(accounts, key)
+        except ValueError:
+            continue    # 壞掉的登記不是證據，也不該讓推斷整個失敗
+    owners: set[str] = set()
+    for key, account_dir in dirs.items():
+        for spec in ENTRY_SPECS:
+            entry = os.path.join(account_dir, spec.name)
+            if spec.share != "symlink" or not os.path.islink(entry) or not os.path.exists(entry):
+                continue
+            real = os.path.realpath(entry)
+            owners.update(other for other, other_dir in dirs.items()
+                          if other != key and is_same_or_within(real, other_dir))
+    if len(owners) == 1:
+        return owners.pop()
+    return next(iter(accounts), None)
+
+
 def build_account_graph(
     accounts: dict[str, dict[str, str]],
     source_key: str,
@@ -125,6 +151,7 @@ def build_account_graph(
 EntryState = Literal[
     "ok", "wrong_link", "broken_link", "real_file", "real_dir", "empty_dir",
     "content_differs", "unexpected_type", "missing", "source_missing", "source_unsupported",
+    "source_in_target",
 ]
 EntryAction = Literal[
     "skip", "create_link", "relink", "copy", "backup_and_link", "backup_and_copy",
@@ -139,6 +166,7 @@ EntryAction = Literal[
 _ACTION_BY_STATE: dict[EntryState, tuple[EntryAction, bool]] = {
     "source_missing": ("skip", False),
     "source_unsupported": ("skip", False),
+    "source_in_target": ("skip", False),
     "ok": ("skip", False),
     "empty_dir": ("create_link", False),   # 空目錄 rmdir 後直接連，不必備份
     "wrong_link": ("relink", False),
@@ -204,12 +232,49 @@ def _source_state(source_entry: str, share: ShareKind) -> EntryState | None:
     return None
 
 
+_MAX_LINK_HOPS = 40     # 與 macOS 的 MAXSYMLINKS 同量級；超過就當作解析不出來
+
+
+def _resolution_passes_through(path: str, root: str) -> bool:
+    """逐段展開 path（entry 本身與中段目錄的 symlink 都展開），途中任何一站落在 root 內就回
+    True。迴圈或過深也回 True——解析不出來的鏈證明不了「不依賴 target」，防呆不得 fail-open。"""
+    pending = [c for c in path.split(os.sep) if c]
+    resolved = os.sep
+    hops = 0
+    while pending:
+        comp = pending.pop(0)
+        if comp == ".":
+            continue
+        if comp == "..":
+            resolved = os.path.dirname(resolved)
+            continue
+        candidate = os.path.join(resolved, comp)
+        if is_same_or_within(candidate, root):
+            return True
+        if not os.path.islink(candidate):
+            resolved = candidate
+            continue
+        hops += 1
+        if hops > _MAX_LINK_HOPS:
+            return True
+        link = os.readlink(candidate)
+        if os.path.isabs(link):
+            resolved = os.sep
+        pending = [c for c in link.split(os.sep) if c] + pending
+    return False
+
+
 def probe_entry(source_dir: str, target_dir: str, spec: EntrySpec) -> EntryState:
     """以 lstat/lexists（**不 follow**）判 target 的實際型別。純探測，無副作用。"""
     source_entry = os.path.join(source_dir, spec.name)
     blocked = _source_state(source_entry, spec.share)
     if blocked is not None:
         return blocked
+    # source entry 的解析途中經過 target 帳號＝source 的內容依賴 target 那一份。照常「先備份
+    # target 再連過去」會把 source 自己的內容搬走，兩邊互指成迴圈（新機還原時方向選反實際發生過）。
+    # 只看終點不夠：A/x → B/x → dotfiles/x 的終點在帳號外，relink B/x 照樣成環（Codex R1 F1）。
+    if _resolution_passes_through(source_entry, os.path.realpath(target_dir)):
+        return "source_in_target"
     target_entry = os.path.join(target_dir, spec.name)
     if not os.path.lexists(target_entry):
         return "missing"

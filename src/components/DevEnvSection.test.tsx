@@ -16,6 +16,8 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   checkDir: (port: number, path: string) => checkDir(port, path),
   commonConfigPlan: () => commonConfigPlan(),
+  // 後端推不出 source 時回 null，卡片退回第一個登記帳號——本檔各案例沿用這個舊慣例
+  commonConfigSource: async () => null,
   fetchTemplates: () => fetchTemplates(),
   templatesPlan: () => templatesPlan(),
 }));

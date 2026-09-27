@@ -247,7 +247,8 @@
       "content_differs": "you have your own version, contents differ",
       "unexpected_type": "not the type we expected",
       "source_missing": "{{source}} doesn't have this item",
-      "source_unsupported": "{{source}}'s copy of this item can't be shared"
+      "source_unsupported": "{{source}}'s copy of this item can't be shared",
+      "source_in_target": "{{source}}'s copy of this item links back here"
     },
     "ready": "Ready",
     "willLink": "Will link",

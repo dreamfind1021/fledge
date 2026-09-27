@@ -131,6 +131,8 @@ vi.mock("../lib/sidecar", async (importOriginal) => ({
   // 共通設置頁掛 CommonConfigCard 後會探帳號目錄並預覽；同樣不碰網路
   checkDir: vi.fn(async () => "dir" as const),
   commonConfigPlan: vi.fn(async () => ({ source_dir: "/Users/x/.claude", operations: [] })),
+  // 後端推不出 source 時回 null，卡片退回第一個登記帳號——本檔各案例沿用這個舊慣例
+  commonConfigSource: async () => null,
   // 系統設置頁掛 SystemSettingsCard → TemplateCard 後會抓範本清單；外殼測試同樣不碰網路
   fetchTemplates: vi.fn(async () => []),
   // 移機的安裝（票 06）：**唯一會寫使用者現役目錄的呼叫**，測試絕不讓它真的發出去

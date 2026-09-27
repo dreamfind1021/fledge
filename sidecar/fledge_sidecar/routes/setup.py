@@ -74,6 +74,17 @@ def _build_plan(body: CommonConfigBody) -> common_config.Plan:
         raise _PlanError(500, "probe_failed") from exc
 
 
+@router.get("/api/setup/common-config/source")
+def common_config_source():
+    """唯讀：依現有連結推斷哪個帳號持有實體內容。共通設置卡與還原卡的修復都先問這裡，
+    判準只有一份——兩處各猜各的，修復就會把連結指到另一邊。"""
+    try:
+        config = AppConfig.load()
+    except ValueError:
+        return JSONResponse(status_code=500, content={"error": "config_unreadable"})
+    return {"source": common_config.infer_source(config.accounts)}
+
+
 @router.post("/api/setup/common-config/plan")
 def common_config_plan(body: CommonConfigBody):
     """唯讀預覽：回每個 (target, entry) 的目前狀態與建議動作，不動檔案系統。"""

@@ -6,6 +6,7 @@ import {
   checkDir,
   commonConfigApply,
   commonConfigPlan,
+  commonConfigSource,
   type CommonConfigAction,
   type CommonConfigOpResult,
   type CommonConfigOperation,
@@ -64,8 +65,12 @@ interface Chip {
   tone: Tone;
 }
 
-/** 一輪偵測的結果快照。`targets` 為空即「不適用」；`plan` 只在有 target 時才有值。 */
+/** 一輪偵測的結果快照。`targets` 為空即「不適用」；`plan` 只在有 target 時才有值。
+ *  `source`／`candidates` 也是偵測結果：誰是 source 由後端看現場連結推斷，與 plan 同一輪取得，
+ *  畫面上的 source 名稱才不會跟 plan 描述的不是同一個帳號。 */
 interface Detected {
+  source: string;
+  candidates: string[];
   targets: string[];
   plan: CommonConfigPlan | null;
   // 有候選帳號目錄「存在但不能用」（denied／not_dir）或探測本身失敗——與「還沒建立」不同，
@@ -94,6 +99,7 @@ const STATE_TEXT: Record<CommonConfigState, string> = {
   unexpected_type: "cc.state.unexpected_type",
   source_missing: "cc.state.source_missing",
   source_unsupported: "cc.state.source_unsupported",
+  source_in_target: "cc.state.source_in_target",
 };
 
 // 動作 → chip。backup_and_* 的 needs_overwrite 必為真，故實際走 chipFor 的前置分支；
@@ -123,8 +129,8 @@ export const OUTCOME_TONE: Record<CommonConfigOutcome, Tone> = {
  *  精靈根本不會授權它（送空 overwrite 清單）。 */
 function chipFor(op: CommonConfigOperation): Chip {
   if (op.needs_overwrite) return { key: "cc.keep", tone: "warn" };
-  // skip 有三種來源：ok（真的已就緒）、source_missing／source_unsupported（source 側缺項或
-  // 不可共用）。後兩者顯示「已就緒」會讓使用者以為同步好了——那是騙人。
+  // skip 有四種來源：ok（真的已就緒）、source_missing／source_unsupported／source_in_target
+  // （source 側缺項、不可共用或內容其實在 target）。後三者顯示「已就緒」會讓使用者以為同步好了——那是騙人。
   if (op.action === "skip" && op.state !== "ok") return { key: "cc.unavailable", tone: "todo" };
   return ACTION_CHIP[op.action];
 }
@@ -167,10 +173,6 @@ export function CommonConfigCard({
   const mounted = useRef(true);
 
   const accountKeys = Object.keys(accounts);
-  // source＝實體檔持有者。取第一個登記帳號（預設 work=~/.claude，spec §6.3）——精靈不讓使用者
-  // 挑 source：首次引導沒有足夠資訊做這個決定，要換由設定頁處理。
-  const source = accountKeys[0] ?? null;
-  const candidates = accountKeys.slice(1);
   // effect dep 用簽章而非 accounts 物件：父層每次 render 都給新引用（config?.accounts ?? {}）。
   // 只看 key 與 config_dir——label 改名不影響共通設置。用 JSON 而非自訂分隔符拼接：
   // macOS 路徑允許 `|` 與 `=`，手寫分隔符會讓兩組不同帳號拼出同一個簽章。
@@ -179,7 +181,8 @@ export function CommonConfigCard({
   // 請求結果不再屬於當前畫面。與 `reqId`（load-vs-load 的先後）是兩件事，**刻意不共用**——
   // 讓 apply 去推進 reqId 會作廢正在跑的合法 load，那個 load 的 `loading` 就沒人解除，
   // apply 再失敗就永久停用按鈕（Codex R2 ①，與票 25 R4 同一族）
-  const ctx = JSON.stringify([port, source, accountsSig]);
+  // source 不在這裡：它是偵測結果（見 `Detected`），由 accounts 與現場連結決定。
+  const ctx = JSON.stringify([port, accountsSig]);
 
   const describeError = useCallback(
     (e: unknown): string => {
@@ -199,11 +202,16 @@ export function CommonConfigCard({
   /** 重新偵測。不碰 `results`——逐項結果的有效期綁在資料上下文（`ctx`）上，見上面的註解。
    *  偵測結果一律整包寫進 `detected`，中途不留半套狀態。 */
   const load = useCallback(async () => {
-    if (port == null || source == null) return;
+    if (port == null || accountKeys.length === 0) return;
     const myId = ++reqId.current;
     setLoading(true);
     setError(null);
     try {
+      // source＝實體檔持有者，後端看現有連結推斷（新機還原後登記順序不一定是舊機的連結方向，
+      // 只取第一個帳號曾把方向選反、四個項目互指成迴圈）。推不出來時後端退回第一個登記帳號。
+      const source = (await commonConfigSource(port)) ?? accountKeys[0];
+      if (reqId.current !== myId) return;
+      const candidates = accountKeys.filter((k) => k !== source);
       let live: string[];
       let blocked: boolean;
       try {
@@ -220,12 +228,12 @@ export function CommonConfigCard({
         // 原文只進 console（spec-b4 §5）
         console.error("[onboarding] 帳號設定目錄探測失敗", e);
         setError(t("errors.check_dir_failed"));
-        setDetected({ targets: [], plan: null, blocked: true });
+        setDetected({ source, candidates, targets: [], plan: null, blocked: true });
         return;
       }
       if (reqId.current !== myId) return;
       if (live.length === 0) {
-        setDetected({ targets: [], plan: null, blocked });
+        setDetected({ source, candidates, targets: [], plan: null, blocked });
         return;
       }
       const next = await commonConfigPlan(port, {
@@ -234,7 +242,7 @@ export function CommonConfigCard({
         entries: COMMON_CONFIG_ENTRIES,
       });
       if (reqId.current !== myId) return;
-      setDetected({ targets: live, plan: next, blocked });
+      setDetected({ source, candidates, targets: live, plan: next, blocked });
     } catch (e) {
       if (reqId.current !== myId) return;
       // 偵測沒完成就沒有可信的快照可顯示：留著上一輪的會變成「錯誤訊息配一張說不適用的卡」
@@ -245,14 +253,14 @@ export function CommonConfigCard({
     }
     // accounts／candidates 的內容變化由 accountsSig 代表（父層每 render 換引用，直接列會無限重跑）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [port, source, accountsSig, t, describeError]);
+  }, [port, accountsSig, t, describeError]);
 
   // apply 回來時要比對「畫面現在的上下文」，而它自己 closure 裡的 `ctx` 是送出當下那一版，
   // 故只能靠 ref。在 commit 後才更新（不寫在 render body）——render 可能被 concurrent 中途
   // 丟棄，那時 ref 會指向使用者根本沒切換過去的那一版（Codex R2 ②）。apply 由使用者事件觸發、
   // 必定發生在 commit 之後，讀到的因此永遠是「畫面上那一版」。
   //
-  // refresh 則直接用 apply 自己捕獲的 `load`：走到那一行代表 ctx 沒變過，也就是 port／source／
+  // refresh 則直接用 apply 自己捕獲的 `load`：走到那一行代表 ctx 沒變過，也就是 port／
   // accounts 都還是同一組，該 closure 打的必然是同一個 sidecar。
   const ctxRef = useRef(ctx);
   useLayoutEffect(() => {
@@ -276,8 +284,20 @@ export function CommonConfigCard({
   // **必須是 layout effect**：passive effect 要等 paint 之後才跑，於是「新 plan 已經畫出來、
   // 套用鍵也解除停用」與「舊授權還沒篩掉」之間有一個真實窗口，那一瞬間按下套用就會送出舊授權
   // （Codex R2 High）。授權是破壞性操作的閘門，不能靠「使用者大概沒那麼快」。
+  //
+  // source 換了（重測後推斷出別的帳號）則**整批作廢**，連同上一輪結果：授權是「用這個 source
+  // 覆蓋那一項」，同一個 (account, entry) 仍需授權也不代表使用者同意用另一份內容去蓋（Codex R1 F2）。
+  // 比對的是上一個**有值**的 source——中間經過 detected=null（plan 失敗）也不能讓它溜過去。
+  const lastSource = useRef<string | null>(null);
   useLayoutEffect(() => {
-    setAuthorized((a) => pruneAuthorized(a, detected?.plan?.operations));
+    const next = detected?.source ?? null;
+    if (next != null && lastSource.current != null && next !== lastSource.current) {
+      setAuthorized({});
+      setResults(null);
+    } else {
+      setAuthorized((a) => pruneAuthorized(a, detected?.plan?.operations));
+    }
+    if (next != null) lastSource.current = next;
   }, [detected]);
 
   useEffect(() => {
@@ -290,6 +310,7 @@ export function CommonConfigCard({
 
   const apply = async () => {
     const targets = detected?.targets ?? [];
+    const source = detected?.source;
     if (port == null || source == null || targets.length === 0) return;
     // 送出當下的資料上下文。回來時上下文若已改變，這批結果屬於上一個 sidecar／上一組帳號，
     // 寫進新畫面就是張冠李戴（Codex R1 High）——只有 mounted 擋不住，元件還在，變的是它面對的
@@ -349,6 +370,8 @@ export function CommonConfigCard({
     }
   };
 
+  const source = detected?.source ?? null;
+  const candidates = detected?.candidates ?? [];
   const targets = detected?.targets ?? null;
   const plan = detected?.plan ?? null;
   const ops = plan?.operations ?? [];
