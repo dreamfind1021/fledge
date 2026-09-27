@@ -38,9 +38,12 @@
      3.70 縮到 1.25，色階變平——這是知情的取捨，票 06。防線在 index.contrast.test.ts */
   --border: rgba(255,255,255,.08); --divider: rgba(255,255,255,.055);
   --win-radius: 12px; --row-radius: 8px; --tab-radius: 13px; --item-py: 7px;
-  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 18px 46px rgba(0,0,0,.5);
-  --shadow-sm: 0 4px 18px rgba(0,0,0,.35);
-  --modal-shadow: 0 24px 70px rgba(0,0,0,.6);
+  /* 三個陰影 token 最前面都帶一層「弱柔光」（票 28，spec G5）：浮層拿掉外框後，靠它把邊緣提亮一點。
+     使用者全是浮起來的東西——選單、對話框、通知、相關浮鈕與面板、側欄卡片、待辦抽屜、⌘T、設定、精靈主卡片——
+     所以直接改 token，不另開一個柔光 token。daylight 不動（v1 不啟用、不驗證） */
+  --shadow: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 1px 2px rgba(0,0,0,.4), 0 18px 46px rgba(0,0,0,.5);
+  --shadow-sm: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 4px 18px rgba(0,0,0,.35);
+  --modal-shadow: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 24px 70px rgba(0,0,0,.6);
   /* 終端機 */
   --term-bg: #080B12; --term-elev: #11161F; --term-text: #E2E6EE; --term-dim: #7E879A;
   --term-border: rgba(255,255,255,.07); --term-divider: rgba(255,255,255,.06);
