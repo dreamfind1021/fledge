@@ -3,7 +3,6 @@
 .ctx-menu {
   position: fixed;
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: var(--row-radius);
   padding: 4px 0;
   z-index: 200;

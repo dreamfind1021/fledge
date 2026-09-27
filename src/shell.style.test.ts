@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseLevel, decl, decls, hasDecl, nightfallBlock, readCss, splitTop, stripComments } from "./testing/cssRules";
+import { baseLevel, cssRules, decl, decls, hasDecl, nightfallBlock, readCss, splitTop, stripComments, token, worst } from "./testing/cssRules";
 
 // 外殼（側欄、分頁列、浮層）的樣式防線——票 28 第一批，spec docs/planning/soft-tiles-app-wide-design.md §2.6。
 // jsdom 不做版面計算、不套 CSS，這裡只能讀 CSS 原始碼驗宣告；畫面由 headless 截圖與真機驗收看。
@@ -82,5 +82,49 @@ describe("外殼：側欄浮起、主區與分頁列（spec §2.2、S1–S4、S7
     expect(decl(tabbar, ".workspace .tabbar-tab.is-active", "border")).toBe("1px solid transparent");
     expect(hasDecl(tabbar, ".workspace .tabbar-tab.is-active", "border-bottom")).toBe(false);
     expect(hasDecl(tabbar, ".tabbar-tab", "border-right")).toBe(false);
+  });
+});
+
+// spec §2.2 後半：浮層（蓋在畫面上的東西）不用外框，靠底色＋陰影＋弱柔光浮起來（G4）
+describe("浮層拿掉外框（spec G4、G6、S5、S8）", () => {
+  const app = baseOf("/src/App.css");
+  const related = baseOf("/src/components/RelatedFloat.css");
+  const menu = baseOf("/src/components/ContextMenu.css");
+
+  it("選單、對話框、通知、相關面板與連結列沒有外框", () => {
+    expect(hasDecl(menu, ".ctx-menu", "border")).toBe(false);
+    expect(hasDecl(app, ".confirm-modal", "border")).toBe(false);
+    expect(hasDecl(app, ".app-toast", "border")).toBe(false);
+    expect(hasDecl(related, ".rf-panel", "border")).toBe(false);
+    expect(hasDecl(related, ".rf-link", "border")).toBe(false);
+  });
+
+  it("確認框按鈕列上方不用橫線，改靠間距", () => {
+    expect(hasDecl(app, ".confirm-foot", "border-top")).toBe(false);
+    expect(decl(app, ".confirm-foot", "padding")).toBe("4px 20px 14px");
+  });
+
+  it("「相關」浮鈕：<button> 寫 border: none，滑過改換底色", () => {
+    expect(lastDecl(related, ".rf-fab", "border")).toBe("none");
+    expect(hasDecl(related, ".rf-fab:hover", "border-color")).toBe(false);
+    expect(decl(related, ".rf-fab:hover", "background")).toBe("var(--hover)");
+  });
+
+  it("「取消」是實心次要鍵：--surface-2 底、--text 字、border: none，滑過 --active，焦點框照舊（G6、G7）", () => {
+    expect(lastDecl(app, ".confirm-btn-ghost", "border")).toBe("none");
+    expect(decl(app, ".confirm-btn-ghost", "background")).toBe("var(--surface-2)");
+    expect(decl(app, ".confirm-btn-ghost", "color")).toBe("var(--text)");
+    expect(decl(app, ".confirm-btn-ghost:hover", "background")).toBe("var(--active)");
+    expect(decl(app, ".confirm-btn-ghost:focus-visible", "outline")).toBe("2px solid var(--focus)");
+  });
+
+  // spec §2.5：背景從 CSS 讀（paintColor），不在測試裡寫死用哪個 token
+  it.each([
+    ["「取消」文字", "/src/App.css", ".confirm-btn-ghost", ".confirm-btn-ghost"],
+    ["「取消」文字（滑過）", "/src/App.css", ".confirm-btn-ghost", ".confirm-btn-ghost:hover"],
+    ["「相關」浮鈕文字（滑過）", "/src/components/RelatedFloat.css", ".rf-fab", ".rf-fab:hover"],
+  ])("%s 對背景至少 4.5:1", (_label, path, fgSelector, bgSelector) => {
+    const { paintToken, paintColor } = cssRules(baseOf(path));
+    expect(worst(token(paintToken(fgSelector, "color")), paintColor(bgSelector, "background"))).toBeGreaterThanOrEqual(4.5);
   });
 });
