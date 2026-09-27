@@ -7,12 +7,15 @@
 .mi-head { padding: 14px 14px 10px; border-bottom: 1px solid var(--divider); }
 .mi-head h1 { font-size: 17px; font-weight: 800; margin: 0 0 9px; display: flex; align-items: center; gap: 8px; }
 .mi-stat { font-size: 11px; font-weight: 500; color: var(--faint); font-family: var(--font-mono); margin-left: auto; }
-.mi-search { width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; color: var(--text); font-size: 12.5px; font-family: var(--font-ui); margin-bottom: 9px; box-sizing: border-box; }
+/* 搜尋框：拿掉外框，靠比背景亮的實心底＋提示字辨識，焦點改畫 2px 環（票 28 第二批，spec M1、M2）。
+   <input> 跟 <button> 一樣有瀏覽器預設外框，要寫 border: none，不能只刪宣告（spec G9） */
+.mi-search { width: 100%; background: var(--surface); border: none; border-radius: 9px; padding: 8px 11px; color: var(--text); font-size: 12.5px; font-family: var(--font-ui); margin-bottom: 9px; box-sizing: border-box; }
 .mi-search::placeholder { color: var(--faint); }
-.mi-search:focus { outline: none; border-color: var(--focus); }
+.mi-search:focus { outline: none; box-shadow: 0 0 0 2px var(--focus); }
 .mi-facets { display: flex; gap: 5px; flex-wrap: wrap; }
-.fchip { font-size: 11px; font-weight: 600; color: var(--dim); background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 3px 9px; cursor: pointer; }
-.fchip.on { background: var(--active); color: var(--text); border-color: color-mix(in srgb, var(--primary) 30%, transparent); }
+/* 篩選小籤：<button> 同樣寫 border: none；選中改成淡橘底橘字（spec M4） */
+.fchip { font-size: 11px; font-weight: 600; color: var(--dim); background: var(--surface); border: none; border-radius: 14px; padding: 3px 9px; cursor: pointer; }
+.fchip.on { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
 .fchip.sep { background: transparent; border: none; color: var(--faint); pointer-events: none; padding: 3px 1px; }
 .mi-scroll { flex: 1; overflow-y: auto; padding: 6px 6px 30px; }
 .mi-empty { padding: 20px; text-align: center; color: var(--faint); font-size: 12px; }
