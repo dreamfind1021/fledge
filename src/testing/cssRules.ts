@@ -131,3 +131,29 @@ export const cssRules = (css: string) => {
   const paintColors = (selector: string, prop: string) => stops(decl(css, selector, prop));
   return { paintToken, paintColor, paintColors };
 };
+
+// ── 樣式防線的小工具（票 28 第二批從 shell.style.test.ts 搬來：Memory.style.test.ts 是第二個用到它們的地方）──
+// 讀某份 CSS 的基礎等級（去註解、拿掉 @media／@container／@keyframes）
+export const baseOf = (path: string) => baseLevel(stripComments(readCss(path)));
+// <button>／<input> 類用這個斷言「border 存在而且是 none」：宣告被刪掉時回 undefined，紅在斷言、不是紅在例外（spec G9）。
+// 驗紅會刪掉宣告的值斷言也用它（decl 在宣告不見時會丟例外）
+export const lastDecl = (text: string, selector: string, prop: string) => decls(text, selector, prop).slice(-1)[0];
+// 分隔線 token 檢查（spec §1.5 第 2 點）：列出 paths 裡每一條引用 --border／--divider／--term-divider 的宣告，
+// 格式「路徑 選擇器 → 宣告」。不用 baseOf：@media／@container 區塊裡加回來的線一樣要抓。readCss 讀不到就炸。
+// scanned 是掃到的宣告總數。期望 hits 為空的呼叫端要斷言它夠大——regex 失效會讓迴圈空轉、hits 也是空的而全綠；
+// 期望 hits 非空的呼叫端不需要：掃描失效時 hits 變空，toEqual 就會紅（Codex plan R1）
+export const lineTokenHits = (paths: string[]) => {
+  const hits: string[] = [];
+  let scanned = 0;
+  for (const path of paths) {
+    const css = stripComments(readCss(path));
+    for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      for (const d of body.split(";")) {
+        if (!d.includes(":")) continue;
+        scanned += 1;
+        if (/var\(\s*--(border|divider|term-divider)(?![\w-])/.test(d)) hits.push(`${path} ${selector.trim()} → ${d.trim()}`);
+      }
+    }
+  }
+  return { hits, scanned };
+};

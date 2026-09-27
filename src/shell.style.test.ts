@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseLevel, cssRules, decl, decls, hasDecl, nightfallBlock, readCss, splitTop, stripComments, token, worst } from "./testing/cssRules";
+import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, nightfallBlock, readCss, splitTop, stripComments, token, worst } from "./testing/cssRules";
 
 // 外殼（側欄、分頁列、浮層）的樣式防線——票 28 第一批，spec docs/planning/soft-tiles-app-wide-design.md §2.6。
 // jsdom 不做版面計算、不套 CSS，這裡只能讀 CSS 原始碼驗宣告；畫面由 headless 截圖與真機驗收看。
@@ -23,11 +23,6 @@ describe("三個陰影 token 帶弱柔光（spec G5、§2.6-3）", () => {
     expect(layers(name)).toEqual(expected);
   });
 });
-
-// 讀某份 CSS 的基礎等級（去註解、拿掉 @media／@container／@keyframes）
-const baseOf = (path: string) => baseLevel(stripComments(readCss(path)));
-// <button> 類用這個斷言「border 存在而且是 none」：宣告被刪掉時回 undefined，紅在斷言、不是紅在例外（spec G9）
-const lastDecl = (text: string, selector: string, prop: string) => decls(text, selector, prop).slice(-1)[0];
 
 // spec §2.2 前半。div 類斷言「沒有這個宣告」（hasDecl：規則本身必須存在，規則不見就炸）；
 // <button> 類斷言 border 存在而且是 none（G9：刪掉這行會冒出瀏覽器預設外框，Codex spec R3）
@@ -144,19 +139,7 @@ describe("第一批的 CSS 不再引用分隔線 token（spec §1.5、§2.6）",
     "/src/components/ContextMenu.css",
   ];
   it("--divider／--term-divider 零次；--border 只剩側欄捲軸的顏色", () => {
-    const hits: string[] = [];
-    let scanned = 0;
-    for (const path of FILES) {
-      // 不用 baseOf：@media／@container 區塊裡加回來的線一樣要抓。readCss 讀不到就炸
-      const css = stripComments(readCss(path));
-      for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
-        for (const d of body.split(";")) {
-          if (!d.includes(":")) continue;
-          scanned += 1;
-          if (/var\(\s*--(border|divider|term-divider)(?![\w-])/.test(d)) hits.push(`${path} ${selector.trim()} → ${d.trim()}`);
-        }
-      }
-    }
+    const { hits, scanned } = lineTokenHits(FILES);
     // regex 失效會讓迴圈空轉而全綠——先確認真的掃到宣告（2026-09-27 這 8 個檔 704 條，第一批改完約 680 條）
     expect(scanned).toBeGreaterThan(500);
     expect(hits).toEqual(["/src/components/Sidebar.css .sidebar-scroll::-webkit-scrollbar-thumb → background: var(--border)"]);
