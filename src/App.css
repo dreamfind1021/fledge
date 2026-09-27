@@ -4,7 +4,8 @@
 .app-root {
   display: flex;
   height: 100vh;
-  background: var(--bg);
+  /* 終端機同色：側欄浮起後，四周 5px 的縫露出的就是這個底（票 28，spec S1） */
+  background: var(--term-bg);
 }
 
 /* ===== Banner 基底 ===== */

@@ -30,4 +30,19 @@ describe("Workspace 的 kind 分派", () => {
     expect(screen.getByTestId("tasks-panel")).toBeTruthy();
     expect(screen.queryByTestId("terminal")).toBeNull();
   });
+
+  // spec S4：面板外圍的 4px 只拿掉左邊（側欄卡片到面板之間只留 .ws-main 的 5px 縫）。
+  // 待辦、記憶、觀測共用這同一個分頁容器（Workspace.tsx 同一段 JSX），驗待辦分頁就涵蓋三種；
+  // 終端機的外層是 left: 12 的絕對定位，不吃這層 padding
+  it("面板分頁的容器左邊留白 0、其他三邊 4px", () => {
+    useAppStore.getState().openTasks();
+    render(
+      <DndContext>
+        <Workspace />
+      </DndContext>,
+    );
+    const wrap = screen.getByTestId("tasks-panel").parentElement as HTMLElement;
+    expect(wrap.style.paddingLeft).toBe("0px");
+    expect([wrap.style.paddingTop, wrap.style.paddingRight, wrap.style.paddingBottom]).toEqual(["4px", "4px", "4px"]);
+  });
 });
