@@ -3,9 +3,13 @@
 /* 外層容器 */
 .sidebar {
   width: 240px;
-  height: 100%;
+  /* 浮起卡片（票 28，spec S1／S2）：四周 5px 縫、不用分隔線。高度交給 .app-root 的 flex stretch 撐滿
+     （扣掉上下 margin）；下面的 overflow: hidden 讓內容跟著圓角裁切。收合的 .is-collapsed 只改寬度，同樣是卡片 */
+  height: auto;
+  margin: 5px 0 5px 5px;
+  border-radius: 16px;
+  box-shadow: var(--shadow);
   background: var(--sidebar);
-  border-right: 1px solid var(--divider);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -97,7 +101,6 @@
 }
 .sidebar-rail-foot {
   padding: 10px 0 14px;
-  border-top: 1px solid var(--divider);
 }
 /* 固定 32×32 方框 + 內容置中：確保窄軌每顆 icon 與品牌羽毛同軸對齊（不受 icon 尺寸差影響） */
 .sidebar-rail-btn {
@@ -152,7 +155,7 @@
   align-items: center;
   gap: 8px;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: none;   /* <button> 拿掉外框要寫 none，刪掉宣告會冒出瀏覽器預設外框（票 28，spec G9） */
   border-radius: 10px;
   padding: 8px 11px;
   color: var(--faint);
@@ -185,7 +188,6 @@
   border-radius: 5px;
   background: var(--hover);
   color: var(--faint);
-  border: 1px solid var(--border);
 }
 
 /* === 捲動區 === */
@@ -415,7 +417,6 @@
 /* === 底部「儀表板入口 + 開啟其他資料夾」=== */
 .sidebar-foot {
   padding: 10px 14px 14px;
-  border-top: 1px solid var(--divider);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -455,25 +456,6 @@
   outline-offset: 1px;
 }
 
-/* 儀表板入口：ghost 風格（透明底、dim 文字、hover 帶底色）*/
-.sidebar-openbtn--ghost {
-  background: transparent;
-  color: var(--dim);
-  border: 1px solid var(--border);
-  box-shadow: none;
-}
-
-.sidebar-openbtn--ghost:hover {
-  filter: none;
-  background: var(--hover);
-  color: var(--text);
-}
-
-.sidebar-openbtn--ghost:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
-}
-
 /* 儀表板入口：搜尋列右側方形 icon 鈕，高度隨列 align stretch 對齊搜尋 pill */
 .sidebar-dash-btn {
   flex-shrink: 0;
@@ -482,7 +464,7 @@
   align-items: center;
   justify-content: center;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: none;   /* <button>，同上（G9） */
   border-radius: 10px;
   color: var(--dim);
   cursor: pointer;

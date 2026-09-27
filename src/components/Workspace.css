@@ -1,13 +1,15 @@
 /* ===== Workspace.css — TabBar+Terminal 合成面板 ===== */
 
-/* 右側主區外殼：貼齊視窗、不留外框內距，讓 tab+終端機與視窗融為一體
-   （不再用 demo 的浮起卡片，避免「懸在框內」的割裂感）*/
+/* 右側主區外殼：貼齊視窗的上、右、下，讓 tab+終端機與視窗融為一體
+   （不再用 demo 的浮起卡片，避免「懸在框內」的割裂感——2026-06-05 使用者的決定）。
+   左邊 5px 是與浮起側欄之間的縫（票 28，spec S1／S2），露出的底與終端機同色 */
 .ws-main {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--bg);
+  padding-left: 5px;
+  background: var(--term-bg);
 }
 
 /* 合成面板：tab strip 與終端機共用一張深色面板（一體），貼齊右側邊界、

@@ -1,17 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { baseLevel, decl, hasDecl, readCss, stripComments } from "../testing/cssRules";
 
 // 三欄版面的防線（票 19，spec §5.1）。同前版的理由：jsdom 不做版面計算，
 // scrollWidth/clientWidth 恆為 0，只能驗 CSS 的**規則存在性**與**數值預算**；
 // 真正的版面由 headless Chrome／dev app 三個寬度各看一次，數字記在 Tasks.css 註解。
-const RAW = import.meta.glob("/src/**/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
-const full = (() => {
-  const text = RAW["/src/components/Tasks.css"];
-  if (typeof text !== "string") throw new Error("glob 沒讀到 Tasks.css");
-  return text.replace(/\/\*[\s\S]*?\*\//g, "");
-})();
+// 讀檔與規則查詢（decl／hasDecl）在 ../testing/cssRules.ts（票 28 抽出，外殼的樣式測試也用）。
+const full = stripComments(readCss("/src/components/Tasks.css"));
 // 基礎（窄）等級＝拿掉所有 @media／@container 區塊：decl 取最後一條宣告，區塊內的覆寫只在那個寬度生效，
 // 混進來會把基礎值蓋掉（Codex final R1）
-const css = full.replace(/@[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
+const css = baseLevel(full);
 
 // 取某個 @container 區塊（依 min-width 值）。找不到就炸——靜默跳過等於防線沒上場
 const block = (minWidth: number) => {
@@ -20,27 +17,12 @@ const block = (minWidth: number) => {
   if (!m) throw new Error(`Tasks.css 找不到 @container tasks (min-width: ${minWidth}px)`);
   return m[1];
 };
-// 某個選擇器在 text 裡所有規則的 prop 宣告（依出現順序）。規則一條都沒有就炸
-const decls = (text: string, selector: string, prop: string) => {
-  const rules = [...text.matchAll(/([^{}]+)\{([^}]*)\}/g)]
-    .filter((m) => m[1].split(",").map((x) => x.trim()).includes(selector));
-  if (rules.length === 0) throw new Error(`找不到規則 ${selector}`);
-  return rules.flatMap((r) => [...r[2].matchAll(new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, "g"))].map((m) => m[1].trim()));
-};
-// 同一個選擇器（權重相同）後面的蓋前面：取最後一條。只取第一條會漏掉檔尾的覆寫（Codex final R1）
 // 取某個 @keyframes 的內容（例如 "from { … }"）。找不到就炸；同名的以最後一個為準（瀏覽器也是，同 decl）
 const keyframes = (name: string) => {
   const all = [...full.matchAll(new RegExp(`@keyframes\\s+${name}\\s*\\{((?:[^{}]*\\{[^{}]*\\})*[^{}]*)\\}`, "g"))];
   if (all.length === 0) throw new Error(`Tasks.css 找不到 @keyframes ${name}`);
   return all[all.length - 1][1];
 };
-const decl = (text: string, selector: string, prop: string) => {
-  const all = decls(text, selector, prop);
-  if (all.length === 0) throw new Error(`${selector} 沒有宣告 ${prop}`);
-  return all[all.length - 1];
-};
-// 「不准宣告」用這個：規則本身必須存在。用 toThrow 的話規則整條不見也會通過，等於沒驗（Codex final R1）
-const hasDecl = (text: string, selector: string, prop: string) => decls(text, selector, prop).length > 0;
 const px = (v: string) => { const m = v.match(/(\d+(?:\.\d+)?)px/); if (!m) throw new Error(`取不出 px：${v}`); return parseFloat(m[1]); };
 
 describe("待辦面板三欄版面", () => {

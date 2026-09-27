@@ -12,7 +12,7 @@
   align-items: center;
   gap: 7px;
   background: var(--surface);
-  border: 1px solid color-mix(in srgb, var(--ai) 35%, var(--border));
+  border: none;   /* <button>：拿掉外框要寫 none（票 28，spec G4／G9），靠底色＋陰影浮起來 */
   border-radius: 20px;
   padding: 7px 13px;
   font-family: var(--font-ui);
@@ -23,7 +23,8 @@
   box-shadow: var(--shadow-sm);
 }
 .rf-fab:hover {
-  border-color: color-mix(in srgb, var(--ai) 55%, var(--border));
+  /* 外框拿掉後，滑過改換底色（票 28，spec S8） */
+  background: var(--hover);
 }
 /* 數量徽章 */
 .rf-n {
@@ -45,7 +46,6 @@
   max-height: 380px;
   overflow-y: auto;
   background: var(--surface);
-  border: 1px solid color-mix(in srgb, var(--ai) 30%, var(--border));
   border-radius: var(--win-radius);
   box-shadow: var(--shadow);
   padding: 14px;
@@ -91,7 +91,6 @@
   padding: 8px 10px;
   border-radius: var(--row-radius);
   background: var(--bg);
-  border: 1px solid var(--border);
   margin-bottom: 6px;
   font-size: 12.5px;
   font-weight: 600;

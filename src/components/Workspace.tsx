@@ -41,7 +41,9 @@ export function Workspace() {
                   position: "absolute",
                   inset: 0,
                   display: t.id === activeTabId ? "block" : "none",
-                  padding: 4,
+                  // 左邊 0：浮起側欄與面板之間只留 .ws-main 的 5px 縫，不再疊這層 4px（票 28，spec S4）。
+                  // 終端機不受影響——它的外層是下面 left: 12 的絕對定位，本來就不吃這層 padding
+                  padding: "4px 4px 4px 0",
                 }}
               >
                 {t.kind === "memory" ? (

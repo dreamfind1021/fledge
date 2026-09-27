@@ -4,7 +4,8 @@
 .app-root {
   display: flex;
   height: 100vh;
-  background: var(--bg);
+  /* 終端機同色：側欄浮起後，四周 5px 的縫露出的就是這個底（票 28，spec S1） */
+  background: var(--term-bg);
 }
 
 /* ===== Banner 基底 ===== */
@@ -151,7 +152,6 @@
 .confirm-modal {
   width: 400px;
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: 14px;
   box-shadow: var(--modal-shadow);
   font-family: var(--font-ui);
@@ -209,11 +209,12 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 14px 20px;
-  border-top: 1px solid var(--divider);
+  /* 不用分隔線（票 28，spec S5）：說明文字與按鈕之間靠 .confirm-row 的 16px＋這裡的 4px 分開 */
+  padding: 4px 20px 14px;
 }
 
-/* 取消：ghost（透明 + border + dim 文字）*/
+/* 取消：實心次要鍵（票 28，spec G6）——--surface-2 底、--text 字、不用外框（<button> 要寫 none，G9）。
+   滑過用 --active：--hover 比 --surface-2 還暗、兩者只差 1.03 倍，滑過看不出變化 */
 .confirm-btn-ghost {
   font-family: var(--font-ui);
   font-weight: 600;
@@ -221,13 +222,13 @@
   cursor: pointer;
   padding: 7px 14px;
   border-radius: 8px;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--dim);
+  background: var(--surface-2);
+  border: none;
+  color: var(--text);
 }
 
 .confirm-btn-ghost:hover {
-  background: var(--hover);
+  background: var(--active);
 }
 
 .confirm-btn-ghost:focus-visible {
@@ -258,7 +259,7 @@
 }
 
 /* ===== Toast ===== */
-/* 底部置中浮層；用 surface/border token，不接 error/warning（只給中性訊息）*/
+/* 底部置中浮層；--surface 底＋陰影浮起、不用外框（票 28，spec G4），不接 error/warning（只給中性訊息）*/
 .app-toast {
   position: fixed;
   bottom: 16px;
@@ -266,7 +267,6 @@
   transform: translateX(-50%);
   background: var(--surface);
   color: var(--text);
-  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 14px;
   font-family: var(--font-ui);

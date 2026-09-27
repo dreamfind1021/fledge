@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { baseLevel, cssRules, readCss, resolveColor, stops, stripComments, token, worst } from "../testing/cssRules";
 
 // 待辦面板的顏色對比防線。
 //
@@ -10,123 +11,11 @@ import { describe, expect, it } from "vitest";
 //   ① 記號與已完成列**實際用的**顏色 token 對比度要過門檻
 //   ② 這些規則不准用 opacity 做淡化——opacity 把顏色往底色拉，
 //      對比度是無聲被打掉的，從 token 值算不出來（①）也就守不住
-//
-// 用 vite 的 import.meta.glob 而非 node:fs——本專案沒有 @types/node，
-// 與 lib/sourceHygiene.test.ts 同一個理由與同一種寫法。
-const RAW = import.meta.glob("/src/**/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
-const read = (path: string) => {
-  const text = RAW[path];
-  if (typeof text !== "string") throw new Error(`glob 沒讀到 ${path}`);   // 讀不到要炸，不能靜默跳過
-  return text;
-};
 
-// 從 index.css 的 nightfall 區塊取 token。取不到就炸——靜默跳過等於這條防線沒上場
-const nightfall = (() => {
-  const all = read("/src/index.css");
-  const from = all.indexOf('[data-theme="nightfall"]');
-  const to = all.indexOf('[data-theme="daylight"]');
-  if (from < 0 || to <= from) throw new Error("index.css 找不到 nightfall 區塊");
-  return all.slice(from, to);
-})();
-const token = (name: string) => {
-  const m = nightfall.match(new RegExp(`--${name}:\\s*(#[0-9A-Fa-f]{6})`));
-  if (!m) throw new Error(`token --${name} 不在 nightfall 區塊裡`);
-  return m[1];
-};
-
-// WCAG 相對亮度與對比度
-const luminance = (hex: string) => {
-  const [r, g, b] = [1, 3, 5]
-    .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
-    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-};
-const contrast = (a: string, b: string) => {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
-};
-
-// 從 Tasks.css 讀出某條規則實際用的顏色 token。
-// 不可以在測試裡自己寫死「done 標題用 --dim」——那樣有人把 CSS 改回 --faint 測試照樣全綠，
-// 斷言就落在一個不會發生的情境上。要驗的是「CSS 現在用的那個 token 夠不夠」。
-const tasksCss = read("/src/components/Tasks.css");
-// 同一個選擇器可能出現在多條規則裡（例如 .tk-mark.is-doing::before 既在合併的
-// content 規則裡、也有自己那條），所以要掃過全部、挑真的宣告了那個屬性的那條。
+// 從 Tasks.css 讀出某條規則實際用的顏色 token；讀檔、查規則、算對比的工具在 ../testing/cssRules.ts（票 28 抽出）。
 // 只看基礎等級：@media／@container 區塊內的覆寫只在那個寬度生效，混進「取最後一條」會把基礎值蓋掉
-const stripped = tasksCss.replace(/\/\*[\s\S]*?\*\//g, "").replace(/@[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, "");
-const bodiesFor = (selector: string) => {
-  const out = [...stripped.matchAll(/([^{}]+)\{([^}]*)\}/g)]
-    .filter((m) => m[1].split(",").map((x: string) => x.trim()).includes(selector))
-    .map((m) => m[2]);
-  if (out.length === 0) throw new Error(`Tasks.css 裡找不到規則 ${selector}`);
-  return out;
-};
-const paintToken = (selector: string, prop: string) => {
-  const m = declValue(selector, prop).match(/var\(--([a-z0-9-]+)\)/);
-  if (!m) throw new Error(`${selector} 的 ${prop} 沒有用 var(--token)`);
-  return m[1];
-};
-// 完整宣告值（票 26＋27）。paintToken 只抓第一個 var(--x)：背景是 color-mix 或漸層時，
-// 「琥珀 38% 混 surface-2」會被讀成純琥珀、算出假的高對比。背景一律走 paintColor／paintColors。
-// 同一個選擇器（權重相同）後面的蓋前面：取最後一條宣告。只取第一條會漏掉後面的覆寫（Codex final R1）
-const declValue = (selector: string, prop: string) => {
-  const re = new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`, "g");
-  const all = bodiesFor(selector).flatMap((body) => [...body.matchAll(re)].map((m) => m[1].trim()));
-  if (all.length === 0) throw new Error(`${selector} 沒有宣告 ${prop}`);
-  return all[all.length - 1];
-};
-// 依頂層逗號切（括號內的逗號不切）
-const splitTop = (s: string) => {
-  const out: string[] = [];
-  let depth = 0, cur = "";
-  for (const ch of s) {
-    if (ch === "(") depth++;
-    if (ch === ")") depth--;
-    if (ch === "," && depth === 0) { out.push(cur.trim()); cur = ""; } else cur += ch;
-  }
-  out.push(cur.trim());
-  return out;
-};
-const inner = (s: string, fn: string) => s.slice(fn.length + 1, -1);   // "fn(...)" 的括號內
-const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-const hex = (c: number[]) => "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("").toUpperCase();
-// color-mix(in srgb, …) 對不透明色＝sRGB 編碼值的線性插值；本檔只混不透明色
-const resolveColor = (expr: string): string => {
-  const e = expr.trim();
-  const v = e.match(/^var\(--([a-z0-9-]+)\)$/);
-  if (v) return token(v[1]);
-  // 漸層不是一個顏色：只取一站會漏掉其他站變亮的退化（Codex final R1）——一律走 stops／paintColors
-  if (e.startsWith("linear-gradient(")) throw new Error(`漸層要用 stops() 逐站驗：${e}`);
-  if (e.startsWith("color-mix(")) {
-    const [space, a, b] = splitTop(inner(e, "color-mix"));
-    if (space !== "in srgb") throw new Error(`只算 srgb：${e}`);
-    const part = (s: string) => {
-      const m = s.match(/^(var\(--[a-z0-9-]+\))(?:\s+(\d+(?:\.\d+)?)%)?$/);
-      if (!m) throw new Error(`認不得的 color-mix 成分：${s}`);
-      return { c: resolveColor(m[1]), p: m[2] == null ? null : parseFloat(m[2]) / 100 };
-    };
-    const A = part(a), B = part(b);
-    if (A.p != null && B.p != null) throw new Error(`兩邊都寫百分比不支援（要正規化或變半透明）：${e}`);
-    const pa = A.p ?? (B.p == null ? 0.5 : 1 - B.p);
-    const ca = rgb(A.c), cb = rgb(B.c);
-    return hex(ca.map((x, i) => x * pa + cb[i] * (1 - pa)));
-  }
-  throw new Error(`認不得的顏色：${e}`);
-};
-const paintColor = (selector: string, prop: string) => resolveColor(declValue(selector, prop));
-// 背景的每一個色站（非漸層＝一站）。文字可能落在漸層任何位置，所以每站都要過門檻。
-// 只驗色站、不取樣中段：目前的漸層都是「暗底混一點琥珀 → 同一個暗底」，中段亮度夾在兩站之間；
-// 改成亮暗交錯的漸層時要補取樣
-const stops = (expr: string): string[] => {
-  const e = expr.trim();
-  if (!e.startsWith("linear-gradient(")) return [resolveColor(e)];
-  const parts = splitTop(inner(e, "linear-gradient"));
-  const colors = /^(-?\d+(?:\.\d+)?(?:deg|turn|rad|grad)|to\s)/.test(parts[0]) ? parts.slice(1) : parts;   // 開頭可能是角度／方向
-  return colors.map((c) => resolveColor(c.replace(/(?:\s+\d+(?:\.\d+)?%)+$/, "")));                    // 去掉站位
-};
-const paintColors = (selector: string, prop: string) => stops(declValue(selector, prop));
-// 前景對一組色站的最差對比
-const worst = (fg: string, backdrop: string | string[]) => Math.min(...[backdrop].flat().map((b) => contrast(fg, b)));
+const tasksCss = readCss("/src/components/Tasks.css");
+const { paintToken, paintColor, paintColors } = cssRules(baseLevel(stripComments(tasksCss)));
 
 describe("待辦面板的顏色對比", () => {
   const bg = token("bg");

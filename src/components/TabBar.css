@@ -23,7 +23,6 @@
   /* 上方圓角 8px（與原始 inline style 保持一致；13px 的合併 tab radius 屬後續 Workspace 任務）*/
   border-top-left-radius: 8px;
   border-top-right-radius: 8px;
-  border-right: 1px solid var(--divider);
   cursor: pointer;
   white-space: nowrap;
   color: var(--dim);
@@ -87,12 +86,13 @@
   height: auto;
   /* strip 與終端機同底色（--term-bg），不加分隔線/不同底色，tab 與終端機融為一體 */
   background: var(--term-bg);
-  padding: 8px 12px 0;
+  /* 左邊 0：第一個分頁的狀態點與終端機文字的起點對齊（票 28，spec S3） */
+  padding: 8px 12px 0 0;
   gap: 3px;
   align-items: center;
 }
 
-/* .ws-tab：strip tab（覆蓋獨立態的 8px 圓角與 border-right 分隔線）。
+/* .ws-tab：strip tab（覆蓋獨立態的 8px 圓角）。
    margin-bottom:-1px 讓 active tab 的底邊壓在 strip 下緣，與終端機接縫。*/
 .workspace .tabbar-tab {
   padding: 9px 14px;
@@ -109,12 +109,11 @@
   color: var(--term-text);
 }
 
-/* .ws-tab.on：active tab 與下方終端機無縫融合——
-   border-bottom 用 --term-bg 抹平接縫，border-top 的 --primary 是琥珀色指示條。*/
+/* .ws-tab.on：active tab 與下方終端機無縫融合——只靠琥珀底，不畫外框（票 28，spec §2.2）。
+   外框留 1px 透明寬度，分頁高度與對齊跟改之前一樣。*/
 .workspace .tabbar-tab.is-active {
   color: var(--term-text);
-  border: 1px solid var(--term-divider);
-  border-bottom: 1px solid var(--term-bg);
+  border: 1px solid transparent;
   border-radius: var(--tab-radius) var(--tab-radius) 0 0;
   /* 視覺語言 A：選取（前景）＝靜態琥珀底（無動畫、無上方線）。
      「呼吸燈」語義保留給未來的 session 活動指示功能（工作中=呼吸、等待=穩定點）。*/
