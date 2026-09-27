@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseOf, cssRules, decl, hasDecl, lastDecl, resolveColor, token, worst } from "../testing/cssRules";
+import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, resolveColor, token, worst } from "../testing/cssRules";
 
 // 記憶面板的樣式防線——票 28 第二批，spec docs/planning/soft-tiles-app-wide-design.md §3.6。
 // jsdom 不套 CSS，這裡只能讀 CSS 原始碼驗宣告；畫面由 headless 截圖與真機驗收看。
@@ -98,5 +98,17 @@ describe("卡片與暗磚上的字（spec §3.5）", () => {
   ])("%s：字對半透明底至少 4.5:1", (_label, selector) => {
     const bg = over(decl(mem, selector, "background"), decl(mem, ".mem-detail", "background"));
     expect(worst(token(paintToken(selector, "color")), bg)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// spec §1.5／§3.6：防的是「以後不小心把線加回來」——最可能的形狀是新增元件時照抄舊寫法
+// `border: 1px solid var(--border)`。定點斷言只看得到既有的選擇器，這條連新增的選擇器也看得到。
+// 不防刻意繞過（寫死顏色另有 index.tokens.test.ts 擋；TSX inline style 靠審查）。
+describe("記憶面板的 CSS 不再引用分隔線 token（spec §1.5、§3.6）", () => {
+  it("--divider／--term-divider 零次；--border 只剩出錯紅框的混色", () => {
+    const { hits } = lineTokenHits(["/src/components/Memory.css"]);
+    // 唯一的例外是線：M6 出錯的紅框，G7 保留的狀態訊號（spec §3.6 明列）。
+    // 不另斷言 scanned：期望的 hits 本身非空，掃描空轉時這條 toEqual 就會紅（Codex plan R1）
+    expect(hits).toEqual(["/src/components/Memory.css .relchip.sug.err → box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--error) 45%, var(--border))"]);
   });
 });
