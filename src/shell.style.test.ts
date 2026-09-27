@@ -128,3 +128,37 @@ describe("浮層拿掉外框（spec G4、G6、S5、S8）", () => {
     expect(worst(token(paintToken(fgSelector, "color")), paintColor(bgSelector, "background"))).toBeGreaterThanOrEqual(4.5);
   });
 });
+
+// spec §1.5／§2.6-1：防的是「以後不小心把線加回來」——最可能的形狀是新增元件時照抄舊寫法
+// `border: 1px solid var(--border)`。定點斷言只看得到既有的選擇器，這條連新增的選擇器也看得到。
+// 不防刻意繞過（寫死顏色另有 index.tokens.test.ts 擋；TSX inline style 靠審查）。
+describe("第一批的 CSS 不再引用分隔線 token（spec §1.5、§2.6）", () => {
+  const FILES = [
+    "/src/App.css",
+    "/src/components/Sidebar.css",
+    "/src/components/FileTree.css",
+    "/src/components/TabBar.css",
+    "/src/components/Workspace.css",
+    "/src/components/Terminal.css",
+    "/src/components/RelatedFloat.css",
+    "/src/components/ContextMenu.css",
+  ];
+  it("--divider／--term-divider 零次；--border 只剩側欄捲軸的顏色", () => {
+    const hits: string[] = [];
+    let scanned = 0;
+    for (const path of FILES) {
+      // 不用 baseOf：@media／@container 區塊裡加回來的線一樣要抓。readCss 讀不到就炸
+      const css = stripComments(readCss(path));
+      for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+        for (const d of body.split(";")) {
+          if (!d.includes(":")) continue;
+          scanned += 1;
+          if (/var\(\s*--(border|divider|term-divider)(?![\w-])/.test(d)) hits.push(`${path} ${selector.trim()} → ${d.trim()}`);
+        }
+      }
+    }
+    // regex 失效會讓迴圈空轉而全綠——先確認真的掃到宣告（2026-09-27 這 8 個檔 704 條，第一批改完約 680 條）
+    expect(scanned).toBeGreaterThan(500);
+    expect(hits).toEqual(["/src/components/Sidebar.css .sidebar-scroll::-webkit-scrollbar-thumb → background: var(--border)"]);
+  });
+});
