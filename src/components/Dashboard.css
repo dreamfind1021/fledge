@@ -1,10 +1,11 @@
 /* ── Dashboard 面板樣式（Nightfall token 直接沿用 var(--…)，從 demo HTML 移植）── */
 
 /* ── 根容器：單頁長滾動，寬度自動填滿視窗（扣側欄後的 Workspace 區）── */
+/* 左右 10px：卡片拿掉外框後 26px 顯得離邊緣太遠，使用者真機驗收時要求收近（票 28 第三批） */
 .dash-root {
   height: 100%;
   overflow-y: auto;
-  padding: 22px 26px 60px;
+  padding: 22px 10px 60px;
   background: var(--bg);
   box-sizing: border-box;
 }
@@ -30,10 +31,11 @@
   font-weight: 700;
   letter-spacing: .2px;
 }
+/* 「資料更新中」小籤：拿掉外框、墊卡片同色的底，形狀不變（票 28 第三批，spec D4） */
 .dash-stale {
   font-size: 11px;
   color: var(--dim);
-  border: 1px solid var(--border);
+  background: var(--surface);
   border-radius: 999px;
   padding: 3px 10px;
 }
@@ -59,15 +61,18 @@
 }
 
 /* ── KPI 條 ── */
+/* 卡片之間的縫左右、上下都 5px，跟側欄旁的縫同寬（票 28 第三批，spec D2；.dash-row 同值） */
 .dash-kpi {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 5px;
+  margin-bottom: 5px;
 }
+/* 卡片不畫外框：靠亮一階的底色＋小一號的浮起陰影（含弱柔光）跟背景分開
+   （票 28 第三批，spec D1；.dash-win-card、.dash-panel 同樣） */
 .dash-kpi-card {
   background: var(--surface);
-  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   border-radius: var(--row-radius);
   padding: 12px 14px 10px;
 }
@@ -119,7 +124,7 @@
 }
 .dash-win-card {
   background: var(--surface);
-  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   border-radius: var(--win-radius);
   padding: 14px 16px;
 }
@@ -139,28 +144,6 @@
   background: var(--ai);
   border-radius: 5px;
   padding: 1px 6px;
-}
-.dash-win-acct {
-  margin-top: 10px;
-}
-.dash-win-acct:first-of-type {
-  margin-top: 0;
-}
-.dash-win-acct-label {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 4px;
-}
-.dash-est-badge {
-  margin-left: 6px;
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--dim);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 0 5px;
-  vertical-align: middle;
 }
 .dash-win-meta {
   display: flex;
@@ -215,7 +198,7 @@
 /* ── 面板共用 ── */
 .dash-panel {
   background: var(--surface);
-  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   border-radius: var(--win-radius);
   padding: 14px 16px;
   margin-bottom: 14px;
@@ -247,8 +230,9 @@
   overflow: hidden;
   min-width: 6px;
 }
+/* 滑過：整根亮一點，不畫細框；×1.25 會把橘推向圖例裡 gpt-5.4 的黃（票 28 第三批，spec D5） */
 .dash-daily-col:hover {
-  outline: 1px solid var(--border);
+  filter: brightness(1.12);
 }
 .dash-daily-col > i {
   display: block;
@@ -277,11 +261,12 @@
 }
 
 /* ── 分布列：donut + heatmap ── */
+/* 縫 5px，同 .dash-kpi（票 28 第三批，spec D2） */
 .dash-row {
   display: grid;
   grid-template-columns: 1fr 1.3fr;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 5px;
+  margin-bottom: 5px;
 }
 .dash-row > .dash-panel {
   margin-bottom: 0;
@@ -341,10 +326,6 @@
   align-items: center;
   gap: 8px;
   padding: 3px 0;
-  border-bottom: 1px solid var(--divider);
-}
-.dash-donut-legend li:last-child {
-  border-bottom: none;
 }
 .dash-donut-legend i {
   width: 8px;
@@ -381,9 +362,11 @@
 }
 
 /* ── 專案表 ── */
+/* 每一列一塊凹進卡片的暗磚、列與列之間 5px；separate 模式首尾格才能各自圓角（票 28 第三批，spec D3） */
 .dash-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0 5px;
   font-size: 12px;
 }
 .dash-table th {
@@ -391,12 +374,11 @@
   font-weight: 500;
   text-align: left;
   padding: 4px 10px;
-  border-bottom: 1px solid var(--border);
   font-size: 11px;
 }
 .dash-table td {
   padding: 7px 10px;
-  border-bottom: 1px solid var(--divider);
+  background: var(--bg);
   text-align: right;
   font-family: var(--font-mono);
   font-size: 12px;
@@ -405,6 +387,10 @@
 .dash-table td:first-child {
   text-align: left;
   font-family: var(--font-ui);
+  border-radius: var(--row-radius) 0 0 var(--row-radius);
+}
+.dash-table td:last-child {
+  border-radius: 0 var(--row-radius) var(--row-radius) 0;
 }
 .dash-table th:first-child {
   text-align: left;
@@ -412,9 +398,7 @@
 .dash-table .dash-th-num {
   text-align: right;
 }
-.dash-table tr:last-child td {
-  border-bottom: none;
-}
+/* 滑過蓋過暗磚：選擇器比 .dash-table td 具體 */
 .dash-table tr:hover td {
   background: var(--hover);
 }
