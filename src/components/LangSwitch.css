@@ -6,8 +6,9 @@
   flex-shrink: 0;
 }
 
+/* 不畫外框：沒選的只有字（票 28 第四批 4a，spec D8） */
 .lang-switch-btn {
-  border: 1px solid var(--border);
+  border: none;
   background: transparent;
   color: var(--dim);
   border-radius: 99px;
@@ -21,9 +22,10 @@
   background: var(--hover);
 }
 
+/* 選中：淡橘底橘字，同記憶面板篩選小籤的選中（spec D8、M4） */
 .lang-switch-btn.is-on {
-  background: var(--surface-2);
-  color: var(--text);
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary);
   font-weight: 600;
 }
 

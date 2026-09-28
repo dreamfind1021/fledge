@@ -106,11 +106,11 @@
 }
 
 /* ── 卡片主體 ── */
+/* 不畫外框：靠 --shadow（含弱柔光）浮起（票 28 第四批 4a，spec D1） */
 .ob-card {
   margin-top: 34px;
   width: 100%;
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: 16px;
   box-shadow: var(--shadow);
   padding: 24px;
@@ -161,9 +161,9 @@
 }
 
 /* ── 說明區塊（根目錄頁的落檔提示，demo .b4-note）── */
+/* 只留淡紫底、不畫外框：補充說明不是要你注意的狀態訊號（票 28 第四批 4a，spec D7；.b4-note 同樣，黃色確認框 .b4-confirm 保留外框） */
 .ob-note {
   background: color-mix(in srgb, var(--ai) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ai) 22%, transparent);
   border-radius: 8px;
   padding: 9px 11px;
   font-size: 12px;
@@ -225,10 +225,11 @@
 }
 
 /* ── select（帳號選擇）── */
+/* 輸入框與下拉選單：最亮的實心底 --active、不畫外框（票 28 第四批 4a，spec D4；.ob-input 同樣） */
 .ob-sel {
   flex: 0 0 92px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--active);
+  border: none;
   color: var(--text);
   padding: 6px 4px;
   border-radius: 4px;
@@ -239,6 +240,12 @@
 .ob-sel:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
+}
+
+/* 停用照舊半透明，同 .ae-input:disabled（票 28 第四批 4a，spec D6；原本沒有這條，停用時是瀏覽器預設樣子） */
+.ob-sel:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 /* ── 輸入列（新增根目錄）── */
@@ -253,8 +260,8 @@
 .ob-input {
   flex: 1;
   min-width: 0;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--active);
+  border: none;
   color: var(--text);
   padding: 6px 8px;
   border-radius: 4px;
@@ -262,8 +269,9 @@
   font-family: var(--font-ui);
 }
 
+/* 提示字：--faint 對 --active 只有 4.00，用 --dim（spec D4） */
 .ob-input::placeholder {
-  color: var(--faint);
+  color: var(--dim);
 }
 
 .ob-input:focus-visible {
@@ -308,14 +316,14 @@
   filter: none;
 }
 
-/* ghost 按鈕：表面色背景，dimmed 文字 */
+/* 次要按鈕：--surface-2 底、--text 字，滑過 --active（票 28 第四批 4a，spec D5／G6；原本 --dim 字、滑過 --hover 反而變暗） */
 .ob-btn-ghost {
   background: var(--surface-2);
-  color: var(--dim);
+  color: var(--text);
 }
 
 .ob-btn-ghost:hover {
-  background: var(--hover);
+  background: var(--active);
 }
 
 .ob-btn-ghost:disabled {
@@ -332,6 +340,13 @@
 
 .ob-btn-del:hover {
   filter: brightness(1.08);
+}
+
+/* 停用照舊半透明，同 .ob-btn:disabled（票 28 第四批 4a，spec D6；原本沒有這條，停用時看起來跟能按一樣） */
+.ob-btn-del:disabled {
+  opacity: 0.5;
+  cursor: default;
+  filter: none;
 }
 
 /* ── 動作列（上一步 / 下一步 等）── */
@@ -391,19 +406,11 @@
   text-transform: uppercase;
 }
 
+/* 清單卡是凹進卡片的暗磚、不畫外框；「不適用」的卡同樣（票 28 第四批 4a，spec D3、D9） */
 .b4-card {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  background: var(--bg);
   border-radius: 10px;
   padding: 14px;
-}
-
-/* 不適用的卡片（不是停用的互動元件，只是當下沒有內容可處理）。
-   **不用 opacity 壓暗**：卡片裡是要讀的說明文字，opacity 會把它連同底色一起往
-   外層拉，實測 .b4-card-desc 的對比掉到 2.66（門檻 4.5），而且從 token 值算不出來。
-   改成拿掉自己的底色讓卡片退後——文字維持原本的 token 對比，視覺上仍與一般卡片分得開。 */
-.b4-card.is-na {
-  background: transparent;
 }
 
 /* ── 卡片標頭（標題 + 說明 + 右側動作）── */
@@ -482,7 +489,6 @@
 /* ── 說明框（登入頁講「為什麼沒有完成狀態」）── */
 .b4-note {
   background: color-mix(in srgb, var(--ai) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--ai) 22%, transparent);
   border-radius: 8px;
   padding: 9px 11px;
   font-size: 12px;
@@ -511,6 +517,12 @@
   color: var(--dim);
 }
 
+/* 停用照舊半透明（票 28 第四批 4a，spec D6；原本沒有這條，停用時是瀏覽器預設樣子） */
+.b4-skip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .b4-skip:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 1px;
@@ -527,21 +539,9 @@
   align-items: center;
   gap: 10px;
   padding: 9px 0;
-  border-bottom: 1px solid var(--divider);
 }
 
-/* 每列與它的展開面板同屬一個 group，分隔線因此掛在 group 的最後一列上 */
-.b4-row-group:last-child .b4-item {
-  border-bottom: none;
-}
-
-/* 沒有展開面板的清單（共通設置）直接把列掛在 list 下——限定直接子元素，
-   否則會連 `.b4-row-group` 內唯一的那列一起去掉分隔線（環境卡每列都會沒有底線） */
-.b4-list > .b4-item:last-child {
-  border-bottom: none;
-}
-
-/* 多帳號時每個 target 一組清單，組間留距（組內的分隔線由 .b4-item 自己負責） */
+/* 多帳號時每個 target 一組清單，組間留距（組內每列之間不畫線，票 28 第四批 4a，spec D2） */
 .b4-group + .b4-group {
   margin-top: 12px;
 }
@@ -670,9 +670,10 @@
 }
 
 /* ── 卡內小按鈕 ── */
+/* 次要鍵實心 --surface-2、不畫外框，滑過 --active（票 28 第四批 4a，spec D5／G6） */
 .b4-btn-sm {
-  border: 1px solid var(--border);
-  background: var(--surface);
+  border: none;
+  background: var(--surface-2);
   color: var(--text);
   border-radius: 6px;
   padding: 5px 11px;
@@ -683,8 +684,9 @@
   white-space: nowrap;
 }
 
+/* .b4-btn-sm.primary 寫在這條後面、同樣具體：橘色鍵滑過不會被蓋成灰 */
 .b4-btn-sm:hover {
-  background: var(--hover);
+  background: var(--active);
 }
 
 .b4-btn-sm:focus-visible {
@@ -695,7 +697,6 @@
 .b4-btn-sm.primary {
   background: var(--primary);
   color: var(--primary-ink);
-  border-color: transparent;
 }
 
 .b4-btn-sm.primary:hover {
@@ -765,8 +766,8 @@
 }
 
 /* ── 卡片內的安裝終端機（票 24）── */
+/* 不畫外框：靠 --term-bg 與上方標題列辨認（票 28 第四批 4a，spec D7；放在暗磚上時邊界很淡，spec §5.4） */
 .b4-term {
-  border: 1px solid var(--term-border);
   border-radius: 8px;
   overflow: hidden;
   background: var(--term-bg);
@@ -780,7 +781,6 @@
   gap: 8px;
   padding: 7px 10px;
   background: var(--term-elev);
-  border-bottom: 1px solid var(--term-border);
   font-size: 11.5px;
   color: var(--term-dim);
 }
@@ -838,7 +838,7 @@
 
 /* 一個區塊：落點、分類、結果的一段 */
 .ob-spot {
-  border: 1px solid var(--border);
+  background: var(--bg);
   border-radius: 8px;
   padding: 10px 12px;
   margin-bottom: 8px;
