@@ -1,0 +1,48 @@
+import { describe, expect, it } from "vitest";
+import { baseOf, cssRules, hasDecl, lastDecl, token, worst } from "../testing/cssRules";
+
+// 設定視窗與引導精靈的樣式防線——票 28 第四批 4a，spec docs/planning/soft-tiles-app-wide-design.md §5.6。
+// 涵蓋六個 CSS 檔：Settings.css、AccountsEditor.css、BackupCard.css、RestoreCard.css、LangSwitch.css、Onboarding.css
+// （Onboarding.css 的 b4-* 設定視窗的開發環境、備份、還原卡片也在用）。
+// jsdom 不套 CSS，這裡只能讀 CSS 原始碼驗宣告；畫面由 demo 的樣式簽名比對與真機驗收看。
+// div／span／code／p 類斷言「沒有這個宣告」（hasDecl：規則本身必須存在，規則不見就炸）；
+// <button>／<input>／<select> 類斷言 border 存在而且是 none（lastDecl：刪掉這行會冒出瀏覽器預設外框，spec G9）。
+// 底色、滑過、提示字顏色、opacity 這些值不斷言——它們不防線被加回來（spec §5.6）；
+// 提示字、方塊、語言鈕的底色由對比測試從 CSS 讀，宣告被刪掉時讀不到而紅
+const set = baseOf("/src/components/Settings.css");
+const S = cssRules(set);
+
+describe("設定視窗：大卡片與分隔線（spec D1、D2）", () => {
+  it("設定視窗沒有外框", () => {
+    expect(hasDecl(set, ".settings-modal", "border")).toBe(false);
+  });
+
+  it("標題列、底部列、開發環境摺疊區沒有線", () => {
+    expect(hasDecl(set, ".settings-head", "border-bottom")).toBe(false);
+    expect(hasDecl(set, ".settings-foot", "border-top")).toBe(false);
+    expect(hasDecl(set, ".st-fold", "border")).toBe(false);
+    expect(hasDecl(set, ".st-fold-body", "border-top")).toBe(false);
+  });
+});
+
+describe("設定視窗：方塊、輸入框、按鈕（spec D3、D4、D5）", () => {
+  it("根目錄／手動專案／訂閱的每一列沒有外框", () => {
+    expect(hasDecl(set, ".settings-rrow", "border")).toBe(false);
+  });
+
+  it("下拉選單、輸入框、次要按鈕寫 border: none（G9）", () => {
+    expect(lastDecl(set, ".settings-rrow-select", "border")).toBe("none");
+    expect(lastDecl(set, ".settings-input", "border")).toBe("none");
+    expect(lastDecl(set, ".settings-add-select", "border")).toBe("none");
+    expect(lastDecl(set, ".settings-btn-ghost", "border")).toBe("none");
+  });
+
+  // spec §5.5：提示字坐在輸入框自己的底上，兩個顏色都從 CSS 讀
+  it("輸入框的提示字對輸入框底至少 4.5:1", () => {
+    expect(worst(token(S.paintToken(".settings-input::placeholder", "color")), S.paintColor(".settings-input", "background"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("手動專案列的帳號名對暗磚至少 4.5:1", () => {
+    expect(worst(token(S.paintToken(".settings-rrow-acct", "color")), S.paintColor(".settings-rrow", "background"))).toBeGreaterThanOrEqual(4.5);
+  });
+});
