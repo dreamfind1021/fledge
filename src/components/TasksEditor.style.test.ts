@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseOf, decl, hasDecl, lastDecl } from "../testing/cssRules";
+import { baseOf, cssRules, decl, hasDecl, lastDecl, token, worst } from "../testing/cssRules";
 
 // 待辦編輯器、⌘T、啟動錯誤框的樣式防線——票 28 第四批 4b，spec docs/planning/soft-tiles-app-wide-design.md §6.6。
 // 涵蓋三個 CSS 檔：Tasks.css（整頁編輯器、提示條與刪除確認框的小按鈕、票內文的程式碼區塊）、ProjectPicker.css、Splash.css。
@@ -9,6 +9,9 @@ import { baseOf, decl, hasDecl, lastDecl } from "../testing/cssRules";
 // <button> 類斷言 border 存在而且是 none（lastDecl：刪掉這行會冒出瀏覽器預設外框，spec G9）。
 // 底色、滑過、opacity、換行這些值不斷言（spec §6.6）；唯一的例外是「儲存」的滑過（D8，守 cascade 的 bug）
 const tasks = baseOf("/src/components/Tasks.css");
+const pp = baseOf("/src/components/ProjectPicker.css");
+const P = cssRules(pp);
+const splash = baseOf("/src/components/Splash.css");
 
 describe("待辦編輯器：外框與分隔線（spec §6 D1、D2）", () => {
   it("編輯器沒有外框", () => {
@@ -48,5 +51,30 @@ describe("提示條與刪除確認框的小按鈕（spec §6 D6、D7）", () => 
 describe("票內文的程式碼區塊（spec §6 D4）", () => {
   it("程式碼區塊沒有外框", () => {
     expect(hasDecl(tasks, ".tk-md pre", "border")).toBe(false);
+  });
+});
+
+describe("⌘T 專案切換與啟動錯誤框（spec §6 D5、D9）", () => {
+  it("⌘T 卡片與底部小鍵帽沒有外框", () => {
+    expect(hasDecl(pp, ".pal-card", "border")).toBe(false);
+    expect(hasDecl(pp, ".pal-foot kbd", "border")).toBe(false);
+  });
+
+  it("⌘T 搜尋列下、底部列上沒有線", () => {
+    expect(hasDecl(pp, ".pal-search", "border-bottom")).toBe(false);
+    expect(hasDecl(pp, ".pal-foot", "border-top")).toBe(false);
+  });
+
+  it("啟動失敗的「詳細資訊」沒有外框", () => {
+    expect(hasDecl(splash, ".splash-err-detail", "border")).toBe(false);
+  });
+
+  // spec §6.5：提示字與輸入的字坐在搜尋列的暗帶上，兩個顏色都從 CSS 讀
+  it("⌘T 的提示字對搜尋列至少 4.5:1", () => {
+    expect(worst(token(P.paintToken(".pal-search input::placeholder", "color")), P.paintColor(".pal-search", "background"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("⌘T 輸入的字對搜尋列至少 4.5:1", () => {
+    expect(worst(token(P.paintToken(".pal-search input", "color")), P.paintColor(".pal-search", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 });

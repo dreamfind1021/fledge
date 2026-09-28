@@ -13,10 +13,10 @@
 }
 
 /* ── 面板主體 ── */
+/* 不畫外框：靠 --modal-shadow（含弱柔光）浮起（票 28 第四批 4b，soft-tiles spec §6 D5） */
 .pal-card {
   width: 600px;
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: 14px;
   box-shadow: var(--modal-shadow);
   overflow: hidden;
@@ -24,12 +24,13 @@
 }
 
 /* ── 搜尋列：sparkles 圖示 + input ── */
+/* 一條側欄色的暗帶、不畫線，隔開下面的清單——同待辦編輯器的工具列（票 28 第四批 4b，soft-tiles spec §6 D5） */
 .pal-search {
   display: flex;
   align-items: center;
   gap: 11px;
   padding: 15px 17px;
-  border-bottom: 1px solid var(--divider);
+  background: var(--sidebar);
 }
 
 /* sparkles 圖示顏色用 ai（lavender）*/
@@ -201,7 +202,6 @@
   align-items: center;
   gap: 16px;
   padding: 10px 16px;
-  border-top: 1px solid var(--divider);
   font-size: 11.5px;
   color: var(--faint);
 }
@@ -212,7 +212,6 @@
   padding: 1px 6px;
   border-radius: 5px;
   background: var(--hover);
-  border: 1px solid var(--border);
   color: var(--dim);
   margin-right: 5px;
 }
