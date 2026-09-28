@@ -37,6 +37,9 @@ describe("待辦面板的顏色對比", () => {
   const cmdRow = paintColor(".tasks-cmd-row", "background");
   const pill = paintColor(".tasks-sec-n", "background");
   const newBtn = paintColor(".tasks-new-btn", "background");
+  // 提示條與刪除確認框的小按鈕有自己的實心底（票 28 第四批 4b，soft-tiles spec §6 D6、D7）：從 CSS 讀
+  const bannerBtn = paintColor(".tk-banner .bbtn", "background");
+  const confirmBtn = paintColor(".tk-confirm button", "background");
   // 下一步是漸層：標籤、內文、› 可能落在任何一站，三態各取全部色站
   const nextBase = paintColors(".tasks-next", "background");
   const nextHover = paintColors(".tasks-next:hover", "background");
@@ -119,11 +122,10 @@ describe("待辦面板的顏色對比", () => {
     ["返回列的票號", ".full-num", "color", drawer],
     ["提示條文字", ".tk-banner", "color", bg],
     ["提示條文字（抽屜）", ".tk-banner", "color", drawer],
-    ["提示條按鈕文字", ".tk-banner .bbtn", "color", bg],
-    ["提示條按鈕文字（抽屜）", ".tk-banner .bbtn", "color", drawer],
-    // 票 25：孤兒草稿的丟棄鍵在編輯中停用；停用的仍是文字，淡化到 --dim 就停
-    ["停用的提示條按鈕文字", ".tk-banner .bbtn:disabled", "color", bg],
-    ["停用的提示條按鈕文字（抽屜）", ".tk-banner .bbtn:disabled", "color", drawer],
+    // 提示條與刪除確認框的按鈕坐落在自己的實心底上，清單或抽屜都一樣，各驗一條（票 28 第四批 4b）；
+    // 「刪除」是紅底白字（3.76，soft-tiles spec §6.7 已知限制），這裡驗的是「取消」；停用改半透明，免對比、不再驗
+    ["提示條按鈕文字", ".tk-banner .bbtn", "color", bannerBtn],
+    ["刪除確認框的「取消」", ".tk-confirm button", "color", confirmBtn],
     // 票 21 貼進新對話的指令：標籤坐落在 .tasks-pane 的 --bg；<pre> 在框自己的 --surface-2 上
     ["指令區塊標籤", ".tasks-cmd-lab", "color", bg],
     ["指令內文", ".tasks-cmd-pre", "color", cmdRow],

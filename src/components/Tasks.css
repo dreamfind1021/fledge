@@ -185,17 +185,20 @@
    不加這道虛線就分不出來（spec §11.5） */
 .tasks-new-input:disabled { color: var(--dim); background: transparent; outline: 1px dashed var(--border); }
 .tasks-new-btn { flex-shrink: 0; background: var(--surface-2); border: none; border-radius: 10px; padding: 0 14px; color: var(--text); font-size: 12px; font-weight: 600; font-family: var(--font-ui); cursor: pointer; }
-.tasks-new-btn:hover:not(:disabled) { background: var(--hover); }
+/* 滑過 --active：--hover 比 --surface-2 還暗，滑過看不出變化（票 28 §2.7、第四批 4b，soft-tiles spec §6 D7） */
+.tasks-new-btn:hover:not(:disabled) { background: var(--active); }
 .tasks-new-btn:disabled { color: var(--faint); cursor: default; }
 
 /* 行內刪除確認：兩次刻意點擊，不動用原生對話框（webview 的 window.confirm 失效） */
 .tk-confirm { display: flex; align-items: center; gap: 8px; margin: 0 10px 6px 30px; padding: 7px 10px; border-radius: 8px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border)); font-size: 11.5px; color: var(--dim); }
 .tk-confirm span { flex: 1; min-width: 0; }
-.tk-confirm button { flex-shrink: 0; border: 1px solid var(--border); border-radius: 6px; padding: 2px 9px; font-size: 11px; font-weight: 600; font-family: var(--font-ui); background: transparent; color: var(--text); cursor: pointer; }
+/* 按鈕實心、不畫框（G6）：「取消」灰底；「刪除」實心紅底白字，同設定與精靈的紅色刪除鍵
+   （白字對紅底 3.76，使用者看過數字後選的；票 28 第四批 4b，soft-tiles spec §6 D6、§6.7） */
+.tk-confirm button { flex-shrink: 0; border: none; border-radius: 6px; padding: 2px 9px; font-size: 11px; font-weight: 600; font-family: var(--font-ui); background: var(--surface-2); color: var(--text); cursor: pointer; }
 /* .tk-confirm button 的選擇器權重是 (0,1,1)，要壓過它得用兩個 class，不是靠 !important */
-.tk-confirm .tk-confirm-yes { color: var(--error); border-color: color-mix(in srgb, var(--error) 45%, var(--border)); }
-.tk-confirm .tk-confirm-yes:hover { background: color-mix(in srgb, var(--error) 15%, transparent); }
-.tk-confirm .tk-confirm-no:hover { background: var(--hover); }
+.tk-confirm .tk-confirm-yes { background: var(--error); color: var(--error-ink); }
+.tk-confirm .tk-confirm-yes:hover { filter: brightness(1.08); }
+.tk-confirm .tk-confirm-no:hover { background: var(--active); }
 
 /* ── 整頁編輯器（spec §6.2）── */
 .full-head { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; padding: 0 2px; }
@@ -236,9 +239,10 @@
 .tk-banner .bacts { display: flex; gap: 6px; flex-shrink: 0; }
 .tk-banner.is-draft { background: color-mix(in srgb, var(--warning) 9%, transparent); border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border)); }
 .tk-banner.is-conflict { background: color-mix(in srgb, var(--error) 9%, transparent); border: 1px solid color-mix(in srgb, var(--error) 38%, var(--border)); }
-.tk-banner .bbtn { border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600; font-family: var(--font-ui); background: transparent; color: var(--text); cursor: pointer; white-space: nowrap; }
-.tk-banner .bbtn:hover:not(:disabled) { background: var(--hover); }
-.tk-banner .bbtn:disabled { color: var(--dim); cursor: default; }
+/* 提示條的按鈕實心 --surface-2、不畫框，滑過 --active；停用照 4a 半透明（票 28 第四批 4b，soft-tiles spec §6 D3、D7） */
+.tk-banner .bbtn { border: none; border-radius: 6px; padding: 3px 9px; font-size: 11px; font-weight: 600; font-family: var(--font-ui); background: var(--surface-2); color: var(--text); cursor: pointer; white-space: nowrap; }
+.tk-banner .bbtn:hover:not(:disabled) { background: var(--active); }
+.tk-banner .bbtn:disabled { opacity: 0.5; cursor: default; }
 
 /* ── 右欄（票 19，spec §5.5）── */
 .lb-detail { position: relative; padding: 22px 26px 40px; }

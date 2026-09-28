@@ -37,3 +37,10 @@ describe("待辦編輯器：按鈕（spec §6 D3、D7、D8）", () => {
     expect(decl(tasks, ".btn.is-primary:hover:not(:disabled)", "background")).toBe(decl(tasks, ".btn.is-primary", "background"));
   });
 });
+
+describe("提示條與刪除確認框的小按鈕（spec §6 D6、D7）", () => {
+  it("小按鈕寫 border: none（G9）", () => {
+    expect(lastDecl(tasks, ".tk-confirm button", "border")).toBe("none");
+    expect(lastDecl(tasks, ".tk-banner .bbtn", "border")).toBe("none");
+  });
+});
