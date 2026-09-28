@@ -223,7 +223,6 @@
   width: 100%;
   text-align: left;
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: var(--row-radius);
   padding: 10px 12px;
   font-family: var(--font-mono);
