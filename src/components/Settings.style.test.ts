@@ -15,6 +15,8 @@ const acc = baseOf("/src/components/AccountsEditor.css");
 const A = cssRules(acc);
 const bk = baseOf("/src/components/BackupCard.css");
 const rs = baseOf("/src/components/RestoreCard.css");
+const ob = baseOf("/src/components/Onboarding.css");
+const O = cssRules(ob);
 
 describe("設定視窗：大卡片與分隔線（spec D1、D2）", () => {
   it("設定視窗沒有外框", () => {
@@ -73,5 +75,42 @@ describe("帳號、備份、還原：方塊、輸入框、按鈕、分隔線（s
     expect(hasDecl(rs, ".rs-path", "border")).toBe(false);
     expect(hasDecl(rs, ".rs-bundles", "border-top")).toBe(false);
     expect(hasDecl(rs, ".rs-links", "border-top")).toBe(false);
+  });
+});
+
+describe("引導精靈與 b4 卡片（spec D1、D2、D3、D4、D5、D7）", () => {
+  it("精靈卡片、清單卡、移機區塊沒有外框", () => {
+    expect(hasDecl(ob, ".ob-card", "border")).toBe(false);
+    expect(hasDecl(ob, ".b4-card", "border")).toBe(false);
+    expect(hasDecl(ob, ".ob-spot", "border")).toBe(false);
+  });
+
+  it("清單每一列之間沒有線", () => {
+    expect(hasDecl(ob, ".b4-item", "border-bottom")).toBe(false);
+  });
+
+  it("紫色說明框與嵌入的終端機沒有外框（黃色確認框保留，不在這裡驗）", () => {
+    expect(hasDecl(ob, ".ob-note", "border")).toBe(false);
+    expect(hasDecl(ob, ".b4-note", "border")).toBe(false);
+    expect(hasDecl(ob, ".b4-term", "border")).toBe(false);
+    expect(hasDecl(ob, ".b4-term-head", "border-bottom")).toBe(false);
+  });
+
+  it("下拉選單、輸入框、卡內小按鈕寫 border: none（G9）", () => {
+    expect(lastDecl(ob, ".ob-sel", "border")).toBe("none");
+    expect(lastDecl(ob, ".ob-input", "border")).toBe("none");
+    expect(lastDecl(ob, ".b4-btn-sm", "border")).toBe("none");
+  });
+
+  it("精靈輸入框的提示字對輸入框底至少 4.5:1", () => {
+    expect(worst(token(O.paintToken(".ob-input::placeholder", "color")), O.paintColor(".ob-input", "background"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("清單卡裡最淡的字（工具版本）對暗磚至少 4.5:1", () => {
+    expect(worst(token(O.paintToken(".b4-item-meta", "color")), O.paintColor(".b4-card", "background"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("移機區塊的「舊機位置」對暗磚至少 4.5:1", () => {
+    expect(worst(token(O.paintToken(".ob-spot-old", "color")), O.paintColor(".ob-spot", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 });
