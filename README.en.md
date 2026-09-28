@@ -224,8 +224,9 @@ Data flow: **frontend ↔ backend (HTTP / WebSocket) ↔ PTY ↔ Claude Code CLI
 ## Development
 
 ```bash
-# Python sidecar environment
-cd sidecar && python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
+# Python sidecar environment (needs Python 3.12+; the python3 that ships with macOS is too old)
+brew install python@3.14
+cd sidecar && "$(brew --prefix python@3.14)/bin/python3.14" -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
 pytest                       # sidecar tests
 
 # Frontend + Tauri (make sure cargo is on PATH first)

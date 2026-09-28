@@ -224,8 +224,9 @@ cp -R skills/handoff      ~/.claude/skills/    # 換對話交接
 ## 開發
 
 ```bash
-# Python sidecar 環境
-cd sidecar && python3 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
+# Python sidecar 環境（需要 Python 3.12 以上，macOS 內建的 python3 版本不夠）
+brew install python@3.14
+cd sidecar && "$(brew --prefix python@3.14)/bin/python3.14" -m venv .venv && source .venv/bin/activate && pip install -e ".[dev]"
 pytest                       # sidecar 測試
 
 # 前端 + Tauri（先確保 cargo 在 PATH）
