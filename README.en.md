@@ -101,7 +101,7 @@ Fledge doesn't touch this layer at all. Claude Code, Codex, and the other CLIs a
 
 Two things, both under the project's `.fledge/`, neither in git:
 
-- **The resume note** `.fledge/state.md` — when you wrap up, say "write the resume note" and the AI records where you're stuck, what's next, and what tripped you up. Next time, that "next step" line sits at the top of the project's task list in the panel; click it and the whole note shows in the right column, where you can edit and save it directly. If the note ends with a "paste into a new conversation" block, the list shows it as a one-click copy.
+- **The resume note** `.fledge/state.md` — when you wrap up, say "write the resume note" and the AI records where you're stuck, what's next, and what tripped you up. Next time, that "next step" line sits at the top of the project's task list in the panel; click it and the whole note opens in a drawer on the right, where you can edit and save it directly. If the note ends with a "paste into a new conversation" block, the list shows it as a one-click copy.
 - **Tasks** `.fledge/tasks/NN-title.md` — one file per item. Whether you create one from the panel or from a conversation, it lands in the same stack of files.
 
 This layer needs two skills before the AI can use it (`resume-note` and `fledge-tasks`, both shipped in [`skills/`](skills/)). Without them the panel still works fully; the AI just doesn't know the format, so it can't open tasks or write notes.
@@ -131,7 +131,7 @@ One paragraph per feature. Step-by-step details live in [`guides/`](guides/).
 
 **Memory**
 
-- **Task panel** — project tree on the left, task list in the middle, task body on the right, all on one screen; the "All projects" page gathers every project's in-progress and recently added tasks. Add, cycle, park (later, not counted as open), or delete tasks; task bodies and the resume note are edited right in the right column (tasks keep a draft, so switching tabs loses nothing). → [`guides/tasks-and-resume-note.en.md`](guides/tasks-and-resume-note.en.md)
+- **Task panel** — project tree on the left, task list in the middle; click a task and its body opens in a drawer on the right, all on one screen; the "All projects" page gathers every project's in-progress and recently added tasks. Add, cycle, park (later, not counted as open), or delete tasks; task bodies and the resume note are edited right in the drawer (tasks keep a draft, so switching tabs loses nothing). → [`guides/tasks-and-resume-note.en.md`](guides/tasks-and-resume-note.en.md)
 - **Memory panel** — aggregates Claude Code memory and the second brain across all accounts and projects; full-text search, grouped browsing; Fledge suggests cross-project links for you to confirm or dismiss. Opening a project floats its related topics at the bottom right of the terminal. Always read-only toward the sources. → [`guides/memory-and-second-brain.en.md`](guides/memory-and-second-brain.en.md)
 
 <p align="center">
