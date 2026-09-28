@@ -44,3 +44,9 @@ describe("提示條與刪除確認框的小按鈕（spec §6 D6、D7）", () => 
     expect(lastDecl(tasks, ".tk-banner .bbtn", "border")).toBe("none");
   });
 });
+
+describe("票內文的程式碼區塊（spec §6 D4）", () => {
+  it("程式碼區塊沒有外框", () => {
+    expect(hasDecl(tasks, ".tk-md pre", "border")).toBe(false);
+  });
+});

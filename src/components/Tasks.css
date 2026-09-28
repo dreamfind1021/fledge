@@ -158,7 +158,9 @@
 .tk-md h1 { font-size: 15px; font-weight: 800; line-height: 1.5; margin: 18px 0 10px; }
 .tk-md h2 { font-size: 13.5px; font-weight: 700; margin: 16px 0 8px; }
 .tk-md code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
-.tk-md pre { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 9px 11px; overflow-x: auto; margin: 0 0 10px; }
+/* 程式碼區塊不畫框、底色維持亮一階——在抽屜卡片與編輯器的暗磚上都看得出來；長行換行、不出左右捲軸，同 .tasks-cmd-pre
+   （票 28 第四批 4b，soft-tiles spec §6 D4） */
+.tk-md pre { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--surface-2); border-radius: 6px; padding: 9px 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: 0 0 10px; }
 .tk-md pre code { background: none; padding: 0; }
 .tk-md ul { margin: 0 0 10px; padding-left: 19px; }
 .tk-md li { margin: 3px 0; }
