@@ -216,21 +216,20 @@
 .ed-foot .spacer { flex: 1; }
 .ed-hint { font-size: 11.5px; color: var(--dim); font-family: var(--font-mono); }
 .ed-hint.is-dirty { color: var(--warning); }
-.btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: 7px; padding: 5px 12px; font-size: 12px; font-weight: 600; font-family: var(--font-ui); background: transparent; color: var(--text); cursor: pointer; }
+.btn { display: inline-flex; align-items: center; gap: 6px; border: none; border-radius: 7px; padding: 5px 12px; font-size: 12px; font-weight: 600; font-family: var(--font-ui); background: transparent; color: var(--text); cursor: pointer; }
 .btn:hover:not(:disabled) { background: var(--hover); }
-.btn.is-primary { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
-.btn.is-quiet { color: var(--dim); border-color: transparent; }
-/* 停用態（review 找到的缺漏）：不用 opacity 淡化（spec §6.4）。
-   .ed-title／.ed-area 平常文字是 --text，換成 --dim 是看得見的真變化；.ed-btn／.btn.is-quiet
-   平常文字已經是 --dim，再把文字換成 --dim 什麼都不會變，改用邊框；.btn.is-primary 平常靠橘底
-   當訊號，停用時把橘底整個拿掉、換成跟 is-quiet 一致的外框樣式——調暗橘底吃掉的正是它的訊號
-   本身，不是「訊號變弱」而是「訊號消失」，跟拿掉它是同一件事，不如老實拿掉。
-   邊框、文字都量過對比度（見 Tasks.contrast.test.ts 與 task-10-report.md）。 */
+.btn.is-primary { background: var(--primary); color: var(--primary-ink); }
+/* 滑過維持橘底、稍微變亮：上一條 .btn:hover:not(:disabled) 的權重 (0,3,0) 高於 .btn.is-primary (0,2,0)，
+   少了這條會把橘底蓋成 --hover、深棕字糊掉（票 28 第四批 4b，soft-tiles spec §6 D8） */
+.btn.is-primary:hover:not(:disabled) { background: var(--primary); filter: brightness(1.08); }
+.btn.is-quiet { color: var(--dim); }
+/* 停用態：輸入框（.ed-title／.ed-area）平常是 --text 字，停用換成 --dim，是看得見的真變化。
+   按鈕的停用照設定與精靈（票 28 第四批 4a D6）半透明：編輯器的線全部拿掉之後，原本「停用才畫一圈灰框」
+   會變成編輯器裡唯一的線（票 28 第四批 4b，soft-tiles spec §6 D3）；橘色「儲存」停用時保留橘底、一起淡掉。
+   停用的控制項免對比（WCAG 1.4.3；index.contrast.test.ts 的 opacity 白名單豁免 :disabled）。 */
 .ed-title:disabled, .ed-area:disabled { color: var(--dim); cursor: default; }
-.ed-btn:disabled { border: 1px solid var(--dim); cursor: default; }
-.btn:disabled { cursor: default; }
-.btn.is-quiet:disabled { border-color: var(--dim); }
-.btn.is-primary:disabled { background: transparent; border-color: var(--dim); color: var(--dim); }
+.ed-btn:disabled { opacity: 0.5; cursor: default; }
+.btn:disabled { opacity: 0.5; cursor: default; }
 /* 提示條 */
 .tk-banner { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 9px; margin: 0 0 10px; padding: 9px 12px; border-radius: 8px; font-size: 12px; line-height: 1.65; color: var(--dim); }
 .tk-banner .btext { flex: 1; }

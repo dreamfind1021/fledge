@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseOf, hasDecl } from "../testing/cssRules";
+import { baseOf, decl, hasDecl, lastDecl } from "../testing/cssRules";
 
 // 待辦編輯器、⌘T、啟動錯誤框的樣式防線——票 28 第四批 4b，spec docs/planning/soft-tiles-app-wide-design.md §6.6。
 // 涵蓋三個 CSS 檔：Tasks.css（整頁編輯器、提示條與刪除確認框的小按鈕、票內文的程式碼區塊）、ProjectPicker.css、Splash.css。
@@ -19,5 +19,21 @@ describe("待辦編輯器：外框與分隔線（spec §6 D1、D2）", () => {
     expect(hasDecl(tasks, ".ed-title", "border-bottom")).toBe(false);
     expect(hasDecl(tasks, ".ed-bar", "border-bottom")).toBe(false);
     expect(hasDecl(tasks, ".ed-foot", "border-top")).toBe(false);
+  });
+});
+
+describe("待辦編輯器：按鈕（spec §6 D3、D7、D8）", () => {
+  it("底部按鈕寫 border: none（G9）", () => {
+    expect(lastDecl(tasks, ".btn", "border")).toBe("none");
+  });
+
+  it("工具鈕停用時不畫框（停用照 4a 半透明）", () => {
+    expect(hasDecl(tasks, ".ed-btn:disabled", "border")).toBe(false);
+  });
+
+  // D8：.btn:hover:not(:disabled) 的權重 (0,3,0) 高於 .btn.is-primary (0,2,0)——少了這條同樣具體的滑過規則，
+  // 滑過「儲存」橘底會被蓋成 --hover。唯一的值斷言：jsdom 模擬不了滑過，只能從宣告驗（spec §6.6）
+  it("滑過「儲存」維持跟平常一樣的橘底", () => {
+    expect(decl(tasks, ".btn.is-primary:hover:not(:disabled)", "background")).toBe(decl(tasks, ".btn.is-primary", "background"));
   });
 });

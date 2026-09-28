@@ -65,11 +65,6 @@ describe("待辦面板的顏色對比", () => {
     ["todo 空心框（選中）", ".tk-mark.is-todo::before", "border", active],
     ["doing 實心方", ".tk-mark.is-doing::before", "background", tileDoing],
     ["done 打勾（繼承 .tk-mark 的 color）", ".tk-mark", "color", tile],
-    // 整頁編輯器（spec §6.2／§6.4）停用態的邊框：平常文字已經是 --dim，改文字色沒有用，
-    // 訊號改放邊框上（task 10 review FIX 2）——工具鈕坐落在工具列上、底部按鈕坐落在編輯器上
-    [".ed-btn 停用邊框", ".ed-btn:disabled", "border", toolbar],
-    ["Preview／Cancel 停用邊框", ".btn.is-quiet:disabled", "border-color", editor],
-    ["Save 停用邊框", ".btn.is-primary:disabled", "border-color", editor],
     // 票 21 指令框尾的複製圖示（lucide svg 吃 currentColor）與已複製的勾，坐落在框的 --surface-2 上
     ["指令複製圖示", ".tasks-cmd-act", "color", cmdRow],
     ["指令已複製的勾", ".tasks-cmd-act.is-done", "color", cmdRow],
@@ -119,7 +114,6 @@ describe("待辦面板的顏色對比", () => {
     [".ed-btn 工具鈕", ".ed-btn", "color", toolbar],
     [".ed-title 停用文字", ".ed-title:disabled", "color", editor],
     [".ed-area 停用文字", ".ed-area:disabled", "color", editor],
-    ["Save 停用文字", ".btn.is-primary:disabled", "color", editor],
     // 返回列（編輯器頁首）坐落在抽屜卡片上；提示條在清單（--bg）與抽屜兩處都會出現，各驗一次
     ["返回列的專案名", ".full-back", "color", drawer],
     ["返回列的票號", ".full-num", "color", drawer],
