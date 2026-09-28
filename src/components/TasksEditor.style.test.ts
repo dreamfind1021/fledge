@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseOf, cssRules, decl, hasDecl, lastDecl, token, worst } from "../testing/cssRules";
+import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, token, worst } from "../testing/cssRules";
 
 // 待辦編輯器、⌘T、啟動錯誤框的樣式防線——票 28 第四批 4b，spec docs/planning/soft-tiles-app-wide-design.md §6.6。
 // 涵蓋三個 CSS 檔：Tasks.css（整頁編輯器、提示條與刪除確認框的小按鈕、票內文的程式碼區塊）、ProjectPicker.css、Splash.css。
@@ -76,5 +76,28 @@ describe("⌘T 專案切換與啟動錯誤框（spec §6 D5、D9）", () => {
 
   it("⌘T 輸入的字對搜尋列至少 4.5:1", () => {
     expect(worst(token(P.paintToken(".pal-search input", "color")), P.paintColor(".pal-search", "background"))).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// spec §1.5／§6.6：防的是「以後不小心把線加回來」——最可能的形狀是新增元件時照抄舊寫法
+// `border: 1px solid var(--border)`。定點斷言只看得到既有的選擇器，這條連新增的選擇器也看得到；
+// Tasks.css 掃整份，連同清單的部分一起守。不防刻意繞過（寫死顏色另有 index.tokens.test.ts 擋；TSX inline style 靠審查）。
+describe("待辦、⌘T、啟動畫面的 CSS 不再引用分隔線 token（spec §1.5、§6.6）", () => {
+  it("--border／--divider／--term-divider 只剩狀態訊號、停用虛線與捲軸七處，都不是分隔線", () => {
+    const { hits } = lineTokenHits([
+      "/src/components/Tasks.css",
+      "/src/components/ProjectPicker.css",
+      "/src/components/Splash.css",
+    ]);
+    // 期望清單非空：掃描迴圈失效時 hits 變空、toEqual 會紅，不另外斷言 scanned（spec §6.6）
+    expect(hits).toEqual([
+      "/src/components/Tasks.css .tk-flagbody → border: 1px solid color-mix(in srgb, var(--warning) 35%, var(--border))",
+      "/src/components/Tasks.css .tk-md blockquote → border-left: 2px solid var(--border)",
+      "/src/components/Tasks.css .tasks-new-input:disabled → outline: 1px dashed var(--border)",
+      "/src/components/Tasks.css .tk-confirm → border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border))",
+      "/src/components/Tasks.css .tk-banner.is-draft → border: 1px solid color-mix(in srgb, var(--warning) 32%, var(--border))",
+      "/src/components/Tasks.css .tk-banner.is-conflict → border: 1px solid color-mix(in srgb, var(--error) 38%, var(--border))",
+      "/src/components/ProjectPicker.css .pal-list::-webkit-scrollbar-thumb → background: var(--border)",
+    ]);
   });
 });
