@@ -229,8 +229,9 @@
   overflow: hidden;
   min-width: 6px;
 }
+/* 滑過：整根亮一點，不畫細框；×1.25 會把橘推向圖例裡 gpt-5.4 的黃（票 28 第三批，spec D5） */
 .dash-daily-col:hover {
-  outline: 1px solid var(--border);
+  filter: brightness(1.12);
 }
 .dash-daily-col > i {
   display: block;
@@ -324,10 +325,6 @@
   align-items: center;
   gap: 8px;
   padding: 3px 0;
-  border-bottom: 1px solid var(--divider);
-}
-.dash-donut-legend li:last-child {
-  border-bottom: none;
 }
 .dash-donut-legend i {
   width: 8px;
@@ -364,9 +361,11 @@
 }
 
 /* ── 專案表 ── */
+/* 每一列一塊凹進卡片的暗磚、列與列之間 5px；separate 模式首尾格才能各自圓角（票 28 第三批，spec D3） */
 .dash-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0 5px;
   font-size: 12px;
 }
 .dash-table th {
@@ -374,12 +373,11 @@
   font-weight: 500;
   text-align: left;
   padding: 4px 10px;
-  border-bottom: 1px solid var(--border);
   font-size: 11px;
 }
 .dash-table td {
   padding: 7px 10px;
-  border-bottom: 1px solid var(--divider);
+  background: var(--bg);
   text-align: right;
   font-family: var(--font-mono);
   font-size: 12px;
@@ -388,6 +386,10 @@
 .dash-table td:first-child {
   text-align: left;
   font-family: var(--font-ui);
+  border-radius: var(--row-radius) 0 0 var(--row-radius);
+}
+.dash-table td:last-child {
+  border-radius: 0 var(--row-radius) var(--row-radius) 0;
 }
 .dash-table th:first-child {
   text-align: left;
@@ -395,9 +397,7 @@
 .dash-table .dash-th-num {
   text-align: right;
 }
-.dash-table tr:last-child td {
-  border-bottom: none;
-}
+/* 滑過蓋過暗磚：選擇器比 .dash-table td 具體 */
 .dash-table tr:hover td {
   background: var(--hover);
 }

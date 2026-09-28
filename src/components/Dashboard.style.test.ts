@@ -24,3 +24,36 @@ describe("卡片與「資料更新中」小籤拿掉外框（spec D1、D4）", (
     expect(worst(token(paintToken(".dash-stale", "color")), paintColor(".dash-stale", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 });
+
+describe("專案表每列一塊暗磚、圖例與長條滑過不畫線（spec D3、D5）", () => {
+  it("表頭與每一列沒有列線", () => {
+    expect(hasDecl(dash, ".dash-table th", "border-bottom")).toBe(false);
+    expect(hasDecl(dash, ".dash-table th", "border")).toBe(false);
+    expect(hasDecl(dash, ".dash-table td", "border-bottom")).toBe(false);
+    expect(hasDecl(dash, ".dash-table td", "border")).toBe(false);
+  });
+
+  it("圓餅圖旁的圖例沒有行線", () => {
+    expect(hasDecl(dash, ".dash-donut-legend li", "border-bottom")).toBe(false);
+    expect(hasDecl(dash, ".dash-donut-legend li", "border")).toBe(false);
+  });
+
+  it("每日成本長條滑過不畫細框", () => {
+    expect(hasDecl(dash, ".dash-daily-col:hover", "outline")).toBe(false);
+  });
+
+  // spec §4.5 第二、三列：字坐在每一列的暗磚上，底色從 .dash-table td 的 background 讀（暗磚底色的間接防線）。
+  // 其他格沒有自己的 color、繼承 body 的 --text，跟專案名稱同一組，不另驗
+  const row = () => paintColor(".dash-table td", "background");
+  it("專案名稱對暗磚至少 4.5:1", () => {
+    expect(worst(token(paintToken(".dash-proj-name", "color")), row())).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("合計對暗磚至少 4.5:1", () => {
+    expect(worst(token(paintToken(".dash-td-total", "color")), row())).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("路徑對暗磚至少 4.5:1", () => {
+    expect(worst(token(paintToken(".dash-proj-path", "color")), row())).toBeGreaterThanOrEqual(4.5);
+  });
+});
