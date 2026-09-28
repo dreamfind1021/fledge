@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseOf, cssRules, decl, hasDecl, lastDecl, over, token, worst } from "../testing/cssRules";
+import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, over, token, worst } from "../testing/cssRules";
 
 // 設定視窗與引導精靈的樣式防線——票 28 第四批 4a，spec docs/planning/soft-tiles-app-wide-design.md §5.6。
 // 涵蓋六個 CSS 檔：Settings.css、AccountsEditor.css、BackupCard.css、RestoreCard.css、LangSwitch.css、Onboarding.css
@@ -130,5 +130,26 @@ describe("語言切換鈕（spec D8）", () => {
   ])("選中的橘字對疊在%s上的淡橘底至少 4.5:1", (_label, backdrop) => {
     const bg = over(decl(lang, ".lang-switch-btn.is-on", "background"), backdrop());
     expect(worst(token(L.paintToken(".lang-switch-btn.is-on", "color")), bg)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// spec §1.5／§5.6：防的是「以後不小心把線加回來」——最可能的形狀是新增元件時照抄舊寫法
+// `border: 1px solid var(--border)`。定點斷言只看得到既有的選擇器，這條連新增的選擇器也看得到。
+// 不防刻意繞過（寫死顏色另有 index.tokens.test.ts 擋；TSX inline style 靠審查）。
+describe("設定與精靈的 CSS 不再引用分隔線 token（spec §1.5、§5.6）", () => {
+  it("--border／--divider／--term-divider 只剩捲軸與精靈進度格兩處，都不是線", () => {
+    const { hits } = lineTokenHits([
+      "/src/components/Settings.css",
+      "/src/components/AccountsEditor.css",
+      "/src/components/BackupCard.css",
+      "/src/components/RestoreCard.css",
+      "/src/components/LangSwitch.css",
+      "/src/components/Onboarding.css",
+    ]);
+    // 期望清單非空：掃描迴圈失效時 hits 變空、toEqual 會紅，不另外斷言 scanned（spec §5.6）
+    expect(hits).toEqual([
+      "/src/components/Settings.css .settings-body::-webkit-scrollbar-thumb → background: var(--border)",
+      "/src/components/Onboarding.css .ob-step-bar → background: var(--border)",
+    ]);
   });
 });
