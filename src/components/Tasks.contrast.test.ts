@@ -19,10 +19,10 @@ const { paintToken, paintColor, paintColors } = cssRules(baseLevel(stripComments
 
 describe("待辦面板的顏色對比", () => {
   const bg = token("bg");
-  // 編輯器（spec §6.2）的文字實際坐落在 .full-editor 的 --surface 上，不是 --bg——
-  // --surface 比 --bg 亮，拿 --bg 當底算出來的對比度會偏高、掩蓋掉真的不夠的情況，
-  // 所以這裡另外備一個底色，各選擇器依實際坐落的容器各自指定（task 10 review）
-  const surface = token("surface");
+  // 編輯器（spec §6.2）的文字坐落在 .full-editor 的底色上、工具鈕坐落在 .ed-bar 的底色上——
+  // 票 28 第四批 4b 起編輯器凹成暗磚、工具列一條側欄色（soft-tiles spec §6 D1、D2），兩個底都從 CSS 讀，不寫死 token
+  const editor = paintColor(".full-editor", "background");
+  const toolbar = paintColor(".ed-bar", "background");
   // 票 21 指令區塊的 <pre> 有自己的 --surface-2 底，比 --surface 再亮一階，同一個理由要另備一個底色
   const surface2 = token("surface-2");
   // 專案樹（票 19）反白列的底是 --active，不是 --bg——同一個選擇器坐落在兩種底色上，
@@ -66,10 +66,10 @@ describe("待辦面板的顏色對比", () => {
     ["doing 實心方", ".tk-mark.is-doing::before", "background", tileDoing],
     ["done 打勾（繼承 .tk-mark 的 color）", ".tk-mark", "color", tile],
     // 整頁編輯器（spec §6.2／§6.4）停用態的邊框：平常文字已經是 --dim，改文字色沒有用，
-    // 訊號改放邊框上（task 10 review FIX 2）——都坐落在 .full-editor 的 --surface 上
-    [".ed-btn 停用邊框", ".ed-btn:disabled", "border", surface],
-    ["Preview／Cancel 停用邊框", ".btn.is-quiet:disabled", "border-color", surface],
-    ["Save 停用邊框", ".btn.is-primary:disabled", "border-color", surface],
+    // 訊號改放邊框上（task 10 review FIX 2）——工具鈕坐落在工具列上、底部按鈕坐落在編輯器上
+    [".ed-btn 停用邊框", ".ed-btn:disabled", "border", toolbar],
+    ["Preview／Cancel 停用邊框", ".btn.is-quiet:disabled", "border-color", editor],
+    ["Save 停用邊框", ".btn.is-primary:disabled", "border-color", editor],
     // 票 21 指令框尾的複製圖示（lucide svg 吃 currentColor）與已複製的勾，坐落在框的 --surface-2 上
     ["指令複製圖示", ".tasks-cmd-act", "color", cmdRow],
     ["指令已複製的勾", ".tasks-cmd-act.is-done", "color", cmdRow],
@@ -108,13 +108,18 @@ describe("待辦面板的顏色對比", () => {
     [".tk-md 連結", ".tk-md a", "color", drawer],
     // 票 25：離場筆記的 `# 標題`；票 26＋27 起右欄內容直接坐落在抽屜卡片（drawer）上
     [".tk-md 一級標題", ".tk-md h1", "color", drawer],
-    // 整頁編輯器（spec §6.2／§6.4，task 10 review FIX 4）：坐落在 --surface 上的文字
-    [".ed-title 正常文字", ".ed-title", "color", surface],
-    [".ed-area 正常文字", ".ed-area", "color", surface],
-    [".ed-hint 狀態字", ".ed-hint", "color", surface],
-    [".ed-title 停用文字", ".ed-title:disabled", "color", surface],
-    [".ed-area 停用文字", ".ed-area:disabled", "color", surface],
-    ["Save 停用文字", ".btn.is-primary:disabled", "color", surface],
+    // 整頁編輯器（spec §6.2／§6.4，task 10 review FIX 4）：坐落在編輯器底色上的文字；
+    // 「未儲存」、預覽／取消文字鈕、預覽裡的內文、工具鈕是票 28 第四批 4b 補的（soft-tiles spec §6.5）
+    [".ed-title 正常文字", ".ed-title", "color", editor],
+    [".ed-area 正常文字", ".ed-area", "color", editor],
+    [".ed-hint 狀態字", ".ed-hint", "color", editor],
+    [".ed-hint「未儲存」", ".ed-hint.is-dirty", "color", editor],
+    ["預覽／取消文字鈕", ".btn.is-quiet", "color", editor],
+    [".tk-md 內文（編輯器預覽）", ".tk-md", "color", editor],
+    [".ed-btn 工具鈕", ".ed-btn", "color", toolbar],
+    [".ed-title 停用文字", ".ed-title:disabled", "color", editor],
+    [".ed-area 停用文字", ".ed-area:disabled", "color", editor],
+    ["Save 停用文字", ".btn.is-primary:disabled", "color", editor],
     // 返回列（編輯器頁首）坐落在抽屜卡片上；提示條在清單（--bg）與抽屜兩處都會出現，各驗一次
     ["返回列的專案名", ".full-back", "color", drawer],
     ["返回列的票號", ".full-num", "color", drawer],
