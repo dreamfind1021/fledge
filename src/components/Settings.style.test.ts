@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseOf, cssRules, hasDecl, lastDecl, token, worst } from "../testing/cssRules";
+import { baseOf, cssRules, decl, hasDecl, lastDecl, over, token, worst } from "../testing/cssRules";
 
 // 設定視窗與引導精靈的樣式防線——票 28 第四批 4a，spec docs/planning/soft-tiles-app-wide-design.md §5.6。
 // 涵蓋六個 CSS 檔：Settings.css、AccountsEditor.css、BackupCard.css、RestoreCard.css、LangSwitch.css、Onboarding.css
@@ -17,6 +17,8 @@ const bk = baseOf("/src/components/BackupCard.css");
 const rs = baseOf("/src/components/RestoreCard.css");
 const ob = baseOf("/src/components/Onboarding.css");
 const O = cssRules(ob);
+const lang = baseOf("/src/components/LangSwitch.css");
+const L = cssRules(lang);
 
 describe("設定視窗：大卡片與分隔線（spec D1、D2）", () => {
   it("設定視窗沒有外框", () => {
@@ -112,5 +114,21 @@ describe("引導精靈與 b4 卡片（spec D1、D2、D3、D4、D5、D7）", () =
 
   it("移機區塊的「舊機位置」對暗磚至少 4.5:1", () => {
     expect(worst(token(O.paintToken(".ob-spot-old", "color")), O.paintColor(".ob-spot", "background"))).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe("語言切換鈕（spec D8）", () => {
+  it("<button> 寫 border: none（G9）", () => {
+    expect(lastDecl(lang, ".lang-switch-btn", "border")).toBe("none");
+  });
+
+  // spec §5.5：選中的底是半透明，疊在它實際坐落的那層底上算——設定視窗標題列（.settings-modal）與精靈頁（.ob-overlay），
+  // 兩個底都從 CSS 讀
+  it.each([
+    ["設定視窗", () => decl(set, ".settings-modal", "background")],
+    ["引導精靈", () => decl(ob, ".ob-overlay", "background")],
+  ])("選中的橘字對疊在%s上的淡橘底至少 4.5:1", (_label, backdrop) => {
+    const bg = over(decl(lang, ".lang-switch-btn.is-on", "background"), backdrop());
+    expect(worst(token(L.paintToken(".lang-switch-btn.is-on", "color")), bg)).toBeGreaterThanOrEqual(4.5);
   });
 });
