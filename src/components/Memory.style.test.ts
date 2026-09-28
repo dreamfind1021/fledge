@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, resolveColor, token, worst } from "../testing/cssRules";
+import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, over, token, worst } from "../testing/cssRules";
 
 // 記憶面板的樣式防線——票 28 第二批，spec docs/planning/soft-tiles-app-wide-design.md §3.6。
 // jsdom 不套 CSS，這裡只能讀 CSS 原始碼驗宣告；畫面由 headless 截圖與真機驗收看。
@@ -7,9 +7,6 @@ import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, resolveColor,
 // <input>／<button> 類斷言 border 存在而且是 none（lastDecl：刪掉這行會冒出瀏覽器預設外框，spec G9）
 const mem = baseOf("/src/components/Memory.css");
 const { paintToken, paintColor } = cssRules(mem);
-// 半透明底色（color-mix(…, transparent)）疊在不透明底色上，等於直接跟那個底色在 sRGB 混——
-// 所以把 transparent 換成它實際坐落的那層底色（從 CSS 讀）再算（spec §3.6）
-const over = (expr: string, backdrop: string) => resolveColor(expr.replace("transparent", backdrop));
 
 describe("搜尋框：拿掉外框，焦點改成 2px 環（spec M1、M2）", () => {
   it("<input> 寫 border: none（G9）", () => {

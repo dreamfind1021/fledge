@@ -115,6 +115,10 @@ export const stops = (expr: string): string[] => {
 };
 // 前景對一組色站的最差對比
 export const worst = (fg: string, backdrop: string | string[]) => Math.min(...[backdrop].flat().map((b) => contrast(fg, b)));
+// 半透明底色（color-mix(…, transparent)）疊在不透明底色上，等於直接跟那個底色在 sRGB 混——
+// 所以把 transparent 換成它實際坐落的那層底色（呼叫端從 CSS 讀）再算。
+// 票 28 第四批 4a 從 Memory.style.test.ts 搬來：語言切換鈕的對比是第二個用到它的地方（spec §5.6）
+export const over = (expr: string, backdrop: string) => resolveColor(expr.replace("transparent", backdrop));
 
 // ── 塗色查詢：綁定一段 CSS（通常是 baseLevel(stripComments(readCss(path)))）──
 // 不可以在測試裡自己寫死「某條規則用某個 token」——那樣有人把 CSS 改回較淡的 token 測試照樣全綠，
