@@ -22,7 +22,6 @@
 /* 備份包選擇 */
 .rs-bundles {
   margin-top: 12px;
-  border-top: 1px solid var(--border);
   padding-top: 10px;
 }
 
@@ -68,7 +67,6 @@
   font-size: 11.5px;
   color: var(--dim);
   background: var(--surface);
-  border: 1px solid var(--border);
   border-radius: 6px;
   padding: 3px 7px;
   flex: 1 1 auto;
@@ -102,10 +100,9 @@
   margin: 8px 0 0;
 }
 
-/* 斷鏈修復區：與上方的展開流程用分隔線隔開——它是展開完成後的另一個動作，
-   而且是這張卡裡唯一會寫入現役目錄的東西 */
+/* 斷鏈修復區：它是展開完成後的另一個動作，而且是這張卡裡唯一會寫入現役目錄的東西——
+   不畫分隔線，靠自己的小標題與上方 22px（margin-top＋padding-top）跟展開流程分開（票 28 第四批 4a，spec §5.2） */
 .rs-links {
   margin-top: 12px;
-  border-top: 1px solid var(--border);
   padding-top: 10px;
 }

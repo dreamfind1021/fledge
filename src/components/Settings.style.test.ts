@@ -11,6 +11,10 @@ import { baseOf, cssRules, hasDecl, lastDecl, token, worst } from "../testing/cs
 // 提示字、方塊、語言鈕的底色由對比測試從 CSS 讀，宣告被刪掉時讀不到而紅
 const set = baseOf("/src/components/Settings.css");
 const S = cssRules(set);
+const acc = baseOf("/src/components/AccountsEditor.css");
+const A = cssRules(acc);
+const bk = baseOf("/src/components/BackupCard.css");
+const rs = baseOf("/src/components/RestoreCard.css");
 
 describe("設定視窗：大卡片與分隔線（spec D1、D2）", () => {
   it("設定視窗沒有外框", () => {
@@ -44,5 +48,30 @@ describe("設定視窗：方塊、輸入框、按鈕（spec D3、D4、D5）", ()
 
   it("手動專案列的帳號名對暗磚至少 4.5:1", () => {
     expect(worst(token(S.paintToken(".settings-rrow-acct", "color")), S.paintColor(".settings-rrow", "background"))).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe("帳號、備份、還原：方塊、輸入框、按鈕、分隔線（spec D2、D3、D4、D5）", () => {
+  it("帳號列與轉移面板沒有外框", () => {
+    expect(hasDecl(acc, ".ae-row", "border")).toBe(false);
+    expect(hasDecl(acc, ".ae-reassign", "border")).toBe(false);
+  });
+
+  it("輸入框、下拉選單、次要按鈕寫 border: none（G9）", () => {
+    expect(lastDecl(acc, ".ae-input", "border")).toBe("none");
+    expect(lastDecl(acc, ".ae-reassign-select", "border")).toBe("none");
+    expect(lastDecl(acc, ".ae-btn-ghost", "border")).toBe("none");
+  });
+
+  it("帳號輸入框的提示字對輸入框底至少 4.5:1", () => {
+    expect(worst(token(A.paintToken(".ae-input::placeholder", "color")), A.paintColor(".ae-input", "background"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("路徑框與清單上緣沒有線", () => {
+    expect(hasDecl(bk, ".bk-path", "border")).toBe(false);
+    expect(hasDecl(bk, ".bk-bundles", "border-top")).toBe(false);
+    expect(hasDecl(rs, ".rs-path", "border")).toBe(false);
+    expect(hasDecl(rs, ".rs-bundles", "border-top")).toBe(false);
+    expect(hasDecl(rs, ".rs-links", "border-top")).toBe(false);
   });
 });
