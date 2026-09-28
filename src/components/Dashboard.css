@@ -30,10 +30,11 @@
   font-weight: 700;
   letter-spacing: .2px;
 }
+/* 「資料更新中」小籤：拿掉外框、墊卡片同色的底，形狀不變（票 28 第三批，spec D4） */
 .dash-stale {
   font-size: 11px;
   color: var(--dim);
-  border: 1px solid var(--border);
+  background: var(--surface);
   border-radius: 999px;
   padding: 3px 10px;
 }
@@ -59,15 +60,18 @@
 }
 
 /* ── KPI 條 ── */
+/* 卡片之間的縫左右、上下都 5px，跟側欄旁的縫同寬（票 28 第三批，spec D2；.dash-row 同值） */
 .dash-kpi {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 5px;
+  margin-bottom: 5px;
 }
+/* 卡片不畫外框：靠亮一階的底色＋小一號的浮起陰影（含弱柔光）跟背景分開
+   （票 28 第三批，spec D1；.dash-win-card、.dash-panel 同樣） */
 .dash-kpi-card {
   background: var(--surface);
-  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   border-radius: var(--row-radius);
   padding: 12px 14px 10px;
 }
@@ -119,7 +123,7 @@
 }
 .dash-win-card {
   background: var(--surface);
-  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   border-radius: var(--win-radius);
   padding: 14px 16px;
 }
@@ -139,28 +143,6 @@
   background: var(--ai);
   border-radius: 5px;
   padding: 1px 6px;
-}
-.dash-win-acct {
-  margin-top: 10px;
-}
-.dash-win-acct:first-of-type {
-  margin-top: 0;
-}
-.dash-win-acct-label {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text);
-  margin-bottom: 4px;
-}
-.dash-est-badge {
-  margin-left: 6px;
-  font-size: 10px;
-  font-weight: 500;
-  color: var(--dim);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 0 5px;
-  vertical-align: middle;
 }
 .dash-win-meta {
   display: flex;
@@ -215,7 +197,7 @@
 /* ── 面板共用 ── */
 .dash-panel {
   background: var(--surface);
-  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   border-radius: var(--win-radius);
   padding: 14px 16px;
   margin-bottom: 14px;
@@ -277,11 +259,12 @@
 }
 
 /* ── 分布列：donut + heatmap ── */
+/* 縫 5px，同 .dash-kpi（票 28 第三批，spec D2） */
 .dash-row {
   display: grid;
   grid-template-columns: 1fr 1.3fr;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 5px;
+  margin-bottom: 5px;
 }
 .dash-row > .dash-panel {
   margin-bottom: 0;
