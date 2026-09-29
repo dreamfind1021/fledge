@@ -158,7 +158,7 @@ One paragraph per feature. Step-by-step details live in [`guides/`](guides/).
 **Interface**
 
 - **Bilingual UI** — switch the interface language; Traditional Chinese and English are both complete.
-- **Nightfall dark theme** — restrained and AI-first. All contrast passes WCAG AA, color is never the only signal, and everything works from the keyboard.
+- **Three themes** — Midnight Blue (dark, the default), Cool Gray and Soft Yellow (light). Switch in Settings → Appearance or in the onboarding wizard; the terminal follows. Restrained and AI-first; text contrast is designed to WCAG AA (4.5:1) and checked by tests in all three themes, with known exceptions listed (in Chinese) in [`CONTEXT.md`](CONTEXT.md); everything works from the keyboard.
 - **Native and fast to launch** — a macOS `.app`; the backend uses a onedir layout (no re-extraction on every launch); install via `curl` or `.dmg`.
 
 ## Bundled skills and templates
@@ -246,7 +246,6 @@ For packaging into `.app`/`.dmg`, see [`scripts/`](scripts/); CI is in [`.github
 
 - **A stable signing identity** — so Full Disk Access stops silently expiring on every update.
 - **Apple signing + notarization** — currently unsigned.
-- **Light theme** — the token layer is ready; the light palette hasn't passed visual review.
 - **Pricing gaps in the dashboard** — long-context tiers and fast-mode pricing aren't counted yet, so costs are underestimated.
 - **Re-check the backup list** — confirm that everything under `~/.claude` that should be included actually is.
 - **In-app skill install** — designed; waiting on a safe write mechanism.
