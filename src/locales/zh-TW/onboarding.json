@@ -219,7 +219,11 @@
     "confirmTitle": "即將執行以下命令",
     "confirmRun": "確認執行",
     "installHint": "安裝過程請留在這一步——離開會中斷安裝。",
-    "pathHint": "PATH 與 git 身分：<code>~/.local/bin</code> 需在 PATH 內（claude、uv 裝在這裡）；<code>git config --global user.name/user.email</code> 若未設，commit 會失敗。這兩項本版不自動偵測。"
+    "pathHint": "PATH：<code>~/.local/bin</code> 需在 PATH 內（claude、uv 裝在這裡）。本版不自動偵測。",
+    "gitIdentityTitle": "Git 還沒設定預設身分",
+    "gitIdentityNameCmd": "git config --global user.name \"你的名字\"",
+    "gitIdentityEmailCmd": "git config --global user.email \"you@example.com\"",
+    "gitIdentityHint": "沒設定的話，commit 可能失敗，或用電腦名稱當 email 送出。貼到終端機後，把引號裡換成你自己的，再按 Enter。"
   },
   "login": {
     "h": "帳號登入",

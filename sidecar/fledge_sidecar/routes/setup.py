@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from fledge_sidecar.app_config import AppConfig, default_config_path
 from fledge_sidecar.setup import common_config, templates
-from fledge_sidecar.setup.env_detect import detect_all
+from fledge_sidecar.setup.env_detect import detect_all, detect_git_identity
 
 router = APIRouter()
 
@@ -42,8 +42,11 @@ class CommonConfigApplyBody(CommonConfigBody):
 
 @router.get("/api/setup/status")
 def setup_status():
-    # detect_all 以模組層名稱呼叫，測試可 monkeypatch 注入假資料
-    return {"tools": [asdict(s) for s in detect_all()]}
+    # detect_all／detect_git_identity 以模組層名稱呼叫，測試可 monkeypatch 注入假資料
+    tools = detect_all()
+    git = next((t for t in tools if t.id == "git"), None)
+    identity = detect_git_identity(git.path if git else None)
+    return {"tools": [asdict(s) for s in tools], "git_identity": asdict(identity)}
 
 
 class _PlanError(Exception):

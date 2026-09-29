@@ -765,6 +765,18 @@
   align-items: center;
 }
 
+/* git 身分提醒（票 32）：指令與它的複製鍵同一行，指令佔滿剩餘寬度 */
+.b4-cmd-line {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.b4-cmd-line .b4-confirm-cmd {
+  flex: 1;
+  min-width: 0;
+}
+
 /* ── 卡片內的安裝終端機（票 24）── */
 /* 不畫外框：靠 --term-bg 與上方標題列辨認（票 28 第四批 4a，spec D7；放在暗磚上時邊界很淡，spec §5.4） */
 .b4-term {

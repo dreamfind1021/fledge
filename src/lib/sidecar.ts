@@ -266,10 +266,24 @@ export interface ToolStatus {
   manual_command: string | null;
 }
 
-export async function fetchSetupStatus(port: number): Promise<ToolStatus[]> {
+/** git 全域身分的三態（票 32）：`unknown`＝git 沒裝或查詢出錯，**不是**「沒設」。
+ *  後端只回狀態、不回名字與 email 本身。 */
+export type GitIdentityState = "set" | "missing" | "unknown";
+
+export interface GitIdentity {
+  name: GitIdentityState;
+  email: GitIdentityState;
+}
+
+export interface SetupStatus {
+  tools: ToolStatus[];
+  git_identity: GitIdentity;
+}
+
+export async function fetchSetupStatus(port: number): Promise<SetupStatus> {
   const resp = await fetch(`${base(port)}/api/setup/status`, { headers: authHeaders() });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-  return (await resp.json()).tools as ToolStatus[];
+  return (await resp.json()) as SetupStatus;
 }
 
 // --- 雙帳號共通設置（spec-b4 §6.3；安全權威在後端 setup/common_config.py）---

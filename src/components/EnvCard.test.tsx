@@ -1,20 +1,24 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
-import { render, cleanup, waitFor } from "@testing-library/react";
+import { render, cleanup, waitFor, within } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
-import { SessionError, type CreateSessionOptions, type ToolStatus } from "../lib/sidecar";
+import { SessionError, type CreateSessionOptions, type GitIdentity, type ToolStatus } from "../lib/sidecar";
 import { EnvCard } from "./EnvCard";
 
 const fetchSetupStatus = vi.fn<(port: number) => Promise<ToolStatus[]>>();
+// 端點另外回 git 身分（票 32）。既有測試只關心工具清單，身分由這支另外控制——
+// 在工具清單落地的那一刻才取值，所以「晚到的舊回應」可以帶著跟新回應不同的身分狀態
+const gitIdentity = vi.fn<() => GitIdentity>();
 const writeClipboard = vi.fn<(text: string) => Promise<boolean>>();
 const createSession = vi.fn<(port: number, opts: CreateSessionOptions) => Promise<string>>();
 const closeSession = vi.fn<(port: number, sessionId: string) => Promise<void>>();
 
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
-  fetchSetupStatus: (port: number) => fetchSetupStatus(port),
+  fetchSetupStatus: async (port: number) =>
+    ({ tools: await fetchSetupStatus(port), git_identity: gitIdentity() }),
   createSession: (port: number, opts: CreateSessionOptions) => createSession(port, opts),
   closeSession: (port: number, sessionId: string) => closeSession(port, sessionId),
 }));
@@ -49,6 +53,7 @@ describe("EnvCard 環境偵測卡", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("zh-TW"); // 固定語言，斷言才對得上 catalog
     fetchSetupStatus.mockReset().mockResolvedValue([brew, node, gh]);
+    gitIdentity.mockReset().mockReturnValue({ name: "set", email: "set" });
     writeClipboard.mockReset().mockResolvedValue(true);
     createSession.mockReset().mockResolvedValue("sess-1");
     closeSession.mockReset().mockResolvedValue(undefined);
@@ -77,10 +82,12 @@ describe("EnvCard 環境偵測卡", () => {
     expect(brewRow.textContent).toContain(zh.env.missing);
   });
 
-  it("PATH 與 git 身分：顯示靜態提醒（本版不偵測）", async () => {
+  it("PATH：顯示靜態提醒（本版不偵測）；git 身分改由偵測決定，不再寫在這段裡", async () => {
     const ui = renderCard();
     await waitFor(() => expect(ui.getByText("Node.js")).toBeTruthy());
-    expect(ui.container.querySelector(".b4-hint")?.textContent).toContain("~/.local/bin");
+    const hint = ui.container.querySelector(".b4-hint")?.textContent;
+    expect(hint).toContain("~/.local/bin");
+    expect(hint).not.toContain("git config");
   });
 
   it("安裝按鈕只出現在未安裝且能一鍵安裝的列上", async () => {
@@ -235,10 +242,99 @@ describe("EnvCard 環境偵測卡", () => {
   });
 });
 
+const git: ToolStatus = {
+  id: "git", label: "Git", tier: "core", installed: true, path: "/opt/homebrew/bin/git",
+  version: "git version 2.50.1", binary: "git", install_command: "brew install git", manual_command: null,
+};
+
+// 票 32：git 沒設名字或 email 時，commit 可能失敗、也可能用電腦名稱當 email 靜默送出。
+// 環境頁在 Git 那列下面提醒，只列缺的那幾行指令；Fledge 只讀不寫 ~/.gitconfig。
+describe("EnvCard git 身分", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("zh-TW");
+    fetchSetupStatus.mockReset().mockResolvedValue([node, git]);
+    gitIdentity.mockReset().mockReturnValue({ name: "missing", email: "missing" });
+    writeClipboard.mockReset().mockResolvedValue(true);
+  });
+  afterEach(cleanup);
+
+  it("名字和 email 都沒設：Git 那列下面列出兩行指令與說明", async () => {
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText(zh.env.gitIdentityTitle)).toBeTruthy());
+    const group = ui.getByText(zh.env.gitIdentityTitle).closest(".b4-row-group")!;
+    expect(group.querySelector(".b4-item-name")?.textContent).toBe("Git"); // 掛在 Git 那列，不是別列
+    expect(within(group as HTMLElement).getByText(zh.env.gitIdentityNameCmd)).toBeTruthy();
+    expect(within(group as HTMLElement).getByText(zh.env.gitIdentityEmailCmd)).toBeTruthy();
+    expect(within(group as HTMLElement).getByText(zh.env.gitIdentityHint)).toBeTruthy();
+  });
+
+  it("只缺 email：只列 email 那行，不叫人覆寫已經設好的名字", async () => {
+    gitIdentity.mockReturnValue({ name: "set", email: "missing" });
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText(zh.env.gitIdentityTitle)).toBeTruthy());
+    expect(ui.queryByText(zh.env.gitIdentityNameCmd)).toBeNull();
+    expect(ui.getByText(zh.env.gitIdentityEmailCmd)).toBeTruthy();
+  });
+
+  it("都設好了：不顯示提醒", async () => {
+    gitIdentity.mockReturnValue({ name: "set", email: "set" });
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText("Git")).toBeTruthy());
+    expect(ui.queryByText(zh.env.gitIdentityTitle)).toBeNull();
+  });
+
+  it("查不到（git 出錯、逾時）：不當成沒設，不顯示提醒", async () => {
+    gitIdentity.mockReturnValue({ name: "unknown", email: "unknown" });
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText("Git")).toBeTruthy());
+    expect(ui.queryByText(zh.env.gitIdentityTitle)).toBeNull();
+  });
+
+  it("複製：把那一行指令原樣寫進剪貼簿（不帶換行，貼上不會直接執行），只有那行回饋已複製", async () => {
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText(zh.env.gitIdentityEmailCmd)).toBeTruthy());
+
+    within(ui.getByText(zh.env.gitIdentityEmailCmd).parentElement!).getByText(zh.common.copy).click();
+
+    await waitFor(() => expect(ui.getByText(zh.env.copied)).toBeTruthy());
+    expect(writeClipboard).toHaveBeenCalledWith(zh.env.gitIdentityEmailCmd);
+    expect(ui.getAllByText(zh.env.copied)).toHaveLength(1);
+  });
+
+  it("重新檢查後設好了：提醒跟著消失", async () => {
+    const ui = renderCard();
+    await waitFor(() => expect(ui.getByText(zh.env.gitIdentityTitle)).toBeTruthy());
+
+    gitIdentity.mockReturnValue({ name: "set", email: "set" });
+    ui.getByText(zh.env.recheck).click();
+
+    await waitFor(() => expect(ui.queryByText(zh.env.gitIdentityTitle)).toBeNull());
+    expect(fetchSetupStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("重疊偵測：先發的回應晚到，不能用舊的身分狀態蓋掉新結果", async () => {
+    let resolveStale!: (v: ToolStatus[]) => void;
+    fetchSetupStatus.mockImplementationOnce(() => new Promise<ToolStatus[]>((r) => { resolveStale = r; }));
+    gitIdentity.mockReturnValue({ name: "set", email: "set" });
+
+    const ui = render(<EnvCard port={1234} onPrev={noop} onNext={noop} />);
+    ui.rerender(<EnvCard port={5678} onPrev={noop} onNext={noop} />); // 新 port → 新一輪偵測
+    await waitFor(() => expect(ui.getByText("Git")).toBeTruthy());
+
+    gitIdentity.mockReturnValue({ name: "missing", email: "missing" }); // 舊 sidecar 的回應帶著「沒設」
+    await act(async () => {
+      resolveStale([node, git]);
+      await new Promise((r) => setTimeout(r, 0)); // 讓晚到回應的後續 promise 全部跑完
+    });
+    expect(ui.queryByText(zh.env.gitIdentityTitle)).toBeNull();
+  });
+});
+
 describe("EnvCard 一鍵安裝", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("zh-TW");
     fetchSetupStatus.mockReset().mockResolvedValue([brew, node, gh]);
+    gitIdentity.mockReset().mockReturnValue({ name: "set", email: "set" });
     writeClipboard.mockReset().mockResolvedValue(true);
     createSession.mockReset().mockResolvedValue("sess-1");
     closeSession.mockReset().mockResolvedValue(undefined);
