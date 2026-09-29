@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseLevel, decl, hasDecl, readCss, stripComments } from "../testing/cssRules";
+import { baseLevel, containerBlock, decl, hasDecl, readCss, stripComments } from "../testing/cssRules";
 
 // 三欄版面的防線（票 19，spec §5.1）。同前版的理由：jsdom 不做版面計算，
 // scrollWidth/clientWidth 恆為 0，只能驗 CSS 的**規則存在性**與**數值預算**；
@@ -10,13 +10,8 @@ const full = stripComments(readCss("/src/components/Tasks.css"));
 // 混進來會把基礎值蓋掉（Codex final R1）
 const css = baseLevel(full);
 
-// 取某個 @container 區塊（依 min-width 值）。找不到就炸——靜默跳過等於防線沒上場
-const block = (minWidth: number) => {
-  const re = new RegExp(`@container\\s+tasks\\s*\\(\\s*min-width\\s*:\\s*${minWidth}px\\s*\\)\\s*\\{([\\s\\S]*?)\\n\\}`);
-  const m = full.match(re);
-  if (!m) throw new Error(`Tasks.css 找不到 @container tasks (min-width: ${minWidth}px)`);
-  return m[1];
-};
+// 取某個 @container 區塊（依 min-width 值）。找不到就炸——靜默跳過等於防線沒上場（cssRules.ts 的 containerBlock）
+const block = (minWidth: number) => containerBlock(full, "tasks", minWidth);
 // 取某個 @keyframes 的內容（例如 "from { … }"）。找不到就炸；同名的以最後一個為準（瀏覽器也是，同 decl）
 const keyframes = (name: string) => {
   const all = [...full.matchAll(new RegExp(`@keyframes\\s+${name}\\s*\\{((?:[^{}]*\\{[^{}]*\\})*[^{}]*)\\}`, "g"))];

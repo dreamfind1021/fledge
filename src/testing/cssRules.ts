@@ -161,3 +161,13 @@ export const lineTokenHits = (paths: string[]) => {
   }
   return { hits, scanned };
 };
+
+// 取某個 @container 區塊的內容（依容器名與 min-width 值）。找不到就炸——靜默跳過等於防線沒上場。
+// 區塊的右大括號要頂格獨佔一行（以 `\n}` 當結尾），同本專案 CSS 的寫法。
+// 票 35 從 Tasks.layout.test.ts 搬來：Dashboard.layout.test.ts 是第二個用到它的地方
+export const containerBlock = (css: string, name: string, minWidth: number) => {
+  const re = new RegExp(`@container\\s+${name}\\s*\\(\\s*min-width\\s*:\\s*${minWidth}px\\s*\\)\\s*\\{([\\s\\S]*?)\\n\\}`);
+  const m = css.match(re);
+  if (!m) throw new Error(`找不到 @container ${name} (min-width: ${minWidth}px)`);
+  return m[1];
+};
