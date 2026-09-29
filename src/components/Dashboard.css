@@ -8,6 +8,10 @@
   padding: 22px 10px 60px;
   background: var(--bg);
   box-sizing: border-box;
+  /* 窄窗口的排法看面板本身多寬、不看視窗（側欄可收合，同一個視窗寬下面板差 184px；同待辦面板 .tasks-root）。
+     基礎樣式是窄版（預設窗口 800 落在這裡），檔尾的 @container dash (min-width: 720px) 還原寬版（票 35） */
+  container-type: inline-size;
+  container-name: dash;
 }
 
 .dash-loading {
@@ -61,10 +65,12 @@
 }
 
 /* ── KPI 條 ── */
-/* 卡片之間的縫左右、上下都 5px，跟側欄旁的縫同寬（票 28 第三批，spec D2；.dash-row 同值） */
+/* 卡片之間的縫左右、上下都 5px，跟側欄旁的縫同寬（票 28 第三批，spec D2；.dash-row 同值）。
+   窄：三張＋兩張、每張一樣寬（下排右邊空一格）；寬（≥720）才一排五張——`1fr` 的下限是內容寬，
+   四位數金額的卡最少約 133px，五張一排要約 628px，窗口 800 時面板只有 526px（票 35 第 1 題） */
 .dash-kpi {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 5px;
   margin-bottom: 5px;
 }
@@ -261,19 +267,21 @@
 }
 
 /* ── 分布列：donut + heatmap ── */
-/* 縫 5px，同 .dash-kpi（票 28 第三批，spec D2） */
+/* 縫 5px，同 .dash-kpi（票 28 第三批，spec D2）。
+   窄：每一塊佔整排、由上往下排；寬（≥720）才並排，欄寬比例在檔尾的寬版區塊（票 35 第 2 題） */
 .dash-row {
   display: grid;
-  grid-template-columns: 1fr 1.3fr;
+  grid-template-columns: 1fr;
   gap: 5px;
   margin-bottom: 5px;
 }
 .dash-row > .dash-panel {
   margin-bottom: 0;
 }
-/* 每日成本（寬）+ Codex 額度（窄）同一行 */
+/* 窄的時候每日成本＋Codex 那一列也是一欄。要明寫：這條跟 .dash-row 權重相同、寫在後面，
+   窄的時候生效的是它；寬版的 1.5fr 1fr（每日成本寬、Codex 額度窄）在檔尾的寬版區塊（票 35 第 2 題） */
 .dash-row-usage {
-  grid-template-columns: 1.5fr 1fr;
+  grid-template-columns: 1fr;
 }
 .dash-row-usage > .dash-windows {
   margin-bottom: 0;
@@ -369,12 +377,14 @@
   border-spacing: 0 5px;
   font-size: 12px;
 }
+/* 表頭、金額、時間不斷行（窄的時候「最後活動」「昨天 22:41」會斷成兩行）；專案名那一格照常換行（票 35 第 4 題） */
 .dash-table th {
   color: var(--faint);
   font-weight: 500;
   text-align: left;
   padding: 4px 10px;
   font-size: 11px;
+  white-space: nowrap;
 }
 .dash-table td {
   padding: 7px 10px;
@@ -382,12 +392,14 @@
   text-align: right;
   font-family: var(--font-mono);
   font-size: 12px;
+  white-space: nowrap;
 }
 /* 第一欄（專案名）左對齊、用 ui 字型 */
 .dash-table td:first-child {
   text-align: left;
   font-family: var(--font-ui);
   border-radius: var(--row-radius) 0 0 var(--row-radius);
+  white-space: normal;
 }
 .dash-table td:last-child {
   border-radius: 0 var(--row-radius) var(--row-radius) 0;
@@ -406,13 +418,16 @@
   color: var(--text);
   font-weight: 600;
 }
+/* 專案名可以從任何字元折行：其他欄不斷行之後，窗口比 800 更窄時靠這一格讓出寬度，表格才不會伸出卡片 */
 .dash-proj-name {
   color: var(--text);
+  overflow-wrap: anywhere;
 }
+/* 窄：不顯示路徑，只留專案名（滑過那一格看完整路徑，td 的 title）；寬（≥720）才顯示（票 35 第 4 題） */
 .dash-proj-path {
   color: var(--faint);
   font-size: 10.5px;
-  display: block;
+  display: none;
   font-family: var(--font-mono);
 }
 
@@ -427,4 +442,16 @@
 }
 .dash-hm-axis span:not(:first-child) {
   text-align: left;
+}
+
+/* ── 寬（面板內容 ≥ 720px）：一排五張數字卡、兩列並排、專案表顯示路徑（票 35）──
+   換算成窗口寬：側欄展開約 1000、收合約 810。headless Chrome 實測（真實量級的假資料）：側欄展開、窗口 800
+   在各種組合下都不出現整頁左右捲動；更窄時看資料——中文＋四位數金額撐到 680、四張金額卡都五位數要 720、
+   英文＋專案表三欄金額都四位數要 760；收合側欄時 600 以上都不會。四張金額卡都五位數時，五張一排在面板內容 720px 仍放得下 */
+@container dash (min-width: 720px) {
+  .dash-kpi { grid-template-columns: repeat(5, 1fr); }
+  .dash-row { grid-template-columns: 1fr 1.3fr; }
+  /* 每日成本（寬）+ Codex 額度（窄）同一行 */
+  .dash-row-usage { grid-template-columns: 1.5fr 1fr; }
+  .dash-proj-path { display: block; }
 }
