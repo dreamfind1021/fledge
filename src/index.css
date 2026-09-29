@@ -16,8 +16,11 @@
    - --X-text：拿來寫字。午夜藍是 --X 的別名（畫面不變）；淺色主題深一階，對「--X 18% 疊在 --active」≥ 4.5。
      功能色當 color 一律用 --X-text，例外（圖示）登記在 src/index.textColor.test.ts 的白名單。 */
 
-/* ===== 午夜藍（nightfall）===== */
-[data-theme="nightfall"] {
+/* ===== 午夜藍（nightfall）=====
+   同時掛在 :root：data-theme 是看不懂的值時（例如 localStorage 被外力改壞），沒有任何主題區塊對得上，
+   畫面就退回午夜藍，而不是一片沒有顏色的首幀。所以 index.html 的啟動腳本可以只搬值、不驗證（spec §4.2）。
+   淺色主題的區塊寫在後面、權重相同（都是 0,1,0），會蓋過這裡 */
+:root, [data-theme="nightfall"] {
   color-scheme: dark;
   /* 語義/UI */
   --primary: #F59E42; --primary-ink: #3B2207;

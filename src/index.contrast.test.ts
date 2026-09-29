@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { THEMES, type ThemeId } from "./lib/themeIds";
-import { contrast, resolveColor, rootBlock, stops, themeBlock, themesInCss, token, tokenNames, over } from "./testing/cssRules";
+import { contrast, over, readCss, resolveColor, rootBlock, stops, stripComments, themeBlock, themesInCss, token, tokenNames } from "./testing/cssRules";
 
 // 主題 token 的對比防線（票 06 起；票 07 起三個主題都跑）。
 //
@@ -120,6 +120,14 @@ describe("主題區塊的 token 集合", () => {
     for (const theme of THEMES) {
       for (const t of STRUCT) expect(tokenNames(themeBlock(theme)).has(t), `${theme} 不該定義 --${t}`).toBe(false);
     }
+  });
+});
+
+// 看不懂的 data-theme（localStorage 被外力改壞）要退回午夜藍，而不是一片沒有顏色的首幀——
+// index.html 的啟動腳本不驗證，靠的就是這一條（spec §4.2）
+describe("看不懂的主題退回午夜藍", () => {
+  it("午夜藍的區塊同時掛在 :root", () => {
+    expect(stripComments(readCss("/src/index.css"))).toMatch(/(^|\})\s*:root\s*,\s*\[data-theme="nightfall"\]\s*\{/);
   });
 });
 
