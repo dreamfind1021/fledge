@@ -139,9 +139,8 @@ describe("第一批的 CSS 不再引用分隔線 token（spec §1.5、§2.6）",
     "/src/components/ContextMenu.css",
   ];
   it("--divider／--term-divider 零次；--border 只剩側欄捲軸的顏色", () => {
-    const { hits, scanned } = lineTokenHits(FILES);
-    // regex 失效會讓迴圈空轉而全綠——先確認真的掃到宣告（2026-09-27 這 8 個檔 704 條，第一批改完約 680 條）
-    expect(scanned).toBeGreaterThan(500);
+    const { hits } = lineTokenHits(FILES);
+    // 不另斷言 scanned：期望的 hits 本身非空，掃描空轉時這條 toEqual 就會紅（票 34，同 Memory.style.test.ts）
     expect(hits).toEqual(["/src/components/Sidebar.css .sidebar-scroll::-webkit-scrollbar-thumb → background: var(--border)"]);
   });
 });
