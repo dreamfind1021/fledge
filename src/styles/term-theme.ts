@@ -37,14 +37,24 @@ export function readTermTheme(): ITheme {
 }
 
 /**
+ * xterm 的 minimumContrastRatio（不在 ITheme 裡，另外讀）：淺色主題 4.5、午夜藍 1（spec §12.5）。
+ * 讀不到、看不懂、小於 1 → 1＝xterm 預設、不調色
+ */
+export function readTermMinContrast(): number {
+  const n = Number(getComputedStyle(document.documentElement).getPropertyValue("--term-min-contrast").trim());
+  return n >= 1 ? n : 1;
+}
+
+/**
  * 已開著的終端機跟著主題換色（票 07，spec §4.5）。回傳取消訂閱的函式，終端機卸載時呼叫——
  * 否則切主題時會去碰已經 dispose 的 xterm。每次都組一個新的 theme 物件：淺→深時選取色要回到 xterm 預設，
  * 物件裡不帶 selectionBackground 才會回去
  */
-export function followTheme(term: { options: { theme?: ITheme } }, imeGhost: HTMLElement): () => void {
+export function followTheme(term: { options: { theme?: ITheme; minimumContrastRatio?: number } }, imeGhost: HTMLElement): () => void {
   return onThemeChange(() => {
     const theme = readTermTheme();
     term.options.theme = theme;
+    term.options.minimumContrastRatio = readTermMinContrast();
     imeGhost.style.color = theme.foreground ?? "#ccc";
   });
 }

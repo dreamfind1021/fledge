@@ -98,6 +98,19 @@ describe.each(LIGHT)("%s 的文字用功能色", (theme) => {
   });
 });
 
+// 淺色主題開 xterm 的 minimumContrastRatio（spec §12.5）：Claude Code 深色主題用 RGB 寫死的次要字 #999999
+// 在淺色終端機底上約 2.5，Fledge 的 token 管不到；xterm 會把不到門檻的字調到門檻。
+// 午夜藍是 1＝xterm 預設、不調色：Claude Code 深色主題本來就是為深底設計的，本票不改午夜藍
+describe("終端機的最低文字對比", () => {
+  const minContrast = (theme: ThemeId) => Number(/--term-min-contrast:\s*([^;]*);/.exec(themeBlock(theme))?.[1]);
+  it("午夜藍是 1（xterm 預設，畫面不變）", () => {
+    expect(minContrast("nightfall")).toBe(1);
+  });
+  it.each(LIGHT)("%s 至少 4.5", (theme) => {
+    expect(minContrast(theme)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
 // 三個主題必須定義同一組 token：少一個就會像票 07 demo 那樣靜默壞掉（側欄的列擠成一團），只有集合比對抓得到
 describe("主題區塊的 token 集合", () => {
   const nightfall = tokenNames(themeBlock("nightfall"));

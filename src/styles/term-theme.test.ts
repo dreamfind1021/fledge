@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ITheme } from "@xterm/xterm";
-import { followTheme, readTermTheme } from "./term-theme";
+import { followTheme, readTermMinContrast, readTermTheme } from "./term-theme";
 import { setTheme } from "../lib/theme";
 
 // 終端機的顏色（票 07，spec docs/planning/daylight-themes-design.md §3.5、§4.5）。
@@ -32,8 +32,23 @@ describe("readTermTheme", () => {
   });
 });
 
+// 淺色主題開 xterm 的 minimumContrastRatio（spec §12.5）：xterm 的選項是數字，CSS 變數讀出來是字串
+describe("readTermMinContrast", () => {
+  it("讀 --term-min-contrast", () => {
+    setVars({ "term-min-contrast": "4.5" });
+    expect(readTermMinContrast()).toBe(4.5);
+  });
+
+  // 退回 1＝xterm 預設、不調色。讀到 NaN 或 0 直接傳給 xterm 的話，它的對比計算會壞掉
+  it("沒定義或看不懂：1（xterm 預設，不調色）", () => {
+    expect(readTermMinContrast()).toBe(1);
+    setVars({ "term-min-contrast": "abc" });
+    expect(readTermMinContrast()).toBe(1);
+  });
+});
+
 describe("followTheme：已開著的終端機跟著主題換色", () => {
-  const fakeTerm = () => ({ options: {} as { theme?: ITheme } });
+  const fakeTerm = () => ({ options: {} as { theme?: ITheme; minimumContrastRatio?: number } });
 
   it("切主題時每一個終端機都換色，輸入法草稿的顏色一起換", () => {
     const [a, b] = [fakeTerm(), fakeTerm()];
@@ -65,6 +80,18 @@ describe("followTheme：已開著的終端機跟著主題換色", () => {
     off();
   });
 
+  it("切主題時最低對比跟著換（淺→深回到 1）", () => {
+    const t = fakeTerm();
+    const off = followTheme(t, document.createElement("div"));
+    setVars({ "term-min-contrast": "4.5" });
+    setTheme("daylight-cool");
+    expect(t.options.minimumContrastRatio).toBe(4.5);
+    setVars({ "term-min-contrast": "1" });
+    setTheme("nightfall");
+    expect(t.options.minimumContrastRatio).toBe(1);
+    off();
+  });
+
   it("取消訂閱之後不再碰這個終端機（已卸載的 xterm）", () => {
     const t = fakeTerm();
     const off = followTheme(t, document.createElement("div"));
@@ -83,6 +110,11 @@ describe("Terminal.tsx 的接線", () => {
   it("建立 xterm 時用 followTheme 訂閱", () => {
     expect(typeof src).toBe("string");
     expect(src).toMatch(/const stopFollowingTheme = followTheme\(term, imeGhost\);/);
+  });
+  // 只在切主題時設的話，淺色使用者新開的終端機要等到下一次切主題才有最低對比
+  it("建立 xterm 時傳最低對比", () => {
+    const ctor = src.slice(src.indexOf("new XTerm({"), src.indexOf("termRef.current = term;"));
+    expect(ctor).toContain("minimumContrastRatio: readTermMinContrast(),");
   });
   it("同一個 effect 的清理函式裡取消訂閱", () => {
     const cleanup = src.slice(src.indexOf("const stopFollowingTheme"));
