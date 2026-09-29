@@ -21,6 +21,12 @@ describe("readTermTheme", () => {
     expect(readTermTheme().cursor).toBe("#67D5C0");
   });
 
+  // 沒傳的話 xterm 用 #000000：淺色主題的方塊游標底下那個字只有 3.36（spec §12.6）
+  it("游標格的字讀 --term-cursor-accent", () => {
+    setVars({ "term-cursor-accent": "#EDF0F6" });
+    expect(readTermTheme().cursorAccent).toBe("#EDF0F6");
+  });
+
   // 午夜藍不定義 --term-selection：讀到空字串就不傳 → xterm 用預設的半透明白，畫面跟改之前一樣
   it("沒定義 --term-selection：不傳 selectionBackground", () => {
     expect("selectionBackground" in readTermTheme()).toBe(false);

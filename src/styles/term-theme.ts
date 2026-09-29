@@ -13,6 +13,8 @@ export function readTermTheme(): ITheme {
     foreground: v("--term-text"),
     // 游標另開 token：淺色主題的 --session 在淺底上只有約 1.5，找不到游標（票 07，spec §3.5）
     cursor: v("--term-cursor"),
+    // 方塊游標底下那個字的顏色：xterm 預設 #000000 壓淺色主題的游標色只有 3.36（spec §12.6）
+    cursorAccent: v("--term-cursor-accent"),
     black: v("--term-black"),
     red: v("--term-red"),
     green: v("--term-green"),

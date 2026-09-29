@@ -86,6 +86,12 @@ describe.each(LIGHT)("%s 的文字用功能色", (theme) => {
     expect(contrast(token("term-cursor", theme), token("term-bg", theme))).toBeGreaterThanOrEqual(3);
   });
 
+  // 方塊游標把那一格的字畫成 cursorAccent、底畫成 cursor。沒設定時是 xterm 預設的 #000000：
+  // 黑字壓淺色主題的 #056D5F 只有 3.36，Claude Code 的輸入框上就有游標（spec §12.6）
+  it("方塊游標底下的字對游標至少 4.5:1", () => {
+    expect(contrast(token("term-cursor-accent", theme), token("term-cursor", theme))).toBeGreaterThanOrEqual(4.5);
+  });
+
   // 一般背景的格子被選取時，xterm 6 的兩種繪製（WebGL、DOM）都拿「終端機底疊上選取色」的不透明結果當底色；
   // 給不透明色就原樣畫出來，**不會自動變淡**——它先算好不透明版，才替另一個繪製用不到的欄位套 30%
   // （node_modules/@xterm/xterm/src/browser/services/ThemeService.ts 的 _setTheme，Codex plan R1）。
@@ -105,6 +111,10 @@ describe("終端機的最低文字對比", () => {
   const minContrast = (theme: ThemeId) => Number(/--term-min-contrast:\s*([^;]*);/.exec(themeBlock(theme))?.[1]);
   it("午夜藍是 1（xterm 預設，畫面不變）", () => {
     expect(minContrast("nightfall")).toBe(1);
+  });
+  // 放在這組：同樣是「午夜藍維持 xterm 預設」（spec §12.6）
+  it("午夜藍的方塊游標字色是 #000000（xterm 預設，畫面不變）", () => {
+    expect(token("term-cursor-accent", "nightfall")).toBe("#000000");
   });
   it.each(LIGHT)("%s 至少 4.5", (theme) => {
     expect(minContrast(theme)).toBeGreaterThanOrEqual(4.5);
