@@ -169,7 +169,7 @@
   gap: 6px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--ai);
+  color: var(--ai-text);
   flex-shrink: 0;
   white-space: nowrap;
 }

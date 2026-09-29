@@ -25,7 +25,7 @@
 /* 選中：淡橘底橘字，同記憶面板篩選小籤的選中（spec D8、M4） */
 .lang-switch-btn.is-on {
   background: color-mix(in srgb, var(--primary) 18%, transparent);
-  color: var(--primary);
+  color: var(--primary-text);
   font-weight: 600;
 }
 

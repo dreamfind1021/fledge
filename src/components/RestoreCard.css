@@ -16,7 +16,7 @@
   font-size: 12px;
   line-height: 1.5;
   margin: 10px 0 0;
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 /* 備份包選擇 */
@@ -80,14 +80,14 @@
   font-size: 12px;
   line-height: 1.5;
   margin: 6px 0 0;
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .rs-error {
   font-size: 12px;
   line-height: 1.5;
   margin: 8px 0 0;
-  color: var(--error);
+  color: var(--error-text);
 }
 
 .rs-actions {

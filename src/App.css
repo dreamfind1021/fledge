@@ -118,7 +118,7 @@
 /* 安裝說明按鈕：warning-outline ghost，不用 amber 填色（§3.2 規則 1）*/
 .app-banner-btn--warning {
   background: transparent;
-  color: var(--warning);
+  color: var(--warning-text);
   border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent);
   border-radius: 6px;
   padding: 4px 12px;
@@ -282,7 +282,7 @@
   border-radius: 6px;
   background: var(--surface-2);
   color: var(--text);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-sm);   /* 原本寫死很重的黑影，淺色主題下太重（票 07）；午夜藍因此多一層弱柔光 */
   pointer-events: none;
   white-space: nowrap;
 }

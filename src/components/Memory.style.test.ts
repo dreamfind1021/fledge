@@ -25,9 +25,10 @@ describe("篩選小籤：拿掉外框，選中改成淡橘底橘字（spec M4）
     expect(lastDecl(mem, ".fchip", "border")).toBe("none");
   });
 
+  // 字用 --primary-text（票 07：功能色寫字一律用文字用的那一個；午夜藍是 --primary 的別名，畫面不變）
   it("選中：淡橘底、橘字，不再用外框帶顏色", () => {
     expect(decl(mem, ".fchip.on", "background")).toBe("color-mix(in srgb, var(--primary) 18%, transparent)");
-    expect(decl(mem, ".fchip.on", "color")).toBe("var(--primary)");
+    expect(decl(mem, ".fchip.on", "color")).toBe("var(--primary-text)");
     expect(hasDecl(mem, ".fchip.on", "border-color")).toBe(false);
   });
 
