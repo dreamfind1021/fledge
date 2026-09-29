@@ -1,6 +1,22 @@
 {
   "banners": {
     "projects_failed": "Couldn't load the project list. Everything else still works.",
-    "rescan": "Rescan"
+    "rescan": "Rescan",
+    "backend_down": "Backend disconnected (sidecar not responding)",
+    "backend_restarting": "Restarting the sidecar…",
+    "restart": "Restart sidecar",
+    "restarting": "Restarting…",
+    "claude_missing": "Claude Code (claude) not found. Please install it first.",
+    "install_guide": "Install guide",
+    "permission_denied": "Some folders can't be read. Allow Fledge under System Settings → Privacy & Security → Files and Folders / App Management."
+  },
+  "toast": {
+    "rescanned": "Projects rescanned"
+  },
+  "close_confirm": {
+    "title": "Close this session?",
+    "desc": "The session \"<name/>\" hasn't ended. If the AI is still working or waiting for a reply, closing it stops the running process and the current progress is lost. If it has only paused (the reply finished, or it's waiting for input), you can pick the conversation back up with <code>/resume</code> after closing. Close it anyway?",
+    "cancel": "Cancel",
+    "confirm": "Close session"
   }
 }
