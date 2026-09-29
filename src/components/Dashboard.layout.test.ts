@@ -38,3 +38,14 @@ describe("觀測面板窄窗口：數字卡、兩欄的列、專案表（票 35 
     expect(decl(css, ".dash-proj-name", "overflow-wrap")).toBe("anywhere");
   });
 });
+
+describe("Codex 額度條任何寬度都兩行（票 35 第 3 題）", () => {
+  // 一行排法時條寬＝卡寬扣掉右邊的百分比與重置時間：重置時間長短不同，兩條就不一樣長，窗口 800 時還會被擠到 0
+  it("上面一行名稱在左、百分比與重置時間在右，下面一行整條進度條", () => {
+    expect(decl(css, ".dash-gauge", "grid-template-columns")).toBe("1fr auto");
+    expect(decl(css, ".dash-gauge", "grid-template-areas")).toBe('"label meta" "bar bar"');
+    expect(decl(css, ".dash-gauge-label", "grid-area")).toBe("label");
+    expect(decl(css, ".dash-gauge > .dash-bar", "grid-area")).toBe("bar");
+    expect(decl(css, ".dash-gauge-meta", "grid-area")).toBe("meta");
+  });
+});
