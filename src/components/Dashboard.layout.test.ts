@@ -49,3 +49,11 @@ describe("Codex 額度條任何寬度都兩行（票 35 第 3 題）", () => {
     expect(decl(css, ".dash-gauge-meta", "grid-area")).toBe("meta");
   });
 });
+
+describe("圓餅中間的總額（票 35 第 5 題）", () => {
+  // 洞寬 72px（.dash-donut 124px − 2 × .dash-donut::after 的 inset 26px）：14px 時 $3,609.72 約 75.6px、壓到圓環，
+  // 12px 約 64.8px。實際字寬由 headless Chrome 量（計畫 Task 5 的 donutGap），這裡只守使用者選的字級
+  it("字 12px", () => {
+    expect(decl(css, ".dash-donut-center b", "font-size")).toBe("12px");
+  });
+});

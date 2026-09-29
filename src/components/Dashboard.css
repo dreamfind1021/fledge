@@ -325,9 +325,10 @@
   justify-content: center;
   z-index: 1;
 }
+/* 12px：洞寬 72px（124 − 2 × 26），14px 時四位數金額 75.6px 壓到圓環；12px 左右各留 3.6px、五位數剛好貼邊（票 35 第 5 題） */
 .dash-donut-center b {
   font-family: var(--font-mono);
-  font-size: 14px;
+  font-size: 12px;
 }
 .dash-donut-legend {
   list-style: none;
