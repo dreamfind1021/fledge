@@ -35,3 +35,12 @@ describe("tasks catalog 註冊", () => {
     expect(i18n.t("tasks:tabTitle")).toBe(en.tabTitle);
   });
 });
+
+// 同上，theme 命名空間（票 07：外觀選項的名稱）
+describe("theme catalog 註冊", () => {
+  it("theme namespace 取得到翻譯，不是回傳 key 原文", async () => {
+    const i18n = (await import("./i18n")).default;
+    const en = (await import("./locales/en/theme.json")).default;
+    expect(i18n.t("theme:nightfall", { lng: "en" })).toBe(en.nightfall);
+  });
+});

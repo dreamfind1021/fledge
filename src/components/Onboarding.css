@@ -152,6 +152,18 @@
   text-align: center;
 }
 
+/* ── 外觀頁（票 07）：外觀選項置中；膠囊比設定視窗裡的大一號（沿用 LangSwitch.css 的樣式，只放大） ── */
+.ob-theme {
+  display: flex;
+  justify-content: center;
+  margin: 20px 0 26px;
+}
+
+.ob-theme .lang-switch-btn {
+  font-size: 13px;
+  padding: 6px 14px;
+}
+
 /* ── 步驟副說明文字 ── */
 .ob-sub {
   font-size: 13.5px;
@@ -180,7 +192,7 @@
 /* ── 內嵌訊息（錯誤 / 注意）── */
 /* 紅色 error（路徑無效、後端失敗）*/
 .ob-error {
-  color: var(--error);
+  color: var(--error-text);
   font-size: 12px;
   text-align: center;
   margin-bottom: 16px;
@@ -188,7 +200,7 @@
 
 /* amber notice（denied 但仍允許加入）*/
 .ob-notice {
-  color: var(--warning);
+  color: var(--warning-text);
   font-size: 12px;
   text-align: center;
   margin-bottom: 16px;
@@ -218,7 +230,7 @@
   display: flex;
   align-items: center;
   gap: 2px;
-  color: var(--session); /* 對應 demo mint / 原 #4ade80 */
+  color: var(--session-text); /* 對應 demo mint / 原 #4ade80 */
   flex: 0 0 auto;
   font-weight: 600;
   font-size: 13px;
@@ -649,7 +661,7 @@
 
 .b4-chip.ok {
   background: color-mix(in srgb, var(--session) 16%, transparent);
-  color: var(--session);
+  color: var(--session-text);
 }
 
 .b4-chip.todo {
@@ -659,14 +671,14 @@
 
 .b4-chip.warn {
   background: color-mix(in srgb, var(--warning) 16%, transparent);
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 /* 藍＝中性的進度資訊（範本「尚未部署」「部分已部署」）：既不是就緒也不是待辦，
    更不是警示——沒有它，未部署的範本會跟未安裝的工具長得一樣 */
 .b4-chip.info {
   background: color-mix(in srgb, var(--ai) 16%, transparent);
-  color: var(--ai);
+  color: var(--ai-text);
 }
 
 /* ── 卡內小按鈕 ── */
@@ -724,7 +736,7 @@
 
 /* 提醒「離開會中斷」用警示色，與一般灰階提示區隔 */
 .b4-hint-warn {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .b4-hint code {
@@ -743,7 +755,7 @@
 
 .b4-confirm-title {
   font-size: 12px;
-  color: var(--warning);
+  color: var(--warning-text);
   font-weight: 600;
 }
 
@@ -929,7 +941,7 @@ p.ob-spot-oldpath {
 
 /* 需要注意但不是錯誤（黃色，與紅色的 .ob-error 分開）*/
 .ob-warn {
-  color: var(--warning);
+  color: var(--warning-text);
   font-size: 12.5px;
   line-height: 1.5;
   margin: 6px 0 0;

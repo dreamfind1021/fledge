@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Settings as SettingsIcon, X, Folder, FolderPlus, Users, Trash2, ChartColumn, Brain } from "lucide-react";
+import { Settings as SettingsIcon, X, Folder, FolderPlus, Users, Trash2, ChartColumn, Brain, Palette } from "lucide-react";
 import { useAppStore } from "../store/useAppStore";
 import { pickDirectory } from "../lib/dialog";
 import { putKmsRoot, DEFAULT_ACCOUNT_KEY } from "../lib/sidecar";
@@ -8,6 +8,7 @@ import { AccountsEditor } from "./AccountsEditor";
 import { BackupCard } from "./BackupCard";
 import { DevEnvSection } from "./DevEnvSection";
 import { LangSwitch } from "./LangSwitch";
+import { ThemePicker } from "./ThemePicker";
 import { RestoreCard, type MigrationResume } from "./RestoreCard";
 import { validateSubscriptions } from "../lib/subscriptionsForm";
 import "./Settings.css";
@@ -23,6 +24,7 @@ interface SettingsProps {
 export function Settings({ onClose, onRerunOnboarding, onResumeMigration }: SettingsProps) {
   const { t } = useTranslation("dashboard");
   const { t: tMem } = useTranslation("memory");
+  const { t: tTheme } = useTranslation("theme");
   const config = useAppStore((s) => s.config);
   const port = useAppStore((s) => s.port);
   const loadConfig = useAppStore((s) => s.loadConfig);
@@ -104,8 +106,17 @@ export function Settings({ onClose, onRerunOnboarding, onResumeMigration }: Sett
             <div className="settings-error">{error}</div>
           )}
 
-          {/* 根目錄 */}
+          {/* 外觀（票 07）：一塊暗磚、一列三選一，點了立刻生效，不經過下面的「完成」 */}
           <div className="settings-sec-title settings-sec-title--first">
+            <Palette size={14} strokeWidth={2} />
+            {tTheme("appearance")}
+          </div>
+          <div className="settings-rrow">
+            <ThemePicker />
+          </div>
+
+          {/* 根目錄 */}
+          <div className="settings-sec-title">
             <Folder size={14} strokeWidth={2} />
             根目錄
           </div>

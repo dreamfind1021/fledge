@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { THEMES } from "../lib/themeIds";
 import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, token, worst } from "../testing/cssRules";
 
 // 待辦編輯器、⌘T、啟動錯誤框的樣式防線——票 28 第四批 4b，spec docs/planning/soft-tiles-app-wide-design.md §6.6。
@@ -70,12 +71,12 @@ describe("⌘T 專案切換與啟動錯誤框（spec §6 D5、D9）", () => {
   });
 
   // spec §6.5：提示字與輸入的字坐在搜尋列的暗帶上，兩個顏色都從 CSS 讀
-  it("⌘T 的提示字對搜尋列至少 4.5:1", () => {
-    expect(worst(token(P.paintToken(".pal-search input::placeholder", "color")), P.paintColor(".pal-search", "background"))).toBeGreaterThanOrEqual(4.5);
+  it.each(THEMES)("%s：⌘T 的提示字對搜尋列至少 4.5:1", (theme) => {
+    expect(worst(token(P.paintToken(".pal-search input::placeholder", "color"), theme), cssRules(pp, theme).paintColor(".pal-search", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("⌘T 輸入的字對搜尋列至少 4.5:1", () => {
-    expect(worst(token(P.paintToken(".pal-search input", "color")), P.paintColor(".pal-search", "background"))).toBeGreaterThanOrEqual(4.5);
+  it.each(THEMES)("%s：⌘T 輸入的字對搜尋列至少 4.5:1", (theme) => {
+    expect(worst(token(P.paintToken(".pal-search input", "color"), theme), cssRules(pp, theme).paintColor(".pal-search", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 });
 

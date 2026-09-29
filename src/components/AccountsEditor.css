@@ -142,7 +142,7 @@
   display: flex;
   align-items: flex-start;
   gap: 5px;
-  color: var(--warning);
+  color: var(--warning-text);
   font-size: 11px;
   line-height: 1.45;
   padding: 2px 0 6px 89px;
@@ -270,7 +270,7 @@
 
 /* ── error 提示（新增 / 刪除失敗）── */
 .ae-error {
-  color: var(--error);
+  color: var(--error-text);
   font-size: 12px;
   padding: 6px 0 2px;
 }

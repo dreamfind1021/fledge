@@ -1,54 +1,35 @@
 import { describe, expect, it } from "vitest";
+import { THEMES, type ThemeId } from "./lib/themeIds";
+import { contrast, over, readCss, resolveColor, rootBlock, stops, stripComments, themeBlock, themesInCss, token, tokenNames } from "./testing/cssRules";
 
-// 主題 token 的對比防線（票 06）。
+// 主題 token 的對比防線（票 06 起；票 07 起三個主題都跑）。
 //
-// Tasks.contrast.test.ts 守的是「某條 CSS 規則用的 token 夠不夠」，
+// Tasks.contrast.test.ts 等規則層測試守的是「某條 CSS 規則用的 token 夠不夠」，
 // 這裡守的是上游：**token 本身**對每一種底色夠不夠。少了這層，
 // 有人把 --faint 調回原本的 #5E6981 時，48 條文字規則會一起悄悄失效，
 // 而每條規則各自的測試（如果有的話）都不會動。
 //
 // 四級文字色（--text / --text-2 / --dim / --faint）全部納入。
-// 只涵蓋 nightfall。daylight 尚未出貨（`--faint: #AEB4BE` 對它的 --bg 只有 1.94，
-// 連非文字的 3:1 都不到），那套色階需要自己的一次視覺審查，見票 07。
+// 主題清單從 src/lib/themeIds.ts 匯入，不在測試裡再抄一份——少跑一個主題時下面的雙向比對會紅。
 const RAW = import.meta.glob("/src/**/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
-const indexCss = (() => {
-  const t = RAW["/src/index.css"];
-  if (typeof t !== "string") throw new Error("glob 沒讀到 index.css");   // 讀不到要炸，不能靜默跳過
-  return t;
-})();
-const nightfall = (() => {
-  const from = indexCss.indexOf('[data-theme="nightfall"]');
-  const to = indexCss.indexOf('[data-theme="daylight"]');
-  if (from < 0 || to <= from) throw new Error("index.css 找不到 nightfall 區塊");
-  return indexCss.slice(from, to);
-})();
-const token = (name: string) => {
-  const m = nightfall.match(new RegExp(`--${name}:\\s*(#[0-9A-Fa-f]{6})`));
-  if (!m) throw new Error(`token --${name} 不在 nightfall 區塊裡`);
-  return m[1];
-};
-const luminance = (hex: string) => {
-  const [r, g, b] = [1, 3, 5]
-    .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
-    .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-};
-const contrast = (a: string, b: string) => {
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return (hi + 0.05) / (lo + 0.05);
-};
+const LIGHT = THEMES.filter((t) => t !== "nightfall");
 
 // 文字實際會坐在這些底色上。--active 不在裡面，理由見下面那條測試
 const TEXT_BACKDROPS = ["bg", "sidebar", "surface", "surface-2", "hover"];
-// 由亮到暗排。--text-2 是 2026-09-09 補定義的第四級（檔案樹檔名，票 18）——
+// 由最清楚到最淡排。--text-2 是 2026-09-09 補定義的第四級（檔案樹檔名，票 18）——
 // 那個顏色本來就在畫面上，只是靠一個沒定義的 token 的 fallback 撐著。
 const TEXT_INKS = ["text", "text-2", "dim", "faint"];
+const FUNCTIONAL = ["primary", "session", "ai", "warning", "error"];
+const ANSI = [
+  "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+  "bright-black", "bright-red", "bright-green", "bright-yellow", "bright-blue", "bright-magenta", "bright-cyan", "bright-white",
+];
 
-describe("nightfall 的文字色階", () => {
+describe.each(THEMES)("%s 的文字色階", (theme) => {
   it.each(TEXT_INKS.flatMap((ink) => TEXT_BACKDROPS.map((bg) => [ink, bg])))(
     "--%s 對 --%s 至少 4.5:1",
     (ink, bg) => {
-      expect(contrast(token(ink), token(bg))).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(token(ink, theme), token(bg, theme))).toBeGreaterThanOrEqual(4.5);
     },
   );
 
@@ -56,19 +37,150 @@ describe("nightfall 的文字色階", () => {
   // 那兩處的 --faint 內容是圖示與分隔符（.sidebar-item-ico.is-discovered、.lrow .sep），
   // 不是文字，門檻 3:1。把它一起塞進上面那組會逼出更亮的值、把色階壓得更平。
   it("--faint 對 --active 至少 3:1（該處只有圖示與分隔符）", () => {
-    expect(contrast(token("faint"), token("active"))).toBeGreaterThanOrEqual(3);
+    expect(contrast(token("faint", theme), token("active", theme))).toBeGreaterThanOrEqual(3);
   });
 
   // 色階要分得出來，否則「這是次要資訊」的暗示就沒了。
-  // 這條同時擋住「為了過對比把 --faint 一路調到跟 --dim 一樣亮」
-  it("四級色階由亮到暗、每一級彼此拉得開", () => {
-    const bg = token("bg");
-    const steps = TEXT_INKS.map((t) => contrast(token(t), bg));
+  // 這條同時擋住「為了過對比把 --faint 一路調到跟 --dim 一樣」。
+  // 比的是對 --bg 的對比、不是亮度，所以深底與淺底同一個寫法
+  it("四級色階由最清楚到最淡、每一級彼此拉得開", () => {
+    const bg = token("bg", theme);
+    const steps = TEXT_INKS.map((t) => contrast(token(t, theme), bg));
     for (let i = 1; i < steps.length; i += 1) {
       // 順序反了代表 TEXT_INKS 排錯或某個 token 被調過頭，兩種都要炸
-      expect(steps[i - 1], `${TEXT_INKS[i - 1]} 應該比 ${TEXT_INKS[i]} 亮`).toBeGreaterThan(steps[i]);
+      expect(steps[i - 1], `${TEXT_INKS[i - 1]} 應該比 ${TEXT_INKS[i]} 清楚`).toBeGreaterThan(steps[i]);
       expect(steps[i - 1] - steps[i], `${TEXT_INKS[i - 1]} 與 ${TEXT_INKS[i]} 差太近`).toBeGreaterThanOrEqual(1);
     }
+  });
+
+  it("終端機的字對終端機底至少 4.5:1", () => {
+    expect(contrast(token("term-text", theme), token("term-bg", theme))).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// 功能色拿來寫字時用 --X-text（spec §3.3）。午夜藍的 --X-text 是 --X 的別名、不加門檻：
+// 午夜藍的 --error #EF4444 對 --surface 只有 4.38，那是現況，本票不改午夜藍（spec §6.2，Codex spec R1）
+describe.each(LIGHT)("%s 的文字用功能色", (theme) => {
+  it.each(FUNCTIONAL.flatMap((k) => [...TEXT_BACKDROPS, "active"].map((bg) => [k, bg])))(
+    "--%s-text 對 --%s 至少 4.5:1",
+    (k, bg) => {
+      expect(contrast(token(`${k}-text`, theme), token(bg, theme))).toBeGreaterThanOrEqual(4.5);
+    },
+  );
+
+  // 只對純底色算不夠：記憶面板選中列的小籤、待辦「下一步」選中時，字壓在一層淡淡的同色上（Codex spec R1 實算 4.07～4.30）。
+  // 18% 是推導基準，不是「最濃」的證明——實際的合成底由規則層測試逐條驗（spec §3.2 第 4 點）
+  // 名稱裡要印兩次 k：it.each 的 %s 依序吃參數，只給一個的話第二個 %s 會印成 undefined
+  it.each(FUNCTIONAL.map((k) => [k, k]))("--%s-text 對「--%s 18% 疊在 --active」至少 4.5:1", (k) => {
+    const tinted = resolveColor(`color-mix(in srgb, var(--${k}) 18%, var(--active))`, theme);
+    expect(contrast(token(`${k}-text`, theme), tinted)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // 終端機裡全是字，亮色也是：xterm 預設把粗體畫成亮色（Codex spec R2）。
+  // 午夜藍不在這組：它的 --term-black 對終端機底只有 1.6，那是刻意的「黑」，本票不改午夜藍
+  it.each(ANSI)("終端機 --term-%s 對終端機底至少 4.5:1", (c) => {
+    expect(contrast(token(`term-${c}`, theme), token("term-bg", theme))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("游標對終端機底至少 3:1（非文字）", () => {
+    expect(contrast(token("term-cursor", theme), token("term-bg", theme))).toBeGreaterThanOrEqual(3);
+  });
+
+  // 方塊游標把那一格的字畫成 cursorAccent、底畫成 cursor。沒設定時是 xterm 預設的 #000000：
+  // 黑字壓淺色主題的 #056D5F 只有 3.36，Claude Code 的輸入框上就有游標（spec §12.6）
+  it("方塊游標底下的字對游標至少 4.5:1", () => {
+    expect(contrast(token("term-cursor-accent", theme), token("term-cursor", theme))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // 一般背景的格子被選取時，xterm 6 的兩種繪製（WebGL、DOM）都拿「終端機底疊上選取色」的不透明結果當底色；
+  // 給不透明色就原樣畫出來，**不會自動變淡**——它先算好不透明版，才替另一個繪製用不到的欄位套 30%
+  // （node_modules/@xterm/xterm/src/browser/services/ThemeService.ts 的 _setTheme，Codex plan R1）。
+  // 選取色寫成 --term-blue 那種深藍的話，選中的藍字對比是 1:1、整段消失。
+  // 門檻 3 不是 4.5：選取是暫時的，擋的是「選中就看不見」（彩色字約 3:1 是知情接受，spec §12.3）。
+  // 不驗反白（SGR 7）與有明確背景色的格子：兩種繪製算法不同，DOM 下反白選取約 1.5，是知情接受（spec §12.4）。
+  // 午夜藍不在這組（xterm 預設的半透明白，本票不改）
+  it.each(["text", ...ANSI])("選取中的 --term-%s 對選取色至少 3:1", (c) => {
+    expect(contrast(token(`term-${c}`, theme), token("term-selection", theme))).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// 淺色主題開 xterm 的 minimumContrastRatio（spec §12.5）：Claude Code 深色主題用 RGB 寫死的次要字 #999999
+// 在淺色終端機底上約 2.5，Fledge 的 token 管不到；xterm 會把不到門檻的字調到門檻。
+// 午夜藍是 1＝xterm 預設、不調色：Claude Code 深色主題本來就是為深底設計的，本票不改午夜藍
+describe("終端機的最低文字對比", () => {
+  const minContrast = (theme: ThemeId) => Number(/--term-min-contrast:\s*([^;]*);/.exec(themeBlock(theme))?.[1]);
+  it("午夜藍是 1（xterm 預設，畫面不變）", () => {
+    expect(minContrast("nightfall")).toBe(1);
+  });
+  // 放在這組：同樣是「午夜藍維持 xterm 預設」（spec §12.6）
+  it("午夜藍的方塊游標字色是 #000000（xterm 預設，畫面不變）", () => {
+    expect(token("term-cursor-accent", "nightfall")).toBe("#000000");
+  });
+  it.each(LIGHT)("%s 至少 4.5", (theme) => {
+    expect(minContrast(theme)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// 三個主題必須定義同一組 token：少一個就會像票 07 demo 那樣靜默壞掉（側欄的列擠成一團），只有集合比對抓得到
+describe("主題區塊的 token 集合", () => {
+  const nightfall = tokenNames(themeBlock("nightfall"));
+  // 唯一的例外：選取色只在淺色定義，午夜藍不定義 → 讀到空字串 → xterm 用預設的半透明白（spec §3.5）
+  const LIGHT_ONLY = ["term-selection"];
+
+  it.each(LIGHT)("%s 的 token ＝ 午夜藍的 token ＋ 只在淺色的例外", (theme) => {
+    expect([...tokenNames(themeBlock(theme))].sort()).toEqual([...nightfall, ...LIGHT_ONLY].sort());
+  });
+
+  it("午夜藍不定義只在淺色的例外", () => {
+    for (const t of LIGHT_ONLY) expect(nightfall.has(t)).toBe(false);
+  });
+
+  // 結構 token 跟主題無關：只在 :root，主題區塊裡出現就代表有人又把它寫回去了（spec §3.1）
+  it("圓角與列距只在 :root", () => {
+    const STRUCT = ["win-radius", "row-radius", "tab-radius", "item-py"];
+    const root = tokenNames(rootBlock());
+    for (const t of STRUCT) expect(root.has(t), `:root 少了 --${t}`).toBe(true);
+    for (const theme of THEMES) {
+      for (const t of STRUCT) expect(tokenNames(themeBlock(theme)).has(t), `${theme} 不該定義 --${t}`).toBe(false);
+    }
+  });
+});
+
+// 看不懂的 data-theme（localStorage 被外力改壞）要退回午夜藍，而不是一片沒有顏色的首幀——
+// index.html 的啟動腳本不驗證，靠的就是這一條（spec §4.2）
+describe("看不懂的主題退回午夜藍", () => {
+  it("午夜藍的區塊同時掛在 :root", () => {
+    expect(stripComments(readCss("/src/index.css"))).toMatch(/(^|\})\s*:root\s*,\s*\[data-theme="nightfall"\]\s*\{/);
+  });
+});
+
+describe("主題清單與 CSS 雙向一致", () => {
+  // 產品決定的三個選項（spec §2.1），不是任意清單
+  it("THEMES 恰好是三個產品選項", () => {
+    expect([...THEMES]).toEqual(["nightfall", "daylight-cool", "daylight-warm"]);
+  });
+
+  it("index.css 的主題區塊＝THEMES（多一塊、少一塊都紅）", () => {
+    expect(themesInCss().sort()).toEqual([...THEMES].sort());
+  });
+});
+
+// 測試工具本身的防線：主題參數要一路傳到底（spec §6.1）。漏傳一層，淺色的測試會悄悄算成午夜藍而假綠
+describe("測試工具的主題參數", () => {
+  const light: ThemeId = "daylight-cool";
+  it("token 解得開別名：午夜藍的 --primary-text ＝ --primary", () => {
+    expect(token("primary-text", "nightfall")).toBe(token("primary", "nightfall"));
+  });
+  // 兩個成分各自都要用指定主題：只比「跟午夜藍不同」的話，漏傳其中一個成分也會不同而假綠
+  const mix = (a: string, b: string, p: number) =>
+    "#" + [1, 3, 5].map((i) => Math.round(parseInt(a.slice(i, i + 2), 16) * p + parseInt(b.slice(i, i + 2), 16) * (1 - p)).toString(16).padStart(2, "0")).join("").toUpperCase();
+  it("resolveColor 的 color-mix 遞迴用的是指定主題（兩個成分都是）", () => {
+    expect(resolveColor("color-mix(in srgb, var(--primary) 50%, var(--bg))", light)).toBe(mix(token("primary", light), token("bg", light), 0.5));
+  });
+  it("stops 與 over 用的是指定主題", () => {
+    expect(stops("linear-gradient(135deg, var(--bg), var(--surface) 70%)", light)).toEqual([token("bg", light), token("surface", light)]);
+    expect(over("color-mix(in srgb, var(--primary) 18%, transparent)", "var(--surface)", light))
+      .toBe(resolveColor("color-mix(in srgb, var(--primary) 18%, var(--surface))", light));
   });
 });
 

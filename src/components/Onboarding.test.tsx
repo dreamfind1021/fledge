@@ -7,8 +7,11 @@ import zhRestore from "../locales/zh-TW/restore.json";
 import { useAppStore } from "../store/useAppStore";
 import { scanPreview, runInstall, fetchBundleInfo, RestoreError } from "../lib/sidecar";
 import { Onboarding } from "./Onboarding";
+import { setTheme } from "../lib/theme";
 
 vi.mock("../lib/dialog", () => ({ pickDirectory: vi.fn(), pickFile: vi.fn() }));
+// 外觀頁選主題會切原生視窗外觀（票 07）；測試不在 Tauri 裡
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setTheme: () => Promise.resolve() }) }));
 // 備份包頁自己的行為在 `BundleCard.test.tsx`；這裡測的是**精靈的導覽**，所以只保留
 // 「回報包資訊」這個對外介面——`paths` 頁的去留與能不能離開 bundle 頁都綁在它上面。
 vi.mock("./BundleCard", async () => {
@@ -159,9 +162,16 @@ const baseConfig = {
   is_first_run: true,
 };
 
+/** 歡迎頁選一條路，再按過外觀頁（票 07：兩條路的第 2 頁都是外觀） */
+async function pickPath(ui: ReturnType<typeof render>, path: "fresh" | "restore") {
+  ui.getByText(zh.welcome[path]).click();
+  await waitFor(() => expect(ui.getByText(zh.appearance.h)).toBeTruthy());
+  ui.getByText(zh.common.next).click();
+}
+
 /** 走到根目錄頁並加一個 draft root（onboard 的前置條件：至少一個根目錄） */
 async function reachRootsWithDraft(ui: ReturnType<typeof render>) {
-  ui.getByText(zh.welcome.fresh).click();
+  await pickPath(ui, "fresh");
   await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
   fireEvent.change(ui.getByPlaceholderText(zh.roots.placeholder), { target: { value: "/tmp/work" } });
   ui.getByText(zh.roots.add).click();
@@ -195,7 +205,7 @@ describe("Onboarding 精靈外殼", () => {
     vi.mocked(scanPreview).mockRejectedValueOnce(new Error("SCAN-SENTINEL-500"));
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.fresh).click();
+    await pickPath(ui, "fresh");
     await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
     fireEvent.change(ui.getByPlaceholderText(zh.roots.placeholder), { target: { value: "/tmp/work" } });
     ui.getByText(zh.roots.add).click();
@@ -361,7 +371,7 @@ describe("Onboarding 精靈外殼", () => {
       ],
     });
     const ui = render(<Onboarding onClose={onClose} />);
-    ui.getByText(zh.welcome.fresh).click();
+    await pickPath(ui, "fresh");
     await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
 
     expect(ui.getByText(zh.roots.created)).toBeTruthy();
@@ -376,14 +386,14 @@ describe("Onboarding 精靈外殼", () => {
     expect(onboardCalls).toBe(0); // 重跑不得再打 onboard（first-run only，會撞 409）
   });
 
-  it("進度條格數跟著帳號數：雙帳號七格、單帳號六格", async () => {
+  it("進度條格數跟著帳號數：雙帳號八格、單帳號七格（票 07 加外觀頁）", async () => {
     const dual = render(<Onboarding onClose={onClose} />);
-    expect(dual.container.querySelectorAll(".ob-step-bar")).toHaveLength(7);
+    expect(dual.container.querySelectorAll(".ob-step-bar")).toHaveLength(8);
     cleanup();
 
     useAppStore.setState({ config: { ...baseConfig, accounts: { work: account } } });
     const single = render(<Onboarding onClose={onClose} />);
-    expect(single.container.querySelectorAll(".ob-step-bar")).toHaveLength(6);
+    expect(single.container.querySelectorAll(".ob-step-bar")).toHaveLength(7);
   });
 
   it("歡迎頁是二選一：全新設定或我有備份", () => {
@@ -392,11 +402,38 @@ describe("Onboarding 精靈外殼", () => {
     expect(ui.getByText(zh.welcome.restore)).toBeTruthy();
   });
 
+  // 票 07：兩條路的第 2 頁都是外觀（主題存在這台電腦本機、不在備份包裡）
+  it.each([["全新設定", "fresh"], ["我有備份", "restore"]] as const)("%s：第 2 頁是外觀，上一步回歡迎頁", async (_label, path) => {
+    const ui = render(<Onboarding onClose={onClose} />);
+    ui.getByText(zh.welcome[path]).click();
+    await waitFor(() => expect(ui.getByText(zh.appearance.h)).toBeTruthy());
+    expect(ui.getByText(zh.appearance.sub)).toBeTruthy();
+    expect([...ui.container.querySelectorAll(".ob-theme button")].map((b) => b.textContent)).toEqual(["午夜藍", "冷調灰", "柔潤黃"]);
+    expect(ui.container.querySelectorAll(".ob-step-bar.is-on")).toHaveLength(2);   // 第 2 頁
+    expect(ui.container.querySelector(".ob-lang")).toBeNull();                      // 語言切換只在歡迎頁
+    ui.getByText(zh.common.prev).click();
+    await waitFor(() => expect(ui.getByText(zh.welcome.fresh)).toBeTruthy());
+  });
+
+  it("外觀頁選主題：立刻換、記住，下一步照常往下走", async () => {
+    localStorage.removeItem("fledge-theme");
+    const ui = render(<Onboarding onClose={onClose} />);
+    ui.getByText(zh.welcome.fresh).click();
+    await waitFor(() => expect(ui.getByText(zh.appearance.h)).toBeTruthy());
+    ui.getByText("冷調灰").click();
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("daylight-cool"));
+    expect(localStorage.getItem("fledge-theme")).toBe("daylight-cool");
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
+    expect(ui.queryByText("午夜藍")).toBeNull();   // 已經離開外觀頁
+    setTheme("nightfall");   // 主題模組的狀態在同一個檔案裡共用，還原給後面的測試
+  });
+
   // 移機分支的第二頁是選備份包，不是「設定工作根目錄」——兩條路從歡迎頁之後就分岔
   it("選「我有備份」後進到備份包頁，不是全新設定的根目錄頁", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
 
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     expect(ui.queryByText(zh.roots.h)).toBeNull();
@@ -409,7 +446,7 @@ describe("Onboarding 精靈外殼", () => {
   it("包資訊還不知道時走不出備份包頁", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
 
     expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(true);
@@ -422,11 +459,11 @@ describe("Onboarding 精靈外殼", () => {
   it("包裡沒有專案歷史時，路徑對應頁整頁不出現", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-absent").click();
 
-    await waitFor(() => expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(8));
+    await waitFor(() => expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(9));
     ui.getByText(zh.common.next).click();
     await waitFor(() => expect(ui.getByText(zh.mig.targets.h)).toBeTruthy());
     ui.getByText("adopt").click();
@@ -443,7 +480,7 @@ describe("Onboarding 精靈外殼", () => {
     useAppStore.setState({ config: { ...baseConfig, is_first_run: true } });
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -480,7 +517,7 @@ describe("Onboarding 精靈外殼", () => {
     });
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -502,7 +539,7 @@ describe("Onboarding 精靈外殼", () => {
   // 根目錄）。**帶回哪些是後端決定的**（舊機的路徑在新機不存在就不帶回），這一頁的職責
   // 只是把落檔後的結果照實說出來——使用者以前完全看不到這件事發生過。
   async function reachTargetsAndAdopt(ui: ReturnType<typeof render>) {
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -560,7 +597,7 @@ describe("Onboarding 精靈外殼", () => {
     });
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -594,7 +631,7 @@ describe("Onboarding 精靈外殼", () => {
     });
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();                    // A 包
     await waitFor(() =>
@@ -637,7 +674,7 @@ describe("Onboarding 精靈外殼", () => {
   it("專案對應住在精靈：離開這一頁再回來還在，且拿得到這一包的專案數", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -675,7 +712,7 @@ describe("Onboarding 精靈外殼", () => {
   it("換一包 → 專案對應清空重來", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -711,7 +748,7 @@ describe("Onboarding 精靈外殼", () => {
   it("專案清單讀不出來時擋住下一步（包裡確實有專案）", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -736,7 +773,7 @@ describe("Onboarding 精靈外殼", () => {
   it("預覽算不出來時擋住下一步，而且拿得到這一頁帶來的對應", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -775,7 +812,7 @@ describe("Onboarding 精靈外殼", () => {
   it("換一包之後，上一包的「清單已讀到」不算數", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -825,7 +862,7 @@ describe("Onboarding 精靈外殼", () => {
     });
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -845,7 +882,7 @@ describe("Onboarding 精靈外殼", () => {
   it("離開備份包頁再回來：選包狀態與包資訊一起留著，不會只剩半邊", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     expect(ui.getByTestId("picked").textContent).toBe("no-bundle");
     ui.getByText("probe-present").click();
@@ -867,15 +904,17 @@ describe("Onboarding 精靈外殼", () => {
   it("回歡迎頁再進移機：整組狀態一致地留著，不是只剩摘要", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
       expect(ui.getByText(zh.common.next).closest("button")!.disabled).toBe(false));
 
+    ui.getByText(zh.common.prev).click();                 // 回外觀頁（票 07）
+    await waitFor(() => expect(ui.getByText(zh.appearance.h)).toBeTruthy());
     ui.getByText(zh.common.prev).click();                 // 回歡迎頁
     await waitFor(() => expect(ui.getByText(zh.welcome.restore)).toBeTruthy());
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
 
     expect(ui.getByTestId("picked").textContent).toBe("/tmp/picked.tar.gz");
@@ -886,7 +925,7 @@ describe("Onboarding 精靈外殼", () => {
   it("從安裝頁回頭換包、序列因此縮短時，使用者仍停在備份包頁", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     // 等 gating 解除再走：同一個 tick 內按鈕還是 disabled，click 不會有任何作用
@@ -913,7 +952,7 @@ describe("Onboarding 精靈外殼", () => {
     }
     ui.getByText("probe-absent").click();        // 新的一包沒有專案歷史 → `paths` 頁消失
 
-    await waitFor(() => expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(8));
+    await waitFor(() => expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(9));
     expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy();
     expect(ui.queryByText(zh.mig.targets.h)).toBeNull();
   });
@@ -923,7 +962,7 @@ describe("Onboarding 精靈外殼", () => {
   /** 走完移機序列到指定的那一頁。**每一頁的 gating 都真的解除**（落檔、專案清單、預覽、
    *  安裝），不是硬跳——硬跳過去的頁面拿不到真實的前置狀態，斷言就會驗在假情境上。 */
   async function reachMigStep(ui: ReturnType<typeof render>, target: string) {
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await walkMigFrom(ui, target);
@@ -1147,7 +1186,7 @@ describe("Onboarding 精靈外殼", () => {
   // 根治靠**後端分得出來**：request_id 綁 `bundle.gen`，換包就換一個。
   it("換一包就換一個 request_id——後端才分得出是不是同一次確認", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -1173,7 +1212,7 @@ describe("Onboarding 精靈外殼", () => {
     const ids: string[] = [];
     for (let round = 0; round < 2; round++) {
       const ui = render(<Onboarding onClose={onClose} />);
-      ui.getByText(zh.welcome.restore).click();
+      await pickPath(ui, "restore");
       await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
       ui.getByText("probe-present").click();
       await waitFor(() =>
@@ -1190,7 +1229,7 @@ describe("Onboarding 精靈外殼", () => {
   it("移機分支一路走到完成頁，全程不出現共通設置與範本部署", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();       // 有專案歷史＝完整九頁序列
     for (const heading of [
@@ -1240,7 +1279,7 @@ describe("Onboarding 精靈外殼", () => {
 
   /** 走到安裝頁並讓預覽就緒（gating 解除）。 */
   async function reachInstallPage(ui: ReturnType<typeof render>) {
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
     ui.getByText("probe-present").click();
     await waitFor(() =>
@@ -1423,20 +1462,20 @@ describe("Onboarding 精靈外殼", () => {
     expect(ui.getByText(zh.mig.install.run)).toBeTruthy();
   });
 
-  it("進度條格數跟著路線：移機九格", async () => {
+  it("進度條格數跟著路線：移機十格（票 07 加外觀頁）", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
 
-    ui.getByText(zh.welcome.restore).click();
+    await pickPath(ui, "restore");
 
     await waitFor(() => expect(ui.getByText(zh.mig.bundle.h)).toBeTruthy());
-    expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(9);
+    expect(ui.container.querySelectorAll(".ob-step-bar")).toHaveLength(10);
   });
 
   it("語言切換掛在歡迎頁，離開歡迎頁後不再出現", async () => {
     const ui = render(<Onboarding onClose={onClose} />);
     expect(ui.container.querySelector(".ob-lang")).toBeTruthy();
 
-    ui.getByText(zh.welcome.fresh).click();
+    await pickPath(ui, "fresh");
     await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
     expect(ui.container.querySelector(".ob-lang")).toBeNull();
   });

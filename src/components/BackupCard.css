@@ -46,14 +46,14 @@
   font-size: 12px;
   line-height: 1.5;
   margin: 0;
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .bk-error {
   font-size: 12px;
   line-height: 1.5;
   margin: 8px 0 0;
-  color: var(--error);
+  color: var(--error-text);
 }
 
 /* 天數主行：分級只用文字顏色，不加徽章也不加 banner（刻意的設計決策——
@@ -65,8 +65,8 @@
 }
 
 .bk-days--fresh { color: var(--text); }
-.bk-days--stale { color: var(--warning); }
-.bk-days--overdue { color: var(--error); }
+.bk-days--stale { color: var(--warning-text); }
+.bk-days--overdue { color: var(--error-text); }
 
 /* 備份包清單 */
 .bk-bundles {
@@ -116,7 +116,7 @@
   font-size: 12px;
   line-height: 1.5;
   margin: 4px 0 0;
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 /* 「關閉設定會中斷」提示：執行中才出現，接在動作列下方 */

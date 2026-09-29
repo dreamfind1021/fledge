@@ -2,6 +2,12 @@
 <html lang="en" data-theme="nightfall">
   <head>
     <meta charset="UTF-8" />
+    <!-- 主題要在第一個畫面之前套上，否則淺色使用者會先閃一下午夜藍（票 07，spec §4.2）。
+         只搬值、不驗證：看不懂的值由 index.css 的 :root 退回午夜藍，src/lib/theme.ts 的 initTheme() 再修正。
+         儲存鍵要跟 src/lib/themeIds.ts 的 THEME_STORAGE_KEY 一致（src/themeBootstrap.test.ts 比對） -->
+    <script>
+      try { var t = localStorage.getItem("fledge-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+    </script>
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Fledge</title>

@@ -15,6 +15,10 @@
     "fresh": "Set up from scratch",
     "restore": "I have a backup"
   },
+  "appearance": {
+    "h": "Appearance",
+    "sub": "You can change this later in Settings."
+  },
   "mig": {
     "bundle": {
       "h": "Choose your backup bundle",

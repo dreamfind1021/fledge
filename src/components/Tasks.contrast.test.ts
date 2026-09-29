@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { THEMES, type ThemeId } from "../lib/themeIds";
 import { baseLevel, cssRules, readCss, resolveColor, stops, stripComments, token, worst } from "../testing/cssRules";
 
 // 待辦面板的顏色對比防線。
@@ -15,41 +16,49 @@ import { baseLevel, cssRules, readCss, resolveColor, stops, stripComments, token
 // 從 Tasks.css 讀出某條規則實際用的顏色 token；讀檔、查規則、算對比的工具在 ../testing/cssRules.ts（票 28 抽出）。
 // 只看基礎等級：@media／@container 區塊內的覆寫只在那個寬度生效，混進「取最後一條」會把基礎值蓋掉
 const tasksCss = readCss("/src/components/Tasks.css");
-const { paintToken, paintColor, paintColors } = cssRules(baseLevel(stripComments(tasksCss)));
+const tasksBase = baseLevel(stripComments(tasksCss));
+const { paintToken } = cssRules(tasksBase);
 
-describe("待辦面板的顏色對比", () => {
-  const bg = token("bg");
-  // 編輯器（spec §6.2）的文字坐落在 .full-editor 的底色上、工具鈕坐落在 .ed-bar 的底色上——
-  // 票 28 第四批 4b 起編輯器凹成暗磚、工具列一條側欄色（soft-tiles spec §6 D1、D2），兩個底都從 CSS 讀，不寫死 token
-  const editor = paintColor(".full-editor", "background");
-  const toolbar = paintColor(".ed-bar", "background");
-  // 票 21 指令區塊的 <pre> 有自己的 --surface-2 底，比 --surface 再亮一階，同一個理由要另備一個底色
-  const surface2 = token("surface-2");
-  // 專案樹（票 19）反白列的底是 --active，不是 --bg——同一個選擇器坐落在兩種底色上，
-  // 各自要驗一次（.tree-item 平常在 --bg，選到 .active 後底色換成 --active、文字色不變）
-  const active = token("active");
-  // 抽屜卡片（spec §11.5）：右欄內容坐落在 .tasks-col-detail 的底色上。從 CSS 讀，不寫死 token
-  const drawer = paintColor(".tasks-col-detail", "background");
-  // 清單的磚塊與元件（spec §11.5）：全部從 CSS 讀
-  const tile = paintColor(".tk-row", "background");
-  const tileHover = paintColor(".tk-row:hover", "background");
-  const tileDoing = paintColor(".tk.is-doing .tk-row", "background");
-  const cmdRow = paintColor(".tasks-cmd-row", "background");
-  const pill = paintColor(".tasks-sec-n", "background");
-  const newBtn = paintColor(".tasks-new-btn", "background");
-  // 提示條與刪除確認框的小按鈕有自己的實心底（票 28 第四批 4b，soft-tiles spec §6 D6、D7）：從 CSS 讀
-  const bannerBtn = paintColor(".tk-banner .bbtn", "background");
-  const confirmBtn = paintColor(".tk-confirm button", "background");
-  // 下一步是漸層：標籤、內文、› 可能落在任何一站，三態各取全部色站
-  const nextBase = paintColors(".tasks-next", "background");
-  const nextHover = paintColors(".tasks-next:hover", "background");
-  const nextOn = paintColors(".tasks-next.is-on", "background");
-  // 專案樹軌道（spec §11.6）：數字坐落在軌道、填充、進行中段三種底色上，選中列的軌道另一個色
-  const track = paintColor(".tree-trk", "background");
-  const trackActive = paintColor(".tree-item.active .tree-trk", "background");
-  const fill = paintColor(".tree-fill", "background");
-  const doingSeg = paintColor(".tree-doing", "background");
+// 底色依主題算（票 07：對比斷言三個主題都跑）。表格裡寫底色的名稱，不寫值
+const backdropsOf = (theme: ThemeId) => {
+  const { paintColor, paintColors } = cssRules(tasksBase, theme);
+  return {
+    bg: token("bg", theme),
+    // 編輯器（spec §6.2）的文字坐落在 .full-editor 的底色上、工具鈕坐落在 .ed-bar 的底色上——
+    // 票 28 第四批 4b 起編輯器凹成暗磚、工具列一條側欄色（soft-tiles spec §6 D1、D2），兩個底都從 CSS 讀，不寫死 token
+    editor: paintColor(".full-editor", "background"),
+    toolbar: paintColor(".ed-bar", "background"),
+    // 票 21 指令區塊的 <pre> 有自己的 --surface-2 底，比 --surface 再亮一階，同一個理由要另備一個底色
+    surface2: token("surface-2", theme),
+    // 專案樹（票 19）反白列的底是 --active，不是 --bg——同一個選擇器坐落在兩種底色上，
+    // 各自要驗一次（.tree-item 平常在 --bg，選到 .active 後底色換成 --active、文字色不變）
+    active: token("active", theme),
+    // 抽屜卡片（spec §11.5）：右欄內容坐落在 .tasks-col-detail 的底色上。從 CSS 讀，不寫死 token
+    drawer: paintColor(".tasks-col-detail", "background"),
+    // 清單的磚塊與元件（spec §11.5）：全部從 CSS 讀
+    tile: paintColor(".tk-row", "background"),
+    tileHover: paintColor(".tk-row:hover", "background"),
+    tileDoing: paintColor(".tk.is-doing .tk-row", "background"),
+    cmdRow: paintColor(".tasks-cmd-row", "background"),
+    pill: paintColor(".tasks-sec-n", "background"),
+    newBtn: paintColor(".tasks-new-btn", "background"),
+    // 提示條與刪除確認框的小按鈕有自己的實心底（票 28 第四批 4b，soft-tiles spec §6 D6、D7）：從 CSS 讀
+    bannerBtn: paintColor(".tk-banner .bbtn", "background"),
+    confirmBtn: paintColor(".tk-confirm button", "background"),
+    // 下一步是漸層：標籤、內文、› 可能落在任何一站，三態各取全部色站
+    nextBase: paintColors(".tasks-next", "background"),
+    nextHover: paintColors(".tasks-next:hover", "background"),
+    nextOn: paintColors(".tasks-next.is-on", "background"),
+    // 專案樹軌道（spec §11.6）：數字坐落在軌道、填充、進行中段三種底色上，選中列的軌道另一個色
+    track: paintColor(".tree-trk", "background"),
+    trackActive: paintColor(".tree-item.active .tree-trk", "background"),
+    fill: paintColor(".tree-fill", "background"),
+    doingSeg: paintColor(".tree-doing", "background"),
+  };
+};
+type Backdrop = keyof ReturnType<typeof backdropsOf>;
 
+describe("待辦面板的顏色對比：測試工具", () => {
   // helper 自己的防線：數字取自 spec §11.9（另以 Python 獨立算過）
   it("resolveColor：var、color-mix；stops：漸層每一站；認不得就炸", () => {
     expect(resolveColor("var(--surface)")).toBe(token("surface"));
@@ -62,118 +71,140 @@ describe("待辦面板的顏色對比", () => {
     expect(() => resolveColor("color-mix(in srgb, var(--primary) 30%, var(--surface) 30%)")).toThrow();
   });
 
-  // 記號是可操作的 UI 元件，非文字門檻 3:1（WCAG 1.4.11）
-  it.each([
-    ["todo 空心框", ".tk-mark.is-todo::before", "border", tile],
-    ["todo 空心框（選中）", ".tk-mark.is-todo::before", "border", active],
-    ["doing 實心方", ".tk-mark.is-doing::before", "background", tileDoing],
-    ["done 打勾（繼承 .tk-mark 的 color）", ".tk-mark", "color", tile],
-    // 票 21 指令框尾的複製圖示（lucide svg 吃 currentColor）與已複製的勾，坐落在框的 --surface-2 上
-    ["指令複製圖示", ".tasks-cmd-act", "color", cmdRow],
-    ["指令已複製的勾", ".tasks-cmd-act.is-done", "color", cmdRow],
-    // 票 19 清單（spec §5.4／§5.6）：擱置是第四種輪廓（虛線空心方）；編輯中清單唯讀（D12）
+});
+
+// 記號是可操作的 UI 元件，非文字門檻 3:1（WCAG 1.4.11）
+const NONTEXT: [string, string, string, Backdrop][] = [
+    ["todo 空心框", ".tk-mark.is-todo::before", "border", "tile"],
+    ["todo 空心框（選中）", ".tk-mark.is-todo::before", "border", "active"],
+      ["done 打勾（繼承 .tk-mark 的 color）", ".tk-mark", "color", "tile"],
+    // 票 21 指令框尾的複製圖示（lucide svg 吃 currentColor），坐落在框的 --surface-2 上；已複製的勾是功能色，在上面「只驗午夜藍」那組
+    ["指令複製圖示", ".tasks-cmd-act", "color", "cmdRow"],
+      // 票 19 清單（spec §5.4／§5.6）：擱置是第四種輪廓（虛線空心方）；編輯中清單唯讀（D12）
     // 停用的記號與動作鍵是圖示（lucide svg 吃 currentColor），非文字 3:1；下一步右上的「›」
     // 是唯一的字符、spec 指定 --faint，同樣按非文字驗
-    ["parked 虛線框", ".tk-mark.is-parked::before", "border", tile],
-    ["停用的狀態記號", ".tk-mark:disabled", "color", tile],
-    ["停用的動作鍵", ".tk-act:disabled", "color", tile],
-    ["下一步的 › 記號", ".tasks-next-more", "color", nextBase],
-    ["下一步的 ›（滑過）", ".tasks-next-more", "color", nextHover],
-    ["下一步的 ›（選中）", ".tasks-next-more", "color", nextOn],
+    ["parked 虛線框", ".tk-mark.is-parked::before", "border", "tile"],
+    ["停用的狀態記號", ".tk-mark:disabled", "color", "tile"],
+    ["停用的動作鍵", ".tk-act:disabled", "color", "tile"],
+    ["下一步的 › 記號", ".tasks-next-more", "color", "nextBase"],
+    ["下一步的 ›（滑過）", ".tasks-next-more", "color", "nextHover"],
+    ["下一步的 ›（選中）", ".tasks-next-more", "color", "nextOn"],
     // 右欄（票 19，spec §5.5）：動作鍵是圖示，非文字 3:1。
     // 票 26＋27 起 .d-body 沒有邊框，動作鍵與 × 都坐落在抽屜卡片（drawer）上
-    ["右欄動作鍵", ".d-acts .tk-act", "color", drawer],
-    ["右欄的 ×", ".d-close", "color", drawer],
-  ])("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
-    expect(worst(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(3);
-  });
+    ["右欄動作鍵", ".d-acts .tk-act", "color", "drawer"],
+    ["右欄的 ×", ".d-close", "color", "drawer"],
+];
 
-  // 票上的文字門檻 4.5:1。已完成的標題淡化到某個 token 就停，再淡就不合格
-  it.each([
-    ["已完成的標題", ".tk.is-done .tk-title", "color", tile],
+// 票上的文字門檻 4.5:1。已完成的標題淡化到某個 token 就停，再淡就不合格
+const TEXT: [string, string, string, Backdrop][] = [
+    ["已完成的標題", ".tk.is-done .tk-title", "color", "tile"],
     // 票 19：擱置的標題淡化到 --dim 就停（與已完成同一條線）；編輯中停用的一行輸入是文字，不能掉到 --faint
-    ["擱置的標題", ".tk.is-parked .tk-title", "color", tile],
-    ["停用的一行輸入", ".tasks-new-input:disabled", "color", bg],
-    ["來源 AI", ".tk-src.is-ai", "color", tile],
-    ["來源 我", ".tk-src.is-me", "color", tile],
+    ["擱置的標題", ".tk.is-parked .tk-title", "color", "tile"],
+    ["停用的一行輸入", ".tasks-new-input:disabled", "color", "bg"],
+    ["來源 AI", ".tk-src.is-ai", "color", "tile"],
+    ["來源 我", ".tk-src.is-me", "color", "tile"],
     // 所有專案頁的跨專案票列（票 19，spec §5.3）：列文字在 --bg 上；專案標籤有自己的 --surface-2 底
-    ["跨專案票列文字", ".tk-xrow", "color", tile],
-    ["跨專案票列的專案標籤", ".tk-proj", "color", surface2],
-    ["第二層分區標籤", ".tasks-sec-lab", "color", bg],
-    ["第二層分區計數", ".tasks-sec-n", "color", pill],
+    ["跨專案票列文字", ".tk-xrow", "color", "tile"],
+    ["跨專案票列的專案標籤", ".tk-proj", "color", "surface2"],
+    ["第二層分區標籤", ".tasks-sec-lab", "color", "bg"],
+    ["第二層分區計數", ".tasks-sec-n", "color", "pill"],
     // 票內文的 markdown（右欄與編輯器預覽共用）：正文與連結都要各自過 4.5:1
-    [".tk-md 內文", ".tk-md", "color", drawer],
-    [".tk-md 連結", ".tk-md a", "color", drawer],
+    [".tk-md 內文", ".tk-md", "color", "drawer"],
+    [".tk-md 連結", ".tk-md a", "color", "drawer"],
     // 票 25：離場筆記的 `# 標題`；票 26＋27 起右欄內容直接坐落在抽屜卡片（drawer）上
-    [".tk-md 一級標題", ".tk-md h1", "color", drawer],
+    [".tk-md 一級標題", ".tk-md h1", "color", "drawer"],
     // 整頁編輯器（spec §6.2／§6.4，task 10 review FIX 4）：坐落在編輯器底色上的文字；
     // 「未儲存」、預覽／取消文字鈕、預覽裡的內文、工具鈕是票 28 第四批 4b 補的（soft-tiles spec §6.5）
-    [".ed-title 正常文字", ".ed-title", "color", editor],
-    [".ed-area 正常文字", ".ed-area", "color", editor],
-    [".ed-hint 狀態字", ".ed-hint", "color", editor],
-    [".ed-hint「未儲存」", ".ed-hint.is-dirty", "color", editor],
-    ["預覽／取消文字鈕", ".btn.is-quiet", "color", editor],
-    [".tk-md 內文（編輯器預覽）", ".tk-md", "color", editor],
-    [".ed-btn 工具鈕", ".ed-btn", "color", toolbar],
-    [".ed-title 停用文字", ".ed-title:disabled", "color", editor],
-    [".ed-area 停用文字", ".ed-area:disabled", "color", editor],
+    [".ed-title 正常文字", ".ed-title", "color", "editor"],
+    [".ed-area 正常文字", ".ed-area", "color", "editor"],
+    [".ed-hint 狀態字", ".ed-hint", "color", "editor"],
+    [".ed-hint「未儲存」", ".ed-hint.is-dirty", "color", "editor"],
+    ["預覽／取消文字鈕", ".btn.is-quiet", "color", "editor"],
+    [".tk-md 內文（編輯器預覽）", ".tk-md", "color", "editor"],
+    [".ed-btn 工具鈕", ".ed-btn", "color", "toolbar"],
+    [".ed-title 停用文字", ".ed-title:disabled", "color", "editor"],
+    [".ed-area 停用文字", ".ed-area:disabled", "color", "editor"],
     // 返回列（編輯器頁首）坐落在抽屜卡片上；提示條在清單（--bg）與抽屜兩處都會出現，各驗一次
-    ["返回列的專案名", ".full-back", "color", drawer],
-    ["返回列的票號", ".full-num", "color", drawer],
-    ["提示條文字", ".tk-banner", "color", bg],
-    ["提示條文字（抽屜）", ".tk-banner", "color", drawer],
+    ["返回列的專案名", ".full-back", "color", "drawer"],
+    ["返回列的票號", ".full-num", "color", "drawer"],
+    ["提示條文字", ".tk-banner", "color", "bg"],
+    ["提示條文字（抽屜）", ".tk-banner", "color", "drawer"],
     // 提示條與刪除確認框的按鈕坐落在自己的實心底上，清單或抽屜都一樣，各驗一條（票 28 第四批 4b）；
     // 「刪除」是紅底白字（3.76，soft-tiles spec §6.7 已知限制），這裡驗的是「取消」；停用改半透明，免對比、不再驗
-    ["提示條按鈕文字", ".tk-banner .bbtn", "color", bannerBtn],
-    ["刪除確認框的「取消」", ".tk-confirm button", "color", confirmBtn],
+    ["提示條按鈕文字", ".tk-banner .bbtn", "color", "bannerBtn"],
+    ["刪除確認框的「取消」", ".tk-confirm button", "color", "confirmBtn"],
     // 票 21 貼進新對話的指令：標籤坐落在 .tasks-pane 的 --bg；<pre> 在框自己的 --surface-2 上
-    ["指令區塊標籤", ".tasks-cmd-lab", "color", bg],
-    ["指令內文", ".tasks-cmd-pre", "color", cmdRow],
+    ["指令區塊標籤", ".tasks-cmd-lab", "color", "bg"],
+    ["指令內文", ".tasks-cmd-pre", "color", "cmdRow"],
     // 專案樹（票 19，spec §5.2）：brief 的「新規則自動納入」是錯的，這幾條要補（task 5 review FIX）
-    ["樹頂端摘要文字", ".tree-head .s", "color", bg],
-    ["樹頂端摘要讀不到警告", ".tree-head .s .is-warn", "color", bg],
-    ["樹的數字", ".tree-n", "color", bg],
+    ["樹頂端摘要文字", ".tree-head .s", "color", "bg"],
+    ["樹頂端摘要讀不到警告", ".tree-head .s .is-warn", "color", "bg"],
+    ["樹的數字", ".tree-n", "color", "bg"],
     // review 點名的那一條：demo 用 --faint，brief 明確要求換成 --dim，這裡才守得住
-    ["樹的擱置 +N", ".tree-n .pk", "color", bg],
-    ["樹讀不到警告", ".tree-una", "color", bg],
-    ["樹未開待辦的淡化名稱", ".tree-item.is-dim .tree-name", "color", bg],
-    ["樹分組標籤", ".tree-grp", "color", bg],
-    ["樹列文字（一般底 --bg）", ".tree-item", "color", bg],
-    ["樹列文字（反白底 --active）", ".tree-item", "color", active],
+    ["樹的擱置 +N", ".tree-n .pk", "color", "bg"],
+    ["樹讀不到警告", ".tree-una", "color", "bg"],
+    ["樹未開待辦的淡化名稱", ".tree-item.is-dim .tree-name", "color", "bg"],
+    ["樹分組標籤", ".tree-grp", "color", "bg"],
+    ["樹列文字（一般底 --bg）", ".tree-item", "color", "bg"],
+    ["樹列文字（反白底 --active）", ".tree-item", "color", "active"],
     // 右欄（票 19，spec §5.5）：.tk-empty／.tk-noedit 坐落在抽屜卡片上（票 26＋27 起 .d-body 透明），
     // 不是 --bg（task 7 拿掉時的白名單死條目留在別處，這裡是它們在右欄的落點）
-    [".tk-empty 無內文提示", ".tk-empty", "color", drawer],
-    [".tk-noedit 不可編輯說明", ".tk-noedit", "color", drawer],
-    ["右欄麵包屑", ".d-crumb", "color", drawer],
-    ["右欄資訊列", ".d-meta", "color", drawer],
+    [".tk-empty 無內文提示", ".tk-empty", "color", "drawer"],
+    [".tk-noedit 不可編輯說明", ".tk-noedit", "color", "drawer"],
+    ["右欄麵包屑", ".d-crumb", "color", "drawer"],
+    ["右欄資訊列", ".d-meta", "color", "drawer"],
     // 選中的票列反白底是 --active（見 .tk-row.active）：已完成／擱置的標題淡化在那個底上
     // 同樣要過 4.5:1——沒有測試釘住的話，反白列上淡化過頭的標題會被漏掉（task 7 review 遺留）
-    ["已完成的標題（反白底 --active）", ".tk.is-done .tk-title", "color", active],
-    ["擱置的標題（反白底 --active）", ".tk.is-parked .tk-title", "color", active],
+    ["已完成的標題（反白底 --active）", ".tk.is-done .tk-title", "color", "active"],
+    ["擱置的標題（反白底 --active）", ".tk.is-parked .tk-title", "color", "active"],
     // 磚塊上的淡字（spec §11.9）：一般、滑過、進行中都過 4.5；選中（--active）只有 --dim 以上過
-    ["票號（磚）", ".tk-num", "color", tile],
-    ["票號（滑過）", ".tk-num", "color", tileHover],
-    ["日期（磚）", ".tk-date", "color", tile],
-    ["日期（滑過）", ".tk-date", "color", tileHover],
-    ["日期（進行中磚）", ".tk-date", "color", tileDoing],
-    ["來源 AI（滑過）", ".tk-src.is-ai", "color", tileHover],
-    ["來源 AI（選中）", ".tk-src.is-ai", "color", active],
-    ["來源 AI（進行中磚）", ".tk-src.is-ai", "color", tileDoing],
-    ["進行中票號", ".tk.is-doing .tk-num", "color", tileDoing],
-    ["選中列票號", ".tk:not(.is-doing) .tk-row.active .tk-num", "color", active],
-    ["選中列日期", ".tk-row.active .tk-date", "color", active],
-    ["停用的新增鍵", ".tasks-new-btn:disabled", "color", newBtn],
-    ["下一步標籤", ".tasks-next-lab", "color", nextBase],
-    ["下一步標籤（滑過）", ".tasks-next-lab", "color", nextHover],
-    ["下一步標籤（選中）", ".tasks-next-lab", "color", nextOn],
-    ["下一步內文（選中）", ".tasks-next-tx", "color", nextOn],
-    ["樹的軌道數字（軌道）", ".tree-num", "color", track],
-    ["樹的軌道數字（選中列軌道）", ".tree-num", "color", trackActive],
-    ["樹的軌道數字（填充）", ".tree-num", "color", fill],
-    ["樹的軌道數字（進行中段）", ".tree-num", "color", doingSeg],
-  ])("%s 對背景至少 4.5:1", (_label, selector, prop, backdrop) => {
-    expect(worst(token(paintToken(selector, prop)), backdrop)).toBeGreaterThanOrEqual(4.5);
+    ["票號（磚）", ".tk-num", "color", "tile"],
+    ["票號（滑過）", ".tk-num", "color", "tileHover"],
+    ["日期（磚）", ".tk-date", "color", "tile"],
+    ["日期（滑過）", ".tk-date", "color", "tileHover"],
+    ["日期（進行中磚）", ".tk-date", "color", "tileDoing"],
+    ["來源 AI（滑過）", ".tk-src.is-ai", "color", "tileHover"],
+    ["來源 AI（選中）", ".tk-src.is-ai", "color", "active"],
+    ["來源 AI（進行中磚）", ".tk-src.is-ai", "color", "tileDoing"],
+    ["進行中票號", ".tk.is-doing .tk-num", "color", "tileDoing"],
+    ["選中列票號", ".tk:not(.is-doing) .tk-row.active .tk-num", "color", "active"],
+    ["選中列日期", ".tk-row.active .tk-date", "color", "active"],
+    ["停用的新增鍵", ".tasks-new-btn:disabled", "color", "newBtn"],
+    ["下一步標籤", ".tasks-next-lab", "color", "nextBase"],
+    ["下一步標籤（滑過）", ".tasks-next-lab", "color", "nextHover"],
+    ["下一步標籤（選中）", ".tasks-next-lab", "color", "nextOn"],
+    ["下一步內文（選中）", ".tasks-next-tx", "color", "nextOn"],
+    ["樹的軌道數字（軌道）", ".tree-num", "color", "track"],
+    ["樹的軌道數字（選中列軌道）", ".tree-num", "color", "trackActive"],
+    ["樹的軌道數字（填充）", ".tree-num", "color", "fill"],
+    ["樹的軌道數字（進行中段）", ".tree-num", "color", "doingSeg"],
+];
+
+// 功能色（--primary 等）畫的非文字：只驗午夜藍。淺色主題的功能色非文字低於 3:1 是知情接受（spec §12.1），
+// 這兩條放進下面的迴圈在淺色必紅，所以分開
+const FUNCTIONAL_NONTEXT: [string, string, string, Backdrop][] = [
+  ["doing 實心方", ".tk-mark.is-doing::before", "background", "tileDoing"],
+  ["指令已複製的勾", ".tasks-cmd-act.is-done", "color", "cmdRow"],
+];
+describe("nightfall：功能色的非文字（淺色主題知情接受）", () => {
+  const B = backdropsOf("nightfall");
+  it.each(FUNCTIONAL_NONTEXT)("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
+    expect(worst(token(paintToken(selector, prop)), B[backdrop])).toBeGreaterThanOrEqual(3);
   });
+});
+
+// 兩張表三個主題都跑（票 07，spec §6.3）：字與中性色的圖示在淺色主題一樣要過門檻
+describe.each(THEMES)("%s：待辦面板的顏色對比", (theme) => {
+  const B = backdropsOf(theme);
+  it.each(NONTEXT)("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
+    expect(worst(token(paintToken(selector, prop), theme), B[backdrop])).toBeGreaterThanOrEqual(3);
+  });
+  it.each(TEXT)("%s 對背景至少 4.5:1", (_label, selector, prop, backdrop) => {
+    expect(worst(token(paintToken(selector, prop), theme), B[backdrop])).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+describe("待辦面板的顏色規則", () => {
 
   // 完成區的展開箭頭是 lucide 的 svg，用 currentColor 吃 .tasks-sec 的 color；
   // 標籤與計數各有自己的 color。分開設就會漂移——2026-09-01 就是標籤改成 --dim

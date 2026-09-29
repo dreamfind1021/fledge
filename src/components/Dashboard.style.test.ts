@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { THEMES, type ThemeId } from "../lib/themeIds";
 import { baseOf, cssRules, hasDecl, lineTokenHits, token, worst } from "../testing/cssRules";
 
 // 觀測面板的樣式防線——票 28 第三批，spec docs/planning/soft-tiles-app-wide-design.md §4.6。
@@ -6,7 +7,7 @@ import { baseOf, cssRules, hasDecl, lineTokenHits, token, worst } from "../testi
 // 觀測面板沒有 <button>／<input>，拿掉的線全在 div／span／th／td／li 上：一律斷言「沒有這個宣告」
 // （hasDecl：規則本身必須存在，規則不見就炸）。縫、陰影、底色、圓角這些值不斷言——它們不防線被加回來（spec §4.6）
 const dash = baseOf("/src/components/Dashboard.css");
-const { paintToken, paintColor } = cssRules(dash);
+const { paintToken } = cssRules(dash);
 
 describe("卡片與「資料更新中」小籤拿掉外框（spec D1、D4）", () => {
   it("數字卡、額度卡、面板沒有外框", () => {
@@ -20,8 +21,8 @@ describe("卡片與「資料更新中」小籤拿掉外框（spec D1、D4）", (
   });
 
   // spec §4.5 第一列。底色從 CSS 讀：宣告被刪掉時讀不到而紅——小籤底色的間接防線（spec §4.6）
-  it("小籤的灰字對自己的底至少 4.5:1", () => {
-    expect(worst(token(paintToken(".dash-stale", "color")), paintColor(".dash-stale", "background"))).toBeGreaterThanOrEqual(4.5);
+  it.each(THEMES)("%s：小籤的灰字對自己的底至少 4.5:1", (theme) => {
+    expect(worst(token(paintToken(".dash-stale", "color"), theme), cssRules(dash, theme).paintColor(".dash-stale", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 });
 
@@ -44,17 +45,14 @@ describe("專案表每列一塊暗磚、圖例與長條滑過不畫線（spec D3
 
   // spec §4.5 第二、三列：字坐在每一列的暗磚上，底色從 .dash-table td 的 background 讀（暗磚底色的間接防線）。
   // 其他格沒有自己的 color、繼承 body 的 --text，跟專案名稱同一組，不另驗
-  const row = () => paintColor(".dash-table td", "background");
-  it("專案名稱對暗磚至少 4.5:1", () => {
-    expect(worst(token(paintToken(".dash-proj-name", "color")), row())).toBeGreaterThanOrEqual(4.5);
-  });
-
-  it("合計對暗磚至少 4.5:1", () => {
-    expect(worst(token(paintToken(".dash-td-total", "color")), row())).toBeGreaterThanOrEqual(4.5);
-  });
-
-  it("路徑對暗磚至少 4.5:1", () => {
-    expect(worst(token(paintToken(".dash-proj-path", "color")), row())).toBeGreaterThanOrEqual(4.5);
+  // 三個主題都跑（票 07）
+  it.each<[ThemeId, string, string]>(THEMES.flatMap((theme) => [
+    [theme, "專案名稱", ".dash-proj-name"] as [ThemeId, string, string],
+    [theme, "合計", ".dash-td-total"] as [ThemeId, string, string],
+    [theme, "路徑", ".dash-proj-path"] as [ThemeId, string, string],
+  ]))("%s：%s對暗磚至少 4.5:1", (theme, _label, selector) => {
+    const row = cssRules(dash, theme).paintColor(".dash-table td", "background");
+    expect(worst(token(paintToken(selector, "color"), theme), row)).toBeGreaterThanOrEqual(4.5);
   });
 });
 

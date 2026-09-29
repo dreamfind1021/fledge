@@ -13,7 +13,7 @@
   font-size: 12px;
   line-height: 1.5;
   margin: 6px 0 0;
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 /* 按鈕的上緣間距：原本靠 `.rs-links button` 給，抽出後那條選擇器只涵蓋還原卡，

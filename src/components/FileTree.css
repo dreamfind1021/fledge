@@ -9,4 +9,4 @@
 .filetree-ico { display: inline-flex; flex: none; color: var(--faint); }
 .filetree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .filetree-hint { height: 20px; color: var(--faint); font-style: italic; }
-.filetree-retry { margin-left: 6px; font-size: 11px; color: var(--primary); background: none; border: none; cursor: pointer; text-decoration: underline; }
+.filetree-retry { margin-left: 6px; font-size: 11px; color: var(--primary-text); background: none; border: none; cursor: pointer; text-decoration: underline; }

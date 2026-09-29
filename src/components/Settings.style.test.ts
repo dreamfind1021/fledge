@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { THEMES } from "../lib/themeIds";
 import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, over, token, worst } from "../testing/cssRules";
 
 // 設定視窗與引導精靈的樣式防線——票 28 第四批 4a，spec docs/planning/soft-tiles-app-wide-design.md §5.6。
@@ -46,12 +47,12 @@ describe("設定視窗：方塊、輸入框、按鈕（spec D3、D4、D5）", ()
   });
 
   // spec §5.5：提示字坐在輸入框自己的底上，兩個顏色都從 CSS 讀
-  it("輸入框的提示字對輸入框底至少 4.5:1", () => {
-    expect(worst(token(S.paintToken(".settings-input::placeholder", "color")), S.paintColor(".settings-input", "background"))).toBeGreaterThanOrEqual(4.5);
+  it.each(THEMES)("%s：輸入框的提示字對輸入框底至少 4.5:1", (theme) => {
+    expect(worst(token(S.paintToken(".settings-input::placeholder", "color"), theme), cssRules(set, theme).paintColor(".settings-input", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("手動專案列的帳號名對暗磚至少 4.5:1", () => {
-    expect(worst(token(S.paintToken(".settings-rrow-acct", "color")), S.paintColor(".settings-rrow", "background"))).toBeGreaterThanOrEqual(4.5);
+  it.each(THEMES)("%s：手動專案列的帳號名對暗磚至少 4.5:1", (theme) => {
+    expect(worst(token(S.paintToken(".settings-rrow-acct", "color"), theme), cssRules(set, theme).paintColor(".settings-rrow", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 });
 
@@ -67,8 +68,8 @@ describe("帳號、備份、還原：方塊、輸入框、按鈕、分隔線（s
     expect(lastDecl(acc, ".ae-btn-ghost", "border")).toBe("none");
   });
 
-  it("帳號輸入框的提示字對輸入框底至少 4.5:1", () => {
-    expect(worst(token(A.paintToken(".ae-input::placeholder", "color")), A.paintColor(".ae-input", "background"))).toBeGreaterThanOrEqual(4.5);
+  it.each(THEMES)("%s：帳號輸入框的提示字對輸入框底至少 4.5:1", (theme) => {
+    expect(worst(token(A.paintToken(".ae-input::placeholder", "color"), theme), cssRules(acc, theme).paintColor(".ae-input", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 
   it("路徑框與清單上緣沒有線", () => {
@@ -104,16 +105,16 @@ describe("引導精靈與 b4 卡片（spec D1、D2、D3、D4、D5、D7）", () =
     expect(lastDecl(ob, ".b4-btn-sm", "border")).toBe("none");
   });
 
-  it("精靈輸入框的提示字對輸入框底至少 4.5:1", () => {
-    expect(worst(token(O.paintToken(".ob-input::placeholder", "color")), O.paintColor(".ob-input", "background"))).toBeGreaterThanOrEqual(4.5);
+  it.each(THEMES)("%s：精靈輸入框的提示字對輸入框底至少 4.5:1", (theme) => {
+    expect(worst(token(O.paintToken(".ob-input::placeholder", "color"), theme), cssRules(ob, theme).paintColor(".ob-input", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("清單卡裡最淡的字（工具版本）對暗磚至少 4.5:1", () => {
-    expect(worst(token(O.paintToken(".b4-item-meta", "color")), O.paintColor(".b4-card", "background"))).toBeGreaterThanOrEqual(4.5);
+  it.each(THEMES)("%s：清單卡裡最淡的字（工具版本）對暗磚至少 4.5:1", (theme) => {
+    expect(worst(token(O.paintToken(".b4-item-meta", "color"), theme), cssRules(ob, theme).paintColor(".b4-card", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 
-  it("移機區塊的「舊機位置」對暗磚至少 4.5:1", () => {
-    expect(worst(token(O.paintToken(".ob-spot-old", "color")), O.paintColor(".ob-spot", "background"))).toBeGreaterThanOrEqual(4.5);
+  it.each(THEMES)("%s：移機區塊的「舊機位置」對暗磚至少 4.5:1", (theme) => {
+    expect(worst(token(O.paintToken(".ob-spot-old", "color"), theme), cssRules(ob, theme).paintColor(".ob-spot", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 });
 
@@ -124,12 +125,15 @@ describe("語言切換鈕（spec D8）", () => {
 
   // spec §5.5：選中的底是半透明，疊在它實際坐落的那層底上算——設定視窗標題列（.settings-modal）與精靈頁（.ob-overlay），
   // 兩個底都從 CSS 讀
-  it.each([
-    ["設定視窗", () => decl(set, ".settings-modal", "background")],
-    ["引導精靈", () => decl(ob, ".ob-overlay", "background")],
-  ])("選中的橘字對疊在%s上的淡橘底至少 4.5:1", (_label, backdrop) => {
-    const bg = over(decl(lang, ".lang-switch-btn.is-on", "background"), backdrop());
-    expect(worst(token(L.paintToken(".lang-switch-btn.is-on", "color")), bg)).toBeGreaterThanOrEqual(4.5);
+  // 三個主題都跑（票 07）
+  describe.each(THEMES)("%s", (theme) => {
+    it.each([
+      ["設定視窗", () => decl(set, ".settings-modal", "background")],
+      ["引導精靈", () => decl(ob, ".ob-overlay", "background")],
+    ])("選中的橘字對疊在%s上的淡橘底至少 4.5:1", (_label, backdrop) => {
+      const bg = over(decl(lang, ".lang-switch-btn.is-on", "background"), backdrop(), theme);
+      expect(worst(token(L.paintToken(".lang-switch-btn.is-on", "color"), theme), bg)).toBeGreaterThanOrEqual(4.5);
+    });
   });
 });
 

@@ -4,6 +4,8 @@
 
 export type WizardStep =
   | "welcome"
+  // 票 07：兩條路的第 2 頁都是外觀（主題存在這台電腦本機、不在備份包裡，移機的人一樣是第一次選）
+  | "appearance"
   | "roots"
   | "env"
   | "login"
@@ -22,6 +24,7 @@ export type WizardStep =
 
 const FRESH_STEPS: readonly WizardStep[] = [
   "welcome",
+  "appearance",
   "roots",
   "env",
   "login",
@@ -34,6 +37,7 @@ const FRESH_STEPS: readonly WizardStep[] = [
 // 重新建立；範本部署是給新使用者鋪底的，東西都搬回來的人不需要（上游 spec §5.1）。
 const RESTORE_STEPS: readonly WizardStep[] = [
   "welcome",
+  "appearance",
   "bundle",
   "targets",
   "paths",

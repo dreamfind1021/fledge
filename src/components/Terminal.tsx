@@ -9,7 +9,7 @@ import { resizeSession, wsUrl } from "../lib/sidecar";
 import { useAppStore } from "../store/useAppStore";
 import { shouldReconnect, nextDelay, MAX_RECONNECT_ATTEMPTS } from "../lib/wsReconnect";
 import { recordActivity, clearActivity } from "../lib/activityTracker";
-import { readTermTheme } from "../styles/term-theme";
+import { followTheme, readTermMinContrast, readTermTheme } from "../styles/term-theme";
 import { ImeReplayGuard } from "../lib/imeReplayGuard";
 import { ImeDraftTracker } from "../lib/imeDraftTracker";
 import { FlowController, type FlowSignal } from "../lib/flowControl";
@@ -24,6 +24,7 @@ import { homeDir } from "@tauri-apps/api/path";
 import { linksInLine, strIndexToColumn } from "../lib/terminalLinks";
 
 // WebGL kill switch：Tahoe WebKit 有破圖前例（xterm#5816），驗收若中獎改 false 一鍵退 DOM
+// 改 false 之前先看 CONTEXT.md 的淺色主題例外：選取到反白的字，DOM 繪製只有約 1.5:1（WebGL 下 minimumContrastRatio 會調到 4.5，DOM 對反白算錯對照色、不調），那條知情接受以 WebGL 為前提（票 07）
 const ENABLE_WEBGL = true;
 // context loss / 載入失敗的永久停用旗標（attach throw 或短窗內 loss 達 3 次才設）
 let webglFailed = false;
@@ -161,6 +162,8 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
       fontFamily: "JetBrains Mono, ui-monospace, monospace",
       fontSize: 13,
       theme: readTermTheme(),
+      // 淺色主題把不到 4.5 的字調到 4.5（Claude Code 用 RGB 寫死的淡字，spec §12.5）；切主題時由 followTheme 重設
+      minimumContrastRatio: readTermMinContrast(),
       cursorBlink: true,
       // 實體滾輪以 125ms 動畫捲動（VS Code 同值）；xterm 6.0 內建判別器只對實體滾輪
       // 生效、觸控板維持即時捲動，不會重演 5.x「smooth scroll 毀觸控板」的坑
@@ -226,6 +229,8 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
       "font-family:JetBrains Mono,ui-monospace,monospace;font-size:13px;";
     imeGhost.style.color = readTermTheme().foreground ?? "#ccc";
     term.element?.querySelector(".xterm-helpers")?.appendChild(imeGhost);
+    // 切主題時這個終端機跟著換色（票 07）；清理時取消訂閱，不再碰已經 dispose 的 xterm
+    const stopFollowingTheme = followTheme(term, imeGhost);
     const syncImeGhost = () => {
       const draft = imeDraft.suspendedDraft;
       if (draft == null) {
@@ -508,6 +513,7 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
       imeContainer.removeEventListener("keydown", onClipboardKeydown, true);
       imeContainer.removeEventListener("contextmenu", onContextMenuEvent);
       imeGhost.remove();
+      stopFollowingTheme();
       window.removeEventListener("blur", onImeWinBlur);
       window.removeEventListener("keydown", onLinkModDown);
       window.removeEventListener("keyup", onLinkModUp);

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, nightfallBlock, readCss, splitTop, stripComments, token, worst } from "./testing/cssRules";
+import { accountColor } from "./lib/accountColor";
+import { THEMES } from "./lib/themeIds";
+import { baseOf, contrast, cssRules, decl, hasDecl, lastDecl, lineTokenHits, nightfallBlock, readCss, splitTop, stripComments, token, worst } from "./testing/cssRules";
 
 // 外殼（側欄、分頁列、浮層）的樣式防線——票 28 第一批，spec docs/planning/soft-tiles-app-wide-design.md §2.6。
 // jsdom 不做版面計算、不套 CSS，這裡只能讀 CSS 原始碼驗宣告；畫面由 headless 截圖與真機驗收看。
@@ -113,14 +115,32 @@ describe("浮層拿掉外框（spec G4、G6、S5、S8）", () => {
     expect(decl(app, ".confirm-btn-ghost:focus-visible", "outline")).toBe("2px solid var(--focus)");
   });
 
-  // spec §2.5：背景從 CSS 讀（paintColor），不在測試裡寫死用哪個 token
-  it.each([
-    ["「取消」文字", "/src/App.css", ".confirm-btn-ghost", ".confirm-btn-ghost"],
-    ["「取消」文字（滑過）", "/src/App.css", ".confirm-btn-ghost", ".confirm-btn-ghost:hover"],
-    ["「相關」浮鈕文字（滑過）", "/src/components/RelatedFloat.css", ".rf-fab", ".rf-fab:hover"],
-  ])("%s 對背景至少 4.5:1", (_label, path, fgSelector, bgSelector) => {
-    const { paintToken, paintColor } = cssRules(baseOf(path));
-    expect(worst(token(paintToken(fgSelector, "color")), paintColor(bgSelector, "background"))).toBeGreaterThanOrEqual(4.5);
+  // spec §2.5：背景從 CSS 讀（paintColor），不在測試裡寫死用哪個 token。三個主題都跑（票 07）。
+  // 「相關」浮鈕的數字（.rf-n）是票 07 補的：深字壓在 --ai 上，原本借 --bg，淺色主題的 --bg 是淺的（Codex daylight spec R1）
+  describe.each(THEMES)("%s", (theme) => {
+    it.each([
+      ["「取消」文字", "/src/App.css", ".confirm-btn-ghost", ".confirm-btn-ghost"],
+      ["「取消」文字（滑過）", "/src/App.css", ".confirm-btn-ghost", ".confirm-btn-ghost:hover"],
+      ["「相關」浮鈕文字（滑過）", "/src/components/RelatedFloat.css", ".rf-fab", ".rf-fab:hover"],
+      ["「相關」浮鈕的數字", "/src/components/RelatedFloat.css", ".rf-n", ".rf-n"],
+    ])("%s 對背景至少 4.5:1", (_label, path, fgSelector, bgSelector) => {
+      const { paintToken, paintColor } = cssRules(baseOf(path), theme);
+      expect(worst(token(paintToken(fgSelector, "color"), theme), paintColor(bgSelector, "background"))).toBeGreaterThanOrEqual(4.5);
+    });
+  });
+});
+
+// 分頁上的帳號小籤：深字壓在帳號色上（帳號色由 lib/accountColor.ts 的 JS 決定，CSS 讀不到，所以從函式取）。
+// 原本借 --bg 當字色，淺色主題的 --bg 是淺的（票 07，daylight spec §3.4）
+describe("分頁的帳號小籤", () => {
+  // 調色盤沒有匯出：用一批帳號名稱把 work／personal 與 hash 調色盤的每一色都取出來
+  const colors = [...new Set(["work", "personal", ...Array.from({ length: 400 }, (_, i) => `acct-${i}`)].map(accountColor))];
+  it("取到的帳號色涵蓋 work、personal 與調色盤的 8 色", () => {
+    expect(colors.length).toBe(10);
+  });
+  it.each(THEMES)("%s：小籤的字對每一個帳號色至少 4.5:1", (theme) => {
+    const ink = token(cssRules(baseOf("/src/components/TabBar.css"), theme).paintToken(".tabbar-chip", "color"), theme);
+    for (const c of colors) expect(contrast(ink, c.toUpperCase()), `對 ${c}`).toBeGreaterThanOrEqual(4.5);
   });
 });
 

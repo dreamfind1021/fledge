@@ -25,7 +25,7 @@
 
 /* 危險動作（如「移除」）：紅字 */
 .ctx-item.is-danger {
-  color: var(--error);
+  color: var(--error-text);
 }
 
 /* 停用項（如無選取時的「複製」）：灰階、不可點、無 hover 高亮 */
