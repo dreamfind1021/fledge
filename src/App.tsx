@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
+import { Trans, useTranslation } from "react-i18next";
 import { AlertTriangle } from "lucide-react";
 import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSensors, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
 import { fetchHealth, rawHealth, restartSidecar } from "./lib/sidecar";
@@ -28,6 +28,7 @@ function CloseConfirm({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation("app");
   const confirmRef = useRef<HTMLButtonElement>(null);
   // 一次性 autofocus（deps=[]）：與 Escape listener 分開，避免父層 re-render 重觸發、把焦點從「取消」拉回危險鈕（Codex Area 6）
   useEffect(() => {
@@ -58,15 +59,18 @@ function CloseConfirm({
         <div className="confirm-row">
           <span className="confirm-ico"><AlertTriangle size={18} /></span>
           <div className="confirm-content">
-            <div className="confirm-title" id="close-confirm-title">關閉這個 session？</div>
+            <div className="confirm-title" id="close-confirm-title">{t("close_confirm.title")}</div>
             <p className="confirm-desc" id="close-confirm-desc">
-              「{title}」的 session 尚未結束。若 AI 仍在處理或等待回覆，關閉會中斷正在執行的程序、目前進度不會保留；若只是階段性停止（回覆結束／等待輸入），關閉後仍可用 <code>/resume</code> 恢復對話。確定要關閉嗎？
+              {/* title 是使用者可控的分頁名稱，不能走 {{title}} 插值：<Trans> 會把插值後的整句當標籤解析
+                  （名稱裡的 <code> 被吃成格式），解析完還會對文字節點再插值一次（`{{title}}` 被展開、
+                  `{{defaultValue}}` 變成 key）。改由 <name/> 佔位、名稱當 React 子節點放進去，完全不經過翻譯字串。 */}
+              <Trans t={t} i18nKey="close_confirm.desc" components={{ name: <>{title}</> }} />
             </p>
           </div>
         </div>
         <div className="confirm-foot">
-          <button className="confirm-btn-ghost" onClick={onCancel}>取消</button>
-          <button ref={confirmRef} className="confirm-btn-danger" onClick={onConfirm}>關閉 session</button>
+          <button className="confirm-btn-ghost" onClick={onCancel}>{t("close_confirm.cancel")}</button>
+          <button ref={confirmRef} className="confirm-btn-danger" onClick={onConfirm}>{t("close_confirm.confirm")}</button>
         </div>
       </div>
     </div>
@@ -216,7 +220,7 @@ function App() {
         setShowPicker(true);
       } else if (e.key === "r") {
         useAppStore.getState().loadProjects();
-        setToast("已重新掃描專案");
+        setToast(t("toast.rescanned"));
         window.setTimeout(() => setToast(null), 1500);
       } else if (e.key === "w") {
         const id = useAppStore.getState().activeTabId;
@@ -229,7 +233,7 @@ function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [requestCloseTab, setActive, showSettings, showPicker, showOnboarding, pendingCloseTabId, pendingTitle, splashDone]);
+  }, [requestCloseTab, setActive, showSettings, showPicker, showOnboarding, pendingCloseTabId, pendingTitle, splashDone, t]);
 
   // 懸空清理：pending 指向的 tab 若已消失或不再是 live session（pendingTitle 回 null，如 sidecar 重啟 markAllTabsEnded），
   // 清掉 pendingCloseTabId——否則框不顯示卻仍讓上面的守門吃掉 Cmd+W/R/1-9，造成快捷鍵被靜默鎖死（Codex Area 3）。
@@ -290,21 +294,21 @@ function App() {
       {(backendStatus === "down" || backendStatus === "restarting") && (
         <div className="app-banner app-banner--error" role="alert">
           <span className="app-banner-icon"><AlertTriangle size={15} /></span>
-          <span className="app-banner-msg">{restarting ? "正在重啟 sidecar…" : "後端斷線（sidecar 無回應）"}</span>
+          <span className="app-banner-msg">{t(restarting ? "banners.backend_restarting" : "banners.backend_down")}</span>
           <button
             onClick={onRestartSidecar}
             disabled={restarting}
             className="app-banner-btn--error"
           >
-            {restarting ? "重啟中…" : "重啟 sidecar"}
+            {t(restarting ? "banners.restarting" : "banners.restart")}
           </button>
         </div>
       )}
       {!claudeFound && (
         <div className="app-banner app-banner--warning app-banner--warning-top" role="status">
           <span className="app-banner-icon"><AlertTriangle size={15} /></span>
-          <span className="app-banner-msg">找不到 Claude Code（claude）。請先安裝。</span>
-          <button onClick={() => { import("@tauri-apps/plugin-opener").then((m) => m.openUrl("https://docs.claude.com/en/docs/claude-code/setup")).catch(() => {}); }} className="app-banner-btn--warning">安裝說明</button>
+          <span className="app-banner-msg">{t("banners.claude_missing")}</span>
+          <button onClick={() => { import("@tauri-apps/plugin-opener").then((m) => m.openUrl("https://docs.claude.com/en/docs/claude-code/setup")).catch(() => {}); }} className="app-banner-btn--warning">{t("banners.install_guide")}</button>
         </div>
       )}
       {/* 底部 banner 堆疊：兩條可能同時出現，交給容器排序而非各自 fixed 疊在一起 */}
@@ -328,7 +332,7 @@ function App() {
           {permissionError && (
             <div className="app-banner app-banner--warning app-banner--warning-bottom" role="status">
               <span className="app-banner-icon"><AlertTriangle size={15} /></span>
-              <span className="app-banner-msg">無法讀取部分資料夾。請到「系統設定 → 隱私權與安全性 → 檔案與資料夾／App 管理」允許 Fledge。</span>
+              <span className="app-banner-msg">{t("banners.permission_denied")}</span>
             </div>
           )}
         </div>

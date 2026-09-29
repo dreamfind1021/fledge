@@ -2,8 +2,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, cleanup, act, waitFor } from "@testing-library/react";
 import i18n from "./i18n";
+import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "./store/useAppStore";
-import type { BootstrapResult } from "./store/useAppStore";
+import type { BootstrapResult, Tab } from "./store/useAppStore";
+import appEn from "./locales/en/app.json";
 
 // App 掛了一整棵樹（xterm、dnd-kit、Tauri plugin…）——這裡只驗啟動接線，
 // 把重量級子樹換成空殼，讓測試聚焦在 App 自己的邏輯。
@@ -29,6 +31,13 @@ function stubBootstrap(result: BootstrapResult | null) {
   });
 }
 
+/** 等 Splash 走完最短顯示 + 淡出後卸載。 */
+async function settleSplash() {
+  await act(async () => {
+    vi.advanceTimersByTime(2000 + 320 + 50);
+  });
+}
+
 describe("App 啟動接線", () => {
   beforeEach(async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -40,13 +49,6 @@ describe("App 啟動接線", () => {
     cleanup();
     vi.restoreAllMocks();
   });
-
-  /** 等 Splash 走完最短顯示 + 淡出後卸載。 */
-  async function settleSplash() {
-    await act(async () => {
-      vi.advanceTimersByTime(2000 + 320 + 50);
-    });
-  }
 
   it("啟動成功且非首次時，Splash 淡出後不開 onboarding", async () => {
     const bootstrap = stubBootstrap({ firstRun: false, projectsError: null });
@@ -154,5 +156,133 @@ describe("App 啟動接線", () => {
     }
     expect(loadProjects).not.toHaveBeenCalled();
     expect(useAppStore.getState().requestCloseTab).not.toHaveBeenCalled();
+  });
+});
+
+// 票 33：殼層的橫幅、Cmd+R 提示與關閉 session 確認框原本寫死中文，英文介面也顯示中文。
+describe("App 殼層文字走 i18n", () => {
+  const CJK = /[\u3400-\u9fff\u3000-\u303f\uff00-\uffef]/;
+  const liveTab = (title: string): Tab => ({
+    id: "tab-1", projectPath: "/p/demo", account: "work", title,
+    sessionId: "s-1", status: "ready", kind: "claude",
+  });
+  const cmdR = () => new KeyboardEvent("keydown", { key: "r", metaKey: true, cancelable: true, bubbles: true });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // 本檔各案例之間 store 不會自動歸零（上一組會把 permissionError、loadProjects 留下來），這裡全部重設
+    useAppStore.setState({
+      startup: "running", startupError: null, port: 1234, config: null, tabs: [],
+      backendStatus: "up", claudeFound: true, permissionError: false, pendingCloseTabId: null,
+      bootstrap: stubBootstrap({ firstRun: false, projectsError: null }),
+      loadProjects: vi.fn(async () => {}),
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+    vi.mocked(invoke).mockReset();
+  });
+
+  it("英文介面：三條橫幅與關閉確認框都是英文，畫面上沒有任何中文", async () => {
+    await i18n.changeLanguage("en");
+    useAppStore.setState({
+      backendStatus: "down", claudeFound: false, permissionError: true,
+      tabs: [liveTab("demo")], pendingCloseTabId: "tab-1",
+    });
+    const ui = render(<App />);
+    await settleSplash();
+
+    for (const text of [
+      appEn.banners.backend_down, appEn.banners.restart, appEn.banners.claude_missing,
+      appEn.banners.install_guide, appEn.banners.permission_denied,
+      appEn.close_confirm.title, appEn.close_confirm.cancel, appEn.close_confirm.confirm,
+    ]) {
+      expect(ui.getByText(text)).toBeTruthy();
+    }
+    expect(ui.container.querySelector("#close-confirm-desc code")?.textContent).toBe("/resume");
+    expect(ui.container.textContent).not.toMatch(CJK);
+  });
+
+  it("英文介面：按下重啟後，橫幅與按鈕都顯示英文的重啟中", async () => {
+    await i18n.changeLanguage("en");
+    vi.mocked(invoke).mockReturnValue(new Promise(() => {})); // restart_sidecar 一直沒回來，停在重啟中
+    useAppStore.setState({ backendStatus: "down" });
+    const ui = render(<App />);
+    await settleSplash();
+
+    await act(async () => { ui.getByText(appEn.banners.restart).click(); });
+
+    expect(ui.getByText(appEn.banners.backend_restarting)).toBeTruthy();
+    expect(ui.getByText(appEn.banners.restarting)).toBeTruthy();
+    expect(ui.container.textContent).not.toMatch(CJK);
+  });
+
+  it("英文介面：Cmd+R 重新掃描的提示是英文", async () => {
+    await i18n.changeLanguage("en");
+    const ui = render(<App />);
+    await settleSplash();
+
+    act(() => { window.dispatchEvent(cmdR()); });
+
+    expect(ui.getByText(appEn.toast.rescanned)).toBeTruthy();
+  });
+
+  // 中文是從程式碼原封不動搬進 catalog 的——這裡釘住原文，搬移時改到任何一個字都會紅
+  it("中文介面：所有文字與搬進 catalog 前一字不差", async () => {
+    await i18n.changeLanguage("zh-TW");
+    useAppStore.setState({
+      backendStatus: "down", claudeFound: false, permissionError: true,
+      tabs: [liveTab("demo")], pendingCloseTabId: "tab-1",
+    });
+    const ui = render(<App />);
+    await settleSplash();
+
+    for (const text of [
+      "後端斷線（sidecar 無回應）", "重啟 sidecar", "找不到 Claude Code（claude）。請先安裝。", "安裝說明",
+      "無法讀取部分資料夾。請到「系統設定 → 隱私權與安全性 → 檔案與資料夾／App 管理」允許 Fledge。",
+      "關閉這個 session？", "取消", "關閉 session",
+    ]) {
+      expect(ui.getByText(text)).toBeTruthy();
+    }
+    expect(ui.container.querySelector("#close-confirm-desc")?.textContent).toBe(
+      "「demo」的 session 尚未結束。若 AI 仍在處理或等待回覆，關閉會中斷正在執行的程序、目前進度不會保留；" +
+      "若只是階段性停止（回覆結束／等待輸入），關閉後仍可用 /resume 恢復對話。確定要關閉嗎？",
+    );
+    expect(ui.container.querySelector("#close-confirm-desc code")?.textContent).toBe("/resume");
+  });
+
+  it("中文介面：重啟中與 Cmd+R 提示的文字與原本相同", async () => {
+    await i18n.changeLanguage("zh-TW");
+    vi.mocked(invoke).mockReturnValue(new Promise(() => {}));
+    useAppStore.setState({ backendStatus: "down" });
+    const ui = render(<App />);
+    await settleSplash();
+
+    await act(async () => { ui.getByText("重啟 sidecar").click(); });
+    expect(ui.getByText("正在重啟 sidecar…")).toBeTruthy();
+    expect(ui.getByText("重啟中…")).toBeTruthy();
+
+    act(() => { window.dispatchEvent(cmdR()); });
+    expect(ui.getByText("已重新掃描專案")).toBeTruthy();
+  });
+
+  // session 名稱是使用者可控的字串，插進帶 <code> 標籤的句子裡時不能被當成標籤解析，也不能被再插值一次
+  // （Codex 審查：<Trans> 解析後會對文字節點再跑一次插值，`{{title}}` 會被展開成名稱本身）
+  it.each([
+    ["標籤字元", "a <code>b</code> & <b>c</b>"],
+    ["字面的 entity（抓多還原一次）", "a &amp; &lt;b&gt; &amp;amp;"],
+    ["插值語法", "demo {{title}}"],
+    ["i18next 的保留參數名", "{{defaultValue}}"],
+  ])("session 名稱含%s時照原樣顯示", async (_case, title) => {
+    await i18n.changeLanguage("zh-TW");
+    useAppStore.setState({ tabs: [liveTab(title)], pendingCloseTabId: "tab-1" });
+    const ui = render(<App />);
+    await settleSplash();
+
+    const desc = ui.container.querySelector("#close-confirm-desc")!;
+    expect(desc.textContent).toContain(`「${title}」`);
+    expect(desc.querySelectorAll("code")).toHaveLength(1); // 只有 /resume 那一個
+    expect(desc.querySelector("b")).toBeNull();
   });
 });

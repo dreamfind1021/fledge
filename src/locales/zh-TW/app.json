@@ -1,6 +1,22 @@
 {
   "banners": {
     "projects_failed": "無法載入專案清單。其他功能仍可使用。",
-    "rescan": "重新掃描"
+    "rescan": "重新掃描",
+    "backend_down": "後端斷線（sidecar 無回應）",
+    "backend_restarting": "正在重啟 sidecar…",
+    "restart": "重啟 sidecar",
+    "restarting": "重啟中…",
+    "claude_missing": "找不到 Claude Code（claude）。請先安裝。",
+    "install_guide": "安裝說明",
+    "permission_denied": "無法讀取部分資料夾。請到「系統設定 → 隱私權與安全性 → 檔案與資料夾／App 管理」允許 Fledge。"
+  },
+  "toast": {
+    "rescanned": "已重新掃描專案"
+  },
+  "close_confirm": {
+    "title": "關閉這個 session？",
+    "desc": "「<name/>」的 session 尚未結束。若 AI 仍在處理或等待回覆，關閉會中斷正在執行的程序、目前進度不會保留；若只是階段性停止（回覆結束／等待輸入），關閉後仍可用 <code>/resume</code> 恢復對話。確定要關閉嗎？",
+    "cancel": "取消",
+    "confirm": "關閉 session"
   }
 }
