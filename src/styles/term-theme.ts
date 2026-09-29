@@ -1,16 +1,18 @@
 import type { ITheme } from "@xterm/xterm";
+import { onThemeChange } from "../lib/theme";
 
 // 從 :root/[data-theme] 讀 CSS 變數值（hex），組 xterm 主題。
-// xterm canvas 不吃 CSS 變數，必須讀成實字串再餵；在 Terminal mount 當下讀一次即可
-// （主題切換是未來雙模式的事，v1 固定 nightfall）。前景/底色/游標 + ANSI 16 色全由 index.css 的
-// token 定義，這裡只負責讀成實 hex 餵 xterm；色票語意與設計理由見 index.css「終端機 ANSI 16 色」。
+// xterm canvas 不吃 CSS 變數，必須讀成實字串再餵：Terminal mount 當下讀一次，
+// 之後切主題由 followTheme() 重讀（票 07）。前景/底色/游標/選取 + ANSI 16 色全由 index.css 的
+// token 定義，這裡只負責讀成實 hex 餵 xterm；色票語意與設計理由見 index.css 各主題區塊的 ANSI 註解。
 export function readTermTheme(): ITheme {
   const cs = getComputedStyle(document.documentElement);
   const v = (name: string) => cs.getPropertyValue(name).trim();
   return {
     background: v("--term-bg"),
     foreground: v("--term-text"),
-    cursor: v("--session"),
+    // 游標另開 token：淺色主題的 --session 在淺底上只有約 1.5，找不到游標（票 07，spec §3.5）
+    cursor: v("--term-cursor"),
     black: v("--term-black"),
     red: v("--term-red"),
     green: v("--term-green"),
@@ -27,5 +29,22 @@ export function readTermTheme(): ITheme {
     brightMagenta: v("--term-bright-magenta"),
     brightCyan: v("--term-bright-cyan"),
     brightWhite: v("--term-bright-white"),
+    // 選取色只在淺色主題定義：午夜藍讀到空字串就不傳，xterm 用預設的半透明白（畫面跟改之前一樣）；
+    // 淺色主題的預設半透明白在淺底上看不到。xterm 會把這個值原樣當一般格子選中時的底色（不透明色不會自動變淡；反白的格子另有算法，spec §12.4），
+    // 所以 CSS 裡寫的就是畫出來的淡藍（index.css、index.contrast.test.ts）
+    ...(v("--term-selection") ? { selectionBackground: v("--term-selection") } : {}),
   };
+}
+
+/**
+ * 已開著的終端機跟著主題換色（票 07，spec §4.5）。回傳取消訂閱的函式，終端機卸載時呼叫——
+ * 否則切主題時會去碰已經 dispose 的 xterm。每次都組一個新的 theme 物件：淺→深時選取色要回到 xterm 預設，
+ * 物件裡不帶 selectionBackground 才會回去
+ */
+export function followTheme(term: { options: { theme?: ITheme } }, imeGhost: HTMLElement): () => void {
+  return onThemeChange(() => {
+    const theme = readTermTheme();
+    term.options.theme = theme;
+    imeGhost.style.color = theme.foreground ?? "#ccc";
+  });
 }

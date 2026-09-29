@@ -9,7 +9,7 @@ import { resizeSession, wsUrl } from "../lib/sidecar";
 import { useAppStore } from "../store/useAppStore";
 import { shouldReconnect, nextDelay, MAX_RECONNECT_ATTEMPTS } from "../lib/wsReconnect";
 import { recordActivity, clearActivity } from "../lib/activityTracker";
-import { readTermTheme } from "../styles/term-theme";
+import { followTheme, readTermTheme } from "../styles/term-theme";
 import { ImeReplayGuard } from "../lib/imeReplayGuard";
 import { ImeDraftTracker } from "../lib/imeDraftTracker";
 import { FlowController, type FlowSignal } from "../lib/flowControl";
@@ -24,6 +24,7 @@ import { homeDir } from "@tauri-apps/api/path";
 import { linksInLine, strIndexToColumn } from "../lib/terminalLinks";
 
 // WebGL kill switch：Tahoe WebKit 有破圖前例（xterm#5816），驗收若中獎改 false 一鍵退 DOM
+// 改 false 之前先看 CONTEXT.md 的淺色主題例外：選取到反白的字，DOM 繪製只有約 1.5:1（WebGL 約 2.5 以上），那條知情接受以 WebGL 為前提（票 07）
 const ENABLE_WEBGL = true;
 // context loss / 載入失敗的永久停用旗標（attach throw 或短窗內 loss 達 3 次才設）
 let webglFailed = false;
@@ -226,6 +227,8 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
       "font-family:JetBrains Mono,ui-monospace,monospace;font-size:13px;";
     imeGhost.style.color = readTermTheme().foreground ?? "#ccc";
     term.element?.querySelector(".xterm-helpers")?.appendChild(imeGhost);
+    // 切主題時這個終端機跟著換色（票 07）；清理時取消訂閱，不再碰已經 dispose 的 xterm
+    const stopFollowingTheme = followTheme(term, imeGhost);
     const syncImeGhost = () => {
       const draft = imeDraft.suspendedDraft;
       if (draft == null) {
@@ -508,6 +511,7 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
       imeContainer.removeEventListener("keydown", onClipboardKeydown, true);
       imeContainer.removeEventListener("contextmenu", onContextMenuEvent);
       imeGhost.remove();
+      stopFollowingTheme();
       window.removeEventListener("blur", onImeWinBlur);
       window.removeEventListener("keydown", onLinkModDown);
       window.removeEventListener("keyup", onLinkModUp);
