@@ -8,6 +8,8 @@
 //   - 塗色查詢（paintToken／paintColor／paintColors）用 cssRules(text) 綁定一段 CSS
 //
 // 用 vite 的 import.meta.glob 而非 node:fs——本專案沒有 @types/node（同 lib/sourceHygiene.test.ts）。
+import { DEFAULT_THEME, type ThemeId } from "../lib/themeIds";
+
 const RAW = import.meta.glob("/src/**/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
 
 export const readCss = (path: string) => {
@@ -39,18 +41,51 @@ export const decl = (text: string, selector: string, prop: string) => {
 export const hasDecl = (text: string, selector: string, prop: string) => decls(text, selector, prop).length > 0;
 
 // ── 顏色 ──
-// 從 index.css 的 nightfall 區塊取 token。取不到就炸——靜默跳過等於這條防線沒上場
-export const nightfallBlock = (() => {
-  const all = readCss("/src/index.css");
-  const from = all.indexOf('[data-theme="nightfall"]');
-  const to = all.indexOf('[data-theme="daylight"]');
-  if (from < 0 || to <= from) throw new Error("index.css 找不到 nightfall 區塊");
-  return all.slice(from, to);
-})();
-export const token = (name: string) => {
-  const m = nightfallBlock.match(new RegExp(`--${name}:\\s*(#[0-9A-Fa-f]{6})`));
-  if (!m) throw new Error(`token --${name} 不在 nightfall 區塊裡`);
+// index.css 裡某個主題的區塊（票 07 起有三個）。依選擇器找到開頭、數大括號找到結尾——
+// 舊寫法用「下一個主題的選擇器出現的位置」當結尾，主題一改名或換順序就讀錯區塊。找不到或是空的就炸
+const INDEX_CSS = () => stripComments(readCss("/src/index.css"));
+export const themeBlock = (theme: ThemeId) => {
+  const all = INDEX_CSS();
+  const head = `[data-theme="${theme}"]`;
+  const from = all.indexOf(head);
+  if (from < 0) throw new Error(`index.css 找不到 ${head} 區塊`);
+  const open = all.indexOf("{", from);
+  let depth = 0;
+  for (let i = open; i < all.length; i += 1) {
+    if (all[i] === "{") depth += 1;
+    else if (all[i] === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        const body = all.slice(open + 1, i);
+        if (!body.trim()) throw new Error(`${head} 區塊是空的`);
+        return body;
+      }
+    }
+  }
+  throw new Error(`${head} 區塊沒有結尾`);
+};
+// index.css 裡實際存在的主題（給 THEMES ⇄ CSS 雙向比對用）
+export const themesInCss = () => [...INDEX_CSS().matchAll(/\[data-theme="([a-z-]+)"\]\s*\{/g)].map((m) => m[1]);
+// :root 區塊（跨主題共用的 token）
+export const rootBlock = () => {
+  const m = INDEX_CSS().match(/:root\s*\{([^}]*)\}/);
+  if (!m) throw new Error("index.css 找不到 :root 區塊");
   return m[1];
+};
+// 某個區塊定義了哪些 token
+export const tokenNames = (block: string) => new Set([...block.matchAll(/(?<![\w-])--([a-z0-9-]+)\s*:/g)].map((m) => m[1]));
+export const nightfallBlock = themeBlock("nightfall");
+// 取 token 的值（#RRGGBB）。值是 var(--別的 token) 時往下解（午夜藍的 --X-text 是 --X 的別名，spec §3.3）；
+// 解不開、不是 hex、或繞成圈就炸——靜默跳過等於這條防線沒上場
+export const token = (name: string, theme: ThemeId = DEFAULT_THEME, seen: string[] = []): string => {
+  if (seen.includes(name)) throw new Error(`token 別名繞成圈：${[...seen, name].join(" → ")}`);
+  const m = themeBlock(theme).match(new RegExp(`(?<![\\w-])--${name}:\\s*([^;]+);`));
+  if (!m) throw new Error(`token --${name} 不在 ${theme} 區塊裡`);
+  const v = m[1].trim();
+  if (/^#[0-9A-Fa-f]{6}$/.test(v)) return v;
+  const alias = v.match(/^var\(--([a-z0-9-]+)\)$/);
+  if (alias) return token(alias[1], theme, [...seen, name]);
+  throw new Error(`token --${name}（${theme}）不是 #RRGGBB 也不是別名：${v}`);
 };
 
 // WCAG 相對亮度與對比度
@@ -81,10 +116,11 @@ const inner = (s: string, fn: string) => s.slice(fn.length + 1, -1);   // "fn(..
 const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 const hex = (c: number[]) => "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("").toUpperCase();
 // color-mix(in srgb, …) 對不透明色＝sRGB 編碼值的線性插值；只混不透明色
-export const resolveColor = (expr: string): string => {
+// theme 要一路傳到底：color-mix 的每個成分都遞迴回這裡，漏傳一層，淺色的測試就會悄悄算成午夜藍（spec §6.1）
+export const resolveColor = (expr: string, theme: ThemeId = DEFAULT_THEME): string => {
   const e = expr.trim();
   const v = e.match(/^var\(--([a-z0-9-]+)\)$/);
-  if (v) return token(v[1]);
+  if (v) return token(v[1], theme);
   // 漸層不是一個顏色：只取一站會漏掉其他站變亮的退化（Codex final R1）——一律走 stops／paintColors
   if (e.startsWith("linear-gradient(")) throw new Error(`漸層要用 stops() 逐站驗：${e}`);
   if (e.startsWith("color-mix(")) {
@@ -93,7 +129,7 @@ export const resolveColor = (expr: string): string => {
     const part = (s: string) => {
       const m = s.match(/^(var\(--[a-z0-9-]+\))(?:\s+(\d+(?:\.\d+)?)%)?$/);
       if (!m) throw new Error(`認不得的 color-mix 成分：${s}`);
-      return { c: resolveColor(m[1]), p: m[2] == null ? null : parseFloat(m[2]) / 100 };
+      return { c: resolveColor(m[1], theme), p: m[2] == null ? null : parseFloat(m[2]) / 100 };
     };
     const A = part(a), B = part(b);
     if (A.p != null && B.p != null) throw new Error(`兩邊都寫百分比不支援（要正規化或變半透明）：${e}`);
@@ -106,24 +142,24 @@ export const resolveColor = (expr: string): string => {
 // 背景的每一個色站（非漸層＝一站）。文字可能落在漸層任何位置，所以每站都要過門檻。
 // 只驗色站、不取樣中段：目前的漸層都是「暗底混一點琥珀 → 同一個暗底」，中段亮度夾在兩站之間；
 // 改成亮暗交錯的漸層時要補取樣
-export const stops = (expr: string): string[] => {
+export const stops = (expr: string, theme: ThemeId = DEFAULT_THEME): string[] => {
   const e = expr.trim();
-  if (!e.startsWith("linear-gradient(")) return [resolveColor(e)];
+  if (!e.startsWith("linear-gradient(")) return [resolveColor(e, theme)];
   const parts = splitTop(inner(e, "linear-gradient"));
   const colors = /^(-?\d+(?:\.\d+)?(?:deg|turn|rad|grad)|to\s)/.test(parts[0]) ? parts.slice(1) : parts;   // 開頭可能是角度／方向
-  return colors.map((c) => resolveColor(c.replace(/(?:\s+\d+(?:\.\d+)?%)+$/, "")));                    // 去掉站位
+  return colors.map((c) => resolveColor(c.replace(/(?:\s+\d+(?:\.\d+)?%)+$/, ""), theme));             // 去掉站位
 };
 // 前景對一組色站的最差對比
 export const worst = (fg: string, backdrop: string | string[]) => Math.min(...[backdrop].flat().map((b) => contrast(fg, b)));
 // 半透明底色（color-mix(…, transparent)）疊在不透明底色上，等於直接跟那個底色在 sRGB 混——
 // 所以把 transparent 換成它實際坐落的那層底色（呼叫端從 CSS 讀）再算。
 // 票 28 第四批 4a 從 Memory.style.test.ts 搬來：語言切換鈕的對比是第二個用到它的地方（spec §5.6）
-export const over = (expr: string, backdrop: string) => resolveColor(expr.replace("transparent", backdrop));
+export const over = (expr: string, backdrop: string, theme: ThemeId = DEFAULT_THEME) => resolveColor(expr.replace("transparent", backdrop), theme);
 
 // ── 塗色查詢：綁定一段 CSS（通常是 baseLevel(stripComments(readCss(path)))）──
 // 不可以在測試裡自己寫死「某條規則用某個 token」——那樣有人把 CSS 改回較淡的 token 測試照樣全綠，
 // 斷言就落在一個不會發生的情境上。要驗的是「CSS 現在用的那個 token 夠不夠」。
-export const cssRules = (css: string) => {
+export const cssRules = (css: string, theme: ThemeId = DEFAULT_THEME) => {
   // paintToken 只抓第一個 var(--x)：背景是 color-mix 或漸層時，「琥珀 38% 混 surface-2」會被讀成純琥珀、
   // 算出假的高對比。背景一律走 paintColor／paintColors（票 26＋27）
   const paintToken = (selector: string, prop: string) => {
@@ -131,8 +167,8 @@ export const cssRules = (css: string) => {
     if (!m) throw new Error(`${selector} 的 ${prop} 沒有用 var(--token)`);
     return m[1];
   };
-  const paintColor = (selector: string, prop: string) => resolveColor(decl(css, selector, prop));
-  const paintColors = (selector: string, prop: string) => stops(decl(css, selector, prop));
+  const paintColor = (selector: string, prop: string) => resolveColor(decl(css, selector, prop), theme);
+  const paintColors = (selector: string, prop: string) => stops(decl(css, selector, prop), theme);
   return { paintToken, paintColor, paintColors };
 };
 
