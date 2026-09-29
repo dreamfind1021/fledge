@@ -44,8 +44,9 @@ curl -fSL "$BASE/checksums.txt" -o "$TMP/checksums.txt" || { echo "下載 checks
 # 驗 sha256（格式對齊 CI：<hash>␣␣<檔名>）
 ( cd "$TMP" && grep "  $ASSET\$" checksums.txt | shasum -a 256 -c - ) || { echo "sha256 校驗失敗" >&2; exit 1; }
 
-# 偵測 app 執行中
-if pgrep -x "Fledge" >/dev/null 2>&1; then
+# 偵測 app 執行中：程序名是執行檔名，小寫 fledge（Contents/MacOS/fledge）。pgrep 預設區分大小寫，
+# 寫成 app 名稱 Fledge 會永遠對不上、檢查形同虛設（2026-09-30 修正前一直是這樣）
+if pgrep -x "fledge" >/dev/null 2>&1; then
   echo "Fledge 正在執行，請先關閉再安裝" >&2; exit 1
 fi
 
