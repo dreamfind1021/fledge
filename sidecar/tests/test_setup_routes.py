@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 import fledge_sidecar.routes.setup as setup_mod
 from fledge_sidecar.app import create_app
-from fledge_sidecar.setup.env_detect import ToolStatus
+from fledge_sidecar.setup.env_detect import GitIdentity, ToolStatus
 
 
 def test_status_returns_tools(monkeypatch):
@@ -35,6 +35,36 @@ def test_status_exposes_commands_for_ui(monkeypatch):
     assert brew["install_command"] is None
     assert brew["manual_command"] == '/bin/bash -c "$(curl -fsSL install.sh)"'
 
+
+
+def _git_tool(path):
+    return ToolStatus("git", "Git", "core", path is not None, path,
+                      "git version 2.50.1" if path else None, "git", "brew install git", None)
+
+
+def test_status_reports_git_identity_probed_with_detected_git_path(monkeypatch):
+    # 票 32：身分查詢要用偵測到的那支 git，結果以三態字串回給環境頁
+    monkeypatch.setattr(setup_mod, "detect_all", lambda: [_git_tool("/opt/homebrew/bin/git")])
+    seen: list = []
+    def _fake_identity(git_path):
+        seen.append(git_path)
+        return GitIdentity(name="set", email="missing")
+    monkeypatch.setattr(setup_mod, "detect_git_identity", _fake_identity)
+    body = TestClient(create_app()).get("/api/setup/status").json()
+    assert body["git_identity"] == {"name": "set", "email": "missing"}
+    assert seen == ["/opt/homebrew/bin/git"]
+
+
+def test_status_passes_no_git_path_when_git_is_missing(monkeypatch):
+    monkeypatch.setattr(setup_mod, "detect_all", lambda: [_git_tool(None)])
+    seen: list = []
+    def _fake_identity(git_path):
+        seen.append(git_path)
+        return GitIdentity(name="unknown", email="unknown")
+    monkeypatch.setattr(setup_mod, "detect_git_identity", _fake_identity)
+    body = TestClient(create_app()).get("/api/setup/status").json()
+    assert body["git_identity"] == {"name": "unknown", "email": "unknown"}
+    assert seen == [None]
 
 def _config_with_accounts(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     src = tmp_path / "claude"

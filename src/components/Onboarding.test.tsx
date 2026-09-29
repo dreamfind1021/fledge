@@ -127,7 +127,8 @@ vi.mock("./InstallPreviewCard", async () => {
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   scanPreview: vi.fn(async (_port: number, path: string) => ({ path, count: 3, status: "ok" as const })),
-  fetchSetupStatus: vi.fn(async () => []), // 環境頁掛 EnvCard 後會偵測；外殼測試不碰網路
+  // 環境頁掛 EnvCard 後會偵測；外殼測試不碰網路
+  fetchSetupStatus: vi.fn(async () => ({ tools: [], git_identity: { name: "unknown", email: "unknown" } })),
   // 共通設置頁掛 CommonConfigCard 後會探帳號目錄並預覽；同樣不碰網路
   checkDir: vi.fn(async () => "dir" as const),
   commonConfigPlan: vi.fn(async () => ({ source_dir: "/Users/x/.claude", operations: [] })),

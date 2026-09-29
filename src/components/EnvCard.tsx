@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation, Trans } from "react-i18next";
-import { fetchSetupStatus, type ToolStatus, type ToolTier } from "../lib/sidecar";
+import { fetchSetupStatus, type GitIdentity, type ToolStatus, type ToolTier } from "../lib/sidecar";
 import { writeClipboard } from "../lib/clipboard";
 import { useCardSession } from "../lib/useCardSession";
 import { CardTerminal } from "./CardTerminal";
@@ -22,6 +22,7 @@ const COPIED_FEEDBACK_MS = 2000;
 export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
   const { t } = useTranslation("onboarding");
   const [tools, setTools] = useState<ToolStatus[] | null>(null);
+  const [gitIdentity, setGitIdentity] = useState<GitIdentity | null>(null);
   const [loading, setLoading] = useState(false);
   const [detectError, setDetectError] = useState<string | null>(null);
   // 展開的那一列：僅手動安裝的工具展開「複製指令」、可一鍵安裝的展開「執行前確認」。
@@ -46,7 +47,8 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
     try {
       const next = await fetchSetupStatus(port);
       if (reqId.current !== myId) return;
-      setTools(next);
+      setTools(next.tools);
+      setGitIdentity(next.git_identity);
     } catch (e) {
       if (reqId.current !== myId) return;
       // 偵測失敗要可見（沉默的空清單會被當成「什麼都沒裝」）；舊結果保留在畫面上。
@@ -74,12 +76,13 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
 
   const error = detectError ?? sessionError;
 
-  const copy = async (tool: ToolStatus) => {
-    if (!tool.manual_command) return;
-    const ok = await writeClipboard(tool.manual_command);
+  // id 決定哪一顆按鈕回饋「已複製」：工具列用 tool.id，git 身分的每一行各用自己的 id
+  const copy = async (id: string, text: string | null) => {
+    if (!text) return;
+    const ok = await writeClipboard(text);
     // 卸載可能發生在寫入完成前——cleanup 已經跑過，此時再排 timer 就沒人清得掉
     if (!ok || !mounted.current) return;   // 失敗不謊稱已複製
-    setCopiedId(tool.id);
+    setCopiedId(id);
     if (copiedTimer.current) clearTimeout(copiedTimer.current);
     copiedTimer.current = setTimeout(() => setCopiedId(null), COPIED_FEEDBACK_MS);
   };
@@ -110,6 +113,13 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
   // 這類收不掉的死內容（票 23 的複製面板就踩過一次）。執行中那列不算——終端機已佔住位置。
   const canInstall = (tool: ToolStatus) =>
     !tool.installed && !!tool.install_command && running?.cardId !== tool.id;
+
+  // 只列「沒設」的那幾項：已設好的不叫人覆寫，查不到（unknown）也不當成沒設（票 32）。
+  // 指令只給人複製、Fledge 從不執行，範例值要跟語言走，所以放 catalog 而不是後端 TOOL_SPECS。
+  const missingIdentity = [
+    { id: "git-name", state: gitIdentity?.name, cmd: t("env.gitIdentityNameCmd") },
+    { id: "git-email", state: gitIdentity?.email, cmd: t("env.gitIdentityEmailCmd") },
+  ].filter((line) => line.state === "missing");
 
   const renderRow = (tool: ToolStatus) => (
     // 展開的手動指令面板要接在觸發它的那一列下面，故與該列同屬一個 fragment
@@ -148,7 +158,7 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
           <div className="b4-confirm-title">{t("env.brewTitle")}</div>
           <div className="b4-confirm-cmd">{tool.manual_command}</div>
           <div className="b4-confirm-foot">
-            <button className="b4-btn-sm" onClick={() => copy(tool)}>
+            <button className="b4-btn-sm" onClick={() => copy(tool.id, tool.manual_command)}>
               {t(copiedId === tool.id ? "env.copied" : "common.copy")}
             </button>
             <span className="b4-hint b4-hint-inline">{t("env.brewHint")}</span>
@@ -169,6 +179,22 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
             <button className="b4-btn-sm" onClick={() => setExpandedId(null)}>{t("common.cancel")}</button>
             <span className="b4-hint b4-hint-inline">{t("env.installHint")}</span>
           </div>
+        </div>
+      )}
+
+      {/* git 身分提醒：commit 可能失敗、也可能用電腦名稱當 email 靜默送出（票 32） */}
+      {tool.id === "git" && missingIdentity.length > 0 && (
+        <div className="b4-confirm">
+          <div className="b4-confirm-title">{t("env.gitIdentityTitle")}</div>
+          {missingIdentity.map((line) => (
+            <div key={line.id} className="b4-cmd-line">
+              <div className="b4-confirm-cmd">{line.cmd}</div>
+              <button className="b4-btn-sm" onClick={() => copy(line.id, line.cmd)}>
+                {t(copiedId === line.id ? "env.copied" : "common.copy")}
+              </button>
+            </div>
+          ))}
+          <p className="b4-hint b4-hint-inline">{t("env.gitIdentityHint")}</p>
         </div>
       )}
 
@@ -207,7 +233,7 @@ export function EnvCard({ port, onPrev, onNext }: EnvCardProps) {
       {section("core", t("env.core"))}
       {section("recommended", t("env.recommended"))}
 
-      {/* 3e 降級：PATH 與 git 身分本版不偵測，只給靜態提醒（spec-b4 §1） */}
+      {/* 3e 降級：PATH 本版不偵測，只給靜態提醒（spec-b4 §1）；git 身分已改為偵測（票 32） */}
       <p className="b4-hint"><Trans t={t} i18nKey="env.pathHint" /></p>
 
       <div className="ob-actions">

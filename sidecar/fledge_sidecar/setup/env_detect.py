@@ -1,4 +1,4 @@
-"""開發工具偵測（純函式）：shutil.which + 版本探測。
+"""開發工具偵測（純函式）：shutil.which + 版本探測，以及 git 身分（票 32）。
 
 which/run 以參數注入，便於測試（不真的呼叫系統）。內容層不拋例外：
 版本探測失敗（OSError/SubprocessError/timeout）→ version=None，不中斷。
@@ -9,6 +9,7 @@ import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import Literal
 
 from fledge_sidecar.setup.install_specs import TOOL_SPECS, ToolSpec
 
@@ -72,3 +73,49 @@ def detect_all(specs=TOOL_SPECS, which=shutil.which, run=subprocess.run) -> list
     # ThreadPoolExecutor.map 保留輸入順序（UI 分組依賴順序穩定）。
     with ThreadPoolExecutor(max_workers=_MAX_PROBE_WORKERS) as ex:
         return list(ex.map(lambda s: detect_tool(s, which=which, run=run), specs))
+
+
+# 三態而不是 bool：「查不到」（git 出錯、逾時、設定檔壞掉）不能壓成「沒設」——
+# 環境頁只對 missing 顯示「去設定」的提醒，誤判會叫已經設好的人覆寫自己的身分。
+IdentityState = Literal["set", "missing", "unknown"]
+
+
+@dataclass(frozen=True)
+class GitIdentity:
+    name: IdentityState
+    email: IdentityState
+
+
+def _probe_git_config(git_path: str, key: str, run) -> IdentityState:
+    try:
+        # 不加 text=True：只需要知道「有沒有輸出」，不需要值本身。解碼成文字的話，舊編碼存的
+        # 名字（如 Latin-1 的 José）會拋 UnicodeDecodeError，拖垮整個環境偵測（Codex 審查 F1）
+        proc = run([git_path, "config", "--global", "--includes", "--get", key],
+                   capture_output=True, timeout=_VERSION_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    stdout = (proc.stdout or b"").strip()
+    stderr = (proc.stderr or b"").strip()
+    if proc.returncode == 0:
+        # 設成空字串也是 exit 0（只印換行）；commit 一樣拿不到值，對使用者等於沒設
+        return "set" if stdout else "missing"
+    # git config 找不到 key 的 exit 1 完全沒有輸出；帶錯誤訊息的 exit 1 或其他結束碼
+    # （設定檔壞掉是 128）都是別的狀況
+    if proc.returncode == 1 and not stdout and not stderr:
+        return "missing"
+    return "unknown"
+
+
+def detect_git_identity(git_path: str | None, run=subprocess.run) -> GitIdentity:
+    """讀 git 的全域身分（唯讀，Fledge 不寫 ~/.gitconfig）；只回狀態，不回名字與 email 本身。
+
+    `git_path` 用 detect_all 偵測到的那支 git（與版本探測同源）；None＝沒裝，不查。
+    --global 涵蓋 ~/.gitconfig 與 ~/.config/git/config，且不受 cwd 所在 repo 的本地設定影響。
+    --includes 必加：指定 --global 時 git 預設不跟 [include]，身分放在 include 檔（dotfiles 常見）
+    的人會被誤判成沒設。已知限制：只在特定資料夾生效的 [includeIf] 身分查不到，會被提醒。"""
+    if git_path is None:
+        return GitIdentity(name="unknown", email="unknown")
+    return GitIdentity(
+        name=_probe_git_config(git_path, "user.name", run),
+        email=_probe_git_config(git_path, "user.email", run),
+    )

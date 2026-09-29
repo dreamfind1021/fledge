@@ -219,7 +219,11 @@
     "confirmTitle": "About to run this command",
     "confirmRun": "Run it",
     "installHint": "Stay on this step while it installs — leaving cancels the install.",
-    "pathHint": "PATH and git identity: <code>~/.local/bin</code> must be on your PATH (claude and uv install there); commits fail if <code>git config --global user.name/user.email</code> is unset. Neither is detected automatically in this version."
+    "pathHint": "PATH: <code>~/.local/bin</code> must be on your PATH (claude and uv install there). This version doesn't detect it automatically.",
+    "gitIdentityTitle": "Git has no default identity yet",
+    "gitIdentityNameCmd": "git config --global user.name \"Your Name\"",
+    "gitIdentityEmailCmd": "git config --global user.email \"you@example.com\"",
+    "gitIdentityHint": "Without it, commits may fail or go out with your computer's name as the email. Paste into a terminal, replace the text in quotes with your own, then press Enter."
   },
   "login": {
     "h": "Sign in",
