@@ -2,9 +2,10 @@ import { describe, it, expect } from "vitest";
 import { wizardSteps, stepIndex, clampStepIndex, progressCells } from "./onboardingSteps";
 
 describe("wizardSteps（全新設定）", () => {
-  it("雙帳號走完整七頁（spec-b4 定案 9）", () => {
+  it("雙帳號走完整八頁（spec-b4 定案 9；票 07 加外觀頁）", () => {
     expect(wizardSteps({ accountCount: 2, mode: "fresh" })).toEqual([
       "welcome",
+      "appearance",
       "roots",
       "env",
       "login",
@@ -14,9 +15,10 @@ describe("wizardSteps（全新設定）", () => {
     ]);
   });
 
-  it("單帳號整個共通設置頁不出現（六頁）", () => {
+  it("單帳號整個共通設置頁不出現（七頁）", () => {
     expect(wizardSteps({ accountCount: 1, mode: "fresh" })).toEqual([
       "welcome",
+      "appearance",
       "roots",
       "env",
       "login",
@@ -30,6 +32,7 @@ describe("wizardSteps（我有備份）", () => {
   it("移機序列（上游 spec §5.1）", () => {
     expect(wizardSteps({ accountCount: 2, mode: "restore" })).toEqual([
       "welcome",
+      "appearance",
       "bundle",
       "targets",
       "paths",
@@ -46,6 +49,7 @@ describe("wizardSteps（我有備份）", () => {
   it("備份包裡沒有專案歷史時 paths 整頁不出現（比照單帳號的 common）", () => {
     expect(wizardSteps({ accountCount: 1, mode: "restore", hasProjectHistory: false })).toEqual([
       "welcome",
+      "appearance",
       "bundle",
       "targets",
       "install",
@@ -61,6 +65,7 @@ describe("wizardSteps（我有備份）", () => {
   it("單帳號的移機序列與雙帳號完全相同", () => {
     expect(wizardSteps({ accountCount: 1, mode: "restore" })).toEqual([
       "welcome",
+      "appearance",
       "bundle",
       "targets",
       "paths",
@@ -83,8 +88,8 @@ describe("stepIndex", () => {
   it("序列縮短時仍停在同一頁——而同一個索引已經是別頁了", () => {
     expect(withPaths[stepIndex("install", withPaths, "restore")]).toBe("install");
     expect(noPaths[stepIndex("install", noPaths, "restore")]).toBe("install");
-    expect(withPaths.indexOf("install")).toBe(4);
-    expect(noPaths[4]).toBe("env"); // 索引定位會把使用者從安裝頁丟到環境頁
+    expect(withPaths.indexOf("install")).toBe(5);
+    expect(noPaths[5]).toBe("env"); // 索引定位會把使用者從安裝頁丟到環境頁
   });
 
   it("目前這一頁被移除時退到它前面最近的一頁（不跳過安裝確認）", () => {
@@ -116,9 +121,9 @@ describe("clampStepIndex", () => {
 });
 
 describe("progressCells", () => {
-  it("格數跟著實際頁數走：單帳號六格、雙帳號七格", () => {
-    expect(progressCells(0, wizardSteps({ accountCount: 1, mode: "fresh" }).length)).toHaveLength(6);
-    expect(progressCells(0, wizardSteps({ accountCount: 2, mode: "fresh" }).length)).toHaveLength(7);
+  it("格數跟著實際頁數走：單帳號七格、雙帳號八格", () => {
+    expect(progressCells(0, wizardSteps({ accountCount: 1, mode: "fresh" }).length)).toHaveLength(7);
+    expect(progressCells(0, wizardSteps({ accountCount: 2, mode: "fresh" }).length)).toHaveLength(8);
   });
 
   it("首頁只填第一格（目前頁本身算已到達）", () => {

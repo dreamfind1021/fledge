@@ -16,6 +16,7 @@ import {
 } from "../lib/onboardingSteps";
 import { FeatherMark } from "./Logo";
 import { LangSwitch } from "./LangSwitch";
+import { ThemePicker } from "./ThemePicker";
 import { EnvCard } from "./EnvCard";
 import { LoginCard } from "./LoginCard";
 import { CommonConfigCard } from "./CommonConfigCard";
@@ -228,9 +229,10 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   const next = () => goTo(adjacentStep(1));
   const prev = () => goTo(adjacentStep(-1));
   // 選路線與前進是同一個動作。指名頁而不是索引：兩條序列的第二頁本來就是不同的頁
+  // 兩條路的第 2 頁都是外觀（票 07），之後的頁序照 wizardSteps()
   const start = (picked: WizardMode) => {
     setMode(picked);
-    goTo(picked === "restore" ? "bundle" : "roots");
+    goTo("appearance");
   };
 
   /** 移機各頁共用的導覽列。`blocked` 是「這一頁還沒有往下走的依據」（票 02 的包資訊）。 */
@@ -462,6 +464,21 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
                 <button onClick={() => start("restore")} className="ob-btn-ghost">
                   {t("welcome.restore")}
                 </button>
+              </div>
+            </div>
+          )}
+
+          {/* ── 外觀（票 07）：兩條路的第 2 頁。點了立刻生效（後面每一頁都用選好的顏色），預設是當下的主題 ── */}
+          {step === "appearance" && (
+            <div className="ob-step-center">
+              <h2 className="ob-h">{t("appearance.h")}</h2>
+              <p className="ob-sub">{t("appearance.sub")}</p>
+              <div className="ob-theme">
+                <ThemePicker />
+              </div>
+              <div className="ob-actions-center">
+                <button onClick={prev} className="ob-btn-ghost">{t("common.prev")}</button>
+                <button onClick={next} className="ob-btn">{t("common.next")}</button>
               </div>
             </div>
           )}

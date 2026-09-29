@@ -152,6 +152,18 @@
   text-align: center;
 }
 
+/* ── 外觀頁（票 07）：外觀選項置中；膠囊比設定視窗裡的大一號（沿用 LangSwitch.css 的樣式，只放大） ── */
+.ob-theme {
+  display: flex;
+  justify-content: center;
+  margin: 20px 0 26px;
+}
+
+.ob-theme .lang-switch-btn {
+  font-size: 13px;
+  padding: 6px 14px;
+}
+
 /* ── 步驟副說明文字 ── */
 .ob-sub {
   font-size: 13.5px;
