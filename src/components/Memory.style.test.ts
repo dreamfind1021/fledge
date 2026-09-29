@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { THEMES } from "../lib/themeIds";
 import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, over, token, worst } from "../testing/cssRules";
 
 // 記憶面板的樣式防線——票 28 第二批，spec docs/planning/soft-tiles-app-wide-design.md §3.6。
@@ -6,7 +7,7 @@ import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, over, token, 
 // div／span／pre 類斷言「沒有這個宣告」（hasDecl：規則本身必須存在，規則不見就炸）；
 // <input>／<button> 類斷言 border 存在而且是 none（lastDecl：刪掉這行會冒出瀏覽器預設外框，spec G9）
 const mem = baseOf("/src/components/Memory.css");
-const { paintToken, paintColor } = cssRules(mem);
+const { paintToken } = cssRules(mem);
 
 describe("搜尋框：拿掉外框，焦點改成 2px 環（spec M1、M2）", () => {
   it("<input> 寫 border: none（G9）", () => {
@@ -32,10 +33,10 @@ describe("篩選小籤：拿掉外框，選中改成淡橘底橘字（spec M4）
     expect(hasDecl(mem, ".fchip.on", "border-color")).toBe(false);
   });
 
-  // spec §3.5 第一列：底是半透明，疊在面板底色（.mem-root 的 background）上算
-  it("選中的橘字對淡橘底至少 4.5:1", () => {
-    const bg = over(decl(mem, ".fchip.on", "background"), decl(mem, ".mem-root", "background"));
-    expect(worst(token(paintToken(".fchip.on", "color")), bg)).toBeGreaterThanOrEqual(4.5);
+  // spec §3.5 第一列：底是半透明，疊在面板底色（.mem-root 的 background）上算。三個主題都跑（票 07）
+  it.each(THEMES)("%s：選中的橘字對淡橘底至少 4.5:1", (theme) => {
+    const bg = over(decl(mem, ".fchip.on", "background"), decl(mem, ".mem-root", "background"), theme);
+    expect(worst(token(paintToken(".fchip.on", "color"), theme), bg)).toBeGreaterThanOrEqual(4.5);
   });
 });
 
@@ -72,8 +73,10 @@ describe("全文框、相關小籤、出錯的紅框（spec M5、M6）", () => {
   });
 });
 
-// spec §3.5：卡片與暗磚上的字。前景從 CSS 的 color 讀、背景從 CSS 的 background 讀，不在測試裡寫死用哪個 token
-describe("卡片與暗磚上的字（spec §3.5）", () => {
+// spec §3.5：卡片與暗磚上的字。前景從 CSS 的 color 讀、背景從 CSS 的 background 讀，不在測試裡寫死用哪個 token。
+// 三個主題都跑（票 07，daylight spec §6.3）
+describe.each(THEMES)("%s：卡片與暗磚上的字（spec §3.5）", (theme) => {
+  const { paintColor } = cssRules(mem, theme);
   it.each([
     ["麵包屑", ".md-crumb", ".mem-detail"],
     ["小標", ".md-h", ".mem-detail"],
@@ -82,11 +85,10 @@ describe("卡片與暗磚上的字（spec §3.5）", () => {
     ["全文", ".md-body", ".md-body"],
     ["相關小籤的字", ".relchip", ".relchip"],
     ["建議小籤的 ✓✕", ".relchip.sug .yn button", ".relchip"],
-    ["小籤的 ◈", ".relchip .ic", ".relchip"],
     ["「建議」字樣", ".relchip .sg", ".relchip"],
     ["「儲存失敗：」", ".relchip .cerr", ".relchip"],
   ])("%s 對背景至少 4.5:1", (_label, fgSelector, bgSelector) => {
-    expect(worst(token(paintToken(fgSelector, "color")), paintColor(bgSelector, "background"))).toBeGreaterThanOrEqual(4.5);
+    expect(worst(token(paintToken(fgSelector, "color"), theme), paintColor(bgSelector, "background"))).toBeGreaterThanOrEqual(4.5);
   });
 
   // 徽章的底是半透明，疊在卡片（.mem-detail 的 background）上算
@@ -94,8 +96,27 @@ describe("卡片與暗磚上的字（spec §3.5）", () => {
     ["native 徽章", ".md-crumb .badge.b-native"],
     ["KMS 徽章", ".md-crumb .badge.b-kms"],
   ])("%s：字對半透明底至少 4.5:1", (_label, selector) => {
-    const bg = over(decl(mem, selector, "background"), decl(mem, ".mem-detail", "background"));
-    expect(worst(token(paintToken(selector, "color")), bg)).toBeGreaterThanOrEqual(4.5);
+    const bg = over(decl(mem, selector, "background"), decl(mem, ".mem-detail", "background"), theme);
+    expect(worst(token(paintToken(selector, "color"), theme), bg)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// 清單列選中時，徽章的半透明底疊在 --active 上（Codex daylight spec R1 點名的缺口：淺色主題第 1 版只有 4.07～4.30）。
+// 只跑淺色：午夜藍的 KMS 徽章在選中列本來就只有 3.92，是改之前的現況，本票不改午夜藍（daylight spec §6.2）
+describe.each(THEMES.filter((t) => t !== "nightfall"))("%s：選中清單列上的徽章", (theme) => {
+  it.each([
+    ["native 徽章", ".lrow .badge.b-native"],
+    ["KMS 徽章", ".lrow .badge.b-kms"],
+  ])("%s：字對疊在 --active 上的半透明底至少 4.5:1", (_label, selector) => {
+    const bg = over(decl(mem, selector, "background"), decl(mem, ".lrow.active", "background"), theme);
+    expect(worst(token(paintToken(selector, "color"), theme), bg)).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// 功能色（--ai）畫的符號：只驗午夜藍。淺色主題的功能色非文字低於 3:1 是知情接受（daylight spec §12.1）
+describe("nightfall：功能色的非文字（淺色主題知情接受）", () => {
+  it("小籤的 ◈ 對背景至少 4.5:1", () => {
+    expect(worst(token(paintToken(".relchip .ic", "color")), cssRules(mem).paintColor(".relchip", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 });
 
