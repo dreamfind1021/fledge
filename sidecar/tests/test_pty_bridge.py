@@ -224,7 +224,8 @@ def _bridge_with_bad_close(alive):
     return bridge
 
 
-def test_close_failure_keeps_handle_when_process_still_alive():
+def test_close_failure_keeps_handle_when_process_still_alive(monkeypatch):
+    monkeypatch.setattr("fledge_sidecar.pty_bridge._CLOSE_GRACE_SECONDS", 0.05)  # 永遠不死，別等滿
     bridge = _bridge_with_bad_close(alive=True)
     bridge.close_session("s")  # 不應拋
     # 進程還在跑 → handle 必須留著，否則永久 orphan（close_all 也找不到它）
@@ -247,8 +248,10 @@ def test_close_failure_drops_handle_when_liveness_unknown():
 # 被恢復的 session 還活著 → usage span 不能收尾：on_close 會 discard _opened_session_ids
 # 並寫 record_close，而 load_sessions 讓 close event 蓋過 live_session_ids——提前呼叫等於讓
 # 這個仍在跑的 session 之後的用量歸屬不到帳號，且真正關掉那次也不會再補 close（Codex R3 Medium）。
-def test_close_failure_defers_on_close_while_process_alive():
+def test_close_failure_defers_on_close_while_process_alive(monkeypatch):
     from fledge_sidecar.pty_bridge import PtyBridge, Session
+
+    monkeypatch.setattr("fledge_sidecar.pty_bridge._CLOSE_GRACE_SECONDS", 0.05)  # 永遠不死，別等滿
 
     alive = {"v": True}
     closed = []
@@ -272,6 +275,77 @@ def test_close_failure_defers_on_close_while_process_alive():
     bridge.close_session("s")
     assert bridge.sessions == {}
     assert closed == ["s"]             # 這次才收尾，且只收一次
+
+
+# ptyprocess 的 close(force=True) 送出 SIGKILL 後只等 0.1 秒就判失敗，被強制結束的進程
+# 可能還在收尾。第一次探測就判「還活著」的話，這個馬上會自己結束的 session 會被放回
+# registry、span 不收尾，一直到 app 關閉才清（票 10）。
+def test_close_failure_waits_for_killed_process_to_exit():
+    from ptyprocess import PtyProcessError
+
+    from fledge_sidecar.pty_bridge import PtyBridge, Session
+
+    closed = []
+    probes = {"n": 0}
+
+    class _SlowDyingPty:
+        fd = 7
+        def close(self, force=False):
+            raise PtyProcessError("Could not terminate the child.")
+        def isalive(self):
+            probes["n"] += 1
+            return probes["n"] < 3     # 前兩次探測還在收尾，之後結束
+
+    bridge = PtyBridge(on_close=lambda s: closed.append(s.session_id))
+    bridge.sessions["s"] = Session(session_id="s", pty=_SlowDyingPty())  # type: ignore[arg-type]
+    bridge.close_session("s")
+    assert bridge.sessions == {}       # 等到它結束 → 不放回
+    assert closed == ["s"]             # span 照常收尾
+
+
+# 寬限期間 app 剛好關閉：uvicorn 只等在途請求 2 秒就跑 lifespan 的 close_all()。
+# 若等待時 handle 不在 registry，close_all() 找不到它、等完才放回就沒人收（Codex 票 10 R1）。
+def test_close_all_during_grace_still_takes_the_session(monkeypatch):
+    import threading
+
+    from ptyprocess import PtyProcessError
+
+    from fledge_sidecar.pty_bridge import PtyBridge, Session
+
+    monkeypatch.setattr("fledge_sidecar.pty_bridge._CLOSE_GRACE_SECONDS", 0.3)
+    alive = {"v": True}
+    closes = {"n": 0}
+    probes = {"n": 0}
+    in_grace = threading.Event()
+    close_all_done = threading.Event()
+    closed = []
+
+    class _StubbornPty:
+        fd = 7
+        def close(self, force=False):
+            closes["n"] += 1
+            if closes["n"] == 1:
+                raise PtyProcessError("Could not terminate the child.")
+            alive["v"] = False           # close_all 那次關得掉
+        def isalive(self):
+            probes["n"] += 1
+            if probes["n"] == 2:         # 第二次探測＝已進入寬限期
+                in_grace.set()
+                close_all_done.wait(5)   # 卡住，讓 close_all 插進來
+            return alive["v"]
+
+    bridge = PtyBridge(on_close=lambda s: closed.append(s.session_id))
+    bridge.sessions["s"] = Session(session_id="s", pty=_StubbornPty())  # type: ignore[arg-type]
+    worker = threading.Thread(target=bridge.close_session, args=("s",))
+    worker.start()
+    assert in_grace.wait(5)
+    bridge.close_all()
+    close_all_done.set()
+    worker.join(5)
+
+    assert closes["n"] == 2              # close_all 有接到它並再關一次
+    assert bridge.sessions == {}         # 事後沒有被放回 registry
+    assert closed == ["s"]               # span 收尾且只收一次
 
 
 def test_close_failure_still_fires_on_close_when_process_exited():
