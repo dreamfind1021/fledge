@@ -213,8 +213,9 @@ export async function createSession(port: number, opts: CreateSessionOptions): P
 }
 
 export async function closeSession(port: number, sessionId: string): Promise<void> {
-  // 失敗時 log（不再靜默吞，符合 CLAUDE.md §3.2）：session 可能殘留在 sidecar，
-  // 完整的重試／orphan reaper 留 Plan 04。仍不 throw——closeTab／orphan 清理不應因此中斷（mode A）。
+  // 失敗時 log（不再靜默吞，符合 CLAUDE.md §3.2）。端點對未知 id 也回 200、關不掉時 sidecar 會
+  // 自己等進程結束（pty_bridge.close_session），非 2xx 幾乎只在 sidecar 連不上時發生，前端重試
+  // 無處可送，故不做（票 10）。仍不 throw——closeTab／orphan 清理不應因此中斷（mode A）。
   try {
     const resp = await fetch(`${base(port)}/api/sessions/${sessionId}`, {
       method: "DELETE",

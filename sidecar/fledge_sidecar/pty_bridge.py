@@ -8,6 +8,7 @@ import logging
 import os
 import select
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Callable
@@ -15,6 +16,12 @@ from typing import Callable
 from ptyprocess import PtyProcess
 
 logger = logging.getLogger(__name__)
+
+# close() 失敗後等子進程結束的上限與探測間隔。ptyprocess 的 close(force=True) 送出 SIGKILL 後
+# 只等 0.1 秒就判失敗，被強制結束的進程可能還在收尾；SIGKILL 無法攔截，多等一下它就會自己結束。
+# 不等的話它會被放回 registry、usage span 不收尾，一直到 app 關閉才清（票 10）。
+_CLOSE_GRACE_SECONDS = 2.0
+_CLOSE_POLL_SECONDS = 0.05
 
 
 @dataclass
@@ -165,8 +172,11 @@ class PtyBridge:
 
         回傳是否放回——呼叫端據此決定要不要收尾 usage span。
         """
+        deadline = time.monotonic() + _CLOSE_GRACE_SECONDS
         try:
-            alive = session.pty.isalive()
+            # 寬限期內輪詢：已送出 SIGKILL 的進程多半只是還沒收尾完（票 10）
+            while (alive := session.pty.isalive()) and time.monotonic() < deadline:
+                time.sleep(_CLOSE_POLL_SECONDS)
         except Exception as e:
             logger.debug("liveness probe failed for %s: %s", session_id, e)
             return False
