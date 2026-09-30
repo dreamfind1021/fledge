@@ -64,6 +64,10 @@ export interface Tab {
 interface AppState {
   port: number | null;
   projects: Project[];
+  /** 專案清單至少成功載入過一次（票 13）。`projects` 是空陣列時分不出「沒有專案」與「從沒讀到」
+   *  ——啟動時專案掃描失敗、還沒重新掃描時，它就是初始的 `[]`。之後的重新載入失敗不撤回：
+   *  那時 `projects` 留著的是上一次讀到的真實清單。 */
+  projectsLoaded: boolean;
   tabs: Tab[];
   activeTabId: string | null;
   config: AppConfigData | null;
@@ -115,6 +119,7 @@ interface AppState {
 export const useAppStore = create<AppState>((set, get) => ({
   port: null,
   projects: [],
+  projectsLoaded: false,
   tabs: [],
   activeTabId: null,
   config: null,
@@ -195,7 +200,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (port == null) return;
     const seq = ++loadProjectsSeq;
     const { projects, permissionError } = await fetchProjects(port);
-    if (seq === loadProjectsSeq) set({ projects, permissionError }); // 只套用最新一次（防並發 stale）
+    if (seq === loadProjectsSeq) set({ projects, permissionError, projectsLoaded: true }); // 只套用最新一次（防並發 stale）
   },
 
   openTab: async (project, accountOverride, kind = "claude", forceNew = false) => {
