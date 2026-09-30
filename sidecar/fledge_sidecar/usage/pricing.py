@@ -64,6 +64,12 @@ def claude_cost(model: str, input_tokens: int, output_tokens: int,
 
     cache 三層讀表內真價，不套寫死倍率——倍率(1.25/2/0.1)只對現行世代成立，
     claude-3-haiku 實際是 1.2×/0.12×。倍率改由 sync 在上游缺該層時當推導 fallback。
+
+    刻意不計 fast mode（`/fast`；上游 `provider_specific_entry.fast`＝2×，opus-4-8／5／5-5）。
+    fast mode 要另購用量額度才能開，開發者本機紀錄全是 `standard`。資料其實在：主對話 jsonl 的
+    `usage.speed` 幾乎每筆都有，但 subagent（`isSidechain`）的紀錄約三分之二缺這欄，且 fast
+    時實際寫出的值沒有樣本驗證過。要補得把 speed 存進 UsageEntry（L2 快取要升 schema）。
+    開了 `/fast` 的使用者，那段花費會被靜默低估一半，且不進「尚未收錄定價」警示。
     """
     price = CLAUDE_PRICING.get(model)
     if price is None:
