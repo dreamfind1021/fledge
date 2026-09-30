@@ -120,6 +120,45 @@ describe("useAppStore", () => {
     expect(sidecar.createSession).toHaveBeenCalledTimes(2);
   });
 
+  // 票 13：精靈的根目錄頁與完成頁靠這個旗標分辨「沒有專案」與「從沒讀到專案清單」——
+  // 啟動時專案掃描失敗、還沒重新掃描時，`projects` 就是初始的空陣列
+  it("專案清單的初始狀態是「還沒讀到」", () => {
+    expect(useAppStore.getInitialState().projectsLoaded).toBe(false);
+  });
+
+  it("loadProjects 成功才標記 projectsLoaded；之後的失敗不撤回", async () => {
+    useAppStore.setState({ projectsLoaded: false });
+    vi.mocked(sidecar.fetchProjects).mockRejectedValueOnce(new Error("fetchProjects failed: 500"));
+    await expect(useAppStore.getState().loadProjects()).rejects.toThrow("500");
+    expect(useAppStore.getState().projectsLoaded).toBe(false);
+
+    vi.mocked(sidecar.fetchProjects).mockResolvedValueOnce({ projects: [], permissionError: false });
+    await useAppStore.getState().loadProjects();
+    expect(useAppStore.getState().projectsLoaded).toBe(true); // 讀到空清單也算讀到了
+
+    // 之後的重新載入失敗時，`projects` 留著上一次讀到的真實清單：數字可能過時，但不是假的
+    vi.mocked(sidecar.fetchProjects).mockRejectedValueOnce(new Error("fetchProjects failed: 500"));
+    await expect(useAppStore.getState().loadProjects()).rejects.toThrow("500");
+    expect(useAppStore.getState().projectsLoaded).toBe(true);
+  });
+
+  // 被 seq 丟棄的舊請求就算成功，旗標也不能跟著立起來：那一輪的清單沒有進 store，`projects`
+  // 仍是空陣列，這時標成「讀到了」就又把「不知道」顯示成 0（Codex plan R1）
+  it("被丟棄的舊請求就算成功，也不標記 projectsLoaded", async () => {
+    useAppStore.setState({ projectsLoaded: false });
+    let resolveOld!: (v: { projects: sidecar.Project[]; permissionError: boolean }) => void;
+    vi.mocked(sidecar.fetchProjects)
+      .mockReturnValueOnce(new Promise((r) => { resolveOld = r; }))
+      .mockRejectedValueOnce(new Error("fetchProjects failed: 500"));
+    const older = useAppStore.getState().loadProjects();
+    await expect(useAppStore.getState().loadProjects()).rejects.toThrow("500");
+    resolveOld({ projects: [proj("/p/old")], permissionError: false });
+    await older;
+
+    expect(useAppStore.getState().projects).toEqual([]); // 前置：舊結果確實被丟掉了
+    expect(useAppStore.getState().projectsLoaded).toBe(false);
+  });
+
   it("setProjectAccount 寫 override 後重新 loadProjects", async () => {
     const cfg = {
       version: 1, roots: [], accounts: {}, manual_projects: [],
