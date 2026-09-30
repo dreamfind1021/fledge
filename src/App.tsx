@@ -289,8 +289,12 @@ function App() {
     }
   };
 
+  // Splash 期間整個主畫面 inert（票 12）：Splash 蓋住畫面、擋住滑鼠與 meta 快捷鍵，但鍵盤焦點
+  // 還摸得到底下看不見的按鈕——config 還沒載入就能開設定頁、再進精靈。Splash 因此放在 app-root
+  // 之外：inert 會連帶所有子孫，放在裡面重試鈕也會一起失效。
   return (
-    <div className="app-root">
+    <>
+    <div className="app-root" inert={!splashDone}>
       {(backendStatus === "down" || backendStatus === "restarting") && (
         <div className="app-banner app-banner--error" role="alert">
           <span className="app-banner-icon"><AlertTriangle size={15} /></span>
@@ -342,9 +346,6 @@ function App() {
         <Workspace />
         <DragOverlay>{dragLabel ? <div className="drag-overlay-chip">{dragLabel}</div> : null}</DragOverlay>
       </DndContext>
-      {!splashDone && (
-        <Splash onDone={() => setSplashDone(true)} onRetry={() => void runStartup({ restart: true })} />
-      )}
       {showOnboarding && (
         <Onboarding
           onClose={() => {
@@ -389,6 +390,10 @@ function App() {
         </div>
       )}
     </div>
+    {!splashDone && (
+      <Splash onDone={() => setSplashDone(true)} onRetry={() => void runStartup({ restart: true })} />
+    )}
+    </>
   );
 }
 

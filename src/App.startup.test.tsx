@@ -9,7 +9,11 @@ import appEn from "./locales/en/app.json";
 
 // App 掛了一整棵樹（xterm、dnd-kit、Tauri plugin…）——這裡只驗啟動接線，
 // 把重量級子樹換成空殼，讓測試聚焦在 App 自己的邏輯。
-vi.mock("./components/Sidebar", () => ({ Sidebar: () => <div /> }));
+vi.mock("./components/Sidebar", () => ({
+  Sidebar: ({ onOpenSettings }: { onOpenSettings: () => void }) => (
+    <button data-testid="sidebar-settings" onClick={onOpenSettings} />
+  ),
+}));
 vi.mock("./components/Workspace", () => ({ Workspace: () => <div /> }));
 vi.mock("./components/Settings", () => ({ Settings: () => <div /> }));
 vi.mock("./components/ProjectPicker", () => ({ ProjectPicker: () => <div /> }));
@@ -156,6 +160,26 @@ describe("App 啟動接線", () => {
     }
     expect(loadProjects).not.toHaveBeenCalled();
     expect(useAppStore.getState().requestCloseTab).not.toHaveBeenCalled();
+  });
+
+  // 票 12（Codex 查證）：Splash 擋住了滑鼠與 meta 快捷鍵，卻沒擋鍵盤焦點——用 Tab 摸到底下
+  // 看不見的齒輪，就能在 config 還沒載入時開設定頁、再從「重跑引導」進精靈
+  it("Splash 期間底下的主畫面是 inert，Splash 自己的重試鈕不是", async () => {
+    useAppStore.setState({ bootstrap: stubBootstrap(null) }); // 啟動失敗，停在 Splash 的錯誤頁
+    const { getByRole, getByTestId } = render(<App />);
+    const retry = await waitFor(() => getByRole("button", { name: i18n.t("splash:actions.retry") }));
+
+    expect(getByTestId("sidebar-settings").closest("[inert]")).not.toBeNull();
+    expect(retry.closest("[inert]")).toBeNull();
+  });
+
+  it("Splash 結束後主畫面解除 inert", async () => {
+    useAppStore.setState({ bootstrap: stubBootstrap({ firstRun: false, projectsError: null }) });
+    const { getByTestId, queryByTestId } = render(<App />);
+    await settleSplash();
+
+    expect(queryByTestId("splash")).toBeNull();
+    expect(getByTestId("sidebar-settings").closest("[inert]")).toBeNull();
   });
 });
 
