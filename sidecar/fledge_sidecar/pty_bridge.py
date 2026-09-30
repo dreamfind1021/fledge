@@ -170,22 +170,36 @@ class PtyBridge:
         結束」，那種情況把 handle 放回去只會讓 live_ids() 多報一個活 session，所以要分開判斷。
         問不出存活狀態時一律當已死：留一個狀態不明的 handle 只會讓 registry 失真。
 
-        回傳是否放回——呼叫端據此決定要不要收尾 usage span。
+        還活著的先放回、再於寬限期內輪詢（票 10）：已送出 SIGKILL 的進程多半只是還沒收尾完。
+        順序不能反過來——等待時 handle 若不在 registry，app 關閉的 close_all() 找不到它，
+        等完才放回就沒人收（Codex 票 10 R1）。期間結束了，只在 registry 裡仍是這個 handle 時
+        才取回；已被 close_all()／另一次 close 拿走，span 由那邊收尾。
+
+        回傳 True＝handle 仍留在 registry 或已由別處接手——呼叫端據此不收尾 usage span。
         """
-        deadline = time.monotonic() + _CLOSE_GRACE_SECONDS
-        try:
-            # 寬限期內輪詢：已送出 SIGKILL 的進程多半只是還沒收尾完（票 10）
-            while (alive := session.pty.isalive()) and time.monotonic() < deadline:
-                time.sleep(_CLOSE_POLL_SECONDS)
-        except Exception as e:
-            logger.debug("liveness probe failed for %s: %s", session_id, e)
-            return False
-        if not alive:
+        if not self._probe_alive(session_id, session):
             return False
         with self._lock:
             # setdefault：同 id 若已被新 session 佔用，不拿舊 handle 覆蓋它
             self.sessions.setdefault(session_id, session)
+        deadline = time.monotonic() + _CLOSE_GRACE_SECONDS
+        while time.monotonic() < deadline:
+            time.sleep(_CLOSE_POLL_SECONDS)
+            if not self._probe_alive(session_id, session):
+                with self._lock:
+                    if self.sessions.get(session_id) is not session:
+                        return True
+                    del self.sessions[session_id]
+                return False
         return True
+
+    @staticmethod
+    def _probe_alive(session_id: str, session: Session) -> bool:
+        try:
+            return session.pty.isalive()
+        except Exception as e:
+            logger.debug("liveness probe failed for %s: %s", session_id, e)
+            return False
 
     def close_all(self) -> None:
         """關閉所有 session：lock 內 snapshot + 清空，再逐一 best-effort close。
