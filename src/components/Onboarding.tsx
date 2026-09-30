@@ -59,6 +59,7 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   const port = useAppStore((s) => s.port);
   const config = useAppStore((s) => s.config);
   const projects = useAppStore((s) => s.projects);
+  const projectsLoaded = useAppStore((s) => s.projectsLoaded);
   const completeOnboarding = useAppStore((s) => s.completeOnboarding);
   const loadConfig = useAppStore((s) => s.loadConfig); // onboard 失敗時向後端對帳落檔狀態
   // 首次時 config 為 in-memory DEFAULT（票 31 起是單一帳號 default）
@@ -406,6 +407,10 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   // 首次啟動時 draft 有內容就用 draft（那才有 scan-preview 的即時計數），落檔後回頭看也還是它；
   // 重跑引導沒有 draft，就顯示設定檔的內容
   const shownRoots = draftRoots.length > 0 ? draftRoots : savedRoots;
+  // 專案數分得出「真的沒有」嗎（票 13）：draft 的數字來自加入當下的試掃，一定是真的；設定檔的
+  // 根目錄要拿 store 的專案清單去數，而清單從沒載入成功過時（啟動時掃描失敗、還沒重新掃描），
+  // 空陣列只代表「不知道」——照數會每列 0、完成頁說「掃描到 0 個專案」。不知道就不顯示數字
+  const countsKnown = draftRoots.length > 0 || projectsLoaded;
 
   const totalProjects = shownRoots.reduce((s, r) => s + r.count, 0);
   const distinctAccounts = new Set(shownRoots.map((r) => r.account)).size;
@@ -506,7 +511,7 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
                     {accountKeys.map((a) => (<option key={a} value={a}>{a}</option>))}
                   </select>
                   <span className="ob-row-count">
-                    <Check size={12} strokeWidth={2} />{r.count}
+                    {countsKnown ? <><Check size={12} strokeWidth={2} />{r.count}</> : "—"}
                   </span>
                   <button
                     onClick={() => removeDraft(r.path)}
@@ -768,11 +773,17 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
                       values={{ installed: installedCount, accounts: accountKeys.length }}
                     />
                   )
-                ) : (
+                ) : countsKnown ? (
                   <Trans
                     t={t}
                     i18nKey="done.summary"
                     values={{ projects: totalProjects, roots: shownRoots.length, accounts: distinctAccounts }}
+                  />
+                ) : (
+                  <Trans
+                    t={t}
+                    i18nKey="done.summaryRootsOnly"
+                    values={{ roots: shownRoots.length, accounts: distinctAccounts }}
                   />
                 )}
               </p>

@@ -325,6 +325,7 @@
   "done": {
     "h": "設定完成",
     "summary": "掃描到 <strong>{{projects}}</strong> 個專案<br />來自 <strong>{{roots}}</strong> 個根目錄、<strong>{{accounts}}</strong> 個帳號",
+    "summaryRootsOnly": "已設定 <strong>{{roots}}</strong> 個根目錄、<strong>{{accounts}}</strong> 個帳號",
     "hint": "未完成的項目（登入、範本…）都能在設定頁的「開發環境」區隨時繼續。",
     "enter": "進入 Fledge",
     "migSummary": "已搬回 <strong>{{installed}}</strong> 項資產<br />分屬 <strong>{{accounts}}</strong> 個帳號",

@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
-import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, cleanup, fireEvent, waitFor, act } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
 import zhRestore from "../locales/zh-TW/restore.json";
 import { useAppStore } from "../store/useAppStore";
-import { scanPreview, runInstall, fetchBundleInfo, RestoreError } from "../lib/sidecar";
+import { scanPreview, runInstall, fetchBundleInfo, RestoreError, type Project } from "../lib/sidecar";
 import { Onboarding } from "./Onboarding";
 import { setTheme } from "../lib/theme";
 
@@ -162,6 +162,19 @@ const baseConfig = {
   is_first_run: true,
 };
 
+/** 重跑引導用（票 13）：單帳號、設定檔早已存在，只有一個根目錄 `/Users/x/work` */
+const rerunConfig = {
+  ...baseConfig,
+  accounts: { work: account },
+  is_first_run: false,
+  roots: [{ path: "/Users/x/work", default_account: "work" }],
+};
+/** `/Users/x/work` 底下的兩個專案 */
+const rerunProjects: Project[] = [
+  { name: "a", path: "/Users/x/work/a", account: "work", source: "root", root: "/Users/x/work", recent: null },
+  { name: "b", path: "/Users/x/work/b", account: "work", source: "root", root: "/Users/x/work", recent: null },
+];
+
 /** 歡迎頁選一條路，再按過外觀頁（票 07：兩條路的第 2 頁都是外觀） */
 async function pickPath(ui: ReturnType<typeof render>, path: "fresh" | "restore") {
   ui.getByText(zh.welcome[path]).click();
@@ -176,6 +189,19 @@ async function reachRootsWithDraft(ui: ReturnType<typeof render>) {
   fireEvent.change(ui.getByPlaceholderText(zh.roots.placeholder), { target: { value: "/tmp/work" } });
   ui.getByText(zh.roots.add).click();
   await waitFor(() => expect(ui.getByText("/tmp/work")).toBeTruthy());
+}
+
+/** 從根目錄頁一路按到完成頁（單帳號：環境→登入→系統設置→完成，沒有共通設置）。根目錄頁的
+ *  主按鈕在第一次設定是「建立設定並繼續」、設定檔已存在時是「下一步」，由呼叫端給 */
+async function walkRootsToDone(ui: ReturnType<typeof render>, rootsNext: string) {
+  ui.getByText(rootsNext).click();
+  await waitFor(() => expect(ui.getByText(zh.env.h)).toBeTruthy());
+  for (const heading of [zh.login.h, zh.sys.h]) {
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+  }
+  ui.getByText(zh.sys.skipAll).click();   // 系統設置頁沒有「下一步」，全部略過就是往前
+  await waitFor(() => expect(ui.getByText(zh.done.h)).toBeTruthy());
 }
 
 describe("Onboarding 精靈外殼", () => {
@@ -365,10 +391,8 @@ describe("Onboarding 精靈外殼", () => {
         is_first_run: false,
         roots: [{ path: "/Users/x/work", default_account: "work" }],
       },
-      projects: [
-        { name: "a", path: "/Users/x/work/a", account: "work", source: "root", root: "/Users/x/work", recent: null },
-        { name: "b", path: "/Users/x/work/b", account: "work", source: "root", root: "/Users/x/work", recent: null },
-      ],
+      projects: rerunProjects,
+      projectsLoaded: true,   // 票 13：專案清單讀到了才有數字，否則是「—」
     });
     const ui = render(<Onboarding onClose={onClose} />);
     await pickPath(ui, "fresh");
@@ -384,6 +408,64 @@ describe("Onboarding 精靈外殼", () => {
 
     await waitFor(() => expect(ui.getByText(zh.env.h)).toBeTruthy());
     expect(onboardCalls).toBe(0); // 重跑不得再打 onboard（first-run only，會撞 409）
+  });
+
+  // 票 13：設定檔裡的根目錄要拿 store 的專案清單去數。清單從沒讀到時（啟動時掃描失敗、還沒
+  // 重新掃描）空陣列只代表「不知道」，照數會每列 0、完成頁說「掃描到 0 個專案」，和真的沒有
+  // 專案長得一模一樣。下面兩條是同一個判斷的兩面
+  it("重跑引導：專案清單讀到了，完成頁照常列出專案數（票 13）", async () => {
+    useAppStore.setState({ config: rerunConfig, projects: rerunProjects, projectsLoaded: true });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await pickPath(ui, "fresh");
+    await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
+    await walkRootsToDone(ui, zh.common.next);
+
+    const numbers = [...ui.container.querySelectorAll(".ob-summary strong")].map((e) => e.textContent);
+    expect(numbers).toEqual(["2", "1", "1"]); // 2 個專案、1 個根目錄、1 個帳號
+  });
+
+  it("重跑引導：專案清單從沒讀到時，專案數顯示「—」、完成頁不提專案數（票 13）", async () => {
+    useAppStore.setState({ config: rerunConfig, projects: [], projectsLoaded: false });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await pickPath(ui, "fresh");
+    await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
+
+    const count = ui.getByText("/Users/x/work").closest(".ob-row")!.querySelector(".ob-row-count")!;
+    expect(count.textContent).toBe("—");
+    expect(count.querySelector("svg")).toBeNull(); // 打勾＝「掃描過」，不知道的時候不能打
+
+    await walkRootsToDone(ui, zh.common.next);
+    const numbers = [...ui.container.querySelectorAll(".ob-summary strong")].map((e) => e.textContent);
+    expect(numbers).toEqual(["1", "1"]); // 只剩 1 個根目錄、1 個帳號，沒有專案數
+  });
+
+  // 精靈開著的時候清單才讀到（例如精靈裡的帳號操作觸發了重新載入）：數字要跟著出現，不能停在
+  // 開精靈那一刻的「—」（Codex plan R1）
+  it("重跑引導：精靈開著時專案清單才讀到，數字跟著出現（票 13）", async () => {
+    useAppStore.setState({ config: rerunConfig, projects: [], projectsLoaded: false });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await pickPath(ui, "fresh");
+    await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
+    const count = () => ui.getByText("/Users/x/work").closest(".ob-row")!.querySelector(".ob-row-count")!;
+    expect(count().textContent).toBe("—"); // 前置：還沒讀到
+
+    act(() => useAppStore.setState({ projects: rerunProjects, projectsLoaded: true }));
+    await waitFor(() => expect(count().textContent).toBe("2"));
+  });
+
+  // 第一次設定時 bootstrap 不載專案清單（旗標必然是 false），數字來自加入根目錄當下的試掃——
+  // 判斷若只看旗標，最常走的這條路每列都會變「—」
+  it("第一次設定：根目錄列與完成頁用試掃的數字，不受專案清單影響（票 13）", async () => {
+    useAppStore.setState({ config: { ...baseConfig, accounts: { work: account } }, projects: [], projectsLoaded: false });
+    const ui = render(<Onboarding onClose={onClose} />);
+    await reachRootsWithDraft(ui);   // 檔首的 scanPreview mock：試掃回 3 個專案
+
+    const count = ui.getByText("/tmp/work").closest(".ob-row")!.querySelector(".ob-row-count")!;
+    expect(count.textContent).toBe("3");
+
+    await walkRootsToDone(ui, zh.roots.next);
+    const numbers = [...ui.container.querySelectorAll(".ob-summary strong")].map((e) => e.textContent);
+    expect(numbers).toEqual(["3", "1", "1"]); // 3 個專案、1 個根目錄、1 個帳號
   });
 
   it("進度條格數跟著帳號數：雙帳號八格、單帳號七格（票 07 加外觀頁）", async () => {

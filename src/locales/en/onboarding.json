@@ -325,6 +325,7 @@
   "done": {
     "h": "You're all set",
     "summary": "Found <strong>{{projects}}</strong> projects<br />across <strong>{{roots}}</strong> root folders and <strong>{{accounts}}</strong> accounts",
+    "summaryRootsOnly": "<strong>{{roots}}</strong> root folders and <strong>{{accounts}}</strong> accounts configured",
     "hint": "Anything you skipped — sign-in, templates — is waiting in the Development environment section of Settings.",
     "enter": "Open Fledge",
     "migSummary": "Moved <strong>{{installed}}</strong> items across <br /><strong>{{accounts}}</strong> account(s)",
