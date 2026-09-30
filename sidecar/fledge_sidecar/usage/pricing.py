@@ -76,7 +76,15 @@ def claude_cost(model: str, input_tokens: int, output_tokens: int,
 
 def codex_cost(model: str, input_tokens: int, cached_input: int,
                output_tokens: int) -> tuple[float, bool]:
-    """cached_input ⊆ input_tokens（本機資料驗證，design §7）。"""
+    """cached_input ⊆ input_tokens（本機資料驗證，design §7）。
+
+    刻意不計上游的 272K 長 context 分層（`*_above_272k_tokens`：input／cached ×2、output ×1.5）。
+    Codex CLI 預設 context 視窗就是 272K（`~/.codex/models_cache.json` 的 `context_window`；
+    rollout 回報可用 258,400），快滿時自動壓縮，預設設定下單筆請求不會越線——這是觀察到的
+    行為，不是硬保證（沒確認單次超大工具輸出會被擋）。使用者在 `~/.codex/config.toml` 調高
+    `model_context_window` 時，越線請求會被靜默低估（input 只算到一半、output 少算三分之一），
+    且不進「尚未收錄定價」警示。要補時上游欄位已齊，sync 加欄位＋這裡加門檻判斷即可。
+    """
     price = CODEX_PRICING.get(model)
     if price is None:
         return 0.0, True
