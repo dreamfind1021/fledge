@@ -18,7 +18,10 @@ def _workflow_path() -> Path:
 
 
 def _upload_run_node() -> yaml.ScalarNode:
-    """回傳「執行 gh release upload 的那個 step」的 run 節點（**保留 scalar style**）。
+    """回傳「執行 gh release create 的那個 step」的 run 節點（**保留 scalar style**）。
+
+    票 22 起上傳改成「所有驗證通過後才 `gh release create --draft`」，取代原本 tauri-action 先建
+    草稿、這一步再 `gh release upload --clobber` 的做法；「驗證與上傳在同一步」的設計不變。
 
     用 compose 而非 safe_load，是因為 safe_load 會丟掉 scalar style，而 style 在這裡
     攸關正確性：`run: >`（folded）會把多行折成一行，一個 `#` 就能把後面整串吞成註解，
@@ -31,7 +34,7 @@ def _upload_run_node() -> yaml.ScalarNode:
             for key, value in node.value:
                 if (isinstance(key, yaml.ScalarNode) and key.value == "run"
                         and isinstance(value, yaml.ScalarNode)
-                        and "gh release upload" in value.value):
+                        and "gh release create" in value.value):
                     found.append(value)
                 walk(value)
         elif isinstance(node, yaml.SequenceNode):
@@ -39,7 +42,7 @@ def _upload_run_node() -> yaml.ScalarNode:
                 walk(item)
 
     walk(root)
-    assert len(found) == 1, f"預期恰好一個執行 gh release upload 的步驟，找到 {len(found)}"
+    assert len(found) == 1, f"預期恰好一個執行 gh release create 的步驟，找到 {len(found)}"
     return found[0]
 
 
@@ -101,7 +104,7 @@ def test_verifier_runs_in_the_same_step_that_uploads():
     script = _active_lines(_upload_run_node().value)
     assert "verify_templates_artifact.py" in script, \
         "驗證器必須在產生上傳檔的同一步驟內執行（拿掉驗證等於拿掉打包）"
-    assert script.index("verify_templates_artifact.py") < script.index("gh release upload"), \
+    assert script.index("verify_templates_artifact.py") < script.index("gh release create"), \
         "驗證必須在上傳之前"
     # 只要求「字串存在」擋不住 `echo scripts/verify_templates_artifact.py` 或
     # `true scripts/...`——關鍵字與順序都還在，驗證卻不會執行。要求該行以 python3 起頭。
@@ -124,7 +127,7 @@ def test_public_seed_drift_check_runs_before_upload():
     script = _active_lines(_upload_run_node().value)
     assert "build_manifest_entries" in script, "drift 檢查必須實際呼叫 build_manifest_entries"
     assert "manifest 與內容不符" in script
-    assert script.index("build_manifest_entries") < script.index("gh release upload")
+    assert script.index("build_manifest_entries") < script.index("gh release create")
 
 
 def test_release_never_builds_with_private_templates():
@@ -176,3 +179,225 @@ def test_drift_check_actually_detects_a_drifted_seed(tmp_path: Path):
     drifted = subprocess.run(["bash", "-e", "-c", block], cwd=fake_repo,
                              capture_output=True, text=True)
     assert drifted.returncode != 0, "seed 多一個檔沒同步 manifest 時 drift 檢查必須失敗"
+
+
+# ---- 票 22：發版流程重做——所有驗證通過後才建 Release；workflow 不刪除任何 Release ----
+
+_REFUSE = "Refuse existing release"
+_TAURI_BUILD = "Tauri build"
+_PUBLISH = "Publish release (rc → prerelease)"
+_PACKAGE = "Verify + package (驗證失敗就沒有可上傳的檔案)"
+_ENV = {"GITHUB_REF_NAME": "v1.2.3", "GITHUB_REPOSITORY": "owner/repo"}
+
+
+def _release_steps() -> list[dict]:
+    workflow = yaml.safe_load(_workflow_path().read_text(encoding="utf-8"))
+    assert isinstance(workflow, dict) and isinstance(workflow.get("jobs"), dict), \
+        "release.yml 結構不符預期（缺 jobs）"
+    assert list(workflow["jobs"]) == ["release"], f"預期只有 release 一個 job：{list(workflow['jobs'])}"
+    return workflow["jobs"]["release"]["steps"]
+
+
+def _label(step: dict) -> str:
+    return step.get("name") or step.get("uses") or str(step.get("run", "")).strip()
+
+
+def _step(label: str) -> dict:
+    found = [s for s in _release_steps() if _label(s) == label]
+    assert len(found) == 1, f"預期恰好一個「{label}」步驟，找到 {len(found)}"
+    return found[0]
+
+
+def _named_run_node(label: str) -> yaml.ScalarNode:
+    """名為 label 的步驟的 run 節點（保留 scalar style，理由同 _upload_run_node）。"""
+    root = yaml.compose(_workflow_path().read_text(encoding="utf-8"))
+    found: list[yaml.ScalarNode] = []
+
+    def walk(node) -> None:
+        if isinstance(node, yaml.MappingNode):
+            keys = {k.value: v for k, v in node.value if isinstance(k, yaml.ScalarNode)}
+            name, run = keys.get("name"), keys.get("run")
+            if (isinstance(name, yaml.ScalarNode) and name.value == label
+                    and isinstance(run, yaml.ScalarNode)):
+                found.append(run)
+            for _, value in node.value:
+                walk(value)
+        elif isinstance(node, yaml.SequenceNode):
+            for item in node.value:
+                walk(item)
+
+    walk(root)
+    assert len(found) == 1, f"預期恰好一個名為「{label}」且有 run 的步驟，找到 {len(found)}"
+    return found[0]
+
+
+def _fake_bin(tmp_path: Path, name: str, body: str) -> None:
+    d = tmp_path / "fakebin"
+    d.mkdir(exist_ok=True)
+    f = d / name
+    f.write_text(body, encoding="utf-8")
+    f.chmod(0o755)
+
+
+def _gh(tmp_path: Path, stdout: str = "", rc: int = 0) -> Path:
+    """假的 gh：把參數一行一筆記下來、印出指定內容、以指定結束碼離開。"""
+    calls = tmp_path / "gh-calls.txt"
+    out = tmp_path / "gh-stdout.txt"
+    out.write_text(stdout, encoding="utf-8")
+    _fake_bin(tmp_path, "gh", f'#!/bin/sh\necho "$*" >> "{calls}"\ncat "{out}"\nexit {rc}\n')
+    return calls
+
+
+def _bash(script: str, tmp_path: Path, env: dict, cwd: Path | None = None):
+    """用 macOS 內建的 /bin/bash（3.2）跑：比 runner 上的 bash 舊，舊的能跑新的也能跑。
+    GitHub 的預設 shell 是 `bash -e {0}`，這裡照樣帶 -e。"""
+    full_env = {**os.environ, "PATH": f"{tmp_path / 'fakebin'}:{os.environ['PATH']}", **env}
+    return subprocess.run(["/bin/bash", "-e", "-c", script], cwd=cwd or tmp_path,
+                          env=full_env, capture_output=True, text=True)
+
+
+def _run_step(label: str, tmp_path: Path, env: dict, cwd: Path | None = None):
+    return _bash(_step(label)["run"], tmp_path, env, cwd)
+
+
+_EXPECTED_ORDER = [
+    "actions/checkout@v4",
+    "actions/setup-python@v5",
+    "actions/setup-node@v4",
+    "dtolnay/rust-toolchain@stable",
+    "Version guard (format + tag base == tauri.conf.json)",
+    _REFUSE,
+    "Build sidecar (onedir + nested codesign)",
+    "npm ci",
+    _TAURI_BUILD,
+    "Verify bundle (codesign + resource path + sidecar runs)",
+    _PACKAGE,
+    _PUBLISH,
+]
+_STRICT_STEPS = [_REFUSE, _TAURI_BUILD, _PUBLISH]
+
+
+def test_release_steps_run_in_the_designed_order():
+    assert [_label(s) for s in _release_steps()] == _EXPECTED_ORDER
+
+
+def test_tauri_action_is_gone():
+    # tauri-action 在草稿模式下找既有 Release 只比 tag、不管是不是草稿：重跑已發布的 tag 時，
+    # 它會在任何驗證之前就把產物傳進公開 Release（票 22 Codex R1，讀其 create-release.ts 確認）
+    assert not [s for s in _release_steps() if str(s.get("uses", "")).startswith("tauri-apps/tauri-action")]
+    body = [ln.strip() for ln in _active_lines(_step(_TAURI_BUILD)["run"]).splitlines()
+            if ln.strip() and ln.strip() != "set -euo pipefail"]
+    assert body == ["npm run tauri build -- --target aarch64-apple-darwin"]
+
+
+def test_same_tag_runs_are_serialized_not_cancelled():
+    workflow = yaml.safe_load(_workflow_path().read_text(encoding="utf-8"))
+    conc = workflow.get("concurrency")
+    assert isinstance(conc, dict), "缺 concurrency：同一個 tag 的兩次執行會同時跑"
+    assert "github.ref_name" in str(conc.get("group", ""))
+    assert conc.get("cancel-in-progress") is False
+
+
+def test_workflow_never_deletes_a_release():
+    # 自動刪除被兩輪審查打穿（會刪到人工建的草稿；「確認是草稿」到「刪除」之間被按發布）。
+    # workflow 一律不刪，失敗留下的草稿交給人處理。
+    assert "gh release delete" not in _all_active_run_text()
+    assert not [s for s in _release_steps() if "failure()" in str(s.get("if", ""))]
+
+
+def test_new_and_changed_steps_are_strict_literal_blocks():
+    for label in _STRICT_STEPS:
+        node = _named_run_node(label)
+        assert node.style == "|", f"「{label}」的 run 必須是 literal block"
+        first = next(ln.strip() for ln in node.value.splitlines()
+                     if ln.strip() and not ln.strip().startswith("#"))
+        assert first == "set -euo pipefail", f"「{label}」的第一個指令必須是 set -euo pipefail"
+
+
+def test_refuse_passes_when_tag_has_no_release(tmp_path: Path):
+    calls = _gh(tmp_path, stdout="")
+    r = _run_step(_REFUSE, tmp_path, _ENV)
+    assert r.returncode == 0, r.stdout + r.stderr
+    args = calls.read_text(encoding="utf-8")
+    # 用列表 API 才查得到草稿；用 tag 查的端點看不到
+    assert "--paginate" in args and "repos/owner/repo/releases" in args and "v1.2.3" in args
+
+
+def test_refuse_stops_on_published_release(tmp_path: Path):
+    _gh(tmp_path, stdout="false\n")
+    r = _run_step(_REFUSE, tmp_path, _ENV)
+    assert r.returncode != 0
+    assert "升版號" in r.stdout
+
+
+def test_refuse_stops_on_draft_without_deleting_it(tmp_path: Path):
+    calls = _gh(tmp_path, stdout="true\n")
+    r = _run_step(_REFUSE, tmp_path, _ENV)
+    assert r.returncode != 0
+    assert "手動刪除" in r.stdout
+    assert "delete" not in calls.read_text(encoding="utf-8"), "草稿可能是人工建的，不能自動刪"
+
+
+def test_refuse_fails_when_query_fails(tmp_path: Path):
+    _gh(tmp_path, stdout="", rc=1)
+    r = _run_step(_REFUSE, tmp_path, _ENV)
+    assert r.returncode != 0, "查詢失敗被當成「沒有 Release」"
+
+
+def test_refuse_sees_a_match_after_blank_pages(tmp_path: Path):
+    # --paginate 每頁各跑一次 --jq：沒命中的頁面不印東西，命中的那筆可能在後面的頁
+    _gh(tmp_path, stdout="\n\nfalse\n")
+    r = _run_step(_REFUSE, tmp_path, _ENV)
+    assert r.returncode != 0
+
+
+def _create_snippet() -> str:
+    """上傳步驟裡 `gh release create … || { …; }` 那一段（含失敗處理）。"""
+    lines = _active_lines(_upload_run_node().value).splitlines()
+    i = next(k for k, ln in enumerate(lines) if ln.strip().startswith("gh release create"))
+    j = next(k for k in range(i, len(lines)) if lines[k].rstrip().endswith("}"))
+    return "\n".join(lines[i:j + 1])
+
+
+def test_release_is_created_as_draft_with_all_assets(tmp_path: Path):
+    calls = _gh(tmp_path)
+    env = {**_ENV, "DMG_PATH": "bundle/dmg/Fledge_1.2.3_aarch64.dmg"}
+    r = _bash(_create_snippet(), tmp_path, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    args = calls.read_text(encoding="utf-8")
+    assert args.startswith("release create v1.2.3 ")
+    for part in ("bundle/dmg/Fledge_1.2.3_aarch64.dmg", "Fledge_aarch64.app.tar.gz",
+                 "templates-artifact-manifest.json", "checksums.txt",
+                 "--draft", "--verify-tag", "--title Fledge v1.2.3"):
+        assert part in args, f"gh release create 少了 {part}"
+
+
+def test_failed_create_points_to_manual_cleanup(tmp_path: Path):
+    calls = _gh(tmp_path, rc=1)
+    env = {**_ENV, "DMG_PATH": "x.dmg"}
+    r = _bash(_create_snippet(), tmp_path, env)
+    assert r.returncode != 0
+    assert "https://github.com/owner/repo/releases" in r.stdout and "手動刪除" in r.stdout
+    assert "delete" not in calls.read_text(encoding="utf-8")
+
+
+def test_publish_marks_rc_as_prerelease(tmp_path: Path):
+    calls = _gh(tmp_path)
+    r = _run_step(_PUBLISH, tmp_path, {**_ENV, "GITHUB_REF_NAME": "v1.2.3-rc.1"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert calls.read_text(encoding="utf-8").strip() == "release edit v1.2.3-rc.1 --draft=false --prerelease"
+
+
+def test_publish_final_release_is_not_prerelease(tmp_path: Path):
+    calls = _gh(tmp_path)
+    r = _run_step(_PUBLISH, tmp_path, _ENV)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert calls.read_text(encoding="utf-8").strip() == "release edit v1.2.3 --draft=false"
+
+
+def test_failed_publish_says_it_may_have_published(tmp_path: Path):
+    _gh(tmp_path, rc=1)
+    r = _run_step(_PUBLISH, tmp_path, _ENV)
+    assert r.returncode != 0
+    assert "不代表沒發布" in r.stdout
+    assert "https://github.com/owner/repo/releases/tag/v1.2.3" in r.stdout

@@ -3,6 +3,12 @@ on:
   push:
     tags: ['v*']
 
+# 同一個 tag 的執行排隊、不互相取消（票 22）。它只協調 Actions 執行之間，不鎖 GitHub 介面上的
+# 操作——所以 workflow 也不自動刪任何 Release（見 Verify + package 與 Publish 的註解）。
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: macos-14            # Apple Silicon (arm64)
@@ -29,6 +35,20 @@ jobs:
           echo "tag base=$BASE conf=$CONF"
           [ "$BASE" = "$CONF" ] || { echo "::error::tag base $BASE != conf $CONF"; exit 1; }
 
+      - name: Refuse existing release
+        run: |
+          set -euo pipefail
+          # 這個 tag 已經有 Release（不論草稿或已發布）就停，什麼都不碰（票 22）。
+          # 用列表 API 連草稿一起查——用 tag 查 Release 的端點看不到草稿。
+          # 查詢本身失敗（網路、權限）會讓指令替換失敗、set -e 讓整步失敗，不會被當成「沒有」。
+          FOUND=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq ".[] | select(.tag_name == \"${GITHUB_REF_NAME}\") | .draft")
+          if [ -n "${FOUND}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 已經有 Release，不重跑。已發布的不重發，要重發請升版號；草稿請先到 https://github.com/${GITHUB_REPOSITORY}/releases 確認後手動刪除，再重跑。"
+            echo "查到的 draft 欄位：${FOUND}"
+            exit 1
+          fi
+
       - name: Build sidecar (onedir + nested codesign)
         run: |
           cd sidecar
@@ -38,15 +58,13 @@ jobs:
 
       - run: npm ci
 
-      - name: Tauri build + draft release
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # tauri-action 建 release 用（gh CLI 另吃 job-level GH_TOKEN）
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Fledge ${{ github.ref_name }}'
-          releaseDraft: true
-          args: --target aarch64-apple-darwin
+      - name: Tauri build
+        run: |
+          set -euo pipefail
+          # 只打包、不碰 Release（票 22）：所有驗證通過後，才由 Verify + package 建草稿。
+          # 原本的 tauri-action 在草稿模式下找既有 Release 只比 tag、不管是不是草稿，
+          # 重跑已發布的 tag 時會在驗證前就把產物傳進公開 Release。
+          npm run tauri build -- --target aarch64-apple-darwin
 
       - name: Verify bundle (codesign + resource path + sidecar runs)
         run: |
@@ -146,23 +164,26 @@ jobs:
 
           B="src-tauri/target/aarch64-apple-darwin/release/bundle"
           tar -czf Fledge_aarch64.app.tar.gz -C "$B/macos" Fledge.app
-          # 確認剛好一個 dmg；用實際 basename（tauri-action 命名 Fledge_<ver>_aarch64.dmg）
+          # 確認剛好一個 dmg；用實際 basename（Tauri 打包器命名 Fledge_<ver>_aarch64.dmg）
           DMG_PATH=$(ls "$B"/dmg/*.dmg)
           [ "$(printf '%s\n' "$DMG_PATH" | wc -l)" -eq 1 ] || { echo "::error::dmg 不是剛好一個"; exit 1; }
           DMG=$(basename "$DMG_PATH")
           cp "$STAGE/artifact-manifest.json" ./templates-artifact-manifest.json
           shasum -a 256 Fledge_aarch64.app.tar.gz > checksums.txt
           ( cd "$B/dmg" && shasum -a 256 "$DMG" ) >> checksums.txt
-          gh release upload "${GITHUB_REF_NAME}" "$DMG_PATH" Fledge_aarch64.app.tar.gz \
-            templates-artifact-manifest.json checksums.txt --clobber
+          # 所有驗證都過了，才第一次碰 GitHub Release（票 22）。--verify-tag：tag 不在遠端就失敗，
+          # 不讓 gh 自己從預設分支建一個 tag。可能已建立草稿、卻在上傳檔案時失敗——草稿不公開、
+          # install.sh 也看不到；workflow 不自動刪（自動刪會刪到人工建的草稿），交給人處理。
+          gh release create "${GITHUB_REF_NAME}" "$DMG_PATH" Fledge_aarch64.app.tar.gz \
+            templates-artifact-manifest.json checksums.txt \
+            --draft --verify-tag --title "Fledge ${GITHUB_REF_NAME}" --notes "" \
+            || { echo "::error::建立草稿 Release 失敗。草稿可能已建立一半：到 https://github.com/${GITHUB_REPOSITORY}/releases 確認後手動刪除，再重跑。"; exit 1; }
 
       - name: Publish release (rc → prerelease)
         run: |
+          set -euo pipefail
+          # 回報失敗不代表沒發布：可能已公開、只是回應失敗（票 22）。workflow 不自動回滾，交給人確認。
           case "${GITHUB_REF_NAME}" in
             *-rc.*) gh release edit "${GITHUB_REF_NAME}" --draft=false --prerelease ;;
             *)      gh release edit "${GITHUB_REF_NAME}" --draft=false ;;
-          esac
-
-      - name: Cleanup draft on failure
-        if: failure()
-        run: gh release delete "${GITHUB_REF_NAME}" --yes || true
+          esac || { echo "::error::發布失敗。回報失敗不代表沒發布：到 https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME} 確認實際狀態。"; exit 1; }
