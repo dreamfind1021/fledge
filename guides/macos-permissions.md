@@ -47,22 +47,31 @@ Operation not permitted
 
 **選的是 Fledge.app，不是 `claude`。** 理由同上——TCC 看最上層 app。這點最容易搞錯。
 
-### 更新版本後授權會失效
+### 授權一次就好（1.9.1 起）
 
-目前 Fledge 用的是臨時簽章（ad-hoc）。TCC 記錄 ad-hoc 簽章 app 的授權時，記的是那份二進位檔的雜湊，每次重新打包雜湊都會變，TCC 就認不出是同一個 app。結果是：**授權作廢，但系統設定裡的開關仍然顯示開著**。
+TCC 記錄授權時，會一併記下「怎樣才算同一個 app」的規則，之後每次都拿這條規則比對。
 
-症狀是明明開了，讀 `~/Library` 還是 `Operation not permitted`。log 裡會有這種紀錄：
+- **1.9.0（含）以前**用的是臨時簽章（ad-hoc），規則記的是那份二進位檔的雜湊。每次重新打包雜湊都會變，更新後就對不上，授權因此失效。
+- **1.9.1 起**改用固定的自建憑證簽章，規則記的是憑證。更新後憑證不變，授權會留著。
+
+**從 1.9.0（含）以前更新上來**：新舊規則不同，第一次要到系統設定把 Fledge 的完整磁碟取用再打開一次。之後就不用了。
+
+**例外：同一台 Mac 上執行過簽章不同的 Fledge**，例如自己從原始碼用 ad-hoc 打包的版本。它一碰到受保護的路徑，TCC 就會記下一筆「拒絕」取代原本的授權：系統設定裡的開關會變成**關**，讀 `~/Library` 回 `Operation not permitted`。到系統設定再打開即可。log 裡會有這種紀錄：
 
 ```
 tccd: Failed to match existing code requirement for subject dev.fledge.app and service kTCCServiceSystemPolicyAllFiles
 ```
 
-**目前的變通**：更新後到系統設定把 Fledge 的完整磁碟取用權限關掉再打開。「App 管理」如果也開過，同樣做一次。
+「App 管理」如果也開過，同樣處理。
 
-**根治**：改用固定的簽章身分，TCC 記的就變成憑證而不是雜湊。在藍圖上。做完之後這一節會改成「授一次即可」。
+**自己確認是不是固定身分**：
 
-<!-- 票 22 做完後更新這一節 -->
+```bash
+codesign -d -r- /Applications/Fledge.app
+```
+
+看到 `certificate leaf = H"…"` 就是固定身分；看到 `cdhash H"…"` 是舊的臨時簽章。
 
 ## 三、Gatekeeper 是另一回事
 
-「App 已損毀，無法打開」是 Gatekeeper 對未簽章 app 的反應，跟上面的 TCC 無關。解法在 README 安裝段：系統設定 › 隱私與安全性 › 仍要打開，或 `xattr -dr com.apple.quarantine /Applications/Fledge.app`。用 `curl` 腳本裝的不會遇到。
+「App 已損毀，無法打開」是 Gatekeeper 對未經 Apple 公證（notarization）的 app 的反應，跟上面的 TCC 無關。解法在 README 安裝段：系統設定 › 隱私與安全性 › 仍要打開，或 `xattr -dr com.apple.quarantine /Applications/Fledge.app`。用 `curl` 腳本裝的不會遇到。

@@ -46,9 +46,7 @@ Download `Fledge_*_aarch64.dmg` from [Releases](https://github.com/dreamfind1021
 
 > ⚠ **If macOS says "Fledge was blocked from accessing Contacts/Calendar", don't worry.** Fledge doesn't have — and doesn't need — those permissions. Claude Code is a child process of Fledge, so when any program it launches (Chrome, say) casually probes Contacts, macOS charges it to Fledge and blocks it outright. Only that side query is blocked; the main job still completes.
 >
-> **The only permission you may need to grant by hand is "Full Disk Access"**, and only when Claude Code inside Fledge needs to read protected paths like `~/Library/…`. Grant it to **Fledge.app** (not `claude`). For now, the grant silently stops working after every update — toggle it off and on again. Full explanation and how to verify it yourself: [`guides/macos-permissions.en.md`](guides/macos-permissions.en.md).
-
-<!-- After ticket 22 lands: change "toggle it off and on again after every update" to "grant it once", and delete this comment -->
+> **The only permission you may need to grant by hand is "Full Disk Access"**, and only when Claude Code inside Fledge needs to read protected paths like `~/Library/…`. Grant it to **Fledge.app** (not `claude`). You only grant it once — updates keep it. If you're coming from 1.9.0 or earlier, turn it on once more after updating, because the signing changed. Full explanation and how to verify it yourself: [`guides/macos-permissions.en.md`](guides/macos-permissions.en.md).
 
 ## Quick start
 
@@ -244,7 +242,6 @@ For packaging into `.app`/`.dmg`, see [`scripts/`](scripts/); CI is in [`.github
 
 **Planned:**
 
-- **A stable signing identity** — so Full Disk Access stops silently expiring on every update.
 - **Apple signing + notarization** — currently unsigned.
 - **Pricing gaps in the dashboard** — long-context tiers and fast-mode pricing aren't counted yet, so costs are underestimated.
 - **Re-check the backup list** — confirm that everything under `~/.claude` that should be included actually is.
