@@ -14,6 +14,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# 先確認簽章憑證在不在：下面打包 sidecar 要好幾分鐘，沒憑證的話要等到 tauri build 才失敗（票 22）
+bash scripts/check-signing-identity.sh
+
 echo "=== 1/2 打包 sidecar binary（onedir + ad-hoc 簽 → src-tauri/binaries/）==="
 ( cd sidecar && ./build_binary.sh )
 

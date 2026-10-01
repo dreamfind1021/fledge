@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "bash scripts/check-signing-identity.sh && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -26,7 +26,7 @@
     "active": true,
     "targets": ["dmg", "app"],
     "resources": { "binaries/fledge-sidecar": "fledge-sidecar" },
-    "macOS": { "signingIdentity": "-" },
+    "macOS": { "signingIdentity": "Fledge Self-Signed" },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

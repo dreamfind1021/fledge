@@ -47,22 +47,31 @@ Operation not permitted
 
 **Pick Fledge.app, not `claude`.** Same reason as above — TCC looks at the top-level app. This is the part people get wrong most often.
 
-### The grant expires after every update
+### Grant it once (1.9.1 and later)
 
-Fledge is currently ad-hoc signed. For an ad-hoc-signed app, TCC records the grant against the hash of that specific binary; every rebuild changes the hash, and TCC no longer recognizes it as the same app. The result: **the grant is void, but the switch in System Settings still shows as on.**
+When TCC records a grant, it also records a rule for "what counts as the same app", and checks every later request against that rule.
 
-The symptom: Full Disk Access looks enabled, yet reading `~/Library` still returns `Operation not permitted`. The log shows records like:
+- **1.9.0 and earlier** were ad-hoc signed, so the rule pinned the hash of that specific binary. Every rebuild changes the hash, so after an update the rule no longer matched and the grant stopped working.
+- **From 1.9.1** Fledge is signed with a stable self-signed certificate, so the rule pins the certificate. Updates keep the same certificate, so the grant stays.
+
+**Coming from 1.9.0 or earlier**: the old and new rules differ, so after the first update turn Fledge's Full Disk Access on once more in System Settings. After that, you're done.
+
+**Exception: running a differently signed Fledge on the same Mac**, such as one you built from source with ad-hoc signing. The moment it touches a protected path, TCC records a denial that replaces the existing grant: the switch in System Settings turns **off**, and reading `~/Library` returns `Operation not permitted`. Turn it back on in System Settings. The log shows records like:
 
 ```
 tccd: Failed to match existing code requirement for subject dev.fledge.app and service kTCCServiceSystemPolicyAllFiles
 ```
 
-**Workaround for now**: after an update, go to System Settings and toggle Fledge's Full Disk Access off and back on. If you ever enabled "App Management", do the same there.
+If you ever enabled "App Management", do the same there.
 
-**The real fix**: sign with a stable identity, so TCC records the certificate rather than a hash. It's on the roadmap; once it lands, this section shrinks to "grant it once".
+**Check it yourself**:
 
-<!-- Update this section after ticket 22 lands -->
+```bash
+codesign -d -r- /Applications/Fledge.app
+```
+
+`certificate leaf = H"…"` means the stable identity; `cdhash H"…"` means the old ad-hoc signature.
 
 ## 3. Gatekeeper is a separate matter
 
-"App is damaged and can't be opened" is Gatekeeper reacting to an unsigned app; it has nothing to do with the TCC story above. The fix is in the README's install section: System Settings › Privacy & Security › Open Anyway, or `xattr -dr com.apple.quarantine /Applications/Fledge.app`. Installing with the `curl` script never hits it.
+"App is damaged and can't be opened" is Gatekeeper reacting to an app that hasn't been notarized by Apple; it has nothing to do with the TCC story above. The fix is in the README's install section: System Settings › Privacy & Security › Open Anyway, or `xattr -dr com.apple.quarantine /Applications/Fledge.app`. Installing with the `curl` script never hits it.

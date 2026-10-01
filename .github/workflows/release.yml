@@ -3,6 +3,12 @@ on:
   push:
     tags: ['v*']
 
+# 同一個 tag 的執行排隊、不互相取消（票 22）。它只協調 Actions 執行之間，不鎖 GitHub 介面上的
+# 操作——所以 workflow 也不自動刪任何 Release（見 Verify + package 與 Publish 的註解）。
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: macos-14            # Apple Silicon (arm64)
@@ -10,6 +16,9 @@ jobs:
       contents: write            # 建/編輯 release
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 自建簽章憑證「Fledge Self-Signed」的 SHA-1 指紋（公開資訊；票 22）。憑證一換，這裡、
+      # 兩個 secret、維護者筆記（docs/guides/signing-certificate.md）都要跟著換。
+      EXPECTED_SIGNING_CERT_SHA1: '58fc82cf556c77f97577a6e040d8226b21f71029'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,6 +38,20 @@ jobs:
           echo "tag base=$BASE conf=$CONF"
           [ "$BASE" = "$CONF" ] || { echo "::error::tag base $BASE != conf $CONF"; exit 1; }
 
+      - name: Refuse existing release
+        run: |
+          set -euo pipefail
+          # 這個 tag 已經有 Release（不論草稿或已發布）就停，什麼都不碰（票 22）。
+          # 用列表 API 連草稿一起查——用 tag 查 Release 的端點看不到草稿。
+          # 查詢本身失敗（網路、權限）會讓指令替換失敗、set -e 讓整步失敗，不會被當成「沒有」。
+          FOUND=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq ".[] | select(.tag_name == \"${GITHUB_REF_NAME}\") | .draft")
+          if [ -n "${FOUND}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 已經有 Release，不重跑。已發布的不重發，要重發請升版號；草稿請先到 https://github.com/${GITHUB_REPOSITORY}/releases 確認後手動刪除，再重跑。"
+            echo "查到的 draft 欄位：${FOUND}"
+            exit 1
+          fi
+
       - name: Build sidecar (onedir + nested codesign)
         run: |
           cd sidecar
@@ -38,15 +61,84 @@ jobs:
 
       - run: npm ci
 
-      - name: Tauri build + draft release
-        uses: tauri-apps/tauri-action@v0
+      - name: Import signing certificate
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}   # tauri-action 建 release 用（gh CLI 另吃 job-level GH_TOKEN）
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Fledge ${{ github.ref_name }}'
-          releaseDraft: true
-          args: --target aarch64-apple-darwin
+          FLEDGE_SIGNING_P12_BASE64: ${{ secrets.FLEDGE_SIGNING_P12_BASE64 }}
+          FLEDGE_SIGNING_P12_PASSWORD: ${{ secrets.FLEDGE_SIGNING_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # 把自建簽章憑證匯入臨時鑰匙圈，讓 tauri build 用設定檔裡的名稱簽章（票 22）。
+          # 不能交給 Tauri 的 APPLE_CERTIFICATE：它只認 Apple 前綴的憑證名稱，找不到自建憑證。
+          # 排在相依套件裝完之後：鑰匙圈解鎖後，同一個 job 裡的任何程式都能叫 codesign 用它
+          # （step env 不是私鑰的隔離邊界），所以把這段時間壓到只剩打包本身。
+          : "${FLEDGE_SIGNING_P12_BASE64:?缺少 secret FLEDGE_SIGNING_P12_BASE64}"
+          : "${FLEDGE_SIGNING_P12_PASSWORD:?缺少 secret FLEDGE_SIGNING_P12_PASSWORD}"
+          NAME=$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['bundle']['macOS']['signingIdentity'])")
+          P12="${RUNNER_TEMP}/fledge-signing.p12"
+          KC="${RUNNER_TEMP}/fledge-signing.keychain-db"
+          # 先裝 trap 再建任何檔案：.p12 無論成敗都刪；失敗時連鑰匙圈一起刪。
+          # 成功時鑰匙圈交給 Remove signing keychain 在打包後刪。
+          cleanup() {
+            status=$?
+            rm -f "${P12}"
+            if [ "${status}" -ne 0 ]; then
+              security delete-keychain "${KC}" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+          printf '%s' "${FLEDGE_SIGNING_P12_BASE64}" | base64 --decode > "${P12}"
+          KC_PASS=$(uuidgen)
+          security create-keychain -p "${KC_PASS}" "${KC}"
+          security unlock-keychain -p "${KC_PASS}" "${KC}"
+          security set-keychain-settings "${KC}"
+          security import "${P12}" -k "${KC}" -P "${FLEDGE_SIGNING_P12_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KC_PASS}" "${KC}" >/dev/null
+          # 搜尋清單保留原有的、再加上這一個：tauri build 用名稱簽章時走搜尋清單
+          LIST=$(security list-keychains -d user)
+          KEYCHAINS=()
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%\"}"
+            line="${line#\"}"
+            if [ -n "${line}" ]; then KEYCHAINS+=("${line}"); fi
+          done <<<"${LIST}"
+          security list-keychains -d user -s ${KEYCHAINS[@]+"${KEYCHAINS[@]}"} "${KC}"
+          IDS=$(security find-identity -p codesigning "${KC}")
+          grep -Fq "\"${NAME}\"" <<<"${IDS}" || { echo "::error::匯入後在鑰匙圈裡找不到「${NAME}」"; exit 1; }
+          echo "SIGNING_KEYCHAIN=${KC}" >> "${GITHUB_ENV}"
+
+      - name: Tauri build
+        run: |
+          set -euo pipefail
+          # 只打包、不碰 Release（票 22）：所有驗證通過後，才由 Verify + package 建草稿。
+          # 原本的 tauri-action 在草稿模式下找既有 Release 只比 tag、不管是不是草稿，
+          # 重跑已發布的 tag 時會在驗證前就把產物傳進公開 Release。
+          npm run tauri build -- --target aarch64-apple-darwin
+
+      - name: Remove signing keychain
+        if: always()
+        run: |
+          set -euo pipefail
+          # 打包一完成就刪，縮短私鑰可用的時間（票 22）。Import 沒跑到或失敗時沒有路徑——
+          # 失敗時它自己的 trap 已經刪掉了。
+          if [ -n "${SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "${SIGNING_KEYCHAIN}"
+          fi
+
+      - name: Verify signing identity
+        run: |
+          set -euo pipefail
+          # 發出去的 app 必須是這張憑證簽的（票 22）：ad-hoc 或別張憑證簽的版本，會讓所有使用者的
+          # 完整磁碟取用授權在更新後失效。codesign -d -r- 的規則印在 stdout，Executable 那行在 stderr。
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Fledge.app"
+          EXPECTED="designated => identifier \"dev.fledge.app\" and certificate leaf = H\"${EXPECTED_SIGNING_CERT_SHA1}\""
+          REQ=$(codesign -d -r- "${APP}")
+          ACTUAL=$(grep '^designated => ' <<<"${REQ}" || true)
+          if [ "${ACTUAL}" != "${EXPECTED}" ]; then
+            echo "::error::簽章身分不符。預期：${EXPECTED}"
+            echo "實際：${ACTUAL:-（沒有 designated 規則）}"
+            exit 1
+          fi
 
       - name: Verify bundle (codesign + resource path + sidecar runs)
         run: |
@@ -146,23 +238,26 @@ jobs:
 
           B="src-tauri/target/aarch64-apple-darwin/release/bundle"
           tar -czf Fledge_aarch64.app.tar.gz -C "$B/macos" Fledge.app
-          # 確認剛好一個 dmg；用實際 basename（tauri-action 命名 Fledge_<ver>_aarch64.dmg）
+          # 確認剛好一個 dmg；用實際 basename（Tauri 打包器命名 Fledge_<ver>_aarch64.dmg）
           DMG_PATH=$(ls "$B"/dmg/*.dmg)
           [ "$(printf '%s\n' "$DMG_PATH" | wc -l)" -eq 1 ] || { echo "::error::dmg 不是剛好一個"; exit 1; }
           DMG=$(basename "$DMG_PATH")
           cp "$STAGE/artifact-manifest.json" ./templates-artifact-manifest.json
           shasum -a 256 Fledge_aarch64.app.tar.gz > checksums.txt
           ( cd "$B/dmg" && shasum -a 256 "$DMG" ) >> checksums.txt
-          gh release upload "${GITHUB_REF_NAME}" "$DMG_PATH" Fledge_aarch64.app.tar.gz \
-            templates-artifact-manifest.json checksums.txt --clobber
+          # 所有驗證都過了，才第一次碰 GitHub Release（票 22）。--verify-tag：tag 不在遠端就失敗，
+          # 不讓 gh 自己從預設分支建一個 tag。可能已建立草稿、卻在上傳檔案時失敗——草稿不公開、
+          # install.sh 也看不到；workflow 不自動刪（自動刪會刪到人工建的草稿），交給人處理。
+          gh release create "${GITHUB_REF_NAME}" "$DMG_PATH" Fledge_aarch64.app.tar.gz \
+            templates-artifact-manifest.json checksums.txt \
+            --draft --verify-tag --title "Fledge ${GITHUB_REF_NAME}" --notes "" \
+            || { echo "::error::建立草稿 Release 失敗。草稿可能已建立一半：到 https://github.com/${GITHUB_REPOSITORY}/releases 確認後手動刪除，再重跑。"; exit 1; }
 
       - name: Publish release (rc → prerelease)
         run: |
+          set -euo pipefail
+          # 回報失敗不代表沒發布：可能已公開、只是回應失敗（票 22）。workflow 不自動回滾，交給人確認。
           case "${GITHUB_REF_NAME}" in
             *-rc.*) gh release edit "${GITHUB_REF_NAME}" --draft=false --prerelease ;;
             *)      gh release edit "${GITHUB_REF_NAME}" --draft=false ;;
-          esac
-
-      - name: Cleanup draft on failure
-        if: failure()
-        run: gh release delete "${GITHUB_REF_NAME}" --yes || true
+          esac || { echo "::error::發布失敗。回報失敗不代表沒發布：到 https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME} 確認實際狀態。"; exit 1; }
