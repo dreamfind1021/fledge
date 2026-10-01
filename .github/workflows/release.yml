@@ -16,6 +16,9 @@ jobs:
       contents: write            # 建/編輯 release
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 自建簽章憑證「Fledge Self-Signed」的 SHA-1 指紋（公開資訊；票 22）。憑證一換，這裡、
+      # 兩個 secret、維護者筆記（docs/guides/signing-certificate.md）都要跟著換。
+      EXPECTED_SIGNING_CERT_SHA1: '58fc82cf556c77f97577a6e040d8226b21f71029'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -58,6 +61,52 @@ jobs:
 
       - run: npm ci
 
+      - name: Import signing certificate
+        env:
+          FLEDGE_SIGNING_P12_BASE64: ${{ secrets.FLEDGE_SIGNING_P12_BASE64 }}
+          FLEDGE_SIGNING_P12_PASSWORD: ${{ secrets.FLEDGE_SIGNING_P12_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # 把自建簽章憑證匯入臨時鑰匙圈，讓 tauri build 用設定檔裡的名稱簽章（票 22）。
+          # 不能交給 Tauri 的 APPLE_CERTIFICATE：它只認 Apple 前綴的憑證名稱，找不到自建憑證。
+          # 排在相依套件裝完之後：鑰匙圈解鎖後，同一個 job 裡的任何程式都能叫 codesign 用它
+          # （step env 不是私鑰的隔離邊界），所以把這段時間壓到只剩打包本身。
+          : "${FLEDGE_SIGNING_P12_BASE64:?缺少 secret FLEDGE_SIGNING_P12_BASE64}"
+          : "${FLEDGE_SIGNING_P12_PASSWORD:?缺少 secret FLEDGE_SIGNING_P12_PASSWORD}"
+          NAME=$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['bundle']['macOS']['signingIdentity'])")
+          P12="${RUNNER_TEMP}/fledge-signing.p12"
+          KC="${RUNNER_TEMP}/fledge-signing.keychain-db"
+          # 先裝 trap 再建任何檔案：.p12 無論成敗都刪；失敗時連鑰匙圈一起刪。
+          # 成功時鑰匙圈交給 Remove signing keychain 在打包後刪。
+          cleanup() {
+            status=$?
+            rm -f "${P12}"
+            if [ "${status}" -ne 0 ]; then
+              security delete-keychain "${KC}" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+          printf '%s' "${FLEDGE_SIGNING_P12_BASE64}" | base64 --decode > "${P12}"
+          KC_PASS=$(uuidgen)
+          security create-keychain -p "${KC_PASS}" "${KC}"
+          security unlock-keychain -p "${KC_PASS}" "${KC}"
+          security set-keychain-settings "${KC}"
+          security import "${P12}" -k "${KC}" -P "${FLEDGE_SIGNING_P12_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KC_PASS}" "${KC}" >/dev/null
+          # 搜尋清單保留原有的、再加上這一個：tauri build 用名稱簽章時走搜尋清單
+          LIST=$(security list-keychains -d user)
+          KEYCHAINS=()
+          while IFS= read -r line; do
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%\"}"
+            line="${line#\"}"
+            if [ -n "${line}" ]; then KEYCHAINS+=("${line}"); fi
+          done <<<"${LIST}"
+          security list-keychains -d user -s ${KEYCHAINS[@]+"${KEYCHAINS[@]}"} "${KC}"
+          IDS=$(security find-identity -p codesigning "${KC}")
+          grep -Fq "\"${NAME}\"" <<<"${IDS}" || { echo "::error::匯入後在鑰匙圈裡找不到「${NAME}」"; exit 1; }
+          echo "SIGNING_KEYCHAIN=${KC}" >> "${GITHUB_ENV}"
+
       - name: Tauri build
         run: |
           set -euo pipefail
@@ -65,6 +114,31 @@ jobs:
           # 原本的 tauri-action 在草稿模式下找既有 Release 只比 tag、不管是不是草稿，
           # 重跑已發布的 tag 時會在驗證前就把產物傳進公開 Release。
           npm run tauri build -- --target aarch64-apple-darwin
+
+      - name: Remove signing keychain
+        if: always()
+        run: |
+          set -euo pipefail
+          # 打包一完成就刪，縮短私鑰可用的時間（票 22）。Import 沒跑到或失敗時沒有路徑——
+          # 失敗時它自己的 trap 已經刪掉了。
+          if [ -n "${SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "${SIGNING_KEYCHAIN}"
+          fi
+
+      - name: Verify signing identity
+        run: |
+          set -euo pipefail
+          # 發出去的 app 必須是這張憑證簽的（票 22）：ad-hoc 或別張憑證簽的版本，會讓所有使用者的
+          # 完整磁碟取用授權在更新後失效。codesign -d -r- 的規則印在 stdout，Executable 那行在 stderr。
+          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Fledge.app"
+          EXPECTED="designated => identifier \"dev.fledge.app\" and certificate leaf = H\"${EXPECTED_SIGNING_CERT_SHA1}\""
+          REQ=$(codesign -d -r- "${APP}")
+          ACTUAL=$(grep '^designated => ' <<<"${REQ}" || true)
+          if [ "${ACTUAL}" != "${EXPECTED}" ]; then
+            echo "::error::簽章身分不符。預期：${EXPECTED}"
+            echo "實際：${ACTUAL:-（沒有 designated 規則）}"
+            exit 1
+          fi
 
       - name: Verify bundle (codesign + resource path + sidecar runs)
         run: |

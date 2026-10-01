@@ -4,12 +4,15 @@
 **必須解析 YAML 並只看未被註解的指令**——純字串比對擋不住「把驗證那行註解掉」：
 字串還在、順序還在，測試照樣綠，但驗證已經不會執行。
 """
+import base64
 import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -185,6 +188,9 @@ def test_drift_check_actually_detects_a_drifted_seed(tmp_path: Path):
 
 _REFUSE = "Refuse existing release"
 _TAURI_BUILD = "Tauri build"
+_IMPORT = "Import signing certificate"
+_REMOVE = "Remove signing keychain"
+_VERIFY_SIGNING = "Verify signing identity"
 _PUBLISH = "Publish release (rc → prerelease)"
 _PACKAGE = "Verify + package (驗證失敗就沒有可上傳的檔案)"
 _ENV = {"GITHUB_REF_NAME": "v1.2.3", "GITHUB_REPOSITORY": "owner/repo"}
@@ -269,12 +275,15 @@ _EXPECTED_ORDER = [
     _REFUSE,
     "Build sidecar (onedir + nested codesign)",
     "npm ci",
+    _IMPORT,
     _TAURI_BUILD,
+    _REMOVE,
+    _VERIFY_SIGNING,
     "Verify bundle (codesign + resource path + sidecar runs)",
     _PACKAGE,
     _PUBLISH,
 ]
-_STRICT_STEPS = [_REFUSE, _TAURI_BUILD, _PUBLISH]
+_STRICT_STEPS = [_REFUSE, _IMPORT, _TAURI_BUILD, _REMOVE, _VERIFY_SIGNING, _PUBLISH]
 
 
 def test_release_steps_run_in_the_designed_order():
@@ -401,3 +410,277 @@ def test_failed_publish_says_it_may_have_published(tmp_path: Path):
     assert r.returncode != 0
     assert "不代表沒發布" in r.stdout
     assert "https://github.com/owner/repo/releases/tag/v1.2.3" in r.stdout
+
+
+# ---- 票 22：CI 用自建憑證簽章——匯入、打包後立刻刪鑰匙圈、發布前驗證簽章身分 ----
+
+_SIGNING_NAME = json.loads(
+    (Path(__file__).resolve().parents[2] / "src-tauri" / "tauri.conf.json").read_text(encoding="utf-8")
+)["bundle"]["macOS"]["signingIdentity"]
+_FORBIDDEN_ENV = {"APPLE_CERTIFICATE", "APPLE_CERTIFICATE_PASSWORD", "APPLE_SIGNING_IDENTITY"}
+# 刻意含空白、引號、錢字號：密碼必須原封不動交給 security import
+_P12_PASSWORD = "pa ss'\"$x"
+_LOGIN = "/Users/runner/Library/Keychains/login.keychain-db"
+_SPACED = "/Users/runner/Library/Keychains/with space.keychain-db"
+_SECURITY_STUB = """#!{python}
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ["STUB_LOG"], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(args) + "\\n")
+cmd = args[0] if args else ""
+if cmd == os.environ.get("STUB_FAIL"):
+    sys.exit(1)
+if cmd == "create-keychain":
+    Path(args[-1]).write_text("keychain", encoding="utf-8")
+elif cmd == "delete-keychain":
+    target = Path(args[-1])
+    if not target.exists():
+        sys.exit(50)
+    target.unlink()
+elif cmd == "list-keychains" and "-s" not in args:
+    print(os.environ.get("STUB_LIST", ""))
+elif cmd == "find-identity":
+    # 照真實行為：加了 -v 只列受信任的身分，自建憑證未受信任、不會出現
+    print("     0 valid identities found" if "-v" in args else os.environ.get("STUB_IDENTITIES", ""))
+"""
+
+
+def _job_env() -> dict:
+    workflow = yaml.safe_load(_workflow_path().read_text(encoding="utf-8"))
+    return workflow["jobs"]["release"].get("env") or {}
+
+
+def _security(tmp_path: Path) -> Path:
+    """有狀態的假 security：create-keychain 真的建檔、delete-keychain 真的刪檔——
+    「有沒有殘留」要看檔案在不在，不是只看參數紀錄。每次呼叫記一行 JSON。"""
+    _fake_bin(tmp_path, "security", _SECURITY_STUB.format(python=sys.executable))
+    return tmp_path / "security-calls.jsonl"
+
+
+def _security_calls(log: Path) -> list[list[str]]:
+    if not log.exists():
+        return []
+    return [json.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln]
+
+
+def _import_env(tmp_path: Path, **overrides) -> dict:
+    runner_temp = tmp_path / "runner_temp"
+    runner_temp.mkdir(exist_ok=True)
+    github_env = tmp_path / "github_env"
+    github_env.touch()
+    env = {
+        "RUNNER_TEMP": str(runner_temp),
+        "GITHUB_ENV": str(github_env),
+        "FLEDGE_SIGNING_P12_BASE64": base64.b64encode(b"fake-p12").decode(),
+        "FLEDGE_SIGNING_P12_PASSWORD": _P12_PASSWORD,
+        "STUB_LOG": str(tmp_path / "security-calls.jsonl"),
+        "STUB_LIST": f'    "{_LOGIN}"\n    "{_SPACED}"',
+        "STUB_IDENTITIES": f'  1) {"A" * 40} "{_SIGNING_NAME}" (CSSMERR_TP_NOT_TRUSTED)',
+    }
+    env.update(overrides)
+    return env
+
+
+def _run_import(tmp_path: Path, **overrides):
+    _security(tmp_path)
+    env = _import_env(tmp_path, **overrides)
+    # 步驟從 repo 根目錄讀 tauri.conf.json 的憑證名稱，所以 cwd 要是 repo 根目錄
+    r = _run_step(_IMPORT, tmp_path, env, cwd=Path(__file__).resolve().parents[2])
+    temp = Path(env["RUNNER_TEMP"])
+    return r, temp / "fledge-signing.p12", temp / "fledge-signing.keychain-db", Path(env["GITHUB_ENV"])
+
+
+def test_import_succeeds_and_hands_keychain_over(tmp_path: Path):
+    r, p12, keychain, github_env = _run_import(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    calls = _security_calls(tmp_path / "security-calls.jsonl")
+    assert [c[0] for c in calls] == [
+        "create-keychain", "unlock-keychain", "set-keychain-settings", "import",
+        "set-key-partition-list", "list-keychains", "list-keychains", "find-identity"]
+    imp = next(c for c in calls if c[0] == "import")
+    assert "-P" in imp and imp[imp.index("-P") + 1] == _P12_PASSWORD, "密碼沒有原封不動交給 security import"
+    assert "-T" in imp and imp[imp.index("-T") + 1] == "/usr/bin/codesign", "要預先允許 codesign 使用這把金鑰"
+    set_list = [c for c in calls if c[0] == "list-keychains" and "-s" in c][0]
+    assert set_list[set_list.index("-s") + 1:] == [_LOGIN, _SPACED, str(keychain)], \
+        "搜尋清單沒有完整保留原有的鑰匙圈（含路徑有空白的）"
+    assert not p12.exists(), ".p12 匯入後必須刪掉"
+    assert keychain.exists(), "成功時鑰匙圈要留給 tauri build 用"
+    assert f"SIGNING_KEYCHAIN={keychain}" in github_env.read_text(encoding="utf-8")
+
+
+def test_import_requires_the_p12_secret(tmp_path: Path):
+    r, *_ = _run_import(tmp_path, FLEDGE_SIGNING_P12_BASE64="")
+    assert r.returncode != 0
+    assert "FLEDGE_SIGNING_P12_BASE64" in r.stderr
+    assert _security_calls(tmp_path / "security-calls.jsonl") == []
+
+
+def test_import_requires_the_password_secret(tmp_path: Path):
+    r, *_ = _run_import(tmp_path, FLEDGE_SIGNING_P12_PASSWORD="")
+    assert r.returncode != 0
+    assert "FLEDGE_SIGNING_P12_PASSWORD" in r.stderr
+    assert _security_calls(tmp_path / "security-calls.jsonl") == []
+
+
+def test_import_cleans_up_when_decoding_fails(tmp_path: Path):
+    _fake_bin(tmp_path, "base64", "#!/bin/sh\nexit 1\n")
+    r, p12, keychain, github_env = _run_import(tmp_path)
+    assert r.returncode != 0
+    assert not p12.exists()
+    assert not keychain.exists()
+    assert "SIGNING_KEYCHAIN" not in github_env.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("failing", [
+    "unlock-keychain", "set-keychain-settings", "import", "set-key-partition-list", "list-keychains"])
+def test_import_cleans_up_when_a_step_fails(tmp_path: Path, failing: str):
+    r, p12, keychain, github_env = _run_import(tmp_path, STUB_FAIL=failing)
+    assert r.returncode != 0
+    assert not p12.exists(), f"{failing} 失敗後 .p12 留在磁碟上"
+    assert not keychain.exists(), f"{failing} 失敗後鑰匙圈沒刪（後面的步驟拿不到路徑）"
+    assert "SIGNING_KEYCHAIN" not in github_env.read_text(encoding="utf-8")
+
+
+def test_import_fails_when_identity_is_not_found(tmp_path: Path):
+    r, p12, keychain, github_env = _run_import(tmp_path, STUB_IDENTITIES="")
+    assert r.returncode != 0
+    assert not p12.exists()
+    assert not keychain.exists()
+    assert "SIGNING_KEYCHAIN" not in github_env.read_text(encoding="utf-8")
+
+
+def test_remove_keychain_deletes_what_import_handed_over(tmp_path: Path):
+    log = _security(tmp_path)
+    keychain = tmp_path / "fledge-signing.keychain-db"
+    keychain.write_text("keychain", encoding="utf-8")
+    r = _run_step(_REMOVE, tmp_path, {"SIGNING_KEYCHAIN": str(keychain), "STUB_LOG": str(log)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not keychain.exists()
+
+
+def test_remove_keychain_is_a_no_op_without_a_keychain(tmp_path: Path):
+    log = _security(tmp_path)
+    r = _run_step(_REMOVE, tmp_path, {"STUB_LOG": str(log)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _security_calls(log) == []
+
+
+def test_remove_keychain_always_runs():
+    assert _step(_REMOVE).get("if") == "always()", "打包失敗時也要刪鑰匙圈"
+
+
+def _codesign(tmp_path: Path, stdout: str, rc: int = 0) -> None:
+    out = tmp_path / "codesign-stdout.txt"
+    out.write_text(stdout, encoding="utf-8")
+    _fake_bin(tmp_path, "codesign",
+              f'#!/bin/sh\necho "Executable=/x/Fledge.app/Contents/MacOS/fledge" >&2\n'
+              f'cat "{out}"\nexit {rc}\n')
+
+
+def _verify(tmp_path: Path, stdout: str, rc: int = 0):
+    _codesign(tmp_path, stdout, rc)
+    return _run_step(_VERIFY_SIGNING, tmp_path,
+                     {"EXPECTED_SIGNING_CERT_SHA1": _job_env()["EXPECTED_SIGNING_CERT_SHA1"]})
+
+
+def _requirement(identifier: str = "dev.fledge.app", sha1: str | None = None) -> str:
+    sha1 = sha1 or _job_env()["EXPECTED_SIGNING_CERT_SHA1"]
+    return f'designated => identifier "{identifier}" and certificate leaf = H"{sha1}"\n'
+
+
+def test_expected_fingerprint_is_a_sha1():
+    fp = _job_env().get("EXPECTED_SIGNING_CERT_SHA1", "")
+    assert isinstance(fp, str), "指紋被 YAML 讀成數字了：值要加引號"
+    assert re.fullmatch(r"[0-9a-f]{40}", fp), "指紋要是 40 位小寫十六進位（codesign 的規則裡就是這個格式）"
+    assert fp != "0" * 40, "還是佔位值：換成維護者那張「Fledge Self-Signed」憑證的 SHA-1 指紋"
+
+
+def test_expected_fingerprint_is_quoted_in_yaml():
+    # 全是數字的指紋（包括佔位值）沒加引號會被 YAML 讀成整數，Actions 拿到的就變成 "0"
+    root = yaml.compose(_workflow_path().read_text(encoding="utf-8"))
+    found: list[yaml.ScalarNode] = []
+
+    def walk(node) -> None:
+        if isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                if isinstance(key, yaml.ScalarNode) and key.value == "EXPECTED_SIGNING_CERT_SHA1":
+                    found.append(value)
+                walk(value)
+        elif isinstance(node, yaml.SequenceNode):
+            for item in node.value:
+                walk(item)
+
+    walk(root)
+    assert len(found) == 1, f"預期恰好一處 EXPECTED_SIGNING_CERT_SHA1，找到 {len(found)}"
+    assert found[0].style in ("'", '"'), "EXPECTED_SIGNING_CERT_SHA1 的值要加引號"
+
+
+def test_verify_accepts_the_expected_signature(tmp_path: Path):
+    r = _verify(tmp_path, _requirement())
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_verify_rejects_adhoc(tmp_path: Path):
+    r = _verify(tmp_path, '# designated => cdhash H"' + "b" * 40 + '"\n')
+    assert r.returncode != 0
+
+
+def test_verify_rejects_another_certificate(tmp_path: Path):
+    r = _verify(tmp_path, _requirement(sha1="c" * 40))
+    assert r.returncode != 0
+
+
+def test_verify_rejects_another_identifier(tmp_path: Path):
+    r = _verify(tmp_path, _requirement(identifier="dev.fledge.other"))
+    assert r.returncode != 0
+
+
+def test_verify_rejects_empty_output(tmp_path: Path):
+    r = _verify(tmp_path, "")
+    assert r.returncode != 0
+
+
+def test_verify_fails_when_codesign_fails(tmp_path: Path):
+    r = _verify(tmp_path, _requirement(), rc=1)
+    assert r.returncode != 0
+
+
+def _env_and_with_keys(node) -> list[str]:
+    """workflow／job／step 各層 env 與 with 的所有 key。"""
+    keys: list[str] = []
+
+    def walk(n) -> None:
+        if isinstance(n, dict):
+            for k, v in n.items():
+                if k in ("env", "with") and isinstance(v, dict):
+                    keys.extend(v)
+                walk(v)
+        elif isinstance(n, list):
+            for item in n:
+                walk(item)
+
+    walk(node)
+    return keys
+
+
+def test_no_tauri_signing_env_anywhere():
+    # Tauri 看到 APPLE_CERTIFICATE* 會自己接手匯入，而它只認 Apple 前綴的憑證名稱、找不到自建憑證；
+    # APPLE_SIGNING_IDENTITY 會蓋掉設定檔的名稱
+    workflow = yaml.safe_load(_workflow_path().read_text(encoding="utf-8"))
+    assert not _FORBIDDEN_ENV & set(_env_and_with_keys(workflow))
+    text = _all_active_run_text()
+    assert not [k for k in _FORBIDDEN_ENV if k in text]
+
+
+def test_signing_secrets_only_reach_the_import_step():
+    workflow = yaml.safe_load(_workflow_path().read_text(encoding="utf-8"))
+    holders = [_label(s) for s in _release_steps() if "secrets.FLEDGE_SIGNING" in json.dumps(s)]
+    assert holders == [_IMPORT]
+    imp = _step(_IMPORT)
+    assert "secrets.FLEDGE_SIGNING" not in imp["run"], "secret 要經由 env 交給步驟，不要直接寫進指令"
+    assert {k for k, v in imp["env"].items() if "secrets.FLEDGE_SIGNING" in str(v)} == \
+        {"FLEDGE_SIGNING_P12_BASE64", "FLEDGE_SIGNING_P12_PASSWORD"}
+    above = {k: v for k, v in workflow.items() if k != "jobs"}
+    above["job"] = {k: v for k, v in workflow["jobs"]["release"].items() if k != "steps"}
+    assert "secrets.FLEDGE_SIGNING" not in json.dumps(above), "secret 不能放在 workflow 或 job 層級"
