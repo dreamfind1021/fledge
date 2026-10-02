@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { THEMES } from "../lib/themeIds";
-import { baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, over, token, worst } from "../testing/cssRules";
+import { DARK_THEMES, NOT_NIGHTFALL_THEMES, baseOf, cssRules, decl, hasDecl, lastDecl, lineTokenHits, over, token, worst } from "../testing/cssRules";
 
 // 記憶面板的樣式防線——票 28 第二批，spec docs/planning/soft-tiles-app-wide-design.md §3.6。
 // jsdom 不套 CSS，這裡只能讀 CSS 原始碼驗宣告；畫面由 headless 截圖與真機驗收看。
@@ -102,8 +102,9 @@ describe.each(THEMES)("%s：卡片與暗磚上的字（spec §3.5）", (theme) =
 });
 
 // 清單列選中時，徽章的半透明底疊在 --active 上（Codex daylight spec R1 點名的缺口：淺色主題第 1 版只有 4.07～4.30）。
-// 只跑淺色：午夜藍的 KMS 徽章在選中列本來就只有 3.92，是改之前的現況，本票不改午夜藍（daylight spec §6.2）
-describe.each(THEMES.filter((t) => t !== "nightfall"))("%s：選中清單列上的徽章", (theme) => {
+// 午夜藍以外都跑：午夜藍的 KMS 徽章在選中列本來就只有 3.92，是改之前的現況，票 07 不改午夜藍（daylight spec §6.2）。
+// 分界是午夜藍自己的舊值、跟深淺無關——票 40 的新深色主題要過（spec §4.2）
+describe.each(NOT_NIGHTFALL_THEMES)("%s：選中清單列上的徽章", (theme) => {
   it.each([
     ["native 徽章", ".lrow .badge.b-native"],
     ["KMS 徽章", ".lrow .badge.b-kms"],
@@ -113,10 +114,10 @@ describe.each(THEMES.filter((t) => t !== "nightfall"))("%s：選中清單列上�
   });
 });
 
-// 功能色（--ai）畫的符號：只驗午夜藍。淺色主題的功能色非文字低於 3:1 是知情接受（daylight spec §12.1）
-describe("nightfall：功能色的非文字（淺色主題知情接受）", () => {
+// 功能色（--ai）畫的符號：只驗深色主題。淺色主題的功能色非文字低於 3:1 是知情接受（daylight spec §12.1）
+describe.each(DARK_THEMES)("%s：功能色的非文字（淺色主題知情接受）", (theme) => {
   it("小籤的 ◈ 對背景至少 4.5:1", () => {
-    expect(worst(token(paintToken(".relchip .ic", "color")), cssRules(mem).paintColor(".relchip", "background"))).toBeGreaterThanOrEqual(4.5);
+    expect(worst(token(paintToken(".relchip .ic", "color"), theme), cssRules(mem, theme).paintColor(".relchip", "background"))).toBeGreaterThanOrEqual(4.5);
   });
 });
 

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { THEMES, type ThemeId } from "./lib/themeIds";
-import { contrast, over, readCss, resolveColor, rootBlock, stops, stripComments, themeBlock, themesInCss, token, tokenNames } from "./testing/cssRules";
+import { THEMES, THEME_SCHEME, type ThemeId } from "./lib/themeIds";
+import {
+  DARK_THEMES, LIGHT_THEMES, NOT_NIGHTFALL_THEMES,
+  contrast, over, readCss, resolveColor, rootBlock, stops, stripComments, themeBlock, themesInCss, token, tokenNames,
+} from "./testing/cssRules";
 
 // 主題 token 的對比防線（票 06 起；票 07 起三個主題都跑）。
 //
@@ -12,7 +15,6 @@ import { contrast, over, readCss, resolveColor, rootBlock, stops, stripComments,
 // 四級文字色（--text / --text-2 / --dim / --faint）全部納入。
 // 主題清單從 src/lib/themeIds.ts 匯入，不在測試裡再抄一份——少跑一個主題時下面的雙向比對會紅。
 const RAW = import.meta.glob("/src/**/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
-const LIGHT = THEMES.filter((t) => t !== "nightfall");
 
 // 文字實際會坐在這些底色上。--active 不在裡面，理由見下面那條測試
 const TEXT_BACKDROPS = ["bg", "sidebar", "surface", "surface-2", "hover"];
@@ -60,7 +62,7 @@ describe.each(THEMES)("%s 的文字色階", (theme) => {
 
 // 功能色拿來寫字時用 --X-text（spec §3.3）。午夜藍的 --X-text 是 --X 的別名、不加門檻：
 // 午夜藍的 --error #EF4444 對 --surface 只有 4.38，那是現況，本票不改午夜藍（spec §6.2，Codex spec R1）
-describe.each(LIGHT)("%s 的文字用功能色", (theme) => {
+describe.each(NOT_NIGHTFALL_THEMES)("%s 的文字用功能色", (theme) => {
   it.each(FUNCTIONAL.flatMap((k) => [...TEXT_BACKDROPS, "active"].map((bg) => [k, bg])))(
     "--%s-text 對 --%s 至少 4.5:1",
     (k, bg) => {
@@ -76,9 +78,14 @@ describe.each(LIGHT)("%s 的文字用功能色", (theme) => {
     expect(contrast(token(`${k}-text`, theme), tinted)).toBeGreaterThanOrEqual(4.5);
   });
 
-  // 終端機裡全是字，亮色也是：xterm 預設把粗體畫成亮色（Codex spec R2）。
-  // 午夜藍不在這組：它的 --term-black 對終端機底只有 1.6，那是刻意的「黑」，本票不改午夜藍
-  it.each(ANSI)("終端機 --term-%s 對終端機底至少 4.5:1", (c) => {
+});
+
+// 終端機裡全是字，亮色也是：xterm 預設把粗體畫成亮色（Codex daylight spec R2）。每個主題都跑——
+// 深色主題沒開最低對比調整（--term-min-contrast 1），這組是終端機彩色字唯一的守門（票 40，Codex spec R2）。
+// 黑與亮黑不在這組：深色主題的「黑」是刻意的淡（午夜藍 1.6），只對淺色要求，見下一組
+const ANSI_DARK_FAINT = ["black", "bright-black"];
+describe.each(THEMES)("%s 的終端機字色", (theme) => {
+  it.each(ANSI.filter((c) => !ANSI_DARK_FAINT.includes(c)))("終端機 --term-%s 對終端機底至少 4.5:1", (c) => {
     expect(contrast(token(`term-${c}`, theme), token("term-bg", theme))).toBeGreaterThanOrEqual(4.5);
   });
 
@@ -91,6 +98,13 @@ describe.each(LIGHT)("%s 的文字用功能色", (theme) => {
   it("方塊游標底下的字對游標至少 4.5:1", () => {
     expect(contrast(token("term-cursor-accent", theme), token("term-cursor", theme))).toBeGreaterThanOrEqual(4.5);
   });
+});
+
+// 只對淺色要求的終端機門檻：黑與亮黑（深色主題的「黑」是刻意的淡）、選取色（只在淺色定義）
+describe.each(LIGHT_THEMES)("%s 的終端機（淺色）", (theme) => {
+  it.each(ANSI_DARK_FAINT)("終端機 --term-%s 對終端機底至少 4.5:1", (c) => {
+    expect(contrast(token(`term-${c}`, theme), token("term-bg", theme))).toBeGreaterThanOrEqual(4.5);
+  });
 
   // 一般背景的格子被選取時，xterm 6 的兩種繪製（WebGL、DOM）都拿「終端機底疊上選取色」的不透明結果當底色；
   // 給不透明色就原樣畫出來，**不會自動變淡**——它先算好不透明版，才替另一個繪製用不到的欄位套 30%
@@ -98,7 +112,7 @@ describe.each(LIGHT)("%s 的文字用功能色", (theme) => {
   // 選取色寫成 --term-blue 那種深藍的話，選中的藍字對比是 1:1、整段消失。
   // 門檻 3 不是 4.5：選取是暫時的，擋的是「選中就看不見」（彩色字約 3:1 是知情接受，spec §12.3）。
   // 不驗反白（SGR 7）與有明確背景色的格子：兩種繪製算法不同，DOM 下反白選取約 1.5，是知情接受（spec §12.4）。
-  // 午夜藍不在這組（xterm 預設的半透明白，本票不改）
+  // 深色主題不在這組（xterm 預設的半透明白，不定義 --term-selection）
   it.each(["text", ...ANSI])("選取中的 --term-%s 對選取色至少 3:1", (c) => {
     expect(contrast(token(`term-${c}`, theme), token("term-selection", theme))).toBeGreaterThanOrEqual(3);
   });
@@ -106,17 +120,17 @@ describe.each(LIGHT)("%s 的文字用功能色", (theme) => {
 
 // 淺色主題開 xterm 的 minimumContrastRatio（spec §12.5）：Claude Code 深色主題用 RGB 寫死的次要字 #999999
 // 在淺色終端機底上約 2.5，Fledge 的 token 管不到；xterm 會把不到門檻的字調到門檻。
-// 午夜藍是 1＝xterm 預設、不調色：Claude Code 深色主題本來就是為深底設計的，本票不改午夜藍
+// 深色主題是 1＝xterm 預設、不調色：Claude Code 深色主題本來就是為深底設計的（午夜藍維持現況；票 40 的新深色主題同理由比照）
 describe("終端機的最低文字對比", () => {
   const minContrast = (theme: ThemeId) => Number(/--term-min-contrast:\s*([^;]*);/.exec(themeBlock(theme))?.[1]);
-  it("午夜藍是 1（xterm 預設，畫面不變）", () => {
-    expect(minContrast("nightfall")).toBe(1);
+  it.each(DARK_THEMES)("%s 是 1（xterm 預設，不調色）", (theme) => {
+    expect(minContrast(theme)).toBe(1);
   });
-  // 放在這組：同樣是「午夜藍維持 xterm 預設」（spec §12.6）
-  it("午夜藍的方塊游標字色是 #000000（xterm 預設，畫面不變）", () => {
-    expect(token("term-cursor-accent", "nightfall")).toBe("#000000");
+  // 放在這組：同樣是「深色主題維持 xterm 預設」（daylight spec §12.6）
+  it.each(DARK_THEMES)("%s 的方塊游標字色是 #000000（xterm 預設）", (theme) => {
+    expect(token("term-cursor-accent", theme)).toBe("#000000");
   });
-  it.each(LIGHT)("%s 至少 4.5", (theme) => {
+  it.each(LIGHT_THEMES)("%s 至少 4.5", (theme) => {
     expect(minContrast(theme)).toBeGreaterThanOrEqual(4.5);
   });
 });
@@ -127,8 +141,9 @@ describe("主題區塊的 token 集合", () => {
   // 唯一的例外：選取色只在淺色定義，午夜藍不定義 → 讀到空字串 → xterm 用預設的半透明白（spec §3.5）
   const LIGHT_ONLY = ["term-selection"];
 
-  it.each(LIGHT)("%s 的 token ＝ 午夜藍的 token ＋ 只在淺色的例外", (theme) => {
-    expect([...tokenNames(themeBlock(theme))].sort()).toEqual([...nightfall, ...LIGHT_ONLY].sort());
+  it.each(THEMES)("%s 的 token ＝ 午夜藍的 token（淺色另加只在淺色的例外）", (theme) => {
+    const expected = THEME_SCHEME[theme] === "light" ? [...nightfall, ...LIGHT_ONLY] : [...nightfall];
+    expect([...tokenNames(themeBlock(theme))].sort()).toEqual(expected.sort());
   });
 
   it("午夜藍不定義只在淺色的例外", () => {
@@ -146,6 +161,15 @@ describe("主題區塊的 token 集合", () => {
   });
 });
 
+// 深淺寫了兩份：CSS 的 color-scheme 給 WebKit 畫原生元件（捲軸、<select>），THEME_SCHEME 給原生視窗外觀與測試分組（票 40，spec §4.1）。
+// 兩份要一致：表寫深、CSS 寫淺（或反過來）時，標題列和捲軸會是兩種顏色，測試分組也會拿錯的規則驗它
+describe("每個主題的 color-scheme ＝ THEME_SCHEME", () => {
+  it.each(THEMES)("%s", (theme) => {
+    const m = /(?:^|[;{\s])color-scheme:\s*([a-z]+)\s*;/.exec(themeBlock(theme));
+    expect(m?.[1], `${theme} 區塊的 color-scheme`).toBe(THEME_SCHEME[theme]);
+  });
+});
+
 // 看不懂的 data-theme（localStorage 被外力改壞）要退回午夜藍，而不是一片沒有顏色的首幀——
 // index.html 的啟動腳本不驗證，靠的就是這一條（spec §4.2）
 describe("看不懂的主題退回午夜藍", () => {
@@ -154,11 +178,12 @@ describe("看不懂的主題退回午夜藍", () => {
   });
 });
 
-// 淺色主題能不能生效，不能靠區塊在 index.css 裡的先後順序（票 38）：午夜藍掛在 :root（權重 0,1,0），
-// 淺色若只寫 [data-theme="…"] 也是 0,1,0，權重相同就是寫在後面的贏——有人把午夜藍的區塊搬到檔尾，
-// 淺色使用者整片變回午夜藍，而上面每一條測試都只讀區塊內容，照樣全綠。淺色帶上 :root（0,2,0）之後，區塊怎麼排都是淺色贏
-describe("淺色主題的選擇器不靠區塊順序", () => {
-  it.each(LIGHT)("%s 的區塊寫成 :root[data-theme=…]", (theme) => {
+// 午夜藍以外的主題能不能生效，不能靠區塊在 index.css 裡的先後順序（票 38）：午夜藍掛在 :root（權重 0,1,0），
+// 其他主題若只寫 [data-theme="…"] 也是 0,1,0，權重相同就是寫在後面的贏——有人把午夜藍的區塊搬到檔尾，
+// 那些使用者整片變回午夜藍，而上面每一條測試都只讀區塊內容，照樣全綠。帶上 :root（0,2,0）之後，區塊怎麼排都是它贏。
+// 分界是「不是午夜藍」（午夜藍兼任看不懂時的退路），跟深淺無關（票 40）
+describe("午夜藍以外的主題的選擇器不靠區塊順序", () => {
+  it.each(NOT_NIGHTFALL_THEMES)("%s 的區塊寫成 :root[data-theme=…]", (theme) => {
     expect(stripComments(readCss("/src/index.css"))).toMatch(new RegExp(`(^|\\})\\s*:root\\[data-theme="${theme}"\\]\\s*\\{`));
   });
 });

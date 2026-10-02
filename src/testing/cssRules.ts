@@ -8,9 +8,18 @@
 //   - 塗色查詢（paintToken／paintColor／paintColors）用 cssRules(text) 綁定一段 CSS
 //
 // 用 vite 的 import.meta.glob 而非 node:fs——本專案沒有 @types/node（同 lib/sourceHygiene.test.ts）。
-import { DEFAULT_THEME, type ThemeId } from "../lib/themeIds";
+import { DEFAULT_THEME, THEMES, THEME_SCHEME, type ThemeId } from "../lib/themeIds";
 
 const RAW = import.meta.glob("/src/**/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+
+// 測試要排除某些主題時用這三組（票 40，spec docs/superpowers/specs/2026-10-02-cocoa-iron-themes-design.md §4.3）。
+// 選哪一組看「排除的理由」，而且理由只涵蓋幾條斷言就只豁免那幾條：
+//   - 理由是深色與淺色的本質差異（淺色才有選取色、深色的「黑」本來就淡）→ DARK_THEMES／LIGHT_THEMES
+//   - 理由是午夜藍自己的舊值（票 07 不改午夜藍），或午夜藍兼任「看不懂時的退路」→ NOT_NIGHTFALL_THEMES。跟深淺無關，不要拿 LIGHT_THEMES 代替
+//   - 沒有理由 → THEMES
+export const DARK_THEMES = THEMES.filter((t) => THEME_SCHEME[t] === "dark");
+export const LIGHT_THEMES = THEMES.filter((t) => THEME_SCHEME[t] === "light");
+export const NOT_NIGHTFALL_THEMES = THEMES.filter((t) => t !== "nightfall");
 
 export const readCss = (path: string) => {
   const text = RAW[path];

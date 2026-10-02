@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { THEMES, type ThemeId } from "../lib/themeIds";
-import { baseLevel, cssRules, readCss, resolveColor, stops, stripComments, token, worst } from "../testing/cssRules";
+import { DARK_THEMES, baseLevel, cssRules, readCss, resolveColor, stops, stripComments, token, worst } from "../testing/cssRules";
 
 // 待辦面板的顏色對比防線。
 //
@@ -180,16 +180,16 @@ const TEXT: [string, string, string, Backdrop][] = [
     ["樹的軌道數字（進行中段）", ".tree-num", "color", "doingSeg"],
 ];
 
-// 功能色（--primary 等）畫的非文字：只驗午夜藍。淺色主題的功能色非文字低於 3:1 是知情接受（spec §12.1），
+// 功能色（--primary 等）畫的非文字：只驗深色主題。淺色主題的功能色非文字低於 3:1 是知情接受（spec §12.1），
 // 這兩條放進下面的迴圈在淺色必紅，所以分開
 const FUNCTIONAL_NONTEXT: [string, string, string, Backdrop][] = [
   ["doing 實心方", ".tk-mark.is-doing::before", "background", "tileDoing"],
   ["指令已複製的勾", ".tasks-cmd-act.is-done", "color", "cmdRow"],
 ];
-describe("nightfall：功能色的非文字（淺色主題知情接受）", () => {
-  const B = backdropsOf("nightfall");
+describe.each(DARK_THEMES)("%s：功能色的非文字（淺色主題知情接受）", (theme) => {
+  const B = backdropsOf(theme);
   it.each(FUNCTIONAL_NONTEXT)("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {
-    expect(worst(token(paintToken(selector, prop)), B[backdrop])).toBeGreaterThanOrEqual(3);
+    expect(worst(token(paintToken(selector, prop), theme), B[backdrop])).toBeGreaterThanOrEqual(3);
   });
 });
 
