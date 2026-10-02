@@ -9,7 +9,7 @@ import { resizeSession, wsUrl } from "../lib/sidecar";
 import { useAppStore } from "../store/useAppStore";
 import { shouldReconnect, nextDelay, MAX_RECONNECT_ATTEMPTS } from "../lib/wsReconnect";
 import { recordActivity, clearActivity } from "../lib/activityTracker";
-import { followTheme, readTermMinContrast, readTermTheme } from "../styles/term-theme";
+import { createImeGhost, followTheme, readTermMinContrast, readTermTheme } from "../styles/term-theme";
 import { ImeReplayGuard } from "../lib/imeReplayGuard";
 import { ImeDraftTracker } from "../lib/imeDraftTracker";
 import { FlowController, type FlowSignal } from "../lib/flowControl";
@@ -222,12 +222,7 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
     // 幽靈草稿（接線）：純視覺、不進 PTY。掛 .xterm-helpers＝與 helper textarea 同座標系，
     // 其 style.left/top 即游標座標；懸置當下定格、第一個互動移除，偏移屬可接受的暫態。
     const imeDraft = new ImeDraftTracker();
-    const imeGhost = document.createElement("div");
-    imeGhost.style.cssText =
-      "position:absolute;pointer-events:none;z-index:2;display:none;white-space:pre;" +
-      "opacity:0.55;border-bottom:1px dashed currentColor;" +
-      "font-family:JetBrains Mono,ui-monospace,monospace;font-size:13px;";
-    imeGhost.style.color = readTermTheme().foreground ?? "#ccc";
+    const imeGhost = createImeGhost();
     term.element?.querySelector(".xterm-helpers")?.appendChild(imeGhost);
     // 切主題時這個終端機跟著換色（票 07）；清理時取消訂閱，不再碰已經 dispose 的 xterm
     const stopFollowingTheme = followTheme(term, imeGhost);
