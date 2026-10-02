@@ -15,9 +15,9 @@ export function NoteEditor({ port, project, note, onSaved, onLeave, leaveRequest
 }) {
   // 基準（內文與 fingerprint）在掛載時快照一次：父層之後 rerender 傳來的 note 不改變「髒」的判定，
   // 送出的也永遠是「內容所基於的那版」的 fingerprint（spec §7.2 同一條原則；key 綁專案，換專案整個重掛）
-  const base = useRef(note.content ?? "");
+  const [base] = useState(note.content ?? "");
   const [baseFp] = useState(note.fingerprint);
-  const [content, setContent] = useState(base.current);
+  const [content, setContent] = useState(base);
   const [saving, setSaving] = useState(false);
   // 三種橫幅互斥、同一個 state：unsaved（離開前確認）／conflict（409）／error（其他失敗）
   const [banner, setBanner] = useState<null | "unsaved" | "conflict" | "error">(null);
@@ -25,7 +25,7 @@ export function NoteEditor({ port, project, note, onSaved, onLeave, leaveRequest
   // 409 的復原是「先複製、再重新載入」，第二步就這樣消失（TaskEditor 已經踩過同一個坑）
   const [copied, setCopied] = useState(false);
   // 沒有草稿要 flush，「髒」直接從內容算，不另開 state
-  const dirty = content !== base.current;
+  const dirty = content !== base;
 
   // 這次離開是誰發起的（onLeave 第二個參數）——與 TaskEditor **完全相同**的機制（spec §5.7、Codex R5）：
   // 父層的 leaveRequest → "request"，父層才套用被攔下的導覽；自己的取消 → "self"，父層只結束編輯。
