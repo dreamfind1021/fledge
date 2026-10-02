@@ -207,7 +207,7 @@ describe("測試工具的主題參數", () => {
   });
   // 兩個成分各自都要用指定主題：只比「跟午夜藍不同」的話，漏傳其中一個成分也會不同而假綠
   const mix = (a: string, b: string, p: number) =>
-    "#" + [1, 3, 5].map((i) => Math.round(parseInt(a.slice(i, i + 2), 16) * p + parseInt(b.slice(i, i + 2), 16) * (1 - p)).toString(16).padStart(2, "0")).join("").toUpperCase();
+    "rgb(" + [1, 3, 5].map((i) => Number((parseInt(a.slice(i, i + 2), 16) * p + parseInt(b.slice(i, i + 2), 16) * (1 - p)).toFixed(6))).join(" ") + ")";
   it("resolveColor 的 color-mix 遞迴用的是指定主題（兩個成分都是）", () => {
     expect(resolveColor("color-mix(in srgb, var(--primary) 50%, var(--bg))", light)).toBe(mix(token("primary", light), token("bg", light), 0.5));
   });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { THEMES, type ThemeId } from "../lib/themeIds";
-import { DARK_THEMES, baseLevel, cssRules, readCss, resolveColor, stops, stripComments, token, worst } from "../testing/cssRules";
+import { DARK_THEMES, baseLevel, contrast, cssRules, readCss, resolveColor, stops, stripComments, token, worst } from "../testing/cssRules";
 
 // 待辦面板的顏色對比防線。
 //
@@ -62,13 +62,21 @@ describe("待辦面板的顏色對比：測試工具", () => {
   // helper 自己的防線：數字取自 spec §11.9（另以 Python 獨立算過）
   it("resolveColor：var、color-mix；stops：漸層每一站；認不得就炸", () => {
     expect(resolveColor("var(--surface)")).toBe(token("surface"));
-    expect(resolveColor("color-mix(in srgb, var(--primary) 38%, var(--surface-2))")).toBe("#705541");
-    expect(stops("linear-gradient(135deg, color-mix(in srgb, var(--primary) 16%, var(--sidebar)), var(--sidebar) 70%)")).toEqual(["#342C28", token("sidebar")]);
+    // 混色結果不取整（票 40 Codex 最終審查 R1）：取整成 #705541、#342C28 會讓貼著門檻的對比被算成過關
+    expect(resolveColor("color-mix(in srgb, var(--primary) 38%, var(--surface-2))")).toBe("rgb(111.7 85.46 64.76)");
+    expect(stops("linear-gradient(135deg, color-mix(in srgb, var(--primary) 16%, var(--sidebar)), var(--sidebar) 70%)")).toEqual(["rgb(51.8 43.76 39.96)", token("sidebar")]);
     expect(stops("var(--surface)")).toEqual([token("surface")]);
     expect(() => resolveColor("linear-gradient(135deg, var(--surface), var(--bg))")).toThrow();
     expect(() => resolveColor("rgba(0,0,0,.5)")).toThrow();
     // 兩邊都寫百分比：CSS 要正規化、總和不足 100% 還會變半透明——這裡不支援，要炸而不是靜默忽略第二個（Codex final R1）
     expect(() => resolveColor("color-mix(in srgb, var(--primary) 30%, var(--surface) 30%)")).toThrow();
+  });
+
+  // 濃巧棕選中列的 KMS 徽章：字 #B3A9FE、底是 --ai 18% 疊在 --active ＝ rgb(85.36 63.98 76.24)，照小數算是 4.4995；
+  // 先把底取整成 #55404C 會算成 4.5068 而過關。WCAG 不准把低於門檻的對比四捨五入成過關（票 40 Codex 最終審查 R1）
+  it("contrast 照小數通道算，不先取整", () => {
+    expect(contrast("#B3A9FE", "rgb(85.36 63.98 76.24)")).toBeLessThan(4.5);
+    expect(contrast("#B3A9FE", "#55404C")).toBeGreaterThan(4.5);
   });
 
 });
