@@ -237,3 +237,19 @@ def test_printed_block_pastes_back(theme):
     nf = dt.nightfall_tokens(dt.strip_comments(CSS))
     css = CSS.replace(_block_text(CSS, dt.theme_selector(theme)), dt.render_block(theme, dt.derive(theme, nf)))
     assert dt.check_css(css) == []
+
+
+def test_backslash_outside_string_is_named():
+    # Codex 最終審查 R1：檔首共用 :root 的結尾 } 誤打成 \}，CSS 把它當跳脫字元、那一塊沒有結束，
+    # 瀏覽器把後面整份吞進去（jsdom 實測規則從 10 條剩 1 條），這裡照原始字元切規則卻印 OK
+    anchor = "--item-py: 7px;\n}"
+    if CSS.count(anchor) != 1:   # 丟例外、不用 assert：錨點不對要顯示成例外
+        raise ValueError(anchor)
+    problems = dt.check_css(CSS.replace(anchor, "--item-py: 7px;\n\\}"))
+    assert problems == ["src/index.css 的括號或引號沒有配對好（字串外有反斜線，CSS 跳脫會讓緊接的括號、引號不算數，"
+                        "src/index.css 不支援）：瀏覽器會把後面整段吞掉，先修好語法再比對"], problems
+
+
+def test_backslash_inside_string_is_allowed():
+    # 不支援的只有字串外的反斜線；字串裡的跳脫（例如 content 的 Unicode 碼）照樣合格
+    assert dt.check_css(CSS + '\n.x::before { content: "\\2014"; }\n') == []

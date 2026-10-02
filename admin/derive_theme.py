@@ -35,10 +35,10 @@ ANSI_NEUTRAL = ["--term-black", "--term-bright-black", "--term-white", "--term-b
 ANSI_COLOR = [p + c for p in ("--term-", "--term-bright-") for c in ("red", "green", "yellow", "blue", "magenta", "cyan")]
 FUNCTIONAL = ["primary", "session", "ai", "warning", "error"]
 GLOW = "0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent)"
-LIGHT_ONLY = {"--term-selection"}
+LIGHT_ONLY = {"--term-selection"}   # 只在淺色定義的 token，同 src/index.contrast.test.ts 的 LIGHT_ONLY
 # CSS 認得的空白只有這幾個。Python 的 strip() 與 \s 還會吞掉全形空白（U+3000）、NBSP（U+00A0），瀏覽器卻把它們當一般字元，
 # 宣告或選擇器前多一個就整條失效（Codex plan R9）
-CSS_WS = " \t\r\n\f"   # 只在淺色定義的 token，同 src/index.contrast.test.ts 的 LIGHT_ONLY
+CSS_WS = " \t\r\n\f"
 
 
 # ── 色彩計算：OKLCH ↔ sRGB、WCAG 對比 ──────────────────────────────────────────
@@ -324,6 +324,10 @@ def unbalanced(css):
                 quote = None
         elif ch in "\"'":
             quote = ch
+        elif ch == "\\":
+            # 字串外的反斜線是 CSS 跳脫：`\}` 讓那個 } 不算區塊結尾，瀏覽器把後面整份吞進那一塊（Codex 最終審查 R1：
+            # 檔首共用 :root 的 } 誤打成 \}，jsdom 實測規則從 10 條剩 1 條），這裡卻照原始字元切規則。現況 0 處，直接不支援
+            return "字串外有反斜線，CSS 跳脫會讓緊接的括號、引號不算數，src/index.css 不支援"
         elif ch in "([{":
             if ch == "{" and any(c in "([" for c in stack):
                 return "大括號出現在還沒閉合的 ( 或 [ 裡"
