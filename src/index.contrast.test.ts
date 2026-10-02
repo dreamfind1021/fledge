@@ -133,6 +133,15 @@ describe("終端機的最低文字對比", () => {
   it.each(LIGHT_THEMES)("%s 至少 4.5", (theme) => {
     expect(minContrast(theme)).toBeGreaterThanOrEqual(4.5);
   });
+  // 淺色的游標兩格是「等於另一格」的規則：admin/derive_theme.py 照規則算、寫成色碼（不寫 var() 別名——term-theme.ts 用 JS 讀它們交給 xterm）。
+  // 腳本的 check 只證明「CSS＝腳本現在的輸出」；這兩條獨立於腳本，規則被改掉又重產時照樣抓得到兩格不再連動
+  // （票 37，Codex spec R1）。跟上面深色的「方塊游標字色是 #000000」對稱
+  it.each(LIGHT_THEMES)("%s 的方塊游標字色＝終端機底", (theme) => {
+    expect(token("term-cursor-accent", theme)).toBe(token("term-bg", theme));
+  });
+  it.each(LIGHT_THEMES)("%s 的游標＝--session-text", (theme) => {
+    expect(token("term-cursor", theme)).toBe(token("session-text", theme));
+  });
 });
 
 // 每個主題必須定義同一組 token：少一個就會像票 07 demo 那樣靜默壞掉（側欄的列擠成一團），只有集合比對抓得到
