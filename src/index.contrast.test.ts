@@ -154,6 +154,15 @@ describe("看不懂的主題退回午夜藍", () => {
   });
 });
 
+// 淺色主題能不能生效，不能靠區塊在 index.css 裡的先後順序（票 38）：午夜藍掛在 :root（權重 0,1,0），
+// 淺色若只寫 [data-theme="…"] 也是 0,1,0，權重相同就是寫在後面的贏——有人把午夜藍的區塊搬到檔尾，
+// 淺色使用者整片變回午夜藍，而上面每一條測試都只讀區塊內容，照樣全綠。淺色帶上 :root（0,2,0）之後，區塊怎麼排都是淺色贏
+describe("淺色主題的選擇器不靠區塊順序", () => {
+  it.each(LIGHT)("%s 的區塊寫成 :root[data-theme=…]", (theme) => {
+    expect(stripComments(readCss("/src/index.css"))).toMatch(new RegExp(`(^|\\})\\s*:root\\[data-theme="${theme}"\\]\\s*\\{`));
+  });
+});
+
 describe("主題清單與 CSS 雙向一致", () => {
   // 產品決定的三個選項（spec §2.1），不是任意清單
   it("THEMES 恰好是三個產品選項", () => {

@@ -19,7 +19,7 @@
 /* ===== 午夜藍（nightfall）=====
    同時掛在 :root：data-theme 是看不懂的值時（例如 localStorage 被外力改壞），沒有任何主題區塊對得上，
    畫面就退回午夜藍，而不是一片沒有顏色的首幀。所以 index.html 的啟動腳本可以只搬值、不驗證（spec §4.2）。
-   淺色主題的區塊寫在後面、權重相同（都是 0,1,0），會蓋過這裡 */
+   淺色主題的選擇器也帶 :root（權重 0,2,0 高過這裡的 0,1,0），所以區塊的先後順序不影響誰生效（票 38） */
 :root, [data-theme="nightfall"] {
   color-scheme: dark;
   /* 語義/UI */
@@ -69,7 +69,7 @@
 /* ===== 冷調灰（daylight-cool）：從午夜藍推導，色相沿用午夜藍的藍灰 =====
    推導規則見 docs/planning/daylight-themes-design.md §3.2：白卡最高、底色凹下、互動狀態往深走；
    四級文字對 --bg 的對比照抄午夜藍；終端機底比 --bg 深一點點；ANSI 16 色全部對終端機底 ≥ 4.5。 */
-[data-theme="daylight-cool"] {
+:root[data-theme="daylight-cool"] {
   color-scheme: light;
   --primary: #F59E42; --primary-ink: #3B2207;
   --session: #67D5C0;
@@ -106,7 +106,7 @@
 
 /* ===== 柔潤黃（daylight-warm）：從午夜藍推導，色相取品牌指南的 Cream =====
    推導規則同冷調灰，只換色相。 */
-[data-theme="daylight-warm"] {
+:root[data-theme="daylight-warm"] {
   color-scheme: light;
   --primary: #F59E42; --primary-ink: #3B2207;
   --session: #67D5C0;
