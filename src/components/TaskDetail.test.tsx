@@ -107,6 +107,17 @@ describe("TaskDetail", () => {
     expect(container.querySelector(".tk-confirm")).toBeNull();
   });
 
+  // 不同專案可以有同名的票（兩邊都有 01-x.md）。父層的 key 已含專案、目前會整個重掛，
+  // 這裡是第二道：identity 少了專案，換到另一個專案的同名票時確認列會留著
+  it("票：對專案 a 的票展開刪除確認後換成專案 b 的同名票，確認列消失", () => {
+    const a = ticket(), b = ticket({ path: "/p/b/.fledge/tasks/02-a.md", title: "B 的同名票" });
+    const { container, rerender } = render(<TaskDetail {...base({ view: { kind: "ticket", task: a, rescueDraft: null } })} />);
+    fireEvent.click(screen.getByLabelText(en.list.delete));
+    expect(container.querySelector(".tk-confirm")).not.toBeNull();
+    rerender(<TaskDetail {...base({ project: "/p/b", projectName: "b", backLabel: "b", view: { kind: "ticket", task: b, rescueDraft: null } })} />);
+    expect(container.querySelector(".tk-confirm")).toBeNull();
+  });
+
   it("票：anomalies 有值時畫記號，點開列出原因", () => {
     render(<TaskDetail {...base({ view: { kind: "ticket", task: ticket({ anomalies: ["number_duplicate"] }), rescueDraft: null } })} />);
     fireEvent.click(screen.getByLabelText(en.anomaly.label));

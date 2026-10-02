@@ -39,7 +39,8 @@ export function TaskDetail({
   // 確認、異常說明、已複製都是「這一張票、這一種檢視」的本地狀態：換票、換成筆記、進出編輯都要歸零。
   // 父層另用 key 讓元件整個重掛（Task 9），這裡是第二道——確認鍵的 onDelete(task) 指向的是當下的票，
   // 沿用上一張票的確認等於讓使用者刪掉沒發起刪除的票（Codex plan R2 high）
-  const identity = view.kind === "ticket" ? `ticket:${view.task.name}` : view.kind;
+  // 帶專案：不同專案可以有同名的票（兩邊都有 01-x.md），只看檔名會把 a 的確認留給 b
+  const identity = `${project}\n${view.kind === "ticket" ? `ticket:${view.task.name}` : view.kind}`;
   useEffect(() => { setConfirming(false); setOpenFlag(false); setCopied(false); }, [identity, editing]);
   const back = <button className="tasks-back" onClick={onBack}><ChevronLeft size={14} strokeWidth={2} />{backLabel}</button>;
   // × 與返回鍵同一個 onBack（spec §11.3）：寬等級顯示 ×、藏返回鍵；中、窄反過來——由 Tasks.css 決定
