@@ -126,10 +126,13 @@ describe("語言切換鈕（spec D8）", () => {
   // spec §5.5：選中的底是半透明，疊在它實際坐落的那層底上算——設定視窗標題列（.settings-modal）與精靈頁（.ob-overlay），
   // 兩個底都從 CSS 讀
   // 三個主題都跑（票 07）
+  // 外觀選項（ThemePicker）用同一顆按鈕，坐在另外兩層底上：設定視窗的外觀列（.settings-rrow）、精靈的卡片（.ob-card）（票 38）
   describe.each(THEMES)("%s", (theme) => {
     it.each([
       ["設定視窗", () => decl(set, ".settings-modal", "background")],
       ["引導精靈", () => decl(ob, ".ob-overlay", "background")],
+      ["設定視窗的外觀列", () => decl(set, ".settings-rrow", "background")],
+      ["精靈的外觀頁", () => decl(ob, ".ob-card", "background")],
     ])("選中的橘字對疊在%s上的淡橘底至少 4.5:1", (_label, backdrop) => {
       const bg = over(decl(lang, ".lang-switch-btn.is-on", "background"), backdrop(), theme);
       expect(worst(token(L.paintToken(".lang-switch-btn.is-on", "color"), theme), bg)).toBeGreaterThanOrEqual(4.5);
