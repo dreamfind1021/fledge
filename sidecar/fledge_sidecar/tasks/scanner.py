@@ -7,7 +7,9 @@
 """
 from __future__ import annotations
 
+import errno
 import hashlib
+import logging
 import os
 import re
 import stat as stat_module
@@ -25,6 +27,8 @@ from fledge_sidecar.tasks.parser import (
     VALID_STATUS, can_round_trip, is_plain_name, make_short_name, parse_task,
     render_task, replace_body, replace_status,
 )
+
+logger = logging.getLogger(__name__)
 
 FLEDGE_DIRNAME = ".fledge"
 TASKS_DIRNAME = "tasks"
@@ -312,19 +316,37 @@ def pick_highlights(rows: list[dict[str, Any]], today: date) -> tuple[list[dict[
     return doing, recent
 
 
+def _read_state_raw(fledge_fd: int) -> tuple[bytes, os.stat_result]:
+    """state.md 兩個讀取點（`_read_state_text`、`read_note`）共用的開檔：`O_NOFOLLOW` 不跟 symlink、
+    `O_NONBLOCK` 不在 FIFO 上等寫入端、`S_ISREG` 只讀一般檔案，讀前 NOTE_MAX_BYTES。
+
+    失敗一律拋 OSError，分類留給呼叫端——`read_note` 要把 FileNotFoundError 分成 absent，
+    `_read_state_text` 全部壓成空字串。原本兩邊各寫一次開檔，總覽那份就漏了 `O_NONBLOCK`：
+    state.md 是 FIFO 時整個 `GET /tasks/overview` 會掛住（票 25）。"""
+    fd = os.open(STATE_FILENAME, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fledge_fd)
+    try:
+        st = os.fstat(fd)
+        if not stat_module.S_ISREG(st.st_mode):
+            raise OSError(errno.EINVAL, "state.md is not a regular file")   # FIFO／目錄／裝置檔
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            return fh.read(NOTE_MAX_BYTES), st
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            # 讀到的內容不受影響，不讓關檔失敗蓋掉結果（與 open_tasks_dir 一致）
+            logger.warning("關閉 state.md 失敗", exc_info=True)
+
+
 def _read_state_text(fledge_fd: int | None) -> str:
     """讀 `.fledge/state.md` 的前 64KB 文字。讀不到一律回空字串——兩個抽取函式共用。"""
     if fledge_fd is None:
         return ""
     try:
-        fd = os.open(STATE_FILENAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=fledge_fd)
+        raw, _ = _read_state_raw(fledge_fd)
     except OSError:
         return ""
-    try:
-        with os.fdopen(fd, "rb") as fh:
-            return _decode(fh.read(NOTE_MAX_BYTES))
-    except OSError:
-        return ""
+    return _decode(raw)
 
 
 def read_next_step(fledge_fd: int | None) -> str:
@@ -411,27 +433,20 @@ def read_note(td: TasksDir) -> NoteResult:
         return NoteResult(STATUS_UNAVAILABLE if td.status == STATUS_UNAVAILABLE else STATUS_ABSENT,
                           None, None, fingerprint=None, editable=False)
     try:
-        fd = os.open(STATE_FILENAME, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=td.fledge_fd)
+        raw, st = _read_state_raw(td.fledge_fd)
+        mtime = date.fromtimestamp(st.st_mtime).isoformat()
     except FileNotFoundError:
         return NoteResult(STATUS_ABSENT, None, None, fingerprint=None, editable=False)
-    except OSError:
+    except (OSError, OverflowError, ValueError):
+        # 修改時間換不成日期也歸這裡：範圍外是 OverflowError／ValueError，Windows 上 1970 年前是
+        # OSError——留在 try 外就是一個 500（APFS 把時間夾在 1677～2262 年，macOS 實際碰不到）
         return NoteResult(STATUS_UNAVAILABLE, None, None, fingerprint=None, editable=False)
-    try:
-        st = os.fstat(fd)
-        if not stat_module.S_ISREG(st.st_mode):
-            return NoteResult(STATUS_UNAVAILABLE, None, None, fingerprint=None, editable=False)   # FIFO／目錄／裝置檔
-        with os.fdopen(fd, "rb", closefd=False) as fh:
-            raw = fh.read(NOTE_MAX_BYTES)
-    except OSError:
-        return NoteResult(STATUS_UNAVAILABLE, None, None, fingerprint=None, editable=False)
-    finally:
-        os.close(fd)
     # fingerprint 算在讀到的位元組上：≤ 上限時就是整檔；超過時是前 64KB——那份 editable 是 False，
     # PUT 也會用整檔重算再拒絕，所以這個「不完整」的 fingerprint 不會被拿去寫。大小用同一次 fstat
     # 的 st_size 而不是 len(raw)：len(raw) 在超過時永遠等於上限，分不出「剛好」與「超過」。
     # 先判大小再判 round-trip：超過時 raw 只是前 64KB，可能切在多位元組字元中間，那個結果沒有意義
     # （短路後根本不算）。`_note_can_round_trip` 對任意位元組不拋例外，讀取路徑的契約不變。
-    return NoteResult(STATUS_OK, _decode(raw), date.fromtimestamp(st.st_mtime).isoformat(),
+    return NoteResult(STATUS_OK, _decode(raw), mtime,
                       fingerprint=fingerprint(raw),
                       editable=(st.st_size <= NOTE_MAX_BYTES and st.st_nlink == 1
                                 and _note_can_round_trip(raw)))
