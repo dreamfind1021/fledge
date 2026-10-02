@@ -1,6 +1,8 @@
 {
   "appearance": "Appearance",
   "nightfall": "Midnight Blue",
+  "nightfallCocoa": "Dark Chocolate",
+  "nightfallIron": "Iron Black",
   "daylightCool": "Cool Gray",
   "daylightWarm": "Soft Yellow"
 }

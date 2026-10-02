@@ -125,7 +125,7 @@ describe("語言切換鈕（spec D8）", () => {
 
   // spec §5.5：選中的底是半透明，疊在它實際坐落的那層底上算——設定視窗標題列（.settings-modal）與精靈頁（.ob-overlay），
   // 兩個底都從 CSS 讀
-  // 三個主題都跑（票 07）
+  // 每個主題都跑（票 07）
   // 外觀選項（ThemePicker）用同一顆按鈕，坐在另外兩層底上：設定視窗的外觀列（.settings-rrow）、精靈的卡片（.ob-card）（票 38）
   describe.each(THEMES)("%s", (theme) => {
     it.each([

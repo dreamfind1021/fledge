@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { DEFAULT_THEME, THEME_STORAGE_KEY, isThemeId, type ThemeId } from "./themeIds";
+import { DEFAULT_THEME, THEME_SCHEME, THEME_STORAGE_KEY, isThemeId, type ThemeId } from "./themeIds";
 
 // 主題切換（票 07，spec docs/planning/daylight-themes-design.md §4.3）。
 // 選擇存在 localStorage（同語言設定的做法，src/i18n.ts）；沒存過、存了看不懂、讀不到 → 午夜藍。
@@ -25,11 +25,11 @@ const readStored = (): ThemeId => {
 const apply = (id: ThemeId) => {
   current = id;
   document.documentElement.dataset.theme = id;
-  // 原生視窗外觀（標題列等），午夜藍 dark、兩個淺色 light。非同步、失敗不擋畫面。
+  // 原生視窗外觀（標題列等）照主題自己的深淺（THEME_SCHEME，票 40）。非同步、失敗不擋畫面。
   // 不在 Tauri 裡（vitest、瀏覽器直接開 vite）時 getCurrentWindow() 會同步丟例外，一樣接住
   try {
     getCurrentWindow()
-      .setTheme(id === "nightfall" ? "dark" : "light")
+      .setTheme(THEME_SCHEME[id])
       .catch((e) => console.warn("[theme] 原生視窗外觀切換失敗", e));
   } catch (e) {
     console.warn("[theme] 不在 Tauri 裡，略過原生視窗外觀", e);

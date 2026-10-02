@@ -18,9 +18,9 @@ describe("ThemePicker", () => {
     cleanup(); // vitest 未開 globals → testing-library 不會自動 cleanup
   });
 
-  it("一列三顆，名稱是午夜藍、冷調灰、柔潤黃；目前的主題亮著", () => {
+  it("一列五顆，名稱照 THEMES 的順序（深色三個在前）；目前的主題亮著", () => {
     const { getAllByRole, getByText } = render(<ThemePicker />);
-    expect(getAllByRole("button").map((b) => b.textContent)).toEqual(["午夜藍", "冷調灰", "柔潤黃"]);
+    expect(getAllByRole("button").map((b) => b.textContent)).toEqual(["午夜藍", "濃巧棕", "深鐵黑", "冷調灰", "柔潤黃"]);
     expect(getByText("午夜藍").className).toContain("is-on");
     expect(getByText("午夜藍").getAttribute("aria-pressed")).toBe("true");
     expect(getByText("冷調灰").className).not.toContain("is-on");
@@ -45,6 +45,6 @@ describe("ThemePicker", () => {
   it("英文介面的名稱", async () => {
     await act(() => i18n.changeLanguage("en"));
     const { getAllByRole } = render(<ThemePicker />);
-    expect(getAllByRole("button").map((b) => b.textContent)).toEqual(["Midnight Blue", "Cool Gray", "Soft Yellow"]);
+    expect(getAllByRole("button").map((b) => b.textContent)).toEqual(["Midnight Blue", "Dark Chocolate", "Iron Black", "Cool Gray", "Soft Yellow"]);
   });
 });

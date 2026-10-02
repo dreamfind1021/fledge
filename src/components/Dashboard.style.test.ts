@@ -45,7 +45,7 @@ describe("專案表每列一塊暗磚、圖例與長條滑過不畫線（spec D3
 
   // spec §4.5 第二、三列：字坐在每一列的暗磚上，底色從 .dash-table td 的 background 讀（暗磚底色的間接防線）。
   // 其他格沒有自己的 color、繼承 body 的 --text，跟專案名稱同一組，不另驗
-  // 三個主題都跑（票 07）
+  // 每個主題都跑（票 07）
   it.each<[ThemeId, string, string]>(THEMES.flatMap((theme) => [
     [theme, "專案名稱", ".dash-proj-name"] as [ThemeId, string, string],
     [theme, "合計", ".dash-td-total"] as [ThemeId, string, string],

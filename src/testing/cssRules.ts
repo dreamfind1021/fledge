@@ -8,9 +8,18 @@
 //   - 塗色查詢（paintToken／paintColor／paintColors）用 cssRules(text) 綁定一段 CSS
 //
 // 用 vite 的 import.meta.glob 而非 node:fs——本專案沒有 @types/node（同 lib/sourceHygiene.test.ts）。
-import { DEFAULT_THEME, type ThemeId } from "../lib/themeIds";
+import { DEFAULT_THEME, THEMES, THEME_SCHEME, type ThemeId } from "../lib/themeIds";
 
 const RAW = import.meta.glob("/src/**/*.css", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+
+// 測試要排除某些主題時用這三組（票 40，spec docs/superpowers/specs/2026-10-02-cocoa-iron-themes-design.md §4.3）。
+// 選哪一組看「排除的理由」，而且理由只涵蓋幾條斷言就只豁免那幾條：
+//   - 理由是深色與淺色的本質差異（淺色才有選取色、深色的「黑」本來就淡）→ DARK_THEMES／LIGHT_THEMES
+//   - 理由是午夜藍自己的舊值（票 07 不改午夜藍），或午夜藍兼任「看不懂時的退路」→ NOT_NIGHTFALL_THEMES。跟深淺無關，不要拿 LIGHT_THEMES 代替
+//   - 沒有理由 → THEMES
+export const DARK_THEMES = THEMES.filter((t) => THEME_SCHEME[t] === "dark");
+export const LIGHT_THEMES = THEMES.filter((t) => THEME_SCHEME[t] === "light");
+export const NOT_NIGHTFALL_THEMES = THEMES.filter((t) => t !== "nightfall");
 
 export const readCss = (path: string) => {
   const text = RAW[path];
@@ -88,10 +97,10 @@ export const token = (name: string, theme: ThemeId = DEFAULT_THEME, seen: string
   throw new Error(`token --${name}（${theme}）不是 #RRGGBB 也不是別名：${v}`);
 };
 
-// WCAG 相對亮度與對比度
-const luminance = (hex: string) => {
-  const [r, g, b] = [1, 3, 5]
-    .map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+// WCAG 相對亮度與對比度。顏色可以是 token 的 #RRGGBB，或混色結果的 rgb(R G B)（通道帶小數，見 resolveColor）
+const luminance = (color: string) => {
+  const [r, g, b] = rgb(color)
+    .map((v) => v / 255)
     .map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 };
@@ -113,8 +122,15 @@ export const splitTop = (s: string) => {
   return out;
 };
 const inner = (s: string, fn: string) => s.slice(fn.length + 1, -1);   // "fn(...)" 的括號內
-const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-const hex = (c: number[]) => "#" + c.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("").toUpperCase();
+const rgb = (c: string) => {
+  const m = c.match(/^rgb\(([\d.]+) ([\d.]+) ([\d.]+)\)$/);
+  if (m) return [m[1], m[2], m[3]].map(Number);
+  if (!/^#[0-9A-Fa-f]{6}$/.test(c)) throw new Error(`認不得的顏色值：${c}`);   // 兩種格式以外的一律炸，不當成 hex 硬讀出 NaN
+  return [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+};
+// 混色結果的通道不取整（票 40 Codex 最終審查 R1）：取整成 #RRGGBB 會把貼著門檻的對比算成過關——濃巧棕的 KMS 徽章照小數是 4.4995、
+// 取整後是 4.5068，而 WCAG 不准把低於門檻的對比四捨五入成過關。toFixed(6) 只為了去掉 111.69999999999999 這種浮點雜訊，對比值的誤差小於 1e-7
+const rgbText = (c: number[]) => `rgb(${c.map((v) => Number(v.toFixed(6))).join(" ")})`;
 // color-mix(in srgb, …) 對不透明色＝sRGB 編碼值的線性插值；只混不透明色
 // theme 要一路傳到底：color-mix 的每個成分都遞迴回這裡，漏傳一層，淺色的測試就會悄悄算成午夜藍（spec §6.1）
 export const resolveColor = (expr: string, theme: ThemeId = DEFAULT_THEME): string => {
@@ -135,7 +151,7 @@ export const resolveColor = (expr: string, theme: ThemeId = DEFAULT_THEME): stri
     if (A.p != null && B.p != null) throw new Error(`兩邊都寫百分比不支援（要正規化或變半透明）：${e}`);
     const pa = A.p ?? (B.p == null ? 0.5 : 1 - B.p);
     const ca = rgb(A.c), cb = rgb(B.c);
-    return hex(ca.map((x, i) => x * pa + cb[i] * (1 - pa)));
+    return rgbText(ca.map((x, i) => x * pa + cb[i] * (1 - pa)));
   }
   throw new Error(`認不得的顏色：${e}`);
 };

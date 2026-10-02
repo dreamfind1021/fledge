@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { THEMES, type ThemeId } from "./themeIds";
 
 // 主題切換（票 07，spec docs/planning/daylight-themes-design.md §4.3）。
 // 模組層有狀態（目前的主題、訂閱者），每條測試重新載入一份乾淨的模組。
@@ -85,6 +86,17 @@ describe("setTheme：切換並記住", () => {
     setTheme("nightfall");
     expect(setWindowTheme).toHaveBeenLastCalledWith("dark");
     expect(localStorage.getItem("fledge-theme")).toBe("nightfall");
+  });
+
+  // 原生視窗外觀照每個主題自己的深淺（票 40，spec §4.1）。期望值寫字面、不從 THEME_SCHEME 推：
+  // 這條守的是「theme.ts 有沒有照表設」；期望值若也從表推，表寫錯時兩邊一起錯而假綠（那個錯由 index.contrast.test.ts 的 color-scheme 一致性抓）
+  const NATIVE: Record<ThemeId, "dark" | "light"> = {
+    nightfall: "dark", "nightfall-cocoa": "dark", "nightfall-iron": "dark", "daylight-cool": "light", "daylight-warm": "light",
+  };
+  it.each(THEMES)("%s：原生視窗外觀照深淺設定", async (id) => {
+    const { setTheme } = await load();
+    setTheme(id);
+    expect(setWindowTheme).toHaveBeenLastCalledWith(NATIVE[id]);
   });
 
   // 先套用再寫（同 LangSwitch.tsx 的理由）：寫失敗時這次仍是使用者要的畫面，只是重開會忘記

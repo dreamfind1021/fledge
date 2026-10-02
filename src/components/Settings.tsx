@@ -106,7 +106,7 @@ export function Settings({ onClose, onRerunOnboarding, onResumeMigration }: Sett
             <div className="settings-error">{error}</div>
           )}
 
-          {/* 外觀（票 07）：一塊暗磚、一列三選一，點了立刻生效，不經過下面的「完成」 */}
+          {/* 外觀（票 07）：一塊暗磚、一列五選一（票 40），點了立刻生效，不經過下面的「完成」 */}
           <div className="settings-sec-title settings-sec-title--first">
             <Palette size={14} strokeWidth={2} />
             {tTheme("appearance")}

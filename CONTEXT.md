@@ -18,11 +18,11 @@ Claude Code 多帳號桌面工作台（Tauri + React 前端、FastAPI sidecar �
 - **`--focus` ring 可見性**、**重要狀態文字化**。
 
 **淺色主題的例外**（冷調灰、柔潤黃，2026-09-29 票 07，spec `docs/planning/daylight-themes-design.md` §12.1）：
-五個功能色（`--primary`、`--session`、`--ai`、`--warning`、`--error`）三個主題都用同一組亮色，是使用者看過 demo 後的決定。
+五個功能色（`--primary`、`--session`、`--ai`、`--warning`、`--error`）每個主題都用同一組亮色，是使用者看過 demo 後的決定（票 40 的兩個深色主題沿用）。
 拿來**寫字**的地方用深一階的 `--X-text`，文字 4.5:1 照常是驗收條件；但**非文字**——狀態點、圖示、按鈕底色對背景、圖表——
 在淺色主題低於 3:1（薄荷綠約 1.6、黃約 1.5、琥珀約 1.9、紫約 2.1），**焦點框**（`--focus`＝琥珀 60%）只有約 1.5（午夜藍是 3.85），
 帳號色點約 2.4。使用者看過數字與「狀態點、焦點框加深」的選項後選擇**全部知情接受**。
-規則層的對比測試因此把「功能色畫的非文字」只放在午夜藍那一組，淺色不驗（例如 `Tasks.contrast.test.ts` 的 `FUNCTIONAL_NONTEXT`）。
+規則層的對比測試因此把「功能色畫的非文字」只放在深色主題那一組，淺色不驗（例如 `Tasks.contrast.test.ts` 的 `FUNCTIONAL_NONTEXT`）。
 **終端機的最低文字對比**（2026-09-30 真機驗收後追加，spec §12.5）：淺色主題開 xterm 的 `minimumContrastRatio: 4.5`（`--term-min-contrast`；午夜藍是 1＝不調色）。
 起因是 Claude Code 深色主題用 RGB 寫死的次要字 `#999999`，在淺色終端機底上約 2.5，Fledge 的 token 管不到。xterm 會把前景對底色不到 4.5 的字調到 4.5（淡字 SGR 2 只要 2.25；方塊、框線字元不調）。
 代價是 Claude Code 刻意畫淡的字與閃爍提示在淺色主題下變得不明顯——使用者選擇併進票 07。
