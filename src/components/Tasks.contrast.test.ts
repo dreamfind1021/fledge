@@ -19,7 +19,7 @@ const tasksCss = readCss("/src/components/Tasks.css");
 const tasksBase = baseLevel(stripComments(tasksCss));
 const { paintToken } = cssRules(tasksBase);
 
-// 底色依主題算（票 07：對比斷言三個主題都跑）。表格裡寫底色的名稱，不寫值
+// 底色依主題算（票 07：對比斷言每個主題都跑）。表格裡寫底色的名稱，不寫值
 const backdropsOf = (theme: ThemeId) => {
   const { paintColor, paintColors } = cssRules(tasksBase, theme);
   return {
@@ -193,7 +193,7 @@ describe.each(DARK_THEMES)("%s：功能色的非文字（淺色主題知情接�
   });
 });
 
-// 兩張表三個主題都跑（票 07，spec §6.3）：字與中性色的圖示在淺色主題一樣要過門檻
+// 兩張表每個主題都跑（票 07，spec §6.3）：字與中性色的圖示在淺色主題一樣要過門檻
 describe.each(THEMES)("%s：待辦面板的顏色對比", (theme) => {
   const B = backdropsOf(theme);
   it.each(NONTEXT)("%s 對背景至少 3:1", (_label, selector, prop, backdrop) => {

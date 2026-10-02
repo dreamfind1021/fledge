@@ -33,7 +33,7 @@ describe("篩選小籤：拿掉外框，選中改成淡橘底橘字（spec M4）
     expect(hasDecl(mem, ".fchip.on", "border-color")).toBe(false);
   });
 
-  // spec §3.5 第一列：底是半透明，疊在面板底色（.mem-root 的 background）上算。三個主題都跑（票 07）
+  // spec §3.5 第一列：底是半透明，疊在面板底色（.mem-root 的 background）上算。每個主題都跑（票 07）
   it.each(THEMES)("%s：選中的橘字對淡橘底至少 4.5:1", (theme) => {
     const bg = over(decl(mem, ".fchip.on", "background"), decl(mem, ".mem-root", "background"), theme);
     expect(worst(token(paintToken(".fchip.on", "color"), theme), bg)).toBeGreaterThanOrEqual(4.5);
@@ -74,7 +74,7 @@ describe("全文框、相關小籤、出錯的紅框（spec M5、M6）", () => {
 });
 
 // spec §3.5：卡片與暗磚上的字。前景從 CSS 的 color 讀、背景從 CSS 的 background 讀，不在測試裡寫死用哪個 token。
-// 三個主題都跑（票 07，daylight spec §6.3）
+// 每個主題都跑（票 07，daylight spec §6.3）
 describe.each(THEMES)("%s：卡片與暗磚上的字（spec §3.5）", (theme) => {
   const { paintColor } = cssRules(mem, theme);
   it.each([

@@ -5,7 +5,7 @@ import {
   contrast, over, readCss, resolveColor, rootBlock, stops, stripComments, themeBlock, themesInCss, token, tokenNames,
 } from "./testing/cssRules";
 
-// 主題 token 的對比防線（票 06 起；票 07 起三個主題都跑）。
+// 主題 token 的對比防線（票 06 起；票 07 起每個主題都跑）。
 //
 // Tasks.contrast.test.ts 等規則層測試守的是「某條 CSS 規則用的 token 夠不夠」，
 // 這裡守的是上游：**token 本身**對每一種底色夠不夠。少了這層，
@@ -135,7 +135,7 @@ describe("終端機的最低文字對比", () => {
   });
 });
 
-// 三個主題必須定義同一組 token：少一個就會像票 07 demo 那樣靜默壞掉（側欄的列擠成一團），只有集合比對抓得到
+// 每個主題必須定義同一組 token：少一個就會像票 07 demo 那樣靜默壞掉（側欄的列擠成一團），只有集合比對抓得到
 describe("主題區塊的 token 集合", () => {
   const nightfall = tokenNames(themeBlock("nightfall"));
   // 唯一的例外：選取色只在淺色定義，午夜藍不定義 → 讀到空字串 → xterm 用預設的半透明白（spec §3.5）
@@ -189,9 +189,9 @@ describe("午夜藍以外的主題的選擇器不靠區塊順序", () => {
 });
 
 describe("主題清單與 CSS 雙向一致", () => {
-  // 產品決定的三個選項（spec §2.1），不是任意清單
-  it("THEMES 恰好是三個產品選項", () => {
-    expect([...THEMES]).toEqual(["nightfall", "daylight-cool", "daylight-warm"]);
+  // 產品決定的五個選項（daylight spec §2.1、票 40 spec §2.1），不是任意清單；外觀選項照這個順序排
+  it("THEMES 恰好是五個產品選項", () => {
+    expect([...THEMES]).toEqual(["nightfall", "nightfall-cocoa", "nightfall-iron", "daylight-cool", "daylight-warm"]);
   });
 
   it("index.css 的主題區塊＝THEMES（多一塊、少一塊都紅）", () => {

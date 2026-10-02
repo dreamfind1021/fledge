@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 // 功能色拿來寫字一律用 --X-text（票 07，spec docs/planning/daylight-themes-design.md §3.3、§6.4）。
 //
-// 五個功能色（--primary、--session、--ai、--warning、--error）在三個主題都是同一組亮色：
+// 五個功能色（--primary、--session、--ai、--warning、--error）在每個主題都是同一組亮色：
 // 按鈕底色、圖示、狀態點用它沒問題，但在淺色主題拿來寫字只有 1.5～3.4:1。寫字要用 --X-text——
 // 午夜藍的 --X-text 是 --X 的別名（畫面不變），淺色主題深一階。
 //

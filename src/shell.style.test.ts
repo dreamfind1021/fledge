@@ -115,7 +115,7 @@ describe("浮層拿掉外框（spec G4、G6、S5、S8）", () => {
     expect(decl(app, ".confirm-btn-ghost:focus-visible", "outline")).toBe("2px solid var(--focus)");
   });
 
-  // spec §2.5：背景從 CSS 讀（paintColor），不在測試裡寫死用哪個 token。三個主題都跑（票 07）。
+  // spec §2.5：背景從 CSS 讀（paintColor），不在測試裡寫死用哪個 token。每個主題都跑（票 07）。
   // 「相關」浮鈕的數字（.rf-n）是票 07 補的：深字壓在 --ai 上，原本借 --bg，淺色主題的 --bg 是淺的（Codex daylight spec R1）
   describe.each(THEMES)("%s", (theme) => {
     it.each([

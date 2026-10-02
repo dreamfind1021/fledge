@@ -490,7 +490,7 @@ describe("Onboarding 精靈外殼", () => {
     ui.getByText(zh.welcome[path]).click();
     await waitFor(() => expect(ui.getByText(zh.appearance.h)).toBeTruthy());
     expect(ui.getByText(zh.appearance.sub)).toBeTruthy();
-    expect([...ui.container.querySelectorAll(".ob-theme button")].map((b) => b.textContent)).toEqual(["午夜藍", "冷調灰", "柔潤黃"]);
+    expect([...ui.container.querySelectorAll(".ob-theme button")].map((b) => b.textContent)).toEqual(["午夜藍", "濃巧棕", "深鐵黑", "冷調灰", "柔潤黃"]);
     expect(ui.container.querySelectorAll(".ob-step-bar.is-on")).toHaveLength(2);   // 第 2 頁
     expect(ui.container.querySelector(".ob-lang")).toBeNull();                      // 語言切換只在歡迎頁
     ui.getByText(zh.common.prev).click();

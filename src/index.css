@@ -1,5 +1,5 @@
 /* ===== 跨主題共用：字型與結構 token（品牌三色已內嵌於 Logo 圖檔，不再需要 --brand-* 變數）=====
-   圓角與列距跟主題無關，放這裡三個主題共用一份。原本寫在各主題區塊裡，新主題漏寫一個，
+   圓角與列距跟主題無關，放這裡所有主題共用一份。原本寫在各主題區塊裡，新主題漏寫一個，
    側欄的列就會擠成一團（票 07 demo 實際發生過）。 */
 :root {
   --font-ui: "Plus Jakarta Sans", "Noto Sans TC", system-ui, -apple-system, sans-serif;
@@ -8,18 +8,19 @@
 }
 
 /* ===== 主題（票 07）=====
-   三個主題定義同一組顏色 token（index.contrast.test.ts 比對集合）；唯一的例外是 --term-selection，只在淺色定義。
+   每個主題定義同一組顏色 token（index.contrast.test.ts 比對集合）；唯一的例外是 --term-selection，只在淺色定義。
    程式代號的唯一來源是 src/lib/themeIds.ts；這裡的選擇器要跟它一致（同一支測試雙向比對）。
 
    功能色分兩種用法：
-   - --X（--primary、--session、--ai、--warning、--error）：按鈕底色、圖示、狀態點。三個主題相同（使用者決定，2026-09-29）。
-   - --X-text：拿來寫字。午夜藍是 --X 的別名（畫面不變）；淺色主題深一階，對「--X 18% 疊在 --active」≥ 4.5。
+   - --X（--primary、--session、--ai、--warning、--error）：按鈕底色、圖示、狀態點。每個主題都相同（使用者決定，2026-09-29；票 40 的兩個深色主題沿用）。
+   - --X-text：拿來寫字。午夜藍是 --X 的別名（畫面不變）；其他主題要對「--X 18% 疊在 --active」≥ 4.5——
+     淺色主題深一階，票 40 的深色主題過的寫 var(--X)、不過的微微調亮。
      功能色當 color 一律用 --X-text，例外（圖示）登記在 src/index.textColor.test.ts 的白名單。 */
 
 /* ===== 午夜藍（nightfall）=====
    同時掛在 :root：data-theme 是看不懂的值時（例如 localStorage 被外力改壞），沒有任何主題區塊對得上，
    畫面就退回午夜藍，而不是一片沒有顏色的首幀。所以 index.html 的啟動腳本可以只搬值、不驗證（spec §4.2）。
-   淺色主題的選擇器也帶 :root（權重 0,2,0 高過這裡的 0,1,0），所以區塊的先後順序不影響誰生效（票 38） */
+   午夜藍以外的主題選擇器都帶 :root（權重 0,2,0 高過這裡的 0,1,0），所以區塊的先後順序不影響誰生效（票 38） */
 :root, [data-theme="nightfall"] {
   color-scheme: dark;
   /* 語義/UI */
@@ -30,7 +31,7 @@
   --warning: #FBBF24; --error: #EF4444; --error-ink: #FFFFFF;
   --primary-text: var(--primary); --session-text: var(--session); --ai-text: var(--ai);
   --warning-text: var(--warning); --error-text: var(--error);
-  /* 深字壓在亮色底上（帳號小籤、「相關」浮鈕的數字）：三個主題都是這個深色，原本借 --bg，淺色主題的 --bg 是淺的 */
+  /* 深字壓在亮色底上（帳號小籤、「相關」浮鈕的數字）：每個主題都是這個深色，原本借 --bg，淺色主題的 --bg 是淺的 */
   --fill-ink: #0C111B;
   --focus: color-mix(in srgb, var(--primary) 60%, transparent);
   /* 表面/文字/結構 */
@@ -64,6 +65,71 @@
   --term-bright-black:#5E6981; --term-bright-red:#F87171; --term-bright-green:#86EFAC;
   --term-bright-yellow:#FCD34D; --term-bright-blue:#93C5FD; --term-bright-magenta:#D8B4FE;
   --term-bright-cyan:#99F6E4; --term-bright-white:#F1F4F9;
+}
+
+/* ===== 濃巧棕（nightfall-cocoa）：從午夜藍推導，色相取 Pantone Chocolate Martini（票 40）=====
+   推導規則見 docs/superpowers/specs/2026-10-02-cocoa-iron-themes-design.md §3.2，色值由
+   docs/planning/demos/2026-10-02-dark-themes/derive/gen_dark.py 產生：表面亮度照午夜藍、底色的灰度＝色票的灰度；
+   四級文字對 --bg 的對比照抄午夜藍、且對五種文字底色都 ≥ 4.5；功能色、ANSI 彩色、陰影照抄午夜藍。
+   要調色時改腳本的規則或參數再重產，不手改單格（腳本的 check 會比對這裡的值）。 */
+:root[data-theme="nightfall-cocoa"] {
+  color-scheme: dark;
+  --primary: #F59E42; --primary-ink: #3B2207;
+  --session: #67D5C0;
+  --ai: #A99BFF; --ai-ink: #191038;
+  --warning: #FBBF24; --error: #EF4444; --error-ink: #FFFFFF;
+  --primary-text: #FBA449; --session-text: var(--session); --ai-text: #B3A9FE;
+  --warning-text: var(--warning); --error-text: #FF857C;
+  --fill-ink: #0C111B;
+  --focus: color-mix(in srgb, var(--primary) 60%, transparent);
+  --bg: #170F0D; --sidebar: #1D1311; --surface: #281C18; --surface-2: #362520;
+  --hover: #34221C; --active: #432C25; --overlay: rgba(12,8,7,.62);
+  --text: #EDE9E7; --text-2: #CBC8C7; --dim: #AB9C97; --faint: #9D8C87;
+  --border: rgba(255,255,255,.08); --divider: rgba(255,255,255,.055);
+  --shadow: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 1px 2px rgba(0,0,0,.4), 0 18px 46px rgba(0,0,0,.5);
+  --shadow-sm: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 4px 18px rgba(0,0,0,.35);
+  --modal-shadow: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 24px 70px rgba(0,0,0,.6);
+  --term-bg: #0F0A08; --term-elev: #1B1412; --term-text: #EBE5E3; --term-dim: #928480;
+  --term-border: rgba(255,255,255,.07); --term-divider: rgba(255,255,255,.06);
+  --term-cursor: #67D5C0;   /* 游標、最低對比、方塊游標字色照抄午夜藍，理由見午夜藍區塊 */
+  --term-min-contrast: 1;
+  --term-cursor-accent: #000000;
+  --term-black:#44322C; --term-red:#EF4444; --term-green:#4ADE80; --term-yellow:#FBBF24;
+  --term-blue:#60A5FA; --term-magenta:#C084FC; --term-cyan:#67D5C0; --term-white:#D4CBC8;
+  --term-bright-black:#76645F; --term-bright-red:#F87171; --term-bright-green:#86EFAC;
+  --term-bright-yellow:#FCD34D; --term-bright-blue:#93C5FD; --term-bright-magenta:#D8B4FE;
+  --term-bright-cyan:#99F6E4; --term-bright-white:#F7F3F2;
+}
+
+/* ===== 深鐵黑（nightfall-iron）：從午夜藍推導，色相取 Pantone Hematite（票 40）=====
+   推導規則同濃巧棕，只換色票。 */
+:root[data-theme="nightfall-iron"] {
+  color-scheme: dark;
+  --primary: #F59E42; --primary-ink: #3B2207;
+  --session: #67D5C0;
+  --ai: #A99BFF; --ai-ink: #191038;
+  --warning: #FBBF24; --error: #EF4444; --error-ink: #FFFFFF;
+  --primary-text: #FBA348; --session-text: var(--session); --ai-text: #B5ABFE;
+  --warning-text: var(--warning); --error-text: #FE847C;
+  --fill-ink: #0C111B;
+  --focus: color-mix(in srgb, var(--primary) 60%, transparent);
+  --bg: #12110F; --sidebar: #181614; --surface: #211E1C; --surface-2: #2D2925;
+  --hover: #2A2622; --active: #37312C; --overlay: rgba(10,9,8,.62);
+  --text: #EBEAE9; --text-2: #C9C9C8; --dim: #A29F9B; --faint: #93908C;
+  --border: rgba(255,255,255,.08); --divider: rgba(255,255,255,.055);
+  --shadow: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 1px 2px rgba(0,0,0,.4), 0 18px 46px rgba(0,0,0,.5);
+  --shadow-sm: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 4px 18px rgba(0,0,0,.35);
+  --modal-shadow: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 24px 70px rgba(0,0,0,.6);
+  --term-bg: #0C0B0A; --term-elev: #171614; --term-text: #E7E6E5; --term-dim: #8A8784;
+  --term-border: rgba(255,255,255,.07); --term-divider: rgba(255,255,255,.06);
+  --term-cursor: #67D5C0;   /* 游標、最低對比、方塊游標字色照抄午夜藍，理由見午夜藍區塊 */
+  --term-min-contrast: 1;
+  --term-cursor-accent: #000000;
+  --term-black:#3A3632; --term-red:#EF4444; --term-green:#4ADE80; --term-yellow:#FBBF24;
+  --term-blue:#60A5FA; --term-magenta:#C084FC; --term-cyan:#67D5C0; --term-white:#CECCCB;
+  --term-bright-black:#6C6865; --term-bright-red:#F87171; --term-bright-green:#86EFAC;
+  --term-bright-yellow:#FCD34D; --term-bright-blue:#93C5FD; --term-bright-magenta:#D8B4FE;
+  --term-bright-cyan:#99F6E4; --term-bright-white:#F4F4F3;
 }
 
 /* ===== 冷調灰（daylight-cool）：從午夜藍推導，色相沿用午夜藍的藍灰 =====
