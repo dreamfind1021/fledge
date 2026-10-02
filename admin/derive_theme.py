@@ -35,6 +35,10 @@ ANSI_NEUTRAL = ["--term-black", "--term-bright-black", "--term-white", "--term-b
 ANSI_COLOR = [p + c for p in ("--term-", "--term-bright-") for c in ("red", "green", "yellow", "blue", "magenta", "cyan")]
 FUNCTIONAL = ["primary", "session", "ai", "warning", "error"]
 GLOW = "0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent)"
+LIGHT_ONLY = {"--term-selection"}
+# CSS 認得的空白只有這幾個。Python 的 strip() 與 \s 還會吞掉全形空白（U+3000）、NBSP（U+00A0），瀏覽器卻把它們當一般字元，
+# 宣告或選擇器前多一個就整條失效（Codex plan R9）
+CSS_WS = " \t\r\n\f"   # 只在淺色定義的 token，同 src/index.contrast.test.ts 的 LIGHT_ONLY
 
 
 # ── 色彩計算：OKLCH ↔ sRGB、WCAG 對比 ──────────────────────────────────────────
@@ -245,8 +249,9 @@ def derive(theme, nf):
 
 
 # ── 讀 CSS、印區塊 ──────────────────────────────────────────────────────────────
-RULE_RE = re.compile(r"([^{}]+)\{([^{}]*)\}")
-DECL_RE = re.compile(r"(--[a-z0-9-]+)\s*:\s*([^;]+);")
+DECL_RE = re.compile(r"(--[a-z0-9-]+|color-scheme)[ \t\r\n\f]*:[ \t\r\n\f]*([^;]+);")
+THEME_SELECTOR_RE = re.compile(r':root\[data-theme="([^"]+)"\]')
+GOOD_DECL_RE = re.compile(r"[ \t\r\n\f]*(--[a-z0-9-]+|color-scheme)[ \t\r\n\f]*:[ \t\r\n\f]*([^!:;{}]+?)[ \t\r\n\f]*")
 
 
 def strip_comments(css):
@@ -254,13 +259,33 @@ def strip_comments(css):
     return re.sub(r"/\*.*?\*/", " ", css, flags=re.S)
 
 
-def rules(css):
-    # 最內層的每條規則 (選擇器, 內容)。@media 裡的規則也會被找到（外層的 @media 那一段不算選擇器）
-    return [(s.strip(), b) for s, b in RULE_RE.findall(css)]
+def rules(css, in_at_rule=False):
+    # 以大括號配對切出每條規則 (選擇器, 內容, 是否包在 @ 規則裡)。內容保留巢狀的大括號：CSS nesting 的子規則
+    # 留在父規則的內容裡（白名單判它不合格），不會吃掉外層的選擇器（Codex plan R1：只抓最內層的正規式會把
+    # [data-theme="x"]:root { …; @media (…) { … } } 的外層選擇器整個丟掉）。@media 等 @ 規則往內遞迴。
+    # 選擇器前面的文字原樣保留：誤留的宣告會跟著選擇器被當成非標準寫法擋下（Codex plan R2）。
+    # 分號式的 @ 敘述（@import、@layer a, b;）不支援：前面帶分號的 @ 不往內遞迴、原樣列出，由 check 點名。
+    # 「怎麼略過它」連三輪各打一個方向（R1～R3），R4 選擇直接不支援——放棄合法寫法也能通過的保證，現況 0 處
+    out, i = [], 0
+    while True:
+        j = css.find("{", i)
+        if j < 0:
+            return out
+        selector = css[i:j].strip(CSS_WS)
+        depth, k = 1, j + 1
+        while k < len(css) and depth:
+            depth += {"{": 1, "}": -1}.get(css[k], 0)
+            k += 1
+        body = css[j + 1:k - 1] if depth == 0 else css[j + 1:]
+        if selector.startswith("@") and ";" not in selector:
+            out += rules(body, True)
+        else:
+            out.append((selector, body, in_at_rule))
+        i = k
 
 
 def declarations(body):
-    return {k: re.sub(r"\s+", " ", v.strip()) for k, v in DECL_RE.findall(body)}
+    return {k: re.sub(r"[ \t\r\n\f]+", " ", v.strip(CSS_WS)) for k, v in DECL_RE.findall(body)}
 
 
 def theme_selector(theme):
@@ -277,25 +302,111 @@ def render_block(theme, t):
 
 
 def nightfall_tokens(css):
-    bodies = [b for s, b in rules(css) if s == NF_SELECTOR]
+    bodies = [b for s, b, _ in rules(css) if s == NF_SELECTOR]
     return declarations(bodies[0]) if bodies else None
 
 
+def unbalanced(css):
+    # 語法的前提（Codex plan R5）：整份檔（已去掉註解）的 () [] {} 與引號要正確配對。未閉合的括號、引號會讓瀏覽器
+    # 把後面整段吞掉（jsdom 實測檔首多一個 `@layer base(` 就解析出 0 條規則），這裡切出來的規則跟瀏覽器看到的就不同了。
+    # 只做配對、不模擬瀏覽器的錯誤恢復：R1～R4 在「怎麼切」上一個寫法補一次，這條一次擋掉整類「沒寫完」。
+    # 大括號也不得出現在還沒閉合的 ( 或 [ 裡（Codex plan R6：檔首 `@layer base(`、檔尾 `)` 配對完整，整份 CSS 卻都在圓括號裡）——
+    # rules() 靠大括號切規則，這兩條就是它的前提。保證範圍到此為止（使用者 2026-10-03 決定）：只保證正常編輯會出現的寫法，
+    # 刻意構造的 CSS（字串裡藏 /* */ 或假的主題區塊之類）不在範圍，那需要真正的 CSS 解析器
+    pairs = {")": "(", "]": "[", "}": "{"}
+    stack, quote, i = [], None, 0
+    while i < len(css):
+        ch = css[i]
+        if quote:
+            if ch == "\\":
+                i += 1   # 跳脫的下一個字不算引號
+            elif ch == quote:
+                quote = None
+        elif ch in "\"'":
+            quote = ch
+        elif ch in "([{":
+            if ch == "{" and any(c in "([" for c in stack):
+                return "大括號出現在還沒閉合的 ( 或 [ 裡"
+            stack.append(ch)
+        elif ch in ")]}":
+            if not stack or stack.pop() != pairs[ch]:
+                return f"多出一個 {ch}"
+        i += 1
+    if quote:
+        return f"引號 {quote} 沒有閉合"
+    return f"{''.join(stack)} 沒有閉合" if stack else None
+
+
+def block_problems(label, body):
+    # 白名單（spec §3.5 第 6 條）：主題區塊只准由「屬性: 值;」組成——屬性是 --* 或 color-scheme、值裡沒有 ! 與 :
+    # （中段漏一個分號時，下一條宣告會被併進值裡，Codex plan R8）、以分號結尾、同一屬性只出現一次。一條擋下 !important、重複宣告、漏分號的最後一條（解析時會被跳過）、混進來的其他屬性。
+    # 列舉「不准的寫法」連三輪各漏一種（Codex spec R1～R3），所以改成「只准一種寫法」
+    *segments, tail = body.split(";")
+    problems, names = [], []
+    odd = sorted({c for c in body if ord(c) > 127})
+    if odd:
+        # 主題區塊（去掉註解後）只會有 ASCII；全形空白、NBSP 這類瀏覽器不當空白，那條宣告會失效（Codex plan R9）
+        problems.append(f"{label}：含 CSS 不認得的字元 {'、'.join(f'U+{ord(c):04X}' for c in odd)}（全形空白、NBSP 之類，瀏覽器不當空白）")
+    for seg in segments:
+        m = GOOD_DECL_RE.fullmatch(seg)
+        if m:
+            names.append(m.group(1))
+        else:
+            problems.append(f"{label}：不合格的宣告 {seg.strip()!r}")
+    for name in sorted(set(names)):
+        if names.count(name) > 1:
+            problems.append(f"{label}：{name} 宣告了 {names.count(name)} 次")
+    if tail.strip(CSS_WS):
+        problems.append(f"{label}：最後一個分號之後還有 {tail.strip(CSS_WS)!r}")
+    return problems
+
+
 def check_css(css):
-    # 回傳問題清單，空清單＝一致（spec §3.5）。午夜藍基準從同一份 css 讀，測試可以餵改過的 CSS
+    # 回傳問題清單，空清單＝一致（spec §3.5）。午夜藍基準從同一份 css 讀，測試可以餵改過的 CSS。
+    # 保證範圍只到 src/index.css 的主題區塊與 data-theme 選擇器；不含 data-theme 的選擇器、其他 CSS 檔覆寫 token 不管
     css = strip_comments(css)
-    nf = nightfall_tokens(css)
-    if nf is None:
-        return [f"nightfall：找不到午夜藍區塊（{NF_SELECTOR}）"]
+    broken = unbalanced(css)
+    if broken:
+        return [f"src/index.css 的括號或引號沒有配對好（{broken}）：瀏覽器會把後面整段吞掉，先修好語法再比對"]
     found = rules(css)
-    problems = []
+    nf_bodies = [b for s, b, _ in found if s == NF_SELECTOR]
+    if len(nf_bodies) != 1:
+        # 找不到就沒有基準；不只一塊時瀏覽器每塊都套、這裡只讀一塊，比對沒有意義
+        return [f"nightfall：區塊出現 {len(nf_bodies)} 次（要恰好 1 次）"]
+    problems = block_problems("nightfall", nf_bodies[0])
+    nf = declarations(nf_bodies[0])
+    for s, b, in_at_rule in found:
+        if s.startswith("@"):
+            problems.append(f"不支援分號式的 @ 敘述（@import、@layer a, b; 這類），src/index.css 裡不要寫：{s.split(';', 1)[0]};")
+        m = THEME_SELECTOR_RE.fullmatch(s)
+        if in_at_rule and (m or s == NF_SELECTOR):
+            # 包在 @media 等規則裡就只在某些條件下生效，條件不成立時這個主題沒有任何顏色
+            problems.append(f"{m.group(1) if m else 'nightfall'}：主題區塊要寫在最外層，不能包在 @media 等 @ 規則裡")
+        if m:
+            problems += block_problems(m.group(1), b)   # 不論有沒有配方都要合格
+            if m.group(1) not in RECIPES:
+                problems.append(f"{m.group(1)}：沒有配方（src/index.css 有這塊，admin/derive_theme.py 的 RECIPES 沒有）")
+        elif "data-theme" in s.lower() and s != NF_SELECTOR:
+            # 例如 [data-theme="x"]:root：權重跟標準寫法相同、寫在後面就生效（Codex spec R1）
+            problems.append(f"非標準的 data-theme 選擇器：{s}")
+    # 每個 data-theme 都要落在某條規則的選擇器上；落在別處的（巢狀子規則的選擇器、@ 規則的條件）上面兩條看不到。
+    # 辨識與清點都不分大小寫：HTML 的屬性名稱不分大小寫，data-Theme 一樣生效（Codex plan R7）；標準寫法仍要求固定格式
+    stray = css.lower().count("data-theme") - sum(s.lower().count("data-theme") for s, _, _ in found)
+    if stray:
+        problems.append(f"data-theme 出現在最外層選擇器以外的地方 {stray} 處（例如巢狀子規則或 @ 規則的條件裡）")
+    # 推導主題輸出的每個 token 午夜藍都要有：午夜藍的值不比對、--X-text 這類又是推導主題自己算的，
+    # 刪掉午夜藍的一條宣告時推導主題照樣一致，午夜藍卻少了那格（Claude 自查，Codex plan R8 那一類的延伸）
+    derived = {theme: derive(theme, nf) for theme in RECIPES}
+    for k in sorted(set().union(*derived.values()) - set(nf) - LIGHT_ONLY):
+        problems.append(f"nightfall：少了 {k}（推導主題都有這格，token 集合照午夜藍）")
     for theme in RECIPES:
-        got = {}
-        for s, b in found:
-            if s == theme_selector(theme):
-                got.update(declarations(b))
+        bodies = [b for s, b, _ in found if s == theme_selector(theme)]
+        if len(bodies) != 1:
+            problems.append(f"{theme}：區塊出現 {len(bodies)} 次（要恰好 1 次）")
+            continue
+        got = declarations(bodies[0])
         # 比的是印出來的區塊解析回來的結果：貼進 CSS 的是印出來的東西，漏印一條要被抓到
-        exp = declarations(render_block(theme, derive(theme, nf)))
+        exp = declarations(render_block(theme, derived[theme]))
         for k in sorted(set(got) | set(exp)):
             if got.get(k) != exp.get(k):
                 problems.append(f"{theme} {k}：CSS {got.get(k)!r}，推導 {exp.get(k)!r}")
