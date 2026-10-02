@@ -38,15 +38,16 @@ curl -fsSL https://raw.githubusercontent.com/dreamfind1021/fledge/main/scripts/i
 
 到 [Releases](https://github.com/dreamfind1021/fledge/releases) 下載 `Fledge_*_aarch64.dmg`，拖進 Applications。
 
-> ⚠ **目前未經 Apple 簽章。** 從瀏覽器下載的 `.dmg` 首次開啟可能被 Gatekeeper 擋（「App 已損毀」）。解法：**系統設定 › 隱私與安全性 › 仍要打開**，或執行：
+> ⚠ **目前未經 Apple 公證。** 從瀏覽器下載的 `.dmg` 會被 Gatekeeper 擋（「Apple 無法驗證…是否為惡意軟體」）。打開 dmg 前先執行這行，就不會被擋：
 > ```bash
-> xattr -dr com.apple.quarantine /Applications/Fledge.app
+> xattr -d com.apple.quarantine ~/Downloads/Fledge_*_aarch64.dmg
 > ```
+> 已經被擋了：到**系統設定 › 隱私權與安全性**按**強制打開**。dmg 和裡面的 Fledge 各會被擋一次，各按一次。
 > （`curl` 安裝腳本不會觸發此問題，因為它不打 quarantine 標記。）
 
 > ⚠ **看到「已阻擋 Fledge 取用聯絡人／行事曆」的通知，不用緊張。** Fledge 沒有、也不需要這些權限。這是因為 Claude Code 是 Fledge 的子程序，它叫起來的任何程式（例如 Chrome）順手去查聯絡人時，macOS 把帳記在 Fledge 頭上、直接擋掉。被擋的只是那個順手的查詢，主要工作照樣完成。
 >
-> **唯一需要手動給的權限是「完整磁碟取用」**，而且只有在 Fledge 裡的 Claude Code 要讀 `~/Library/…` 這類路徑時才需要。授權時選 **Fledge.app**（不是 `claude`）。授權一次即可，之後更新版本不用重新授權；從 1.9.0（含）以前的版本更新上來時，因為簽章方式換了，要再打開一次。完整原因與驗證方式見 [`guides/macos-permissions.md`](guides/macos-permissions.md)。
+> **唯一需要手動給的權限是「完整磁碟取用」**，而且只有在 Fledge 裡的 Claude Code 要讀 `~/Library/…` 這類路徑時才需要。授權時選 **Fledge.app**（不是 `claude`）。授權一次即可，之後更新版本不用重新授權；從 1.9.0（含）以前的版本更新上來時，因為簽章方式換了，第一次會被擋、開關變成關，再打開一次即可。完整原因與驗證方式見 [`guides/macos-permissions.md`](guides/macos-permissions.md)。
 
 ## 快速上手
 
@@ -242,7 +243,7 @@ npm run tauri dev            # 開發模式啟動 App
 
 **規劃中：**
 
-- **Apple 簽章 ＋ notarization**——目前未簽章。
+- **Apple 簽章 ＋ notarization**——目前是自建憑證簽章。
 - **數據面板的定價缺口**——長 context 分層計價、fast mode 兩倍價目前沒算進去，會低估。
 - **核對備份清單**——確認 `~/.claude` 底下每一項該收的都收了。
 - **in-app 安裝 skill**——設計已有，等寫入的安全機制做完。

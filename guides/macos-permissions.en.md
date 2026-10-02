@@ -54,7 +54,7 @@ When TCC records a grant, it also records a rule for "what counts as the same ap
 - **1.9.0 and earlier** were ad-hoc signed, so the rule pinned the hash of that specific binary. Every rebuild changes the hash, so after an update the rule no longer matched and the grant stopped working.
 - **From 1.9.1** Fledge is signed with a stable self-signed certificate, so the rule pins the certificate. Updates keep the same certificate, so the grant stays.
 
-**Coming from 1.9.0 or earlier**: the old and new rules differ, so after the first update turn Fledge's Full Disk Access on once more in System Settings. After that, you're done.
+**Coming from 1.9.0 or earlier**: the old and new rules differ, so the first time the updated Fledge reads a protected path it gets blocked, and the switch in System Settings turns off. Turn it back on and restart Fledge; after that, you're done. Toggling it before that first block does nothing — it only changes the old version's record.
 
 **Exception: running a differently signed Fledge on the same Mac**, such as one you built from source with ad-hoc signing. The moment it touches a protected path, TCC records a denial that replaces the existing grant: the switch in System Settings turns **off**, and reading `~/Library` returns `Operation not permitted`. Turn it back on in System Settings. The log shows records like:
 
@@ -74,4 +74,4 @@ codesign -d -r- /Applications/Fledge.app
 
 ## 3. Gatekeeper is a separate matter
 
-"App is damaged and can't be opened" is Gatekeeper reacting to an app that hasn't been notarized by Apple; it has nothing to do with the TCC story above. The fix is in the README's install section: System Settings › Privacy & Security › Open Anyway, or `xattr -dr com.apple.quarantine /Applications/Fledge.app`. Installing with the `curl` script never hits it.
+"Apple could not verify … is free of malware" is Gatekeeper reacting to a file that hasn't been notarized by Apple; it has nothing to do with the TCC story above. With a browser download, the dmg and the Fledge inside it are each blocked once. The fix is in the README's install section: remove the dmg's quarantine flag before opening it, or click Open Anyway in System Settings › Privacy & Security. Installing with the `curl` script never hits it.

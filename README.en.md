@@ -38,15 +38,16 @@ Installs to `/Applications`; open it from Spotlight/Launchpad. (Use `bash`, not 
 
 Download `Fledge_*_aarch64.dmg` from [Releases](https://github.com/dreamfind1021/fledge/releases) and drag it into Applications.
 
-> ⚠ **Not yet Apple-signed.** A `.dmg` downloaded via a browser may be blocked by Gatekeeper on first launch ("app is damaged"). Fix: **System Settings › Privacy & Security › Open Anyway**, or run:
+> ⚠ **Not notarized by Apple yet.** A `.dmg` downloaded via a browser is blocked by Gatekeeper ("Apple could not verify … is free of malware"). Run this before opening the dmg and it won't be blocked:
 > ```bash
-> xattr -dr com.apple.quarantine /Applications/Fledge.app
+> xattr -d com.apple.quarantine ~/Downloads/Fledge_*_aarch64.dmg
 > ```
+> Already blocked: go to **System Settings › Privacy & Security** and click **Open Anyway**. The dmg and the Fledge inside it are each blocked once, so click it once for each.
 > (The `curl` install script doesn't trigger this, since it doesn't set the quarantine flag.)
 
 > ⚠ **If macOS says "Fledge was blocked from accessing Contacts/Calendar", don't worry.** Fledge doesn't have — and doesn't need — those permissions. Claude Code is a child process of Fledge, so when any program it launches (Chrome, say) casually probes Contacts, macOS charges it to Fledge and blocks it outright. Only that side query is blocked; the main job still completes.
 >
-> **The only permission you may need to grant by hand is "Full Disk Access"**, and only when Claude Code inside Fledge needs to read protected paths like `~/Library/…`. Grant it to **Fledge.app** (not `claude`). You only grant it once — updates keep it. If you're coming from 1.9.0 or earlier, turn it on once more after updating, because the signing changed. Full explanation and how to verify it yourself: [`guides/macos-permissions.en.md`](guides/macos-permissions.en.md).
+> **The only permission you may need to grant by hand is "Full Disk Access"**, and only when Claude Code inside Fledge needs to read protected paths like `~/Library/…`. Grant it to **Fledge.app** (not `claude`). You only grant it once — updates keep it. If you're coming from 1.9.0 or earlier, the signing changed: the first access after updating gets blocked and the switch turns off — turn it on once more. Full explanation and how to verify it yourself: [`guides/macos-permissions.en.md`](guides/macos-permissions.en.md).
 
 ## Quick start
 
@@ -242,7 +243,7 @@ For packaging into `.app`/`.dmg`, see [`scripts/`](scripts/); CI is in [`.github
 
 **Planned:**
 
-- **Apple signing + notarization** — currently unsigned.
+- **Apple signing + notarization** — currently self-signed.
 - **Pricing gaps in the dashboard** — long-context tiers and fast-mode pricing aren't counted yet, so costs are underestimated.
 - **Re-check the backup list** — confirm that everything under `~/.claude` that should be included actually is.
 - **In-app skill install** — designed; waiting on a safe write mechanism.
