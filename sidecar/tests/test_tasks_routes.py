@@ -134,6 +134,7 @@ def test_list_tasks_shape_and_fingerprint(tmp_path, monkeypatch):
     assert t["name"] == "01-a.md" and t["number"] == 1 and t["title"] == "第一件"
     assert t["status"] == "todo" and t["source"] == "me" and t["anomalies"] == []
     assert len(t["fingerprint"]) == 64  # sha256 hex
+    assert t["path"] == str(proj / ".fledge" / "tasks" / "01-a.md")   # 給「用編輯器打開」，由 sidecar 組
 
 
 def test_list_tasks_rejects_unknown_project(tmp_path, monkeypatch):
@@ -222,6 +223,7 @@ def test_post_creates_ticket_and_returns_name_and_fingerprint(tmp_path, monkeypa
     assert body["number"] == 1 and body["status"] == "todo" and body["source"] == "me"
     assert len(body["fingerprint"]) == 64
     assert (proj / ".fledge" / "tasks" / body["name"]).exists()   # 逐層建出來了
+    assert body["path"] == str(proj / ".fledge" / "tasks" / "01-匯出的檔名要能自訂.md")
 
 
 def test_post_rejects_blank_title(tmp_path, monkeypatch):
@@ -336,6 +338,7 @@ def test_patch_changes_only_status_and_leaves_body_byte_identical(tmp_path, monk
     assert r.json()["status"] == "doing"
     assert r.json()["fingerprint"] != fp                             # 回新的 fingerprint
     assert r.json()["title"] == "標題不該被動到"
+    assert r.json()["path"] == str(tasks / "01-a.md")
 
 
 def test_patch_with_stale_fingerprint_is_409_and_file_untouched(tmp_path, monkeypatch):
@@ -506,6 +509,7 @@ def test_put_content_registered_on_composed_app(tmp_path, monkeypatch):
     assert body["title"] == "new" and body["body"] == "nb" and body["name"] == "01-t.md"
     assert body["editable"] is True and "fingerprint" in body
     assert p.read_text(encoding="utf-8").endswith("# new\n\nnb\n")
+    assert body["path"] == str(p)
 
 
 def test_put_content_stale_returns_409_and_leaves_file(tmp_path, monkeypatch):

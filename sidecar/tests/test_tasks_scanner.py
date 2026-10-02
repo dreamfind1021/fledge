@@ -1135,6 +1135,7 @@ def test_update_content_lock_is_global_not_per_ticket(tmp_path, monkeypatch):
 # ── 總覽的進行中／近期新增票（票 19，spec §4.1）────────────────────────
 
 from datetime import date as _date
+from datetime import datetime as _datetime
 
 T19 = "---\nstatus: {status}\nsource: ai\ncreated: {created}\n---\n\n# {title}\n"
 
@@ -1199,12 +1200,85 @@ def test_overview_carries_highlights_with_path_and_three_states(tmp_path):
 def test_read_note_ok_returns_content_and_mtime(tmp_path):
     config, proj = _setup(tmp_path)
     (proj / ".fledge").mkdir()
-    (proj / ".fledge" / "state.md").write_text("# p\n\n**下一步**：x\n\n## 停在哪\n\n- y\n", encoding="utf-8")
+    state = proj / ".fledge" / "state.md"
+    state.write_text("# p\n\n**下一步**：x\n\n## 停在哪\n\n- y\n", encoding="utf-8")
+    # 釘一個固定的本地時間，不比「今天」——寫檔與斷言跨過午夜時會差一天
+    noon = _datetime(2026, 1, 15, 12, 0).timestamp()
+    os.utime(state, (noon, noon))
     with scanner.open_tasks_dir(str(proj), config) as td:
         r = scanner.read_note(td)
     assert r.status == scanner.STATUS_OK
     assert r.content.startswith("# p\n")
-    assert r.mtime == _date.today().isoformat()
+    assert r.mtime == "2026-01-15"
+
+
+def test_read_note_unconvertible_mtime_is_unavailable_not_raised(tmp_path, monkeypatch):
+    """修改時間換不成日期（Windows 上 1970 年前的時間戳會丟 OSError；APFS 夾在 1677～2262 年，
+    macOS 實際碰不到）→ unavailable，不讓例外穿出去變成 500。前端拿到 500 也是畫 unavailable，
+    差別在 sidecar 不留一筆未處理例外。"""
+    config, proj = _setup(tmp_path)
+    (proj / ".fledge").mkdir()
+    (proj / ".fledge" / "state.md").write_text("# p\n", encoding="utf-8")
+
+    class _BadDate(_date):
+        @classmethod
+        def fromtimestamp(cls, t):
+            raise OverflowError("timestamp out of range for platform time_t")
+
+    monkeypatch.setattr(scanner, "date", _BadDate)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = scanner.read_note(td)
+    assert r.status == scanner.STATUS_UNAVAILABLE and r.content is None
+
+
+def _within_deadline(fn, fifo, seconds=5.0):
+    """在另一條執行緒呼叫 `fn`，限時回來。開檔少了 `O_NONBLOCK` 時會卡在 FIFO 上等寫入端——
+    這裡判失敗，紅在斷言而不是整個 pytest 掛住（本 repo 沒有 pytest-timeout）。"""
+    box = {}
+
+    def run():
+        try:
+            box["r"] = fn()
+        except BaseException as e:   # 例外帶回主執行緒再拋，不在背景吞掉
+            box["e"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(seconds)
+    if t.is_alive():
+        # 盡力放行卡住的執行緒再收尾：開一次寫入端讓 open 回來、關掉讓 read 讀到 EOF
+        wfd = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+        t.join(1.0)
+        os.close(wfd)
+        t.join(seconds)
+        pytest.fail("讀 state.md 卡在 FIFO 上：開檔少了 O_NONBLOCK")
+    if "e" in box:
+        raise box["e"]
+    return box["r"]
+
+
+def test_read_note_fifo_state_md_is_unavailable_without_blocking(tmp_path):
+    """state.md 是 FIFO：`O_NONBLOCK` 讓開檔不等寫入端，`S_ISREG` 擋下非一般檔案 → unavailable。
+    少了 `S_ISREG`，沒有寫入端的 FIFO 讀到 0 位元組，會被當成一份空白筆記回 ok。"""
+    config, proj = _setup(tmp_path)
+    (proj / ".fledge").mkdir()
+    fifo = proj / ".fledge" / "state.md"
+    os.mkfifo(fifo)
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        r = _within_deadline(lambda: scanner.read_note(td), fifo)
+    assert r.status == scanner.STATUS_UNAVAILABLE and r.content is None
+
+
+def test_overview_fifo_state_md_does_not_block(tmp_path):
+    """總覽的「下一步」也讀 state.md（`_read_state_text`）。少了 `O_NONBLOCK`，一個專案的
+    state.md 是 FIFO 就會把整個 `GET /tasks/overview` 掛住，而不是只有那一列讀不到。"""
+    config, proj = _setup(tmp_path)
+    (proj / ".fledge").mkdir()
+    fifo = proj / ".fledge" / "state.md"
+    os.mkfifo(fifo)
+    ov = _within_deadline(lambda: scanner.build_overview(config), fifo)
+    row = next(r for r in ov["projects"] if r["path"] == str(proj))
+    assert row["next_step"] == ""
 
 
 def test_read_note_absent_when_fledge_or_state_missing(tmp_path):

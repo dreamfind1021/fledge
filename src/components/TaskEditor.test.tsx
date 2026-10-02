@@ -623,5 +623,41 @@ describe("TaskEditor", () => {
         expect(onLeave).toHaveBeenCalledWith(false, true);
       } finally { setItem.mockRestore(); }
     });
+
+    // 下面兩條都從「request 觸發的離開寫草稿失敗」出發：來源停在 "request"，之後使用者
+    // 自己的動作得把它改回 "self"。上面那條「自己按取消」從全新編輯器開始，來源本來就是
+    // "self"，selfLeave／discardAndReload 裡寫回 "self" 的那行刪掉也不會紅
+    it("leaveRequest 失敗 → 自己按取消也寫不進去 → 仍要離開 → onLeave(false, false)", async () => {
+      const onLeave = vi.fn();
+      const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
+      try {
+        const { rerender } = render(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={0} t={t} />);
+        fireEvent.change(bodyBox(), { target: { value: "typed" } });
+        rerender(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={1} t={t} />);
+        await screen.findByText(en.list.leaveAnyway);
+        fireEvent.click(screen.getByText(en.list.cancel));             // 自發的離開，草稿一樣寫不進去
+        expect(onLeave).not.toHaveBeenCalled();
+        fireEvent.click(screen.getByText(en.list.leaveAnyway));
+        expect(onLeave).toHaveBeenCalledTimes(1);
+        expect(onLeave).toHaveBeenCalledWith(false, false);
+      } finally { setItem.mockRestore(); }
+    });
+
+    it("leaveRequest 失敗後改去存檔撞 409 → 捨棄我的版本 → onLeave(true, false)", async () => {
+      const onLeave = vi.fn();
+      updateTaskContent.mockRejectedValue(new TaskConflictError());
+      const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
+      try {
+        const { rerender } = render(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={0} t={t} />);
+        fireEvent.change(bodyBox(), { target: { value: "typed" } });
+        rerender(<TaskEditor port={1} project="/p" projectName="p" task={task()} onSaved={() => {}} onLeave={onLeave} leaveRequest={1} t={t} />);
+        await screen.findByText(en.list.leaveAnyway);
+      } finally { setItem.mockRestore(); }                               // 空間又夠了：存檔前的草稿寫得進去
+      fireEvent.click(saveBtn());
+      await screen.findByText(en.list.conflictEditor);
+      fireEvent.click(screen.getByText(en.list.discardAndReload));
+      expect(onLeave).toHaveBeenCalledTimes(1);
+      expect(onLeave).toHaveBeenCalledWith(true, false);
+    });
   });
 });
