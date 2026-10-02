@@ -48,6 +48,21 @@ export function readTermMinContrast(): number {
 }
 
 /**
+ * 輸入法懸置草稿的元素（純視覺、不進 PTY），Terminal.tsx 掛到 .xterm-helpers 底下。字色是終端機前景色、打淡化，
+ * 看得出還沒送出。它是 DOM 元素、不是 xterm 畫的字：minimumContrastRatio 管不到，對比由 term-theme.test.ts 建一個出來驗（票 38）
+ */
+export function createImeGhost(): HTMLDivElement {
+  const ghost = document.createElement("div");
+  // 淡化 0.62：淺色主題對終端機底剛好過 4.5（0.55 只有約 3.85，票 38）
+  ghost.style.cssText =
+    "position:absolute;pointer-events:none;z-index:2;display:none;white-space:pre;" +
+    "opacity:0.62;border-bottom:1px dashed currentColor;" +
+    "font-family:JetBrains Mono,ui-monospace,monospace;font-size:13px;";
+  ghost.style.color = readTermTheme().foreground ?? "#ccc";
+  return ghost;
+}
+
+/**
  * 已開著的終端機跟著主題換色（票 07，spec §4.5）。回傳取消訂閱的函式，終端機卸載時呼叫——
  * 否則切主題時會去碰已經 dispose 的 xterm。每次都組一個新的 theme 物件：淺→深時選取色要回到 xterm 預設，
  * 物件裡不帶 selectionBackground 才會回去

@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ITheme } from "@xterm/xterm";
-import { followTheme, readTermMinContrast, readTermTheme } from "./term-theme";
+import { createImeGhost, followTheme, readTermMinContrast, readTermTheme } from "./term-theme";
 import { setTheme } from "../lib/theme";
+import { THEMES } from "../lib/themeIds";
+import { contrast, resolveColor, token } from "../testing/cssRules";
 
 // 終端機的顏色（票 07，spec docs/planning/daylight-themes-design.md §3.5、§4.5）。
 // jsdom 讀得到寫在 <html> 上的 CSS 變數：用它模擬「切主題之後 CSS 變數變了」，不必載入整份 index.css
@@ -50,6 +52,22 @@ describe("readTermMinContrast", () => {
     expect(readTermMinContrast()).toBe(1);
     setVars({ "term-min-contrast": "abc" });
     expect(readTermMinContrast()).toBe(1);
+  });
+});
+
+// 輸入法懸置草稿（票 38）：DOM 元素、不是 xterm 畫的字，minimumContrastRatio 管不到，CSS 的對比測試也掃不到 inline style。
+// 直接建一個出來，讀它最後的字色與 opacity 算（Codex plan R2：讀原始碼得列舉各種覆寫寫法，改讀實際的元素）
+describe("createImeGhost：輸入法懸置草稿", () => {
+  const rgbOf = (hex: string) => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;
+  it.each(THEMES)("%s：終端機前景色打淡化，對終端機底至少 4.5:1", (theme) => {
+    setVars({ "term-text": token("term-text", theme), "term-bg": token("term-bg", theme) });
+    const ghost = createImeGhost();
+    expect(ghost.style.color).toBe(rgbOf(token("term-text", theme)));
+    const opacity = Number(ghost.style.opacity);
+    expect(opacity).toBeGreaterThan(0);   // 沒寫淡化的話讀到 ""，Number("") 是 0
+    expect(opacity).toBeLessThan(1);      // 要比已送出的字淡，看得出還沒送出
+    const ink = resolveColor(`color-mix(in srgb, var(--term-text) ${opacity * 100}%, var(--term-bg))`, theme);
+    expect(contrast(ink, token("term-bg", theme))).toBeGreaterThanOrEqual(4.5);
   });
 });
 
@@ -113,6 +131,10 @@ describe("followTheme：已開著的終端機跟著主題換色", () => {
 describe("Terminal.tsx 的接線", () => {
   const SRC = import.meta.glob("/src/components/Terminal.tsx", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
   const src = SRC["/src/components/Terminal.tsx"];
+  // 草稿另外在這裡手寫一份的話，上面 createImeGhost 的對比測試就驗不到實際畫出來的那個（票 38）
+  it("輸入法懸置草稿用 createImeGhost() 建立", () => {
+    expect(src).toContain("const imeGhost = createImeGhost();");
+  });
   it("建立 xterm 時用 followTheme 訂閱", () => {
     expect(typeof src).toBe("string");
     expect(src).toMatch(/const stopFollowingTheme = followTheme\(term, imeGhost\);/);
