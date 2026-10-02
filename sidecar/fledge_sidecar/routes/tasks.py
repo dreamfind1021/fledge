@@ -16,15 +16,6 @@ from fledge_sidecar.tasks import scanner
 router = APIRouter(prefix="/tasks")
 
 
-def _with_path(rows: list[dict], project: str) -> list[dict]:
-    """替每張票補上絕對路徑，給前端「用編輯器打開」用（design §5.2）。
-
-    **這是唯讀資訊**——寫入端點仍然只收 `project` ＋ `name`（design §7.1）。"""
-    for row in rows:
-        row["path"] = scanner.task_path(project, row["name"])
-    return rows
-
-
 def _target(td: scanner.TasksDir) -> JSONResponse | None:
     """寫入端點共用的前置檢查。回 `None` 代表可以動手。
 
@@ -121,7 +112,7 @@ def list_tasks(project: str = "") -> JSONResponse:
         if td.status == scanner.STATUS_UNKNOWN_PROJECT:
             return JSONResponse({"error": "unknown_project"}, status_code=400)
         if td.status == scanner.STATUS_OK and td.fd is not None:
-            tasks: list | None = _with_path(scanner.scan_tasks(td.fd), td.project)
+            tasks: list | None = scanner.with_path(scanner.scan_tasks(td.fd), td.project)
         elif td.status == scanner.STATUS_ABSENT:
             tasks = []
         else:
@@ -156,7 +147,7 @@ def create_task(project: str = Body(""), title: str = Body("")) -> JSONResponse:
             return rejected
         try:
             row = scanner.create_task(td.fd, clean, created=date.today().isoformat())
-            _with_path([row], td.project)
+            scanner.with_path([row], td.project)
         except OSError:
             return JSONResponse({"error": "create_failed"}, status_code=500)
         return JSONResponse(row, status_code=201)
@@ -195,7 +186,7 @@ def update_task(
             return JSONResponse({"error": "invalid_target"}, status_code=400)
         if row is None:
             return JSONResponse({"error": "stale"}, status_code=409)
-        return JSONResponse(_with_path([row], td.project)[0])
+        return JSONResponse(scanner.with_path([row], td.project)[0])
 
 
 @router.put("/content")
@@ -233,7 +224,7 @@ def update_content(
             return JSONResponse({"error": "invalid_target"}, status_code=400)
         if row is None:
             return JSONResponse({"error": "stale"}, status_code=409)
-        return JSONResponse(_with_path([row], td.project)[0])
+        return JSONResponse(scanner.with_path([row], td.project)[0])
 
 
 @router.delete("")

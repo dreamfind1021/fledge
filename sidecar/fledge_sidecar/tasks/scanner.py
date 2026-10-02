@@ -479,8 +479,7 @@ def build_overview(config: AppConfig, *, today: date | None = None) -> dict[str,
                 doing: int | None = counts.doing
                 parked: int | None = counts.parked
                 doing_tasks, recent_tasks = pick_highlights(scanned, today)
-                for r in (*doing_tasks, *recent_tasks):
-                    r["path"] = task_path(td.project, r["name"])
+                with_path([*doing_tasks, *recent_tasks], td.project)
                 highlights: tuple[list | None, list | None] = (doing_tasks, recent_tasks)
             elif td.status == STATUS_ABSENT:
                 unfinished = doing = parked = 0
@@ -548,6 +547,15 @@ def task_path(project: str, name: str) -> str:
     由 sidecar 組而不是前端拼：`.fledge/tasks` 這個佈局是本檔的常數，
     寫兩份必然漂移。**這是唯讀資訊，寫入端點仍然只收 `project` ＋ `name`。**"""
     return os.path.join(project, FLEDGE_DIRNAME, TASKS_DIRNAME, name)
+
+
+def with_path(rows: list[dict[str, Any]], project: str) -> list[dict[str, Any]]:
+    """替每張票就地補上 `path`（`task_path`），回傳同一個 list。總覽與 `routes/tasks.py` 的
+    四個端點共用——原本路由一份、總覽一份同樣的迴圈（票 25）。**這是唯讀資訊**，寫入端點
+    仍然只收 `project` ＋ `name`（design §7.1）。"""
+    for row in rows:
+        row["path"] = task_path(project, row["name"])
+    return rows
 
 
 def _open_existing(tasks_fd: int, name: str, *, write: bool = False) -> int:
