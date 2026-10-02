@@ -4,8 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // 主題切換（票 07，spec docs/planning/daylight-themes-design.md §4.3）。
 // 模組層有狀態（目前的主題、訂閱者），每條測試重新載入一份乾淨的模組。
 // Tauri 的原生視窗外觀用 mock 觀察：vitest 不在 Tauri 裡，真的 getCurrentWindow() 會丟例外。
+// getWindow 可以改成丟例外，模擬瀏覽器直接開 vite 的情況（票 38）
 const setWindowTheme = vi.fn((_t: "dark" | "light" | null) => Promise.resolve());
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setTheme: setWindowTheme }) }));
+const getWindow = vi.fn(() => ({ setTheme: setWindowTheme }));
+vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => getWindow() }));
 
 const load = async () => {
   vi.resetModules();
@@ -54,6 +56,21 @@ describe("initTheme：啟動時套用存過的主題", () => {
     const { initTheme, currentTheme } = await load();
     expect(() => initTheme()).not.toThrow();
     expect(currentTheme()).toBe("nightfall");
+  });
+
+  // 不在 Tauri 裡（瀏覽器直接開 vite、README 截圖 rig）時 getCurrentWindow() 會同步丟例外（票 38）。
+  // 其他測試都 mock 成正常回傳，拿掉 apply() 裡那段 try/catch 照樣全綠——只有這條看得到
+  it("getCurrentWindow() 同步丟例外：照樣套用、照樣通知、留下警告，不讓 app 開不起來", async () => {
+    getWindow.mockImplementationOnce(() => { throw new Error("window.__TAURI_INTERNALS__ is undefined"); });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    localStorage.setItem("fledge-theme", "daylight-cool");
+    const { initTheme, onThemeChange } = await load();
+    const notified = vi.fn();
+    onThemeChange(notified);
+    expect(() => initTheme()).not.toThrow();
+    expect(document.documentElement.dataset.theme).toBe("daylight-cool");
+    expect(notified).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalled();
   });
 });
 
