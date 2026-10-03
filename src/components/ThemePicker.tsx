@@ -10,6 +10,7 @@ const LABEL: Record<ThemeId, string> = {
   "nightfall-iron": "nightfallIron",
   "daylight-cool": "daylightCool",
   "daylight-warm": "daylightWarm",
+  "daylight-cherry": "daylightCherry",
 };
 
 const SCHEMES = ["dark", "light"] as const;

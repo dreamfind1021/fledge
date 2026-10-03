@@ -12,7 +12,9 @@
    程式代號的唯一來源是 src/lib/themeIds.ts；這裡的選擇器要跟它一致（同一支測試雙向比對）。
 
    功能色分兩種用法：
-   - --X（--primary、--session、--ai、--warning、--error）：按鈕底色、圖示、狀態點。每個主題都相同（使用者決定，2026-09-29；票 40 的兩個深色主題沿用）。
+   - --X（--primary、--session、--ai、--warning、--error）：按鈕底色、圖示、狀態點。每個主題都相同（使用者決定，2026-09-29；票 40 的兩個深色主題沿用），
+     例外是櫻花粉的 --primary：色票本身，--primary-ink、--focus 跟著換色相（櫻花粉 spec docs/superpowers/specs/2026-10-03-cherry-blossom-theme-design.md §3.2）。
+     各處註解稱主色為橘／琥珀，是預設外觀的描述；櫻花粉的 --primary 是粉。
    - --X-text：拿來寫字。午夜藍是 --X 的別名（畫面不變）；其他主題要對「--X 18% 疊在 --active」≥ 4.5——
      淺色主題深一階，票 40 的深色主題過的寫 var(--X)、不過的微微調亮。
      功能色當 color 一律用 --X-text，例外（圖示）登記在 src/index.textColor.test.ts 的白名單。 */
@@ -203,6 +205,70 @@
   --term-bright-cyan:#0A7B6C; --term-bright-white:#706D68;
 }
 
+/* ===== 櫻花粉（daylight-cherry）：從午夜藍推導，色相取使用者給的色票 #FBCEE1（Mac 螢幕截圖 Display P3 換算）=====
+   推導規則同冷調灰；主色（按鈕、圖示、狀態點）就是色票本身，按鈕上的字與焦點外圈跟著換色相
+   （spec docs/superpowers/specs/2026-10-03-cherry-blossom-theme-design.md §3.2）。
+   色值由 admin/derive_theme.py 產生：要調色時改配方或規則再重產，不手改單格（腳本的 check 會比對這裡的值）。 */
+:root[data-theme="daylight-cherry"] {
+  color-scheme: light;
+  --primary: #FBCEE1;   /* 色票本身，很淡：對側欄約 1.30，知情接受（spec §4） */
+  --primary-ink: #3C1C2C;
+  --session: #67D5C0;
+  --ai: #A99BFF;
+  --ai-ink: #191038;
+  --warning: #FBBF24;
+  --error: #EF4444;
+  --error-ink: #FFFFFF;
+  --primary-text: #7D5768;
+  --session-text: #076B5D;
+  --ai-text: #5F4EAA;
+  --warning-text: #7B5B01;
+  --error-text: #AF041A;
+  --fill-ink: #0C111B;
+  --focus: color-mix(in srgb, #FA8BC0 60%, transparent);   /* 外圈不用主色（太淡），用午夜藍的橘換成這個色相（spec §3.2 第 3 條） */
+  --bg: #FEEDF4;
+  --sidebar: #FEF4F8;
+  --surface: #FFFDFE;
+  --surface-2: #FEE1ED;
+  --hover: #FFE5F0;
+  --active: #FED4E6;
+  --overlay: rgba(45,24,35,.32);
+  --text: #21151A;
+  --text-2: #3B2F34;
+  --dim: #5A4C52;
+  --faint: #66595E;
+  --border: rgba(45,24,35,.12);
+  --divider: rgba(45,24,35,.08);
+  --shadow: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 1px 2px rgba(45,24,35,.06), 0 12px 32px rgba(45,24,35,.10);
+  --shadow-sm: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 4px 14px rgba(45,24,35,.08);
+  --modal-shadow: 0 0 8px 0 color-mix(in srgb, var(--text) 6%, transparent), 0 24px 60px rgba(45,24,35,.20);
+  --term-bg: #FFE9F2;
+  --term-elev: #FFF3F8;
+  --term-text: #1D1217;
+  --term-dim: #6A5C62;
+  --term-border: rgba(45,24,35,.10);
+  --term-divider: rgba(45,24,35,.07);
+  --term-cursor: #076B5D;
+  --term-min-contrast: 4.5;    /* 理由見冷調灰區塊 */
+  --term-cursor-accent: #FFE9F2;   /* ＝--term-bg（理由見冷調灰區塊） */
+  --term-selection: #BEC4E2;   /* ＝--term-blue 30% 疊在 --term-bg（理由見冷調灰區塊） */
+  --term-black: #35292E;
+  --term-red: #D2222B;
+  --term-green: #027D3D;
+  --term-yellow: #8B6706;
+  --term-blue: #286DBD;
+  --term-magenta: #8B4FC2;
+  --term-cyan: #037A6A;
+  --term-white: #686164;
+  --term-bright-black: #74686D;
+  --term-bright-red: #C03E43;
+  --term-bright-green: #057D45;
+  --term-bright-yellow: #836A05;
+  --term-bright-blue: #416FA2;
+  --term-bright-magenta: #805EA1;
+  --term-bright-cyan: #067A6B;
+  --term-bright-white: #726A6D;
+}
 /* 全域 reset + base：body 用 token（缺 reset 會露出 body 預設 8px margin 白邊）。 */
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; padding: 0; height: 100%; }

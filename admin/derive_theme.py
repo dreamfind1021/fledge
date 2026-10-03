@@ -18,7 +18,7 @@ CSS_PATH = Path(__file__).resolve().parent.parent / "src" / "index.css"
 NF_SELECTOR = ':root, [data-theme="nightfall"]'
 
 # ── 配方：每個主題的輸入參數。規則在下面，這裡只放「這個主題選了什麼」 ─────────────────
-# 深色：色票（sRGB）。淺色：色相、表面彩度、文字彩度、卡片（OKLCH 亮度, 彩度）、陰影底色（rgba 的 RGB）
+# 深色：色票（sRGB）。淺色：色相、表面彩度、文字彩度、卡片（OKLCH 亮度, 彩度）、陰影底色（rgba 的 RGB）、主色（選填，見 derive_light）
 RECIPES = {
     "nightfall-cocoa": {"scheme": "dark", "swatch": "#59443E"},   # Pantone Chocolate Martini
     "nightfall-iron": {"scheme": "dark", "swatch": "#766F69"},    # Pantone Hematite
@@ -26,6 +26,9 @@ RECIPES = {
                       "card": (1.0, 0.0), "shade": "18,25,39"},
     "daylight-warm": {"scheme": "light", "hue": 75, "c_surface": 0.012, "c_text": 0.018,
                       "card": (0.996, 0.004), "shade": "40,30,18"},
+    # 色相取使用者給的色票 #FBCEE1（Mac 螢幕截圖 Display P3 換算），主色就是色票本身
+    "daylight-cherry": {"scheme": "light", "hue": 351, "c_surface": 0.030, "c_text": 0.020,
+                        "card": (0.996, 0.004), "shade": "45,24,35", "primary": "#FBCEE1"},
 }
 
 SURFACES = ["--bg", "--sidebar", "--surface", "--surface-2", "--hover", "--active", "--term-bg", "--term-elev"]
@@ -198,6 +201,15 @@ def derive_dark(nf, swatch):
 def derive_light(nf, r):
     # daylight spec §3.2 五條，加上審查手調、寫成規則的部分（spec §3.4 表中標 ＊ 的）
     H, Cn, Ct = r["hue"], r["c_surface"], r["c_text"]
+    if "primary" in r:
+        # 主色換成指定色（spec docs/superpowers/specs/2026-10-03-cherry-blossom-theme-design.md §3.2）。先複製再換：
+        # check_css 對每個配方共用同一份 nf，直接改的話之後推的主題會拿到這個主色（Codex spec R1）。
+        # 按鈕上的字、焦點外圈：午夜藍那一格的亮度與彩度、換成這個色相（主色本身可能太淡，外圈不用它）
+        nf = dict(nf)
+        pL, pC, _ = to_oklch(nf["--primary"])
+        focus = oklch_hex(pL, pC, H)
+        iL, iC, _ = to_oklch(nf["--primary-ink"])
+        nf["--primary"], nf["--primary-ink"] = r["primary"], oklch_hex(iL, iC, H)
     t = dict(nf)
     lightness = {"--surface": r["card"][0], "--sidebar": 0.977, "--bg": 0.962,
                  "--hover": 0.946, "--surface-2": 0.938, "--active": 0.912}
@@ -233,6 +245,8 @@ def derive_light(nf, r):
     t["--term-border"] = shade(".10")
     t["--term-divider"] = shade(".07")
     t["color-scheme"] = "light"
+    if "primary" in r:
+        t["--focus"] = f"color-mix(in srgb, {focus} 60%, transparent)"
     # 選取色只在淺色定義：--term-blue 30% 疊在 --term-bg，寫成畫出來的色碼（輸出的 token 值才取整），放在 --term-cursor-accent 之後
     selection = rgb2hex(mix(t["--term-blue"], tb, 0.30))
     out = {}
