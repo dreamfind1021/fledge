@@ -10,10 +10,10 @@ def test_normalize_claude_alias_and_suffix():
 
 
 def test_claude_sonnet_5_priced_at_standard_rate():
-    # sonnet-5 用標準價 $3/$15（非促銷 $2/$10）：1M in + 1M out = 3 + 15
+    # sonnet-5 的標準價是 $2/$10：原訂 9/1 漲到 $3/$15 已被官方取消，1M in + 1M out = 2 + 10
     cost, missing = pricing.claude_cost("claude-sonnet-5", 1_000_000, 1_000_000, 0, 0, 0)
     assert missing is False
-    assert abs(cost - 18.0) < 1e-9
+    assert abs(cost - 12.0) < 1e-9
 
 
 def test_claude_cost_per_mtok_with_cache_tiers():
