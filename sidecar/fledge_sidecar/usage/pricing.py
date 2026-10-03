@@ -26,9 +26,6 @@ _CODEX_DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 # 價與理由放在一起，是為了不依賴「前一版表的內容」——表是生成物，欄位數改了就對不上。
 PINNED: dict[str, tuple[tuple[float, ...], str]] = {
     # (input, output, cache_5m, cache_1h, cache_read)，取自 Anthropic 官方定價頁的標準價欄
-    "claude-sonnet-5": ((3.0, 15.0, 3.75, 6.0, 0.3),
-                        "釘標準價 $3/$15。Anthropic 官方：促銷價 $2/$10 至 2026-08-31，"
-                        "9/1 起標準價生效；上游追促銷價。靜態表不追時間，且 Net ROI 需跨月可比。"),
 }
 
 # 刻意不入表：查無定價會走 missing 警示，比默默用近似價安全。

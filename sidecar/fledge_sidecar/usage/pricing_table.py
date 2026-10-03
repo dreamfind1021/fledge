@@ -8,7 +8,7 @@ from __future__ import annotations
 
 # <生成日期>.<表內容 sha256 前 8 碼>：內容一變就變，改表不可能忘記遞增。
 # cache.py 只做相等比對，不解析內容。
-TABLE_VERSION = "2026-09-23.89314800"
+TABLE_VERSION = "2026-10-04.a4832f83"
 
 # Claude：(input, output, cache_5m_write, cache_1h_write, cache_read)——三層 cache 存
 # 上游真價而非倍率（倍率只對現行世代成立，claude-3-haiku 實為 1.2x/0.12x）；
@@ -28,20 +28,30 @@ CLAUDE_PRICING: dict[str, tuple[float, float, float, float, float]] = {
     "claude-opus-5-5": (4.0, 20.0, 5.0, 8.0, 0.2),
     "claude-sonnet-4-5": (3.0, 15.0, 3.75, 6.0, 0.3),
     "claude-sonnet-4-6": (3.0, 15.0, 3.75, 6.0, 0.3),
-    "claude-sonnet-5": (3.0, 15.0, 3.75, 6.0, 0.3),
+    "claude-sonnet-5": (2.0, 10.0, 2.5, 4.0, 0.2),
+    "claude-sonnet-5-5": (2.0, 10.0, 2.5, 4.0, 0.2),
 }
 
 # Codex：(input, cached_input, output)
 CODEX_PRICING: dict[str, tuple[float, float, float]] = {
     "gpt-5": (1.25, 0.125, 10.0),
     "gpt-5-chat": (1.25, 0.125, 10.0),
+    "gpt-5-chat-latest": (1.25, 0.125, 10.0),
+    "gpt-5-codex": (1.25, 0.125, 10.0),
     "gpt-5-mini": (0.25, 0.025, 2.0),
     "gpt-5-nano": (0.05, 0.005, 0.4),
     "gpt-5-pro": (15.0, 1.5, 120.0),
     "gpt-5-search-api": (1.25, 0.125, 10.0),
     "gpt-5.1": (1.25, 0.125, 10.0),
+    "gpt-5.1-chat-latest": (1.25, 0.125, 10.0),
+    "gpt-5.1-codex": (1.25, 0.125, 10.0),
+    "gpt-5.1-codex-max": (1.25, 0.125, 10.0),
+    "gpt-5.1-codex-mini": (0.25, 0.025, 2.0),
     "gpt-5.2": (1.75, 0.175, 14.0),
+    "gpt-5.2-chat-latest": (1.75, 0.175, 14.0),
+    "gpt-5.2-codex": (1.75, 0.175, 14.0),
     "gpt-5.2-pro": (21.0, 2.1, 168.0),
+    "gpt-5.3-chat-latest": (1.75, 0.175, 14.0),
     "gpt-5.3-codex": (1.75, 0.175, 14.0),
     "gpt-5.4": (2.5, 0.25, 15.0),
     "gpt-5.4-mini": (0.75, 0.075, 4.5),
@@ -57,4 +67,5 @@ CODEX_PRICING: dict[str, tuple[float, float, float]] = {
     "gpt-6-astra": (10.0, 1.0, 50.0),
     "gpt-6-luna": (0.1, 0.01, 0.5),
     "gpt-6-sol": (2.0, 0.2, 10.0),
+    "gpt-6.1-sol": (2.0, 0.1, 10.0),
 }
