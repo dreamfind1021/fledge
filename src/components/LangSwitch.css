@@ -6,6 +6,14 @@
   flex-shrink: 0;
 }
 
+/* 外觀選項（ThemePicker）借用這裡的膠囊：深色一排、淺色一排，每一排是一個 .lang-switch
+   （spec docs/superpowers/specs/2026-10-03-cherry-blossom-theme-design.md §5） */
+.theme-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 /* 不畫外框：沒選的只有字（票 28 第四批 4a，spec D8） */
 .lang-switch-btn {
   border: none;

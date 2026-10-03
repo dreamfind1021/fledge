@@ -198,9 +198,9 @@ describe("午夜藍以外的主題的選擇器不靠區塊順序", () => {
 });
 
 describe("主題清單與 CSS 雙向一致", () => {
-  // 產品決定的五個選項（daylight spec §2.1、票 40 spec §2.1），不是任意清單；外觀選項照這個順序排
-  it("THEMES 恰好是五個產品選項", () => {
-    expect([...THEMES]).toEqual(["nightfall", "nightfall-cocoa", "nightfall-iron", "daylight-cool", "daylight-warm"]);
+  // 產品決定的六個選項（daylight spec §2.1、票 40 spec §2.1、櫻花粉 spec §2.1），不是任意清單；外觀選項照這個順序排
+  it("THEMES 恰好是六個產品選項", () => {
+    expect([...THEMES]).toEqual(["nightfall", "nightfall-cocoa", "nightfall-iron", "daylight-cool", "daylight-warm", "daylight-cherry"]);
   });
 
   it("index.css 的主題區塊＝THEMES（多一塊、少一塊都紅）", () => {
@@ -210,7 +210,9 @@ describe("主題清單與 CSS 雙向一致", () => {
 
 // 測試工具本身的防線：主題參數要一路傳到底（spec §6.1）。漏傳一層，淺色的測試會悄悄算成午夜藍而假綠
 describe("測試工具的主題參數", () => {
-  const light: ThemeId = "daylight-cool";
+  // 用櫻花粉：它的 --primary 跟午夜藍不同。冷調灰的主色同午夜藍，color-mix 第一個成分漏傳主題時照樣算出一樣的值而假綠
+  // （櫻花粉 spec docs/superpowers/specs/2026-10-03-cherry-blossom-theme-design.md §7.3）
+  const light: ThemeId = "daylight-cherry";
   it("token 解得開別名：午夜藍的 --primary-text ＝ --primary", () => {
     expect(token("primary-text", "nightfall")).toBe(token("primary", "nightfall"));
   });

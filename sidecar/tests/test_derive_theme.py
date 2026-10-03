@@ -1,4 +1,4 @@
-"""admin/derive_theme.py：從午夜藍推導四個主題、跟 src/index.css 逐條比對（票 37）。
+"""admin/derive_theme.py：從午夜藍推導其他主題、跟 src/index.css 逐條比對（票 37）。
 
 腳本在 sidecar 套件外，故以 importlib 由路徑載入（同 test_sync_pricing.py）。
 負對照（改壞一份 CSS 副本、check 要點名）每條都先寫、先看它紅在斷言，再補 check 對應的那段判斷（spec §5）。
@@ -35,6 +35,30 @@ def _block_text(css, selector):
 
 def test_real_css_matches():
     assert dt.check_css(CSS) == []
+
+
+# 淺色配方的 primary（主色換成指定色，spec docs/superpowers/specs/2026-10-03-cherry-blossom-theme-design.md §3.2）。
+# 期望值寫字面、不在測試裡重算同一條公式：test_real_css_matches 只比「推導＝CSS」，規則寫錯後重產 CSS 時兩邊一起錯而全綠，
+# 這條把規則的輸出釘在 spec 附錄 A
+def test_primary_recipe_literals():
+    t = dt.derive("daylight-cherry", dt.nightfall_tokens(dt.strip_comments(CSS)))
+    assert {k: t[k] for k in ("--primary", "--primary-ink", "--focus", "--primary-text")} == {
+        "--primary": "#FBCEE1", "--primary-ink": "#3C1C2C",
+        "--focus": "color-mix(in srgb, #FA8BC0 60%, transparent)", "--primary-text": "#7D5768"}
+
+
+# 推導不改傳進來的基準（check_css 對每個配方共用同一份 nf，Codex spec R1），沒寫 primary 的配方照抄午夜藍。
+# 用同一份 nf 先推櫻花粉、再推其他淺色；期望值從 CSS 重新讀一份，不用那份 nf
+def test_primary_does_not_leak():
+    nf = dt.nightfall_tokens(dt.strip_comments(CSS))
+    before = dict(nf)
+    dt.derive("daylight-cherry", nf)
+    assert nf == before
+    fresh = dt.nightfall_tokens(dt.strip_comments(CSS))
+    keys = ("--primary", "--primary-ink", "--focus")
+    for theme in ("daylight-cool", "daylight-warm"):
+        t = dt.derive(theme, nf)
+        assert [t[k] for k in keys] == [fresh[k] for k in keys], theme
 
 
 def test_cli_check_ok(capsys):

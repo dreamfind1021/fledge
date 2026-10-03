@@ -13,7 +13,7 @@ describe("設定視窗的外觀區", () => {
   });
   afterEach(() => cleanup());
 
-  it("第一個區塊是「外觀」，裡面是五個主題選項", () => {
+  it("第一個區塊是「外觀」，裡面是六個主題選項", () => {
     const { container } = render(<Settings onClose={() => {}} onRerunOnboarding={() => {}} onResumeMigration={() => {}} />);
     const titles = [...container.querySelectorAll(".settings-body .settings-sec-title")];
     expect(titles[0].textContent).toBe("外觀");
@@ -22,6 +22,6 @@ describe("設定視窗的外觀區", () => {
     expect(titles.slice(1).every((t) => !t.className.includes("settings-sec-title--first"))).toBe(true);
     const tile = titles[0].nextElementSibling;
     expect(tile?.className).toBe("settings-rrow");
-    expect([...(tile?.querySelectorAll("button") ?? [])].map((b) => b.textContent)).toEqual(["午夜藍", "濃巧棕", "深鐵黑", "冷調灰", "柔潤黃"]);
+    expect([...(tile?.querySelectorAll("button") ?? [])].map((b) => b.textContent)).toEqual(["午夜藍", "濃巧棕", "深鐵黑", "冷調灰", "柔潤黃", "櫻花粉"]);
   });
 });

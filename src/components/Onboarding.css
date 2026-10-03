@@ -164,6 +164,11 @@
   padding: 6px 14px;
 }
 
+/* 深色、淺色兩排各自置中（設定視窗裡靠左＝預設） */
+.ob-theme .theme-picker {
+  align-items: center;
+}
+
 /* ── 步驟副說明文字 ── */
 .ob-sub {
   font-size: 13.5px;

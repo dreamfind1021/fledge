@@ -157,7 +157,7 @@ One paragraph per feature. Step-by-step details live in [`guides/`](guides/).
 **Interface**
 
 - **Bilingual UI** — switch the interface language; Traditional Chinese and English are both complete.
-- **Five themes** — three dark (Midnight Blue [the default], Dark Chocolate, Iron Black) and two light (Cool Gray, Soft Yellow). Switch in Settings → Appearance or in the onboarding wizard; the terminal follows. Restrained and AI-first; text contrast is designed to WCAG AA (4.5:1) and checked by tests in every theme, with known exceptions listed (in Chinese) in [`CONTEXT.md`](CONTEXT.md); everything works from the keyboard.
+- **Six themes** — three dark (Midnight Blue [the default], Dark Chocolate, Iron Black) and three light (Cool Gray, Soft Yellow, Cherry Blossom). Switch in Settings → Appearance or in the onboarding wizard; the terminal follows. Restrained and AI-first; text contrast is designed to WCAG AA (4.5:1) and checked by tests in every theme, with known exceptions listed (in Chinese) in [`CONTEXT.md`](CONTEXT.md); everything works from the keyboard.
 - **Native and fast to launch** — a macOS `.app`; the backend uses a onedir layout (no re-extraction on every launch); install via `curl` or `.dmg`.
 
 ## Bundled skills and templates
