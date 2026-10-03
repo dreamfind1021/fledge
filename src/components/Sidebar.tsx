@@ -228,6 +228,14 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           </button>
           <button
             className="sidebar-rail-btn"
+            aria-label={tTasks("entry")}
+            title={tTasks("entry")}
+            onClick={() => useAppStore.getState().openTasks()}
+          >
+            <ListTodo size={18} strokeWidth={1.75} />
+          </button>
+          <button
+            className="sidebar-rail-btn"
             title={tDash("entry")}
             onClick={() => useAppStore.getState().openDashboard()}
           >
@@ -240,14 +248,6 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
             onClick={() => useAppStore.getState().openMemory()}
           >
             <Brain size={18} strokeWidth={1.75} />
-          </button>
-          <button
-            className="sidebar-rail-btn"
-            aria-label={tTasks("entry")}
-            title={tTasks("entry")}
-            onClick={() => useAppStore.getState().openTasks()}
-          >
-            <ListTodo size={18} strokeWidth={1.75} />
           </button>
         </div>
         {/* 彈性 spacer：把開資料夾鈕推到底 */}
@@ -306,6 +306,14 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
         </button>
         <button
           className="sidebar-dash-btn"
+          onClick={() => useAppStore.getState().openTasks()}
+          aria-label={tTasks("entry")}
+          title={tTasks("entry")}
+        >
+          <ListTodo size={16} strokeWidth={1.75} />
+        </button>
+        <button
+          className="sidebar-dash-btn"
           onClick={() => useAppStore.getState().openDashboard()}
           aria-label={tDash("entry")}
           title={tDash("entry")}
@@ -319,14 +327,6 @@ export function Sidebar({ onOpenPicker, onOpenSettings }: { onOpenPicker: () => 
           title={tMem("entry")}
         >
           <Brain size={16} strokeWidth={1.75} />
-        </button>
-        <button
-          className="sidebar-dash-btn"
-          onClick={() => useAppStore.getState().openTasks()}
-          aria-label={tTasks("entry")}
-          title={tTasks("entry")}
-        >
-          <ListTodo size={16} strokeWidth={1.75} />
         </button>
       </div>
 
