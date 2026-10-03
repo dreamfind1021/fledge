@@ -14,7 +14,7 @@ PRICING_VERSION = TABLE_VERSION
 _MTOK = 1_000_000
 
 # 別名＝同代正價近似（opus 4.x 全代同價，誤差可忽略）；裸別名指向各系列最新款
-_CLAUDE_ALIASES = {"opus": "claude-opus-4-8", "sonnet": "claude-sonnet-5", "haiku": "claude-haiku-4-5"}
+_CLAUDE_ALIASES = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-4-5"}
 _CLAUDE_DATE_SUFFIX = re.compile(r"-\d{8}$")
 _CODEX_DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 

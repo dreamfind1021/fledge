@@ -2,8 +2,8 @@ from fledge_sidecar.usage import pricing
 
 
 def test_normalize_claude_alias_and_suffix():
-    assert pricing.normalize_claude_model("opus") == "claude-opus-4-8"
-    assert pricing.normalize_claude_model("sonnet") == "claude-sonnet-5"  # 裸別名指向最新 sonnet
+    assert pricing.normalize_claude_model("opus") == "claude-opus-5-5"  # 裸別名指向現役 opus
+    assert pricing.normalize_claude_model("sonnet") == "claude-sonnet-5-5"  # 裸別名指向最新 sonnet
     assert pricing.normalize_claude_model("claude-haiku-4-5-20251001") == "claude-haiku-4-5"
     assert pricing.normalize_claude_model("claude-fable-5") == "claude-fable-5"
     assert pricing.normalize_claude_model("<synthetic>") is None  # 不可計價
