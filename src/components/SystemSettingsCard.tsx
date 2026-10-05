@@ -12,6 +12,11 @@ interface SystemSettingsCardProps {
   kmsRoot: string;
   onPrev: () => void;
   onNext: () => void;
+  /** 送出中。**由父層持有**（精靈）：精靈右上角的 × 要跟本卡的導覽按鈕讀同一份值，才會一起鎖、一起解鎖。
+   *  卡片在送出前設 true、`finally` 設 false——存好時是先 `onNext()` 換頁才走到 `finally`，那時卡片
+   *  已卸載，但 setter 是父層的，false 照樣送得到。 */
+  busy: boolean;
+  onBusyChange: (busy: boolean) => void;
 }
 
 // 表單列的費用維持字串（input 的原始值，含使用者打到一半的狀態）；轉數字與驗證交給
@@ -26,7 +31,9 @@ interface SubsRow {
  * **這兩區刻意沒有各自的儲存鈕**（視覺權威 `docs/design/b4-onboarding-wizard.html`）：頁尾只有
  * 「全部略過」與「下一步」。因此「下一步」＝送出使用者真的改過的區塊、「全部略過」＝什麼都不送。
  * 沒改就不送——用一次可能失敗的請求換零變更，只會擋住想直接往下走的人。 */
-export function SystemSettingsCard({ port, subscriptions, kmsRoot, onPrev, onNext }: SystemSettingsCardProps) {
+export function SystemSettingsCard({
+  port, subscriptions, kmsRoot, onPrev, onNext, busy, onBusyChange,
+}: SystemSettingsCardProps) {
   const { t } = useTranslation("onboarding");
   const saveSubscriptions = useAppStore((s) => s.saveSubscriptions);
   const loadConfig = useAppStore((s) => s.loadConfig);
@@ -38,7 +45,6 @@ export function SystemSettingsCard({ port, subscriptions, kmsRoot, onPrev, onNex
   );
   const [kms, setKms] = useState(kmsRoot);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   // dirty 的比較基準＝**本卡已知、已成功持久化的 baseline**（mount 時的 config 值，之後每次存成功
   // 就往前推），刻意**不是**當下的 props：sidecar 重啟或外部改動會讓 props 換成新值，拿它跟沒被碰過
@@ -85,7 +91,7 @@ export function SystemSettingsCard({ port, subscriptions, kmsRoot, onPrev, onNex
       setError(t("errors.backend_unavailable"));
       return;
     }
-    setBusy(true);
+    onBusyChange(true);
     let subsSaved = false; // 失敗訊息要指向真的出錯的那一區，且不能否認前一段已經存進去了
     try {
       if (subsChanged) {
@@ -108,7 +114,7 @@ export function SystemSettingsCard({ port, subscriptions, kmsRoot, onPrev, onNex
       if (subsChanged && !subsSaved) setError(t("errors.subs_failed"));
       else setError(t(subsSaved ? "errors.kms_failed_subs_saved" : "errors.kms_failed"));
     } finally {
-      setBusy(false);
+      onBusyChange(false);
     }
   };
 

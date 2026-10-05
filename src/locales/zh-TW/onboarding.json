@@ -7,7 +7,8 @@
     "copy": "複製",
     "cancel": "取消",
     "skip": "略過",
-    "progress": "設定步驟"
+    "progress": "設定步驟",
+    "close": "關閉"
   },
   "welcome": {
     "h": "歡迎使用 Fledge",

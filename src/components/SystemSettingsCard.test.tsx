@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act } from "react";
+import { act, useState } from "react";
 import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import zh from "../locales/zh-TW/onboarding.json";
@@ -23,10 +23,16 @@ vi.mock("../lib/dialog", () => ({ pickDirectory: () => pickDirectory() }));
 const onNext = vi.fn<() => void>();
 const onPrev = vi.fn<() => void>();
 
-const renderCard = (props: Partial<Parameters<typeof SystemSettingsCard>[0]> = {}) =>
-  render(
-    <SystemSettingsCard port={1234} subscriptions={[]} kmsRoot="" onPrev={onPrev} onNext={onNext} {...props} />,
-  );
+type CardProps = Omit<Parameters<typeof SystemSettingsCard>[0], "busy" | "onBusyChange">;
+
+/** busy 由父層持有（精靈），這裡用一個持有它的外殼掛卡片；要看 onBusyChange 呼叫的案例另外給 spy */
+function Harness({ spy, ...props }: CardProps & { spy?: (busy: boolean) => void }) {
+  const [busy, setBusy] = useState(false);
+  return <SystemSettingsCard {...props} busy={busy} onBusyChange={(b) => { setBusy(b); spy?.(b); }} />;
+}
+
+const renderCard = (props: Partial<CardProps> & { spy?: (busy: boolean) => void } = {}) =>
+  render(<Harness port={1234} subscriptions={[]} kmsRoot="" onPrev={onPrev} onNext={onNext} {...props} />);
 
 /** 填第 i 列的名稱與費用（費用是 type=number，jsdom 會擋掉非數字字串） */
 function fillRow(ui: ReturnType<typeof render>, i: number, name: string, cost: string) {
@@ -213,7 +219,10 @@ describe("SystemSettingsCard 系統設置頁（訂閱 + KMS 根目錄）", () =>
   // 然後把畫面上的舊值寫回去蓋掉較新的設定——基準必須是「後端已經有的值」而非當下 props
   it("props 在 mount 後換成新值、表單沒被碰過：不把舊值寫回後端", async () => {
     const ui = render(
-      <SystemSettingsCard port={1234} subscriptions={[]} kmsRoot="~/old" onPrev={onPrev} onNext={onNext} />,
+      <SystemSettingsCard
+        port={1234} subscriptions={[]} kmsRoot="~/old" onPrev={onPrev} onNext={onNext}
+        busy={false} onBusyChange={() => {}}
+      />,
     );
     ui.rerender(
       <SystemSettingsCard
@@ -222,6 +231,8 @@ describe("SystemSettingsCard 系統設置頁（訂閱 + KMS 根目錄）", () =>
         kmsRoot="~/new"
         onPrev={onPrev}
         onNext={onNext}
+        busy={false}
+        onBusyChange={() => {}}
       />,
     );
     next(ui);
@@ -267,5 +278,21 @@ describe("SystemSettingsCard 系統設置頁（訂閱 + KMS 根目錄）", () =>
     next(ui);
 
     await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
+  });
+
+  // busy 由父層持有：精靈右上角的 ×（從設定頁開的精靈才有）要跟本卡的導覽按鈕讀同一份值
+  // （spec 2026-10-06 §4.4）
+  it("onBusyChange：送出前設 true、結束時設 false", async () => {
+    let release = () => {};
+    saveSubscriptions.mockImplementation(() => new Promise<void>((resolve) => { release = () => resolve(); }));
+    const spy = vi.fn<(busy: boolean) => void>();
+    const ui = renderCard({ spy });
+    addItem(ui);
+    fillRow(ui, 0, "Claude", "200");
+    next(ui);
+    await waitFor(() => expect(spy.mock.calls).toEqual([[true]]));
+
+    await act(async () => { release(); });
+    expect(spy.mock.calls).toEqual([[true], [false]]);
   });
 });

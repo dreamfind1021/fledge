@@ -1561,6 +1561,178 @@ describe("Onboarding 精靈外殼", () => {
     await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
     expect(ui.container.querySelector(".ob-lang")).toBeNull();
   });
+
+  // ── 從設定頁開的精靈：右上角 ×（spec 2026-10-06-onboarding-rerun-exit-design）──────────
+  //
+  // 首次啟動刻意要走完（票 01）；從設定頁進來的人只想重做一步，卻得把全部頁面按完才出得來。
+  // × 的停用條件＝「上一步」被停用的同一組：移機安裝執行中、系統設置頁儲存中。
+
+  /** 卡片右上角的 ×（無障礙名稱＝catalog 的 common.close） */
+  const dismissBtn = (ui: ReturnType<typeof render>) =>
+    ui.queryByRole("button", { name: zh.common.close }) as HTMLButtonElement | null;
+
+  /** 逐頁斷言 × 在，再用該頁的動作往下走。`advance` 為 undefined 的是最後一頁 */
+  async function expectDismissOnEveryPage(
+    ui: ReturnType<typeof render>,
+    pages: [heading: string, advance?: () => Promise<void>][],
+  ) {
+    for (const [heading, advance] of pages) {
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+      expect(dismissBtn(ui), heading).not.toBeNull();
+      await advance?.();
+    }
+  }
+  const clickText = (ui: ReturnType<typeof render>, text: string) => async () => {
+    ui.getByText(text).click();
+  };
+  /** 等某顆按鈕解除停用再按（落點、路徑對應、預覽這幾頁要先有依據才放行） */
+  const clickWhenEnabled = async (ui: ReturnType<typeof render>, text: string) => {
+    await waitFor(() => expect(ui.getByText(text).closest("button")!.disabled).toBe(false));
+    ui.getByText(text).click();
+  };
+
+  /** 重跑引導、單帳號：歡迎 → 外觀 → 根目錄 → 環境 → 登入 → 系統設置 */
+  async function reachSystemPage(ui: ReturnType<typeof render>) {
+    await pickPath(ui, "fresh");
+    await waitFor(() => expect(ui.getByText(zh.roots.h)).toBeTruthy());
+    for (const heading of [zh.env.h, zh.login.h, zh.sys.h]) {
+      ui.getByText(zh.common.next).click();
+      await waitFor(() => expect(ui.getByText(heading)).toBeTruthy());
+    }
+  }
+  /** 系統設置頁填一列訂閱，讓「下一步」真的要送出 */
+  function fillSubscription(ui: ReturnType<typeof render>) {
+    fireEvent.click(ui.getByText(zh.sys.addItem));
+    fireEvent.change(ui.getByPlaceholderText(zh.sys.subsName), { target: { value: "Claude" } });
+    fireEvent.change(ui.getByPlaceholderText(zh.sys.subsCost), { target: { value: "200" } });
+  }
+
+  it("沒給 onDismiss（首次啟動）：沒有 ×", () => {
+    const ui = render(<Onboarding onClose={onClose} />);
+    expect(ui.getByText(zh.welcome.h)).toBeTruthy();
+    expect(dismissBtn(ui)).toBeNull();
+  });
+
+  it("給了 onDismiss：全新設定（雙帳號）的每一頁都有 ×", async () => {
+    useAppStore.setState({
+      config: { ...baseConfig, is_first_run: false, roots: [{ path: "/Users/x/work", default_account: "work" }] },
+    });
+    const ui = render(<Onboarding onClose={onClose} onDismiss={vi.fn()} />);
+    await expectDismissOnEveryPage(ui, [
+      [zh.welcome.h, clickText(ui, zh.welcome.fresh)],
+      [zh.appearance.h, clickText(ui, zh.common.next)],
+      [zh.roots.h, clickText(ui, zh.common.next)],
+      [zh.env.h, clickText(ui, zh.common.next)],
+      [zh.login.h, clickText(ui, zh.common.next)],
+      [zh.cc.h, () => clickWhenEnabled(ui, zh.common.next)],
+      [zh.sys.h, clickText(ui, zh.sys.skipAll)],
+      [zh.done.h],
+    ]);
+  });
+
+  it("給了 onDismiss：移機（有專案歷史）的每一頁都有 ×", async () => {
+    const ui = render(<Onboarding onClose={onClose} onDismiss={vi.fn()} />);
+    await expectDismissOnEveryPage(ui, [
+      [zh.welcome.h, clickText(ui, zh.welcome.restore)],
+      [zh.appearance.h, clickText(ui, zh.common.next)],
+      [zh.mig.bundle.h, async () => {
+        ui.getByText("probe-present").click();
+        await clickWhenEnabled(ui, zh.common.next);
+      }],
+      [zh.mig.targets.h, async () => {
+        ui.getByText("adopt").click();
+        await clickWhenEnabled(ui, zh.common.next);
+      }],
+      [zh.mig.paths.h, async () => {
+        ui.getByText("paths-loaded").click();
+        await clickWhenEnabled(ui, zh.common.next);
+      }],
+      [zh.mig.install.h, async () => {
+        ui.getByText("preview-loaded").click();
+        await clickWhenEnabled(ui, zh.mig.install.run);
+        await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
+        ui.getByText(zh.common.next).click();
+      }],
+      [zh.env.h, clickText(ui, zh.common.next)],
+      [zh.login.h, clickText(ui, zh.common.next)],
+      [zh.mig.repair.h, clickText(ui, zh.common.next)],
+      [zh.done.h],
+    ]);
+  });
+
+  it("按 ×：呼叫 onDismiss，不呼叫 onClose", () => {
+    const onDismiss = vi.fn<() => void>();
+    const ui = render(<Onboarding onClose={onClose} onDismiss={onDismiss} />);
+    fireEvent.click(dismissBtn(ui)!);
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("移機安裝執行中：× 跟「上一步」一起鎖住，裝完恢復", async () => {
+    let release: (o: { results: []; stale_temps: [] }) => void = () => {};
+    vi.mocked(runInstall).mockImplementationOnce(
+      () => new Promise((resolve) => { release = resolve; }));
+    const ui = render(<Onboarding onClose={onClose} onDismiss={vi.fn()} />);
+    await reachInstallPage(ui);
+    expect(dismissBtn(ui)!.disabled).toBe(false);
+
+    ui.getByText(zh.mig.install.run).click();
+    await waitFor(() => expect(ui.getByText(zh.mig.install.running)).toBeTruthy());
+    expect(dismissBtn(ui)!.disabled).toBe(true);
+
+    release({ results: [], stale_temps: [] });
+    await waitFor(() => expect(ui.getByText(zh.mig.result.h)).toBeTruthy());
+    expect(dismissBtn(ui)!.disabled).toBe(false);
+  });
+
+  it("系統設置頁儲存中：× 鎖住；存好換到完成頁，× 可以按", async () => {
+    let release = () => {};
+    useAppStore.setState({
+      config: rerunConfig,
+      saveSubscriptions: () => new Promise<void>((resolve) => { release = () => resolve(); }),
+    });
+    const ui = render(<Onboarding onClose={onClose} onDismiss={vi.fn()} />);
+    await reachSystemPage(ui);
+    fillSubscription(ui);
+
+    ui.getByText(zh.common.next).click();
+    // 卡片的「上一步」與 × 讀同一份 busy（精靈持有），一起鎖
+    await waitFor(() => expect(ui.getByText(zh.common.prev).closest("button")!.disabled).toBe(true));
+    expect(dismissBtn(ui)!.disabled).toBe(true);
+
+    // 存好時卡片先 onNext() 換頁、才在 finally 設回 false——那時它已卸載，但 setter 是精靈的，照樣送得到
+    await act(async () => { release(); });
+    await waitFor(() => expect(ui.getByText(zh.done.h)).toBeTruthy());
+    expect(dismissBtn(ui)!.disabled).toBe(false);
+  });
+
+  it("系統設置頁儲存失敗：× 恢復可按", async () => {
+    let fail = () => {};
+    useAppStore.setState({
+      config: rerunConfig,
+      saveSubscriptions: () => new Promise<void>((_, reject) => { fail = () => reject(new Error("boom")); }),
+    });
+    const ui = render(<Onboarding onClose={onClose} onDismiss={vi.fn()} />);
+    await reachSystemPage(ui);
+    fillSubscription(ui);
+
+    ui.getByText(zh.common.next).click();
+    await waitFor(() => expect(dismissBtn(ui)!.disabled).toBe(true));   // 先確認真的鎖住了
+
+    await act(async () => { fail(); });
+    await waitFor(() => expect(ui.getByText(zh.errors.subs_failed)).toBeTruthy());
+    expect(dismissBtn(ui)!.disabled).toBe(false);
+  });
+
+  // 字面值而不是讀 catalog：兩語一起漏掉 key 時，parity 測試照樣綠（兩邊的 key 集合仍然相等），
+  // 名稱會變成 "common.close" 這串 key——只有寫死期望值才抓得到
+  it("× 的無障礙名稱：中文「關閉」、英文「Close」", async () => {
+    const ui = render(<Onboarding onClose={onClose} onDismiss={vi.fn()} />);
+    expect(ui.queryByRole("button", { name: "關閉" })).not.toBeNull();
+
+    await act(async () => { await i18n.changeLanguage("en"); });
+    expect(ui.queryByRole("button", { name: "Close" })).not.toBeNull();
+  });
 });
 
 // ── 中斷續作（票 07）：從還原卡按「繼續移機」直接進安裝頁 ────────────────────
