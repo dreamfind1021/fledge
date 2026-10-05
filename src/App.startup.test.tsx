@@ -15,10 +15,28 @@ vi.mock("./components/Sidebar", () => ({
   ),
 }));
 vi.mock("./components/Workspace", () => ({ Workspace: () => <div /> }));
-vi.mock("./components/Settings", () => ({ Settings: () => <div /> }));
+vi.mock("./components/Settings", () => ({
+  // 精靈從設定頁開的兩個入口（重跑引導、繼續移機）各露出一顆按鈕
+  Settings: ({ onRerunOnboarding, onResumeMigration }: {
+    onRerunOnboarding: () => void;
+    onResumeMigration: (resume: { sourceRoot: string; mapping: { old: string; new: string }[] }) => void;
+  }) => (
+    <div data-testid="settings">
+      <button data-testid="settings-rerun" onClick={onRerunOnboarding} />
+      <button data-testid="settings-resume" onClick={() => onResumeMigration({ sourceRoot: "/d", mapping: [] })} />
+    </div>
+  ),
+}));
 vi.mock("./components/ProjectPicker", () => ({ ProjectPicker: () => <div /> }));
 vi.mock("./components/Onboarding", () => ({
-  Onboarding: () => <div data-testid="onboarding" />,
+  // 有沒有收到 onDismiss＝畫不畫 ×（× 本身的行為在 Onboarding.test.tsx）；
+  // onboarding-done 代表完成頁的「進入 Fledge」
+  Onboarding: ({ onClose, onDismiss }: { onClose: () => void; onDismiss?: () => void }) => (
+    <div data-testid="onboarding">
+      <button data-testid="onboarding-done" onClick={onClose} />
+      {onDismiss && <button data-testid="onboarding-dismiss" onClick={onDismiss} />}
+    </div>
+  ),
 }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => Promise.reject(new Error("no tauri")) }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -308,5 +326,74 @@ describe("App 殼層文字走 i18n", () => {
     expect(desc.textContent).toContain(`「${title}」`);
     expect(desc.querySelectorAll("code")).toHaveLength(1); // 只有 /resume 那一個
     expect(desc.querySelector("b")).toBeNull();
+  });
+});
+
+// 精靈從哪裡開，決定有沒有右上角 ×（spec 2026-10-06-onboarding-rerun-exit-design §4.1）：
+// 首次啟動刻意要走完；從設定頁開的（重跑引導、繼續移機）可以按 × 回到設定頁。
+describe("App：精靈的開啟來源與 ×", () => {
+  beforeEach(async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await i18n.changeLanguage("zh-TW");
+    // 前面幾組會把 store 留在別的狀態（banner、確認框、bootstrap），這裡全部重設
+    useAppStore.setState({
+      startup: "running", startupError: null, port: 1234, config: null, tabs: [],
+      backendStatus: "up", claudeFound: true, permissionError: false, pendingCloseTabId: null,
+      bootstrap: stubBootstrap({ firstRun: false, projectsError: null }),
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+  });
+
+  /** 開機畫面走完 → 從側欄開設定頁 */
+  async function openSettings(ui: ReturnType<typeof render>) {
+    await settleSplash();
+    ui.getByTestId("sidebar-settings").click();
+    await waitFor(() => expect(ui.queryByTestId("settings")).not.toBeNull());
+  }
+
+  it("首次啟動開的精靈沒有 ×", async () => {
+    useAppStore.setState({ bootstrap: stubBootstrap({ firstRun: true, projectsError: null }) });
+    const ui = render(<App />);
+    await settleSplash();
+    await waitFor(() => expect(ui.queryByTestId("onboarding")).not.toBeNull());
+    expect(ui.queryByTestId("onboarding-dismiss")).toBeNull();
+  });
+
+  it("設定頁「重跑引導」開的精靈有 ×；按下去精靈收掉、回到設定頁", async () => {
+    const ui = render(<App />);
+    await openSettings(ui);
+
+    ui.getByTestId("settings-rerun").click();
+    await waitFor(() => expect(ui.queryByTestId("onboarding")).not.toBeNull());
+    expect(ui.queryByTestId("settings")).toBeNull();   // 兩個 modal 不疊在一起
+    expect(ui.queryByTestId("onboarding-dismiss")).not.toBeNull();
+
+    ui.getByTestId("onboarding-dismiss").click();
+    await waitFor(() => expect(ui.queryByTestId("onboarding")).toBeNull());
+    expect(ui.queryByTestId("settings")).not.toBeNull();
+  });
+
+  // 完成頁的「進入 Fledge」不分來源，一律回主畫面（spec §4.3）——只有 × 才回設定頁
+  it("設定頁開的精靈走到完成頁按「進入 Fledge」：回主畫面，不回設定頁", async () => {
+    const ui = render(<App />);
+    await openSettings(ui);
+    ui.getByTestId("settings-rerun").click();
+    await waitFor(() => expect(ui.queryByTestId("onboarding")).not.toBeNull());
+
+    ui.getByTestId("onboarding-done").click();
+    await waitFor(() => expect(ui.queryByTestId("onboarding")).toBeNull());
+    expect(ui.queryByTestId("settings")).toBeNull();
+  });
+
+  it("設定頁「繼續移機」開的精靈也有 ×", async () => {
+    const ui = render(<App />);
+    await openSettings(ui);
+
+    ui.getByTestId("settings-resume").click();
+    await waitFor(() => expect(ui.queryByTestId("onboarding")).not.toBeNull());
+    expect(ui.queryByTestId("onboarding-dismiss")).not.toBeNull();
   });
 });

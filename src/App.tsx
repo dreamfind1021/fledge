@@ -101,9 +101,16 @@ function App() {
   const [projectsError, setProjectsError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
-  const [showOnboarding, setShowOnboarding] = useState(false);
+  // 精靈開著沒有、從哪裡開的（null＝沒開）。「開著」與「從哪開」是同一個值，不會有兩個 state 對不上的組合：
+  // 從設定頁開的（重跑引導、繼續移機）才有右上角 ×；首次啟動刻意要走完（票 01 的「引導強制完成」）
+  const [onboardingFrom, setOnboardingFrom] = useState<"startup" | "settings" | null>(null);
+  const showOnboarding = onboardingFrom !== null;
   // 續作（票 07）：非 null＝這次開精靈是要接續上次沒完成的移機，直接落在安裝頁並預填
   const [resumeMigration, setResumeMigration] = useState<MigrationResume | null>(null);
+  const closeOnboarding = () => {
+    setOnboardingFrom(null);
+    setResumeMigration(null);   // 續作是一次性的入口，關掉就不再套用
+  };
   const [toast, setToast] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
   const backendStatus = useAppStore((s) => s.backendStatus);
@@ -175,7 +182,7 @@ function App() {
       if (r.firstRun) {
         setShowSettings(false); // 清掉 sidecar 啟動等待期間使用者可能開的 modal（Codex F-6）
         setShowPicker(false);
-        setShowOnboarding(true);
+        setOnboardingFrom("startup");
       }
     },
     [bootstrap],
@@ -348,10 +355,12 @@ function App() {
       </DndContext>
       {showOnboarding && (
         <Onboarding
-          onClose={() => {
-            setShowOnboarding(false);
-            setResumeMigration(null);   // 續作是一次性的入口，關掉就不再套用
-          }}
+          onClose={closeOnboarding}
+          // 從設定頁開的才能中途離開：按 × 關掉精靈、回到設定頁（兩個 modal 不疊在一起）
+          onDismiss={onboardingFrom === "settings" ? () => {
+            closeOnboarding();
+            setShowSettings(true);
+          } : undefined}
           resume={resumeMigration ?? undefined}
         />
       )}
@@ -362,13 +371,13 @@ function App() {
           onRerunOnboarding={() => {
             setShowSettings(false);
             setResumeMigration(null);   // 重跑引導是從頭走，不是續作
-            setShowOnboarding(true);
+            setOnboardingFrom("settings");
           }}
           // 接續上次沒完成的移機（票 07）：同樣關掉設定頁再開精靈，兩個 modal 不疊在一起
           onResumeMigration={(resume) => {
             setShowSettings(false);
             setResumeMigration(resume);
-            setShowOnboarding(true);
+            setOnboardingFrom("settings");
           }}
         />
       )}
