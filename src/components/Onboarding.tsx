@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Check } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { useTranslation, Trans } from "react-i18next";
 import { useAppStore } from "../store/useAppStore";
 import { useEffect } from "react";
@@ -32,6 +32,11 @@ import "./Onboarding.css";
 interface OnboardingProps {
   onClose: () => void;
   /**
+   * 從設定頁開的精靈才給（重跑引導、繼續移機）：每一頁卡片右上角畫一個 ×，按下由 App 關掉精靈、
+   * 回到設定頁。首次啟動不給——那條路刻意要走完（票 01 的「引導強制完成」）。
+   */
+  onDismiss?: () => void;
+  /**
    * 中斷續作（票 07）：從還原卡的「繼續移機」進來時，直接落在移機分支的安裝頁，並把上次
    * 填的展開位置與專案路徑對應預填回去。
    *
@@ -54,7 +59,7 @@ type InstallRun =
   | { kind: "running" }
   | { kind: "done"; results: InstallItemResult[]; staleTemps: string[] };
 
-export function Onboarding({ onClose, resume }: OnboardingProps) {
+export function Onboarding({ onClose, onDismiss, resume }: OnboardingProps) {
   const { t } = useTranslation("onboarding");
   const port = useAppStore((s) => s.port);
   const config = useAppStore((s) => s.config);
@@ -76,6 +81,8 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // 系統設置頁的送出中：由精靈持有、傳給卡片——卡片的導覽按鈕與這裡的 × 讀同一份值
+  const [systemBusy, setSystemBusy] = useState(false);
   // onboard 是 first-run only（設定檔已存在回 409），落檔與否決定「根目錄頁還能不能編輯」與
   // 「主按鈕要不要再打一次 onboard」。不讀 config.is_first_run 判斷——後續頁的 config write
   // 會讓該欄變 undefined（Codex F-7 已警告不可當 render gate），只拿它當初值：唯有明確為 true
@@ -218,6 +225,9 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
   });
   const index = stepIndex(current, steps, mode);
   const step = steps[index];
+  // × 的停用條件＝「上一步」被停用的同一組：兩者都是離開這一頁，× 不能變成繞過既有防線的後門。
+  // 兩個條件都是這裡持有的 state，與各頁「上一步」讀的是同一份值，同一次 render 一起鎖、一起解鎖。
+  const leaveBlocked = run.kind === "running" || systemBusy;
 
   const goTo = (target: WizardStep) => {
     setCurrent(target);
@@ -441,18 +451,31 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
 
         {/* 卡片主體 */}
         <div className="ob-card">
-          {/* 進度條：格數＝實際頁數（單帳號少一格），填到目前頁為止 */}
-          <div
-            className="ob-steps"
-            role="progressbar"
-            aria-label={t("common.progress")}
-            aria-valuenow={index + 1}
-            aria-valuemin={1}
-            aria-valuemax={steps.length}
-          >
-            {progressCells(index, steps.length).map((on, i) => (
-              <div key={i} className={`ob-step-bar${on ? " is-on" : ""}`} />
-            ))}
+          {/* 進度條：格數＝實際頁數（單帳號少一格），填到目前頁為止。從設定頁開的精靈在同一列右端多一個 × */}
+          <div className="ob-card-head">
+            <div
+              className="ob-steps"
+              role="progressbar"
+              aria-label={t("common.progress")}
+              aria-valuenow={index + 1}
+              aria-valuemin={1}
+              aria-valuemax={steps.length}
+            >
+              {progressCells(index, steps.length).map((on, i) => (
+                <div key={i} className={`ob-step-bar${on ? " is-on" : ""}`} />
+              ))}
+            </div>
+            {onDismiss && (
+              <button
+                type="button"
+                className="ob-dismiss"
+                onClick={onDismiss}
+                disabled={leaveBlocked}
+                aria-label={t("common.close")}
+              >
+                <X size={18} strokeWidth={1.75} />
+              </button>
+            )}
           </div>
 
           {/* 錯誤 / 注意訊息 */}
@@ -752,6 +775,8 @@ export function Onboarding({ onClose, resume }: OnboardingProps) {
               kmsRoot={config?.kms_root ?? ""}
               onPrev={prev}
               onNext={next}
+              busy={systemBusy}
+              onBusyChange={setSystemBusy}
             />
           )}
 

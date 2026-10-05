@@ -117,12 +117,50 @@
   font-size: 13px;
 }
 
+/* ── 卡片頂列：進度條＋（從設定頁開的精靈才有的）× ── */
+.ob-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
 /* ── 進度條（三條橫槓，填色表示已到達的步驟）── */
 .ob-steps {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 18px;
+}
+
+/* 關閉精靈：外觀比照設定頁的 ×（.settings-head-close）。負邊距讓它不把頂列撐高——
+   沒有 × 的首次啟動與有 × 的重跑，進度條下方的內容才對得齊 */
+.ob-dismiss {
+  display: flex;
+  margin: -8px -8px -8px 0;
+  padding: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  line-height: 0;
+}
+
+.ob-dismiss:hover:not(:disabled) {
+  color: var(--dim);
+  background: var(--hover);
+}
+
+.ob-dismiss:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+/* 停用照舊半透明，同 .ob-btn-ghost:disabled */
+.ob-dismiss:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* 每一條 */
