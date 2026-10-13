@@ -400,7 +400,7 @@ describe("App：精靈的開啟來源與 ×", () => {
   });
 
   // 票 42：精靈開著時，鍵盤仍摸得到背後的側欄（根因見票 43），可以在精靈底下開出設定頁。
-  // 這時設定頁的兩個入口整個不動作：首次啟動的精靈不能因此多出 ×，也不能被塞進續作資料
+  // 這時設定頁的兩個入口整個不動作：不關設定頁，首次啟動的精靈不能因此多出 ×，也不能被塞進續作資料
   /** 首次啟動開出精靈 → 在精靈底下從側欄開設定頁 */
   async function openSettingsUnderStartupWizard(ui: ReturnType<typeof render>) {
     await settleSplash();
@@ -417,6 +417,7 @@ describe("App：精靈的開啟來源與 ×", () => {
     await act(async () => { ui.getByTestId("settings-rerun").click(); });
     expect(ui.queryByTestId("onboarding")).not.toBeNull();
     expect(ui.queryByTestId("onboarding-dismiss")).toBeNull();
+    expect(ui.queryByTestId("settings")).not.toBeNull();
   });
 
   it("首次啟動的精靈開著時按設定頁「繼續移機」：精靈還在，沒有 ×，也沒收到續作資料", async () => {
@@ -428,5 +429,6 @@ describe("App：精靈的開啟來源與 ×", () => {
     expect(ui.queryByTestId("onboarding")).not.toBeNull();
     expect(ui.queryByTestId("onboarding-dismiss")).toBeNull();
     expect(ui.getByTestId("onboarding").getAttribute("data-resume")).toBe("");
+    expect(ui.queryByTestId("settings")).not.toBeNull();
   });
 });
