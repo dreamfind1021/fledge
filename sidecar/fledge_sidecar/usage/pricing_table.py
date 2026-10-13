@@ -8,7 +8,7 @@ from __future__ import annotations
 
 # <生成日期>.<表內容 sha256 前 8 碼>：內容一變就變，改表不可能忘記遞增。
 # cache.py 只做相等比對，不解析內容。
-TABLE_VERSION = "2026-10-04.a4832f83"
+TABLE_VERSION = "2026-10-13.e78284da"
 
 # Claude：(input, output, cache_5m_write, cache_1h_write, cache_read)——三層 cache 存
 # 上游真價而非倍率（倍率只對現行世代成立，claude-3-haiku 實為 1.2x/0.12x）；
@@ -17,6 +17,7 @@ CLAUDE_PRICING: dict[str, tuple[float, float, float, float, float]] = {
     "claude-fable-5": (10.0, 50.0, 12.5, 20.0, 1.0),
     "claude-fable-5-1": (10.0, 50.0, 12.5, 20.0, 0.25),
     "claude-haiku-4-5": (1.0, 5.0, 1.25, 2.0, 0.1),
+    "claude-haiku-5-5": (0.1, 0.5, 0.125, 0.2, 0.01),
     "claude-mythos-5": (10.0, 50.0, 12.5, 20.0, 1.0),
     "claude-mythos-5-1": (10.0, 50.0, 12.5, 20.0, 0.25),
     "claude-mythos-preview": (10.0, 50.0, 12.5, 20.0, 1.0),
@@ -29,7 +30,7 @@ CLAUDE_PRICING: dict[str, tuple[float, float, float, float, float]] = {
     "claude-sonnet-4-5": (3.0, 15.0, 3.75, 6.0, 0.3),
     "claude-sonnet-4-6": (3.0, 15.0, 3.75, 6.0, 0.3),
     "claude-sonnet-5": (2.0, 10.0, 2.5, 4.0, 0.2),
-    "claude-sonnet-5-5": (2.0, 10.0, 2.5, 4.0, 0.2),
+    "claude-sonnet-5-5": (2.0, 10.0, 2.5, 4.0, 0.1),
 }
 
 # Codex：(input, cached_input, output)
