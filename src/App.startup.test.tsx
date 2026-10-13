@@ -55,6 +55,12 @@ function stubBootstrap(result: BootstrapResult | null) {
   });
 }
 
+/** 有 live session 的 claude 分頁：關掉它要先確認（isLiveClaudeTab 成立），可以讓關閉確認框畫出來。 */
+const liveTab = (title: string): Tab => ({
+  id: "tab-1", projectPath: "/p/demo", account: "work", title,
+  sessionId: "s-1", status: "ready", kind: "claude",
+});
+
 /** 等 Splash 走完最短顯示 + 淡出後卸載。 */
 async function settleSplash() {
   await act(async () => {
@@ -206,10 +212,6 @@ describe("App 啟動接線", () => {
 // 票 33：殼層的橫幅、Cmd+R 提示與關閉 session 確認框原本寫死中文，英文介面也顯示中文。
 describe("App 殼層文字走 i18n", () => {
   const CJK = /[\u3400-\u9fff\u3000-\u303f\uff00-\uffef]/;
-  const liveTab = (title: string): Tab => ({
-    id: "tab-1", projectPath: "/p/demo", account: "work", title,
-    sessionId: "s-1", status: "ready", kind: "claude",
-  });
   const cmdR = () => new KeyboardEvent("keydown", { key: "r", metaKey: true, cancelable: true, bubbles: true });
 
   beforeEach(() => {
@@ -399,8 +401,9 @@ describe("App：精靈的開啟來源與 ×", () => {
     expect(ui.queryByTestId("onboarding-dismiss")).not.toBeNull();
   });
 
-  // 票 42：精靈開著時，鍵盤仍摸得到背後的側欄（根因見票 43），可以在精靈底下開出設定頁。
-  // 這時設定頁的兩個入口整個不動作：不關設定頁，首次啟動的精靈不能因此多出 ×，也不能被塞進續作資料
+  // 票 42：在首次啟動的精靈底下開出設定頁，這時設定頁的兩個入口整個不動作：不關設定頁，首次啟動的精靈不能因此
+  // 多出 ×，也不能被塞進續作資料。真機上精靈開著時主畫面是 inert（票 43），鍵盤走不到設定頁，守衛是第二道防線；
+  // jsdom 不實作 inert，click() 照樣按得到 inert 底下的按鈕，所以這裡仍能直接驗守衛
   /** 首次啟動開出精靈 → 在精靈底下從側欄開設定頁 */
   async function openSettingsUnderStartupWizard(ui: ReturnType<typeof render>) {
     await settleSplash();
@@ -430,5 +433,96 @@ describe("App：精靈的開啟來源與 ×", () => {
     expect(ui.queryByTestId("onboarding-dismiss")).toBeNull();
     expect(ui.getByTestId("onboarding").getAttribute("data-resume")).toBe("");
     expect(ui.queryByTestId("settings")).not.toBeNull();
+  });
+
+  // 票 43：精靈蓋住整個畫面、擋得住滑鼠，擋不住鍵盤焦點——Tab 會走到背後看不見的側欄。精靈開著時主畫面 inert，
+  // 精靈自己放在 app-root 之外才不會一起被鎖。jsdom 不實作 inert 的行為，這裡驗結構：按鈕有沒有 inert 祖先。
+  // 先斷言 Splash 已卸載：Splash 期間主畫面本來就 inert，斷言落在那段期間的話，拿掉精靈的條件也照樣綠
+  it("首次啟動的精靈開著時，背後的主畫面是 inert，精靈自己不是", async () => {
+    useAppStore.setState({ bootstrap: stubBootstrap({ firstRun: true, projectsError: null }) });
+    const ui = render(<App />);
+    await settleSplash();
+    await waitFor(() => expect(ui.queryByTestId("onboarding")).not.toBeNull());
+
+    expect(ui.queryByTestId("splash")).toBeNull();
+    expect(ui.getByTestId("sidebar-settings").closest("[inert]")).not.toBeNull();
+    expect(ui.getByTestId("onboarding-done").closest("[inert]")).toBeNull();
+  });
+
+  it("設定頁「重跑引導」開的精靈開著時，背後的主畫面是 inert，精靈自己（含 ×）不是", async () => {
+    const ui = render(<App />);
+    await openSettings(ui);
+    ui.getByTestId("settings-rerun").click();
+    await waitFor(() => expect(ui.queryByTestId("onboarding")).not.toBeNull());
+
+    expect(ui.queryByTestId("splash")).toBeNull();
+    expect(ui.getByTestId("sidebar-settings").closest("[inert]")).not.toBeNull();
+    expect(ui.getByTestId("onboarding-dismiss").closest("[inert]")).toBeNull();
+  });
+
+  // 精靈收掉之後主畫面要解除 inert：× 回到的設定頁就在主畫面裡
+  it("設定頁開的精靈按 × 回到設定頁：設定頁不是 inert", async () => {
+    const ui = render(<App />);
+    await openSettings(ui);
+    ui.getByTestId("settings-rerun").click();
+    await waitFor(() => expect(ui.queryByTestId("onboarding")).not.toBeNull());
+
+    ui.getByTestId("onboarding-dismiss").click();
+    await waitFor(() => expect(ui.queryByTestId("onboarding")).toBeNull());
+    expect(ui.getByTestId("settings-rerun").closest("[inert]")).toBeNull();
+  });
+
+  // 首次啟動時精靈在 Splash 卸載前就掛上了：bootstrap 一回傳 firstRun 就開精靈，Splash 還要補滿 2 秒再淡出。
+  // 精靈在 app-root 之外，這段期間要靠自己外層的 inert。時鐘固定不走，Splash 的計時器不會觸發，斷言一定落在這段期間
+  it("首次啟動、Splash 還在畫面上時，精靈已掛上，也是 inert", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers();   // 不用 shouldAdvanceTime
+    useAppStore.setState({ bootstrap: stubBootstrap({ firstRun: true, projectsError: null }) });
+    const ui = render(<App />);
+    await act(async () => {});   // 讓 bootstrap 的 Promise 跑完、精靈掛上
+
+    expect(ui.queryByTestId("splash")).not.toBeNull();
+    expect(ui.getByTestId("onboarding-done").closest("[inert]")).not.toBeNull();
+  });
+
+  // 票 43：關閉確認框不擋 Tab（票 45），可以在它底下開出設定頁。這時開精靈，主畫面連同確認框一起 inert，
+  // 確認框卻疊在精靈上面——看得到、按不到。所以兩個入口整個不動作：精靈不開、設定頁不關、確認框留著
+  it.each([
+    ["重跑引導", "settings-rerun"],
+    ["繼續移機", "settings-resume"],
+  ])("關閉確認框顯示中按設定頁「%s」：精靈不開，設定頁與確認框都還在", async (_entry, button) => {
+    useAppStore.setState({ tabs: [liveTab("demo")], pendingCloseTabId: "tab-1" });
+    const ui = render(<App />);
+    await openSettings(ui);
+    expect(ui.queryByRole("alertdialog")).not.toBeNull();
+
+    await act(async () => { ui.getByTestId(button).click(); });
+    expect(ui.queryByTestId("onboarding")).toBeNull();
+    expect(ui.queryByTestId("settings")).not.toBeNull();
+    expect(ui.queryByRole("alertdialog")).not.toBeNull();
+  });
+
+  // 「確認框顯示中」抽成 closeConfirmOpen 時改到三處既有判斷：快捷鍵 handler、modalOpen 旗標、畫確認框的條件。
+  // 畫確認框有 i18n 那組守，前兩處之前沒有測試守。
+  // 確認框都在開機後才出現，effect 的依賴陣列漏掉它就會一直讀到開機時的 false
+  it("關閉確認框顯示中按 Cmd+,：不開設定頁", async () => {
+    const ui = render(<App />);
+    await settleSplash();
+    act(() => { useAppStore.setState({ tabs: [liveTab("demo")], pendingCloseTabId: "tab-1" }); });
+    expect(ui.queryByRole("alertdialog")).not.toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true, cancelable: true, bubbles: true }));
+    });
+    expect(ui.queryByTestId("settings")).toBeNull();
+  });
+
+  it("關閉確認框顯示中 modalOpen 為 true", async () => {
+    render(<App />);
+    await settleSplash();
+    expect(useAppStore.getState().modalOpen).toBe(false);
+
+    act(() => { useAppStore.setState({ tabs: [liveTab("demo")], pendingCloseTabId: "tab-1" }); });
+    expect(useAppStore.getState().modalOpen).toBe(true);
   });
 });
