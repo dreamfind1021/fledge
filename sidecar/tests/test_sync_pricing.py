@@ -25,6 +25,28 @@ def _claude(p_in, p_out, *, c5m=None, c1h=None, cread=None):
     return entry
 
 
+
+def _long_context_fields(p_in, p_out, *, c5m=None, c1h=None, cread=None, k=100):
+    """上游 `<欄位>_above_<k>k_tokens` 分段欄位（per-token）；給 None 的欄位不放。"""
+    entry = {}
+    for field, value in (("input_cost_per_token", p_in), ("output_cost_per_token", p_out),
+                         ("cache_creation_input_token_cost", c5m),
+                         ("cache_creation_input_token_cost_above_1hr", c1h),
+                         ("cache_read_input_token_cost", cread)):
+        if value is not None:
+            entry[f"{field}_above_{k}k_tokens"] = value
+    return entry
+
+
+# 照 2026-10-13 上游 claude-haiku-5-5 的形狀：基本價＋100K 分段＋batch 變體（batch 不得影響結果）
+HAIKU_9 = {
+    **_claude(1e-07, 5e-07, c5m=1.25e-07, c1h=2e-07, cread=1e-08),
+    **_long_context_fields(5e-07, 2.5e-06, c5m=6.25e-07, c1h=1e-06, cread=5e-08),
+    "input_cost_per_token_above_100k_tokens_batches": 2.5e-07,
+    "output_cost_per_token_above_100k_tokens_batches": 1.25e-06,
+}
+HAIKU_9_LONG_CONTEXT = (100000, (0.5, 2.5, 0.625, 1.0, 0.05))
+
 UPSTREAM = {
     # 裸 key 與其日期版 → 同一個表 key，價格一致故不算衝突
     "claude-opus-9": _claude(5e-06, 2.5e-05, c5m=6.25e-06, c1h=1e-05, cread=5e-07),
@@ -58,7 +80,7 @@ def _no_real_exceptions(monkeypatch):
 
 
 def test_only_bare_first_party_keys_enter_table():
-    claude, codex, _, conflicts = sync.build_tables(UPSTREAM)
+    claude, codex, _, _, conflicts = sync.build_tables(UPSTREAM)
     assert conflicts == []
     # 日期版併入裸 key；provider 前綴/路徑/`:` 版本尾綴全濾掉，故區域價不會蓋掉第一方價
     assert claude == {"claude-opus-9": (5.0, 25.0, 6.25, 10.0, 0.5)}
@@ -72,7 +94,7 @@ def test_new_codex_generation_is_collected_not_silently_skipped():
     但不能放寬成 `gpt-`：那會把 gpt-4o／音訊／圖像／embedding 一起吃進來——Codex 不跑
     那些款，而它們的價格欄位形狀不同（常缺 output），會讓 invalid_prices 擋掉整檔寫入。
     """
-    _, codex, _, _ = sync.build_tables({
+    _, codex, _, _, _ = sync.build_tables({
         "gpt-6-astra": {"input_cost_per_token": 1e-05, "cache_read_input_token_cost": 1e-06,
                         "output_cost_per_token": 5e-05, "mode": "chat"},
         "gpt-4o": {"input_cost_per_token": 2.5e-06, "output_cost_per_token": 1e-05,
@@ -103,7 +125,7 @@ def test_missing_model_explanation_distinguishes_its_four_causes(monkeypatch):
 
 def test_codex_prefix_requires_a_generation_boundary():
     """字首比對要有世代邊界，否則 gpt-60／gpt-6a 這種不同世代也會被收進來。"""
-    _, codex, _, _ = sync.build_tables({
+    _, codex, _, _, _ = sync.build_tables({
         "gpt-6-astra": {"input_cost_per_token": 1e-05, "output_cost_per_token": 5e-05,
                         "mode": "chat"},
         "gpt-5.6-sol": {"input_cost_per_token": 4e-06, "output_cost_per_token": 2e-05,
@@ -130,7 +152,7 @@ def test_non_text_products_are_excluded_by_declared_mode():
     放行未知等於讓上游 schema 漂移把非文字產品無聲收進表，日後以文字 token 三元組
     算出錯帳；擋下來則是看得見的失敗（面板警示 ＋ explain_missing 說明原因）。
     """
-    _, codex, notes, _ = sync.build_tables({
+    _, codex, _, notes, _ = sync.build_tables({
         "gpt-6-astra": {"input_cost_per_token": 1e-05, "output_cost_per_token": 5e-05,
                         "mode": "chat"},
         "gpt-6-thinky": {"input_cost_per_token": 1e-05, "output_cost_per_token": 5e-05,
@@ -172,7 +194,7 @@ def test_missing_codex_cached_price_is_derived_not_free_and_not_input(monkeypatc
     「上游剛好沒值」的同 tier 模型差 10 倍——官方對四個 pro 同樣標「—」，
     差異來自資料缺漏而非定價。
     """
-    _, codex, _, _ = sync.build_tables(UPSTREAM)
+    _, codex, _, _, _ = sync.build_tables(UPSTREAM)
     assert codex["gpt-5.9"] == (5.0, 0.5, 30.0)          # 上游填 0
     assert codex["gpt-5.9-pro"] == (30.0, 3.0, 180.0)     # 上游整個沒有該欄
     assert codex["gpt-5.9-mini"] == (0.75, 0.075, 4.5)    # 上游有真值 → 照收
@@ -180,7 +202,7 @@ def test_missing_codex_cached_price_is_derived_not_free_and_not_input(monkeypatc
 
 def test_codex_cached_price_is_kept_however_far_from_the_multiplier():
     """Codex 側套用同一條規則：上游正數照收，不因偏離 0.1× 就被覆寫。"""
-    _, codex, notes, _ = sync.build_tables({
+    _, codex, _, notes, _ = sync.build_tables({
         "gpt-5.9": {"input_cost_per_token": 5e-06, "cache_read_input_token_cost": 4e-06,
                     "output_cost_per_token": 3e-05, "mode": "chat"},
     })
@@ -191,13 +213,13 @@ def test_codex_cached_price_is_kept_however_far_from_the_multiplier():
 def test_same_normalized_key_with_different_prices_is_a_conflict():
     raw = dict(UPSTREAM)
     raw["claude-opus-9-20260202"] = _claude(7e-06, 3.5e-05)   # 與裸 key 不同價
-    _, _, _, conflicts = sync.build_tables(raw)
+    _, _, _, _, conflicts = sync.build_tables(raw)
     assert any("claude-opus-9" in c for c in conflicts)
 
 
 def test_excluded_key_never_enters_table(monkeypatch):
     monkeypatch.setattr(pricing, "EXCLUDED", {"gpt-5.9": "測試用理由"})
-    _, codex, notes, _ = sync.build_tables(UPSTREAM)
+    _, codex, _, notes, _ = sync.build_tables(UPSTREAM)
     assert "gpt-5.9" not in codex
     assert any("測試用理由" in n for n in notes)
 
@@ -205,7 +227,7 @@ def test_excluded_key_never_enters_table(monkeypatch):
 def test_pinned_value_wins_over_upstream_and_upstream_is_reported(monkeypatch):
     pinned = (99.0, 999.0, 123.75, 198.0, 9.9)
     monkeypatch.setattr(pricing, "PINNED", {"claude-opus-9": (pinned, "測試用釘價")})
-    claude, _, notes, _ = sync.build_tables(UPSTREAM)
+    claude, _, _, notes, _ = sync.build_tables(UPSTREAM)
     assert claude["claude-opus-9"] == pinned                 # 不被上游覆寫
     # 上游值仍報告出來供複核——釘住不等於不看上游
     assert any("測試用釘價" in n and "(5.0, 25.0, 6.25, 10.0, 0.5)" in n for n in notes)
@@ -214,14 +236,14 @@ def test_pinned_value_wins_over_upstream_and_upstream_is_reported(monkeypatch):
 def test_pinned_value_with_wrong_arity_is_refused_not_silently_used(monkeypatch):
     """表的欄位數改過而 PINNED 忘了跟上時，不得寫進長度不對的 tuple（runtime 解包會炸）。"""
     monkeypatch.setattr(pricing, "PINNED", {"claude-opus-9": ((99.0, 999.0), "欄位數過時")})
-    claude, _, notes, _ = sync.build_tables(UPSTREAM)
+    claude, _, _, notes, _ = sync.build_tables(UPSTREAM)
     assert claude["claude-opus-9"] == (5.0, 25.0, 6.25, 10.0, 0.5)   # 改採上游值
     assert any("欄位數不符" in n for n in notes)
 
 
 def test_claude_cache_layers_use_upstream_price_and_derive_only_what_is_missing():
     """cache 存真價：上游給了就照收（哪怕不是 1.25×），沒給的層才用倍率推導。"""
-    claude, _, _, _ = sync.build_tables({
+    claude, _, _, _, _ = sync.build_tables({
         # 5m 是 1.2×（claude-3-haiku 的真實情況）、read 給 0.1×、1h 完全沒給
         "claude-odd-9": _claude(1e-06, 5e-06, c5m=1.2e-06, cread=1e-07),
     })
@@ -237,7 +259,7 @@ def test_positive_upstream_cache_price_is_kept_however_far_from_the_multiplier()
     立案依據（claude-3-haiku 的 24×、claude-3-opus 的 0.4×）上游已修正，實測開關它
     對現行表零影響。刻意偏離上游改走 PINNED／EXCLUDED——那是人決定且寫得出理由的。
     """
-    claude, _, notes, _ = sync.build_tables({
+    claude, _, _, notes, _ = sync.build_tables({
         "claude-far-hi": _claude(2.5e-07, 1.25e-06, c1h=6e-06),    # 1h = 24× input
         "claude-far-lo": _claude(1.5e-05, 7.5e-05, c1h=6e-06),     # 1h = 0.4× input
         "claude-cheapread": _claude(1e-05, 5e-05, cread=2.5e-07),  # read = 0.025×
@@ -250,13 +272,85 @@ def test_positive_upstream_cache_price_is_kept_however_far_from_the_multiplier()
 
 def test_nonpositive_upstream_cache_price_is_derived_and_flagged():
     """非有限正數是真的壞掉——這不是猜的。改用估價並要人去看上游。"""
-    claude, _, notes, _ = sync.build_tables({
+    claude, _, _, notes, _ = sync.build_tables({
         "claude-bad-9": _claude(1e-06, 5e-06, c5m=-1e-06),
     })
     assert claude["claude-bad-9"][2] == 1.25       # 1.25× input 的估價
     assert any("非有限正數" in n and "claude-bad-9" in n for n in notes)
 
 
+
+
+def test_long_context_threshold_and_prices_come_from_upstream_field_names():
+    """門檻從欄位名讀（100k → 100000）；`_batches` 是 batch 模式價，Claude Code 碰不到，不得混進來。"""
+    claude, _, long_context, _, conflicts = sync.build_tables({**UPSTREAM, "claude-haiku-9": HAIKU_9})
+    assert conflicts == []
+    assert long_context == {"claude-haiku-9": HAIKU_9_LONG_CONTEXT}   # 沒有分段欄位的 opus-9 不在裡面
+    assert claude["claude-haiku-9"] == (0.1, 0.5, 0.125, 0.2, 0.01)   # 基本價不受分段欄位影響
+
+
+def test_long_context_threshold_is_read_not_assumed():
+    """門檻照欄位名讀，不是寫死 100K：下一款帶分段的模型可能是別的門檻（上游已有 200k、272k）。"""
+    entry = {**_claude(1e-07, 5e-07), **_long_context_fields(5e-07, 2.5e-06, c5m=6.25e-07, c1h=1e-06,
+                                                            cread=5e-08, k=272)}
+    _, _, long_context, _, _ = sync.build_tables({"claude-haiku-9": entry})
+    assert long_context == {"claude-haiku-9": (272000, HAIKU_9_LONG_CONTEXT[1])}
+
+
+def test_missing_long_context_cache_layer_is_derived_and_flagged():
+    """分段的 cache 層缺值，與基本價同一條規則：用分段 input × 標準倍率推導、標明估值。"""
+    entry = {**_claude(1e-07, 5e-07, c5m=1.25e-07, c1h=2e-07, cread=1e-08),
+             **_long_context_fields(5e-07, 2.5e-06, c5m=6.25e-07, c1h=1e-06)}   # 缺分段 read
+    _, _, long_context, notes, _ = sync.build_tables({"claude-haiku-9": entry})
+    assert long_context == {"claude-haiku-9": HAIKU_9_LONG_CONTEXT}   # read＝0.1 × 分段 input 0.5
+    assert any("claude-haiku-9（超過 100k 分段）" in n and "估值" in n for n in notes)
+
+
+def test_missing_long_context_output_is_refused():
+    """分段 output 缺值會被 _mtok 轉成 0.0＝越線請求的 output 免費。與基本價同樣擋下。"""
+    entry = {**_claude(1e-07, 5e-07), **_long_context_fields(5e-07, None)}
+    claude, codex, long_context, _, _ = sync.build_tables({"claude-haiku-9": entry})
+    assert any("分段" in line and "claude-haiku-9" in line
+               for line in sync.invalid_prices(claude, codex, long_context))
+
+
+def test_nonpositive_long_context_threshold_is_refused():
+    """門檻 0＝每筆請求都算越線。上游寫出 `_above_0k_tokens` 就是壞資料，與價格壞值同樣擋下。"""
+    entry = {**_claude(1e-07, 5e-07), **_long_context_fields(5e-07, 2.5e-06, k=0)}
+    claude, codex, long_context, _, _ = sync.build_tables({"claude-haiku-9": entry})
+    assert any("claude 分段 claude-haiku-9" in line
+               for line in sync.invalid_prices(claude, codex, long_context))
+
+
+def test_two_long_context_thresholds_are_a_conflict():
+    """表一款只能表達一個門檻；上游哪天給了兩段，不猜哪段算數，中止寫入。"""
+    entry = {**HAIKU_9, **_long_context_fields(1e-06, 5e-06, k=200)}
+    _, _, _, _, conflicts = sync.build_tables({"claude-haiku-9": entry})
+    assert any("claude-haiku-9" in c and "100000" in c and "200000" in c for c in conflicts)
+
+
+def test_dated_key_without_long_context_conflicts_with_bare_key():
+    """同一正規化名的兩個上游 key，一個有分段一個沒有：不猜哪個對，與基本價不一致同樣處理。"""
+    _, _, _, _, conflicts = sync.build_tables({
+        "claude-haiku-9": HAIKU_9,
+        "claude-haiku-9-20261001": _claude(1e-07, 5e-07, c5m=1.25e-07, c1h=2e-07, cread=1e-08),
+    })
+    assert any("claude-haiku-9" in c for c in conflicts)
+
+
+def test_excluded_model_has_no_long_context(monkeypatch):
+    monkeypatch.setattr(pricing, "EXCLUDED", {"claude-haiku-9": "測試用理由"})
+    _, _, long_context, _, _ = sync.build_tables({"claude-haiku-9": HAIKU_9})
+    assert long_context == {}
+
+
+def test_pinned_model_keeps_upstream_long_context(monkeypatch):
+    """PINNED 只管基本價；分段一律跟上游（spec §4.2 第 7 點）。"""
+    pinned = (0.2, 1.0, 0.25, 0.4, 0.02)
+    monkeypatch.setattr(pricing, "PINNED", {"claude-haiku-9": (pinned, "測試用釘價")})
+    claude, _, long_context, _, _ = sync.build_tables({"claude-haiku-9": HAIKU_9})
+    assert claude["claude-haiku-9"] == pinned
+    assert long_context == {"claude-haiku-9": HAIKU_9_LONG_CONTEXT}
 
 def test_empty_or_non_mapping_upstream_is_refused(tmp_path):
     """合法但殘缺的 JSON 不得生出空表整檔覆蓋（Codex 審查 finding #1）。"""
@@ -269,35 +363,47 @@ def test_empty_or_non_mapping_upstream_is_refused(tmp_path):
 
 def test_missing_or_nonfinite_price_is_refused():
     """缺 output 價會被 _mtok 轉成 0.0＝output token 免費，是最貴那欄的靜默低估。"""
-    claude, codex, _, _ = sync.build_tables({
+    claude, codex, long_context, _, _ = sync.build_tables({
         "claude-broken-9": {"input_cost_per_token": 5e-06},              # 缺 output
         "gpt-5.9-broken": {"input_cost_per_token": 5e-06, "mode": "chat",
                            "output_cost_per_token": float("inf")},
     })
-    bad = sync.invalid_prices(claude, codex)
+    bad = sync.invalid_prices(claude, codex, long_context)
     assert any("claude-broken-9" in line for line in bad)
     assert any("gpt-5.9-broken" in line for line in bad)
     # 正常表不得誤報
-    ok_claude, ok_codex, _, _ = sync.build_tables(UPSTREAM)
-    assert sync.invalid_prices(ok_claude, ok_codex) == []
+    ok_claude, ok_codex, ok_long_context, _, _ = sync.build_tables(UPSTREAM)
+    assert sync.invalid_prices(ok_claude, ok_codex, ok_long_context) == []
 
 
 def test_rendered_table_is_importable_and_round_trips():
-    claude, codex, _, _ = sync.build_tables(UPSTREAM)
+    claude, codex, long_context, _, _ = sync.build_tables({**UPSTREAM, "claude-haiku-9": HAIKU_9})
     namespace: dict = {}
-    exec(compile(sync.render_table(claude, codex), "pricing_table.py", "exec"), namespace)
+    exec(compile(sync.render_table(claude, codex, long_context), "pricing_table.py", "exec"), namespace)
     assert namespace["CLAUDE_PRICING"] == claude
+    assert namespace["CLAUDE_LONG_CONTEXT"] == {"claude-haiku-9": HAIKU_9_LONG_CONTEXT}
     assert namespace["CODEX_PRICING"] == codex
     assert namespace["TABLE_VERSION"].count(".") == 1
 
 
 def test_table_version_tracks_content_not_time():
-    claude, codex, _, _ = sync.build_tables(UPSTREAM)
-    same = sync.render_table(claude, codex)
-    assert sync.render_table(dict(claude), dict(codex)) == same    # 同內容 → 同版本
-    changed = sync.render_table({**claude, "claude-opus-9": (1.0, 2.0, 1.25, 2.0, 0.1)}, codex)
+    claude, codex, long_context, _, _ = sync.build_tables(UPSTREAM)
+    same = sync.render_table(claude, codex, long_context)
+    assert sync.render_table(dict(claude), dict(codex), dict(long_context)) == same    # 同內容 → 同版本
+    changed = sync.render_table({**claude, "claude-opus-9": (1.0, 2.0, 1.25, 2.0, 0.1)}, codex,
+                                long_context)
     assert _version_of(changed) != _version_of(same)               # 改一個價 → 版本必變
 
+
+
+def test_table_version_tracks_long_context_too():
+    """只改分段（價或門檻）也必須換版本，否則 L2 不重算、舊金額留著（spec §4.5）。"""
+    claude, codex, long_context, _, _ = sync.build_tables({**UPSTREAM, "claude-haiku-9": HAIKU_9})
+    same = _version_of(sync.render_table(claude, codex, long_context))
+    price_changed = {"claude-haiku-9": (100000, (0.5, 2.5, 0.625, 1.0, 0.06))}
+    threshold_changed = {"claude-haiku-9": (200000, HAIKU_9_LONG_CONTEXT[1])}
+    assert _version_of(sync.render_table(claude, codex, price_changed)) != same
+    assert _version_of(sync.render_table(claude, codex, threshold_changed)) != same
 
 def test_removing_existing_models_requires_explicit_flag(monkeypatch, tmp_path):
     """上游殘缺時表會整批縮水，而 diff 看起來只是「少了幾行」（Codex 審查 finding #1）。"""
