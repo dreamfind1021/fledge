@@ -115,6 +115,26 @@ def test_new_codex_model_stale_l2_repriced_without_reparse(tmp_path: Path, monke
     assert r1.entries[0].missing_pricing is False and r1.entries[0].cost > 0
 
 
+
+def test_long_context_entry_in_stale_l2_is_repriced_at_tier_price(tmp_path: Path, monkeypatch):
+    """L2 存的是舊公式（沒有分段）算的 Haiku 5.5 越線紀錄；表與公式一起更新後，重啟只重算不重 parse，
+    金額要變成分段價。四個長度欄位都存在 UsageEntry 裡，所以不必升 SCHEMA_VERSION（spec §4.7）。"""
+    line = json.dumps({"type": "assistant", "timestamp": "2026-10-12T01:00:00Z",
+                       "cwd": "/p", "sessionId": "s", "requestId": "r",
+                       "message": {"id": "m", "model": "claude-haiku-5-5",
+                                   "usage": {"input_tokens": 100_001, "output_tokens": 1}}})
+    f = tmp_path / "h.jsonl"
+    f.write_text(line, encoding="utf-8")
+    l2 = tmp_path / "usage-v1.json"
+    with monkeypatch.context() as m:
+        m.setattr(pricing, "CLAUDE_LONG_CONTEXT", {})
+        m.setattr(pricing, "PRICING_VERSION", "test.stale")
+        r0 = UsageCache(l2_path=l2).refresh(claude=[f], codex=[])
+        assert abs(r0.entries[0].cost - (100_001 * 0.1 + 1 * 0.5) / 1e6) < 1e-12   # 舊算法：基本價
+    r1 = UsageCache(l2_path=l2).refresh(claude=[f], codex=[])
+    assert r1.parsed_files == 0
+    assert abs(r1.entries[0].cost - (100_001 * 0.5 + 1 * 2.5) / 1e6) < 1e-12
+
 def test_generation_monotonic_and_atomic_write(tmp_path: Path):
     f = _write_claude(tmp_path, "a.jsonl")
     l2 = tmp_path / "usage-v1.json"

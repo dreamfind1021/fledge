@@ -1,13 +1,15 @@
 """計價公式與模型名正規化。定價表在 pricing_table.py（公式統一 ÷ 1_000_000，design §7）。
 
 定價更新流程：改 pricing_table.py → 遞增 `TABLE_VERSION` → L2 快取自動只重算 cost（cache.py）。
+`PRICING_VERSION` 只跟著表的內容走：只改公式、不改表時它不會變，L2 也不會重算——公式變更要跟著
+表內容變更一起出貨（票 44 的分段公式與分段表在同一個 commit）。
 """
 from __future__ import annotations
 
 import re
 
-from fledge_sidecar.usage.pricing_table import (CLAUDE_PRICING, CODEX_PRICING,
-                                                TABLE_VERSION)
+from fledge_sidecar.usage.pricing_table import (CLAUDE_LONG_CONTEXT, CLAUDE_PRICING,
+                                                CODEX_PRICING, TABLE_VERSION)
 
 PRICING_VERSION = TABLE_VERSION
 
@@ -67,10 +69,18 @@ def claude_cost(model: str, input_tokens: int, output_tokens: int,
     `usage.speed` 幾乎每筆都有，但 subagent（`isSidechain`）的紀錄約三分之二缺這欄，且 fast
     時實際寫出的值沒有樣本驗證過。要補得把 speed 存進 UsageEntry（L2 快取要升 schema）。
     開了 `/fast` 的使用者，那段花費會被靜默低估一半，且不進「尚未收錄定價」警示。
+
+    依 prompt 長度分段的款（`CLAUDE_LONG_CONTEXT`，目前只有 Haiku 5.5）：這次請求的 input＋
+    cache 5m 寫入＋cache 1h 寫入＋cache 讀取「大於」門檻時，五欄（含 output）整組改用分段價。
+    每次請求各自判斷（官方定價頁 Long context pricing）。查不到基本價的款照舊回 missing，
+    分段表不會讓表外的款變成有價。
     """
     price = CLAUDE_PRICING.get(model)
     if price is None:
         return 0.0, True
+    tier = CLAUDE_LONG_CONTEXT.get(model)
+    if tier is not None and input_tokens + cache_5m + cache_1h + cache_read > tier[0]:
+        price = tier[1]
     p_in, p_out, p_5m, p_1h, p_read = price
     cost = (input_tokens * p_in + output_tokens * p_out
             + cache_5m * p_5m + cache_1h * p_1h + cache_read * p_read) / _MTOK

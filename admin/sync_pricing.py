@@ -58,6 +58,15 @@ _CODEX_KEY_RE = re.compile(r"^gpt-[56](?:[.-]|$)")
 # 讓上游 schema 漂移把非文字產品無聲收進表，日後以文字 token 三元組算出錯帳；
 # 擋下來則是看得見的失敗——面板警示 ＋ `explain_missing()` 說明原因。
 _CODEX_MODES = ("chat", "responses")
+# Claude 依單次請求 prompt 長度分段的價：上游寫成 `<基本欄位>_above_<N>k_tokens`，門檻＝N×1000。
+# 結尾錨定——`_batches`／`_priority` 等計費模式變體接在後面，自然不符（Claude Code 碰不到那些
+# 模式，見票 14 備註）。2026-10-13 全上游的 token 分段欄位只有這一種寫法。
+_CLAUDE_BASE_FIELDS = ("input_cost_per_token", "output_cost_per_token",
+                       "cache_creation_input_token_cost",
+                       "cache_creation_input_token_cost_above_1hr",
+                       "cache_read_input_token_cost")
+_LONG_CONTEXT_FIELD_RE = re.compile(
+    r"^(" + "|".join(_CLAUDE_BASE_FIELDS) + r")_above_(\d+)k_tokens$")
 
 
 def fetch_upstream(local: str | None) -> dict:
@@ -127,6 +136,29 @@ def _claude_cache_prices(entry: dict, p_in: float,
     return (prices[0], prices[1], prices[2]), notes
 
 
+def _claude_long_context(entry: dict, key: str) -> tuple[tuple | None, list[str], str | None]:
+    """上游分段欄位 → ((門檻, 越線後的五欄) 或 None, 異常說明, 衝突說明)。
+
+    把分段欄位去掉 `_above_<N>k_tokens` 尾巴，組成一份長得像基本價的 view，套用與基本價
+    **完全相同**的規則：cache 層缺值用分段 input 推導並標明估值、output 缺值變 0 交給
+    `invalid_prices` 擋。不另立分段專用的規則。
+    """
+    by_threshold: dict[int, dict] = {}
+    for field, value in entry.items():
+        m = _LONG_CONTEXT_FIELD_RE.match(field)
+        if m:
+            by_threshold.setdefault(int(m.group(2)) * 1000, {})[m.group(1)] = value
+    if not by_threshold:
+        return None, [], None
+    if len(by_threshold) > 1:      # 表一款只能表達一個門檻，不猜哪段算數
+        return None, [], f"{key}：上游有多個分段門檻 {sorted(by_threshold)}，表只能表達一個"
+    threshold, view = by_threshold.popitem()
+    p_in = view.get("input_cost_per_token") or 0.0
+    cache_prices, notes = _claude_cache_prices(view, p_in, f"{key}（超過 {threshold // 1000}k 分段）")
+    price = (_mtok(p_in), _mtok(view.get("output_cost_per_token")), *cache_prices)
+    return (threshold, price), notes, None
+
+
 def _normalized_name(key: str) -> str | None:
     """上游裸 key → Fledge 查表用的名字。與 `build_tables` 用同一組 normalize。"""
     if key.startswith("claude-"):
@@ -170,17 +202,19 @@ def explain_missing(name: str, raw: dict) -> str:
     return "上游有此款且通過收錄條件，卻沒進表 → 非預期，請查 build_tables"
 
 
-def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str]]:
-    """回 (claude_table, codex_table, notes, conflicts)。
+def build_tables(raw: dict) -> tuple[dict, dict, dict, list[str], list[str]]:
+    """回 (claude_table, codex_table, claude_long_context, notes, conflicts)。
 
     表 key＝上游裸 key 餵進 Fledge 自己的 normalize——保證「表裡的 key」與
     「runtime 查表時用的 key」由同一段程式產生，不會各自漂移。
     """
     claude: dict[str, tuple[float, float, float, float, float]] = {}
     codex: dict[str, tuple[float, float, float]] = {}
-    seen: dict[str, dict[str, tuple]] = {}      # 正規化 key → {上游 key: price}
+    long_context: dict[str, tuple[int, tuple[float, float, float, float, float]]] = {}
+    seen: dict[str, dict[str, tuple]] = {}      # 正規化 key → {上游 key: price 或 (price, 分段)}
     notes: list[str] = []
     warnings: list[str] = []
+    tier_conflicts: list[str] = []
 
     for key, entry in sorted(_table_candidates(raw).items()):
         p_in = entry["input_cost_per_token"]
@@ -213,7 +247,18 @@ def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str]]:
         if norm in pricing.EXCLUDED:
             notes.append(f"跳過 {norm}（EXCLUDED）：{pricing.EXCLUDED[norm]}")
             continue
-        seen.setdefault(norm, {})[key] = price
+        # 分段跟著基本價一起進表：EXCLUDED、normalize 回 None 的款兩張表都不進，
+        # 所以分段表的 key 一定在 claude 表裡
+        tier = None
+        if table is claude:
+            tier, tier_notes, tier_conflict = _claude_long_context(entry, key)
+            warnings.extend(tier_notes)
+            if tier_conflict:
+                tier_conflicts.append(tier_conflict)
+            if tier is not None:
+                long_context[norm] = tier
+        # 衝突比對連分段一起比：同名的上游 key 一個有分段、一個沒有，同樣不猜
+        seen.setdefault(norm, {})[key] = price if tier is None else (price, tier)
         table[norm] = price
 
     # 同一正規化 key 被多個上游 key 指到且價格不一致 → 不猜，中止寫入
@@ -239,10 +284,10 @@ def build_tables(raw: dict) -> tuple[dict, dict, list[str], list[str]]:
     for key in pricing.PINNED:
         if key not in claude and key not in codex:
             warnings.append(f"PINNED 的 {key} 已不在上游 → 該例外可能已過期，請複核")
-    return claude, codex, notes + warnings, conflicts
+    return claude, codex, long_context, notes + warnings, conflicts + tier_conflicts
 
 
-def invalid_prices(claude: dict, codex: dict) -> list[str]:
+def invalid_prices(claude: dict, codex: dict, long_context: dict) -> list[str]:
     """回價格不合法的項目描述。
 
     上游缺 `output_cost_per_token` 會被 `_mtok` 轉成 0.0＝output token 免費，
@@ -256,11 +301,17 @@ def invalid_prices(claude: dict, codex: dict) -> list[str]:
                 if not math.isfinite(value) or value <= 0:
                     bad.append(f"{label} {key} = {price}")
                     break
+    # 分段同一條規則：越線請求的 output 缺值＝免費，門檻非正數＝每筆都算越線
+    for key, (threshold, price) in sorted(long_context.items()):
+        if threshold <= 0 or any(not math.isfinite(v) or v <= 0 for v in price):
+            bad.append(f"claude 分段 {key} = {(threshold, price)}")
     return bad
 
 
-def render_table(claude: dict, codex: dict) -> str:
-    payload = json.dumps({"claude": claude, "codex": codex}, sort_keys=True)
+def render_table(claude: dict, codex: dict, long_context: dict) -> str:
+    # 雜湊必須含分段表：只改分段（價或門檻）時版本也要變，否則 L2 不重算、舊金額留著
+    payload = json.dumps({"claude": claude, "claude_long_context": long_context, "codex": codex},
+                         sort_keys=True)
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
     version = f"{datetime.date.today().isoformat()}.{digest}"
     lines = [
@@ -282,6 +333,15 @@ def render_table(claude: dict, codex: dict) -> str:
         "CLAUDE_PRICING: dict[str, tuple[float, float, float, float, float]] = {",
     ]
     lines += [f'    "{k}": {v!r},' for k, v in sorted(claude.items())]
+    lines += [
+        "}",
+        "",
+        "# Claude 依單次請求 prompt 長度分段的價：key → (門檻, 越線後的五欄)。prompt 長度＝input＋",
+        "# cache 5m 寫入＋cache 1h 寫入＋cache 讀取，「大於」門檻才用這組，五欄（含 output）整組替換",
+        "# 基本價。欄位順序同 CLAUDE_PRICING；來源是上游的 `<欄位>_above_<N>k_tokens`。",
+        "CLAUDE_LONG_CONTEXT: dict[str, tuple[int, tuple[float, float, float, float, float]]] = {",
+    ]
+    lines += [f'    "{k}": {v!r},' for k, v in sorted(long_context.items())]
     lines += [
         "}",
         "",
@@ -327,14 +387,14 @@ def main() -> int:
         print(f"上游取得失敗：{exc}", file=sys.stderr)
         return 1
 
-    claude, codex, notes, conflicts = build_tables(raw)
+    claude, codex, long_context, notes, conflicts = build_tables(raw)
     # 整檔覆蓋是破壞性操作：所有「會生出壞表」的檢查都必須在 os.replace 之前擋掉
     if conflicts:
         print("同一模型名對到不同價格，不猜、中止寫入：", file=sys.stderr)
         for line in conflicts:
             print(f"  ✗ {line}", file=sys.stderr)
         return 1
-    bad = invalid_prices(claude, codex)
+    bad = invalid_prices(claude, codex, long_context)
     if bad:
         print("價格非有限正數（上游缺欄或資料損壞），中止寫入：", file=sys.stderr)
         for line in bad:
@@ -359,16 +419,28 @@ def main() -> int:
     # 差異長得一模一樣，人審不出來。這不是新增護欄，是讓既有的人工關卡真的可用。
     for k in changed:
         print(f"  改價 {k}：{previous[k]} → {latest[k]}")
+    # 分段價：新增時就印出數值——這是人第一次看到這組價（票 44 的起因是 dry-run 對分段一個字都沒提）
+    previous_lc = current.CLAUDE_LONG_CONTEXT
+    removed_lc = sorted(set(previous_lc) - set(long_context))
+    for k in sorted(long_context):
+        if k not in previous_lc:
+            threshold, price = long_context[k]
+            print(f"  新增分段 {k}：prompt 超過 {threshold:,} → {price}")
+        elif previous_lc[k] != long_context[k]:
+            print(f"  改分段 {k}：{previous_lc[k]} → {long_context[k]}")
+    for k in removed_lc:
+        print(f"  移除分段 {k}：{previous_lc[k]}")
     print(f"  表：claude {len(claude)} 款、codex {len(codex)} 款")
 
-    # 移除既有模型要顯式同意：上游殘缺／改 schema 時，表會整批縮水而 diff 看起來只是「少了幾行」
-    if removed and not args.allow_removals:
-        print(f"\n本次會移除 {len(removed)} 款既有模型；確認上游真的下架了，再加 --allow-removals 重跑。",
-              file=sys.stderr)
+    # 移除既有模型要顯式同意：上游殘缺／改 schema 時，表會整批縮水而 diff 看起來只是「少了幾行」。
+    # 分段消失＝那款越線的請求退回基本價，是同一種風險，一起擋
+    if (removed or removed_lc) and not args.allow_removals:
+        print(f"\n本次會移除 {len(removed)} 款既有模型、{len(removed_lc)} 組分段價；"
+              f"確認上游真的下架了，再加 --allow-removals 重跑。", file=sys.stderr)
         return 1
 
     if not args.dry_run:
-        rendered = render_table(claude, codex)
+        rendered = render_table(claude, codex, long_context)
         tmp = TABLE_PATH.with_name(TABLE_PATH.name + ".tmp")
         tmp.write_text(rendered, encoding="utf-8")
         os.replace(tmp, TABLE_PATH)
