@@ -13,8 +13,9 @@ interface SystemSettingsCardProps {
   onPrev: () => void;
   onNext: () => void;
   /** 送出中。**由父層持有**（精靈）：精靈右上角的 × 要跟本卡的導覽按鈕讀同一份值，才會一起鎖、一起解鎖。
-   *  卡片在送出前設 true、`finally` 設 false——存好時是先 `onNext()` 換頁才走到 `finally`，那時卡片
-   *  已卸載，但 setter 是父層的，false 照樣送得到。 */
+   *  卡片在送出前設 true、`finally` 設 false。存好時，`onNext()` 的換頁與 `finally` 的 false 在同一段
+   *  續行裡排進佇列、同一次 render 提交：`finally` 執行時卡片還掛著，是那次提交才卸載。兩個更新一起提交，
+   *  完成頁的 × 才不會有一幀停用。 */
   busy: boolean;
   onBusyChange: (busy: boolean) => void;
 }

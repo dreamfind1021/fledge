@@ -218,7 +218,7 @@ function App() {
       // ⚠ 這道 gate 必須在 preventDefault 之後：放在 handler 開頭直接 return 的話，事件會落回
       // Tauri 預設行為，Splash 期間按 Cmd+W 會直接關掉整個 app。
       if (!splashDone) return;
-      if (showOnboarding) return; // onboarding 強制完成，期間吃掉所有 meta 快捷鍵（Codex F-6）
+      if (showOnboarding) return; // 精靈開著時（不論首次啟動或從設定頁開）吃掉所有 meta 快捷鍵（Codex F-6）
       // 確認框「實際顯示時」才吃掉 meta 快捷鍵（用 pendingTitle 而非 raw id，避免懸空 id 在 cleanup effect
       // 執行前那一 render tick 仍鎖死快捷鍵——與下方 render 的顯示條件一致）。Enter/Esc 交給框自己處理。
       if (pendingCloseTabId && pendingTitle !== null) return;

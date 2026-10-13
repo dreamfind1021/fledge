@@ -1708,7 +1708,7 @@ describe("Onboarding 精靈外殼", () => {
     await waitFor(() => expect(ui.getByText(zh.common.prev).closest("button")!.disabled).toBe(true));
     expect(dismissBtn(ui)!.disabled).toBe(true);
 
-    // 存好時卡片先 onNext() 換頁、才在 finally 設回 false——那時它已卸載，但 setter 是精靈的，照樣送得到
+    // 存好時 onNext() 的換頁與 finally 的 false 在同一次 render 提交（卡片那次才卸載）；setter 是精靈的，照樣送得到
     await act(async () => { release(); });
     await waitFor(() => expect(ui.getByText(zh.done.h)).toBeTruthy());
     expect(dismissBtn(ui)!.disabled).toBe(false);
