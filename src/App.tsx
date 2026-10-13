@@ -112,8 +112,8 @@ function App() {
     setResumeMigration(null);   // 續作是一次性的入口，關掉就不再套用
   };
   // 設定頁的兩個入口（重跑引導、繼續移機）：關掉設定頁再開精靈，兩個 modal 不疊在一起。
-  // 精靈已經開著時整個不動作（票 42）：精靈開著時鍵盤仍摸得到背後的設定頁（票 43），按下去會把首次啟動的
-  // 精靈改成「從設定頁開」而多出 ×，「繼續移機」還會把續作資料塞進正在跑的精靈
+  // 精靈已經開著時整個不動作（票 42）：按下去會把首次啟動的精靈改成「從設定頁開」而多出 ×，「繼續移機」還會把
+  // 續作資料塞進正在跑的精靈。精靈開著時主畫面是 inert（票 43），鍵盤走不到這裡；這是第二道防線
   const openOnboardingFromSettings = (resume: MigrationResume | null) => {
     if (showOnboarding) return;
     setShowSettings(false);
@@ -305,12 +305,12 @@ function App() {
     }
   };
 
-  // Splash 期間整個主畫面 inert（票 12）：Splash 蓋住畫面、擋住滑鼠與 meta 快捷鍵，但鍵盤焦點
-  // 還摸得到底下看不見的按鈕——config 還沒載入就能開設定頁、再進精靈。Splash 因此放在 app-root
-  // 之外：inert 會連帶所有子孫，放在裡面重試鈕也會一起失效。
+  // Splash 期間與精靈開著時，整個主畫面 inert（票 12、票 43）：兩者都蓋住整個畫面、擋住滑鼠與 meta 快捷鍵，
+  // 但鍵盤焦點還摸得到底下看不見的按鈕——Splash 期間 config 還沒載入就能開設定頁、再進精靈；精靈開著時能在
+  // 它底下開出設定頁。Splash 與精靈因此都放在 app-root 之外：inert 會連帶所有子孫，放在裡面會連自己一起失效。
   return (
     <>
-    <div className="app-root" inert={!splashDone}>
+    <div className="app-root" inert={!splashDone || showOnboarding}>
       {(backendStatus === "down" || backendStatus === "restarting") && (
         <div className="app-banner app-banner--error" role="alert">
           <span className="app-banner-icon"><AlertTriangle size={15} /></span>
@@ -362,17 +362,6 @@ function App() {
         <Workspace />
         <DragOverlay>{dragLabel ? <div className="drag-overlay-chip">{dragLabel}</div> : null}</DragOverlay>
       </DndContext>
-      {showOnboarding && (
-        <Onboarding
-          onClose={closeOnboarding}
-          // 從設定頁開的才能中途離開：按 × 關掉精靈、回到設定頁（兩個 modal 不疊在一起）
-          onDismiss={onboardingFrom === "settings" ? () => {
-            closeOnboarding();
-            setShowSettings(true);
-          } : undefined}
-          resume={resumeMigration ?? undefined}
-        />
-      )}
       {showSettings && (
         <Settings
           onClose={() => setShowSettings(false)}
@@ -398,6 +387,20 @@ function App() {
         </div>
       )}
     </div>
+    {/* 首次啟動時精靈在 Splash 淡出前就掛上、被 Splash 蓋住：那段期間精靈也要 inert（票 43） */}
+    {showOnboarding && (
+      <div inert={!splashDone}>
+        <Onboarding
+          onClose={closeOnboarding}
+          // 從設定頁開的才能中途離開：按 × 關掉精靈、回到設定頁（兩個 modal 不疊在一起）
+          onDismiss={onboardingFrom === "settings" ? () => {
+            closeOnboarding();
+            setShowSettings(true);
+          } : undefined}
+          resume={resumeMigration ?? undefined}
+        />
+      </div>
+    )}
     {!splashDone && (
       <Splash onDone={() => setSplashDone(true)} onRetry={() => void runStartup({ restart: true })} />
     )}
