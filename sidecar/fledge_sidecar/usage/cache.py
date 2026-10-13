@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 # 走過 walk 的存檔名，而未變動的來源檔不會重 parse，那筆會永遠停在錯的價格帶。
 # 3：Claude 裸別名改指現役型號（opus→claude-opus-5-5、sonnet→claude-sonnet-5-5）；
 # 舊存檔裡由別名正規化來的名字同樣回不去，理由同 2。
-SCHEMA_VERSION = 3
+# 4：haiku 裸別名改指 claude-haiku-5-5，理由同 3。
+SCHEMA_VERSION = 4
 
 
 @dataclass
