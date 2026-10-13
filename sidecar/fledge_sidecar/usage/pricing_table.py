@@ -8,7 +8,7 @@ from __future__ import annotations
 
 # <生成日期>.<表內容 sha256 前 8 碼>：內容一變就變，改表不可能忘記遞增。
 # cache.py 只做相等比對，不解析內容。
-TABLE_VERSION = "2026-10-13.e78284da"
+TABLE_VERSION = "2026-10-13.b88f6624"
 
 # Claude：(input, output, cache_5m_write, cache_1h_write, cache_read)——三層 cache 存
 # 上游真價而非倍率（倍率只對現行世代成立，claude-3-haiku 實為 1.2x/0.12x）；
@@ -31,6 +31,13 @@ CLAUDE_PRICING: dict[str, tuple[float, float, float, float, float]] = {
     "claude-sonnet-4-6": (3.0, 15.0, 3.75, 6.0, 0.3),
     "claude-sonnet-5": (2.0, 10.0, 2.5, 4.0, 0.2),
     "claude-sonnet-5-5": (2.0, 10.0, 2.5, 4.0, 0.1),
+}
+
+# Claude 依單次請求 prompt 長度分段的價：key → (門檻, 越線後的五欄)。prompt 長度＝input＋
+# cache 5m 寫入＋cache 1h 寫入＋cache 讀取，「大於」門檻才用這組，五欄（含 output）整組替換
+# 基本價。欄位順序同 CLAUDE_PRICING；來源是上游的 `<欄位>_above_<N>k_tokens`。
+CLAUDE_LONG_CONTEXT: dict[str, tuple[int, tuple[float, float, float, float, float]]] = {
+    "claude-haiku-5-5": (100000, (0.5, 2.5, 0.625, 1.0, 0.05)),
 }
 
 # Codex：(input, cached_input, output)

@@ -1,3 +1,4 @@
+import pytest
 from fledge_sidecar.usage import pricing
 
 
@@ -30,6 +31,64 @@ def test_claude_cost_unknown_model_is_zero_and_missing():
     cost, missing = pricing.claude_cost("claude-unknown-9", 1000, 1000, 0, 0, 0)
     assert cost == 0.0 and missing is True
 
+
+
+_BASE = (1.0, 2.0, 3.0, 4.0, 5.0)
+_TIER = (10.0, 30.0, 50.0, 70.0, 90.0)   # 各欄倍數不同：「整組乘同一個倍數」的錯算也抓得到
+
+
+@pytest.fixture
+def long_context_tables(monkeypatch):
+    """假款：claude-tier-9 有分段（門檻 1M）、claude-flat-9 沒有。數字選成容易手算。"""
+    monkeypatch.setattr(pricing, "CLAUDE_PRICING", {"claude-tier-9": _BASE, "claude-flat-9": _BASE})
+    monkeypatch.setattr(pricing, "CLAUDE_LONG_CONTEXT", {"claude-tier-9": (1_000_000, _TIER)})
+
+
+def _cost(model, inp=0, out=0, c5m=0, c1h=0, read=0):
+    cost, missing = pricing.claude_cost(model, inp, out, c5m, c1h, read)
+    assert missing is False
+    return cost
+
+
+def test_long_context_starts_strictly_above_the_threshold(long_context_tables):
+    """官方：「for prompts over 100,000 tokens」——剛好等於門檻仍是基本價。"""
+    assert _cost("claude-tier-9", inp=1_000_000) == pytest.approx(1.0)
+    assert _cost("claude-tier-9", inp=1_000_001) == pytest.approx(10.00001)
+
+
+@pytest.mark.parametrize("field, expected", [
+    ("inp", 10.00001), ("c5m", 50.00005), ("c1h", 70.00007), ("read", 90.00009)],
+    ids=["input", "cache_5m", "cache_1h", "cache_read"])
+def test_each_prompt_component_alone_can_cross_the_threshold(long_context_tables, field, expected):
+    """長度＝input＋兩種 cache 寫入＋cache 讀取（官方：counts all of its input tokens, including
+    cache reads and cache writes）。每項單獨越線都要換價，少算任何一項，對應那條會紅。"""
+    assert _cost("claude-tier-9", **{field: 1_000_001}) == pytest.approx(expected)
+
+
+def test_components_add_up_to_cross_the_threshold(long_context_tables):
+    """每項單獨都沒越線、加起來才越線：長度是四項相加，不是取最大的那一項（Codex plan R1）。"""
+    cost = _cost("claude-tier-9", inp=250_001, c5m=250_000, c1h=250_000, read=250_000)
+    assert cost == pytest.approx((250_001 * 10.0 + 250_000 * (50.0 + 70.0 + 90.0)) / 1e6)
+
+
+def test_output_does_not_count_toward_prompt_length(long_context_tables):
+    assert _cost("claude-tier-9", inp=1_000_000, out=5_000_000) == pytest.approx(1.0 + 10.0)
+
+
+def test_crossing_the_threshold_switches_all_five_columns(long_context_tables):
+    cost = _cost("claude-tier-9", inp=1_000_000, out=1_000_000, c5m=1_000_000, c1h=1_000_000,
+                 read=1_000_000)
+    assert cost == pytest.approx(10.0 + 30.0 + 50.0 + 70.0 + 90.0)   # output 也換成分段價
+
+
+def test_model_without_long_context_keeps_base_price(long_context_tables):
+    assert _cost("claude-flat-9", inp=5_000_000) == pytest.approx(5.0)
+
+
+def test_haiku_5_5_long_context_matches_official_pricing():
+    """官方定價頁（2026-10-13）：prompt 超過 100,000 時五欄全 ×5。上游改了這組數字，同步後這條
+    會紅，逼人回官方頁核對（同 gpt-5.6 三 tier 的釘價做法）。"""
+    assert pricing.CLAUDE_LONG_CONTEXT["claude-haiku-5-5"] == (100000, (0.5, 2.5, 0.625, 1.0, 0.05))
 
 def test_normalize_codex_only_strips_date_suffix():
     assert pricing.normalize_codex_model("gpt-5.5-2026-04-23") == "gpt-5.5"

@@ -77,6 +77,7 @@ def _no_real_exceptions(monkeypatch):
     monkeypatch.setattr(pricing, "EXCLUDED", {})
     monkeypatch.setattr(sync.current, "CLAUDE_PRICING", {})
     monkeypatch.setattr(sync.current, "CODEX_PRICING", {})
+    monkeypatch.setattr(sync.current, "CLAUDE_LONG_CONTEXT", {})
 
 
 def test_only_bare_first_party_keys_enter_table():
@@ -314,6 +315,27 @@ def test_missing_long_context_output_is_refused():
                for line in sync.invalid_prices(claude, codex, long_context))
 
 
+
+def test_cli_writes_long_context_into_the_table(monkeypatch, tmp_path):
+    """main() 要把分段表寫進檔案（與 pricing.py 的分段公式同一個 commit 接上，spec §4.7）。"""
+    target = tmp_path / "pricing_table.py"
+    monkeypatch.setattr(sync, "fetch_upstream", lambda local: {**UPSTREAM, "claude-haiku-9": HAIKU_9})
+    monkeypatch.setattr(sync, "TABLE_PATH", target)
+    monkeypatch.setattr(sys, "argv", ["sync_pricing.py", "--no-check-local"])
+    sync.main()
+    namespace: dict = {}
+    exec(compile(target.read_text(encoding="utf-8"), "pricing_table.py", "exec"), namespace)
+    assert namespace["CLAUDE_LONG_CONTEXT"] == {"claude-haiku-9": HAIKU_9_LONG_CONTEXT}
+
+
+def test_cli_refuses_long_context_with_missing_output(monkeypatch, tmp_path):
+    """分段 output 缺值時 main() 中止（不寫檔由 test_write_happens_only_after_all_blocking_checks 守）。"""
+    entry = {**_claude(1e-07, 5e-07), **_long_context_fields(5e-07, None)}
+    monkeypatch.setattr(sync, "fetch_upstream", lambda local: {"claude-haiku-9": entry})
+    monkeypatch.setattr(sync, "TABLE_PATH", tmp_path / "pricing_table.py")
+    monkeypatch.setattr(sys, "argv", ["sync_pricing.py", "--no-check-local"])
+    assert sync.main() == 1
+
 def test_nonpositive_long_context_threshold_is_refused():
     """門檻 0＝每筆請求都算越線。上游寫出 `_above_0k_tokens` 就是壞資料，與價格壞值同樣擋下。"""
     entry = {**_claude(1e-07, 5e-07), **_long_context_fields(5e-07, 2.5e-06, k=0)}
@@ -442,6 +464,41 @@ def test_price_change_line_shows_old_and_new_values(monkeypatch, tmp_path, capsy
     assert "(5.0, 25.0, 6.25, 0.5, 0.5)" in out        # 舊值
     assert "(5.0, 25.0, 6.25, 10.0, 0.5)" in out       # 新值，20 倍的差異一眼看得到
 
+
+
+def test_new_long_context_is_printed_with_threshold_and_prices(monkeypatch, tmp_path, capsys):
+    """這張票的起因：收錄 Haiku 5.5 時 dry-run 對分段一個字都沒提，少算是靜默的。
+    新增時就印出數值——這是人第一次看到這組價。"""
+    monkeypatch.setattr(sync, "fetch_upstream", lambda local: {**UPSTREAM, "claude-haiku-9": HAIKU_9})
+    monkeypatch.setattr(sync, "TABLE_PATH", tmp_path / "pricing_table.py")
+    monkeypatch.setattr(sys, "argv", ["sync_pricing.py", "--no-check-local", "--dry-run"])
+    sync.main()
+    assert ("新增分段 claude-haiku-9：prompt 超過 100,000 → (0.5, 2.5, 0.625, 1.0, 0.05)"
+            in capsys.readouterr().out)
+
+
+def test_changed_long_context_prints_old_and_new_values(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(sync, "fetch_upstream", lambda local: {**UPSTREAM, "claude-haiku-9": HAIKU_9})
+    monkeypatch.setattr(sync, "TABLE_PATH", tmp_path / "pricing_table.py")
+    monkeypatch.setattr(sync.current, "CLAUDE_LONG_CONTEXT",
+                        {"claude-haiku-9": (100000, (0.1, 0.5, 0.125, 0.2, 0.01))})
+    monkeypatch.setattr(sys, "argv", ["sync_pricing.py", "--no-check-local", "--dry-run"])
+    sync.main()
+    assert ("改分段 claude-haiku-9：(100000, (0.1, 0.5, 0.125, 0.2, 0.01)) → "
+            "(100000, (0.5, 2.5, 0.625, 1.0, 0.05))" in capsys.readouterr().out)
+
+
+def test_removing_long_context_requires_explicit_flag(monkeypatch, tmp_path, capsys):
+    """分段消失＝那款越線的請求退回基本價，與上游殘缺造成模型整批消失是同一種風險（spec §4.4）。"""
+    monkeypatch.setattr(sync, "fetch_upstream", lambda local: UPSTREAM)   # opus-9 仍在上游，但沒有分段
+    monkeypatch.setattr(sync, "TABLE_PATH", tmp_path / "pricing_table.py")
+    monkeypatch.setattr(sync.current, "CLAUDE_LONG_CONTEXT",
+                        {"claude-opus-9": (200000, (10.0, 50.0, 12.5, 20.0, 1.0))})
+    monkeypatch.setattr(sys, "argv", ["sync_pricing.py", "--no-check-local"])
+    assert sync.main() == 1
+    assert "移除分段 claude-opus-9：(200000, (10.0, 50.0, 12.5, 20.0, 1.0))" in capsys.readouterr().out
+    monkeypatch.setattr(sys, "argv", ["sync_pricing.py", "--no-check-local", "--allow-removals"])
+    assert sync.main() == 0
 
 def test_write_happens_only_after_all_blocking_checks(monkeypatch, tmp_path):
     """整檔覆蓋是破壞性的：價格不合法時不得先寫檔再回報（Codex 審查 finding #1）。"""

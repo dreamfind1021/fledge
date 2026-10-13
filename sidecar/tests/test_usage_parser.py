@@ -54,6 +54,18 @@ def test_claude_cache_aggregate_fallback_when_no_nested(tmp_path: Path):
     assert abs(entries[0].cost - 6.25) < 1e-9  # 1M * 1.25 * $5 / 1M
 
 
+
+def test_bare_haiku_alias_with_aggregate_cache_creation_crosses_long_context(tmp_path: Path):
+    """端到端：舊格式只給合計的 cache_creation（解析成 5m）、模型寫裸別名 haiku（正規化成
+    claude-haiku-5-5）。input 只有 1，靠 cache 寫入把長度推過 100,000 → 五欄整組用分段價。"""
+    f = tmp_path / "a.jsonl"
+    f.write_text(_claude_line(model="haiku", usage={
+        "input_tokens": 1, "output_tokens": 0,
+        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 100_000,
+    }), encoding="utf-8")
+    entries, _ = parse_claude_file(f)
+    assert abs(entries[0].cost - (1 * 0.5 + 100_000 * 0.625) / 1e6) < 1e-12
+
 def test_claude_synthetic_unpriced(tmp_path: Path):
     f = tmp_path / "a.jsonl"
     f.write_text(_claude_line(model="<synthetic>"), encoding="utf-8")

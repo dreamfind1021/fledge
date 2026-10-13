@@ -387,16 +387,14 @@ def main() -> int:
         print(f"上游取得失敗：{exc}", file=sys.stderr)
         return 1
 
-    # 分段表先不寫進檔案：分段價要與 pricing.py 的分段公式同一個 commit 生效，否則同步出來的表
-    # 帶著最終的 TABLE_VERSION、金額卻是舊公式算的，L2 之後不會再重算（票 44 spec §4.7）
-    claude, codex, _, notes, conflicts = build_tables(raw)
+    claude, codex, long_context, notes, conflicts = build_tables(raw)
     # 整檔覆蓋是破壞性操作：所有「會生出壞表」的檢查都必須在 os.replace 之前擋掉
     if conflicts:
         print("同一模型名對到不同價格，不猜、中止寫入：", file=sys.stderr)
         for line in conflicts:
             print(f"  ✗ {line}", file=sys.stderr)
         return 1
-    bad = invalid_prices(claude, codex, {})
+    bad = invalid_prices(claude, codex, long_context)
     if bad:
         print("價格非有限正數（上游缺欄或資料損壞），中止寫入：", file=sys.stderr)
         for line in bad:
@@ -421,16 +419,28 @@ def main() -> int:
     # 差異長得一模一樣，人審不出來。這不是新增護欄，是讓既有的人工關卡真的可用。
     for k in changed:
         print(f"  改價 {k}：{previous[k]} → {latest[k]}")
+    # 分段價：新增時就印出數值——這是人第一次看到這組價（票 44 的起因是 dry-run 對分段一個字都沒提）
+    previous_lc = current.CLAUDE_LONG_CONTEXT
+    removed_lc = sorted(set(previous_lc) - set(long_context))
+    for k in sorted(long_context):
+        if k not in previous_lc:
+            threshold, price = long_context[k]
+            print(f"  新增分段 {k}：prompt 超過 {threshold:,} → {price}")
+        elif previous_lc[k] != long_context[k]:
+            print(f"  改分段 {k}：{previous_lc[k]} → {long_context[k]}")
+    for k in removed_lc:
+        print(f"  移除分段 {k}：{previous_lc[k]}")
     print(f"  表：claude {len(claude)} 款、codex {len(codex)} 款")
 
-    # 移除既有模型要顯式同意：上游殘缺／改 schema 時，表會整批縮水而 diff 看起來只是「少了幾行」
-    if removed and not args.allow_removals:
-        print(f"\n本次會移除 {len(removed)} 款既有模型；確認上游真的下架了，再加 --allow-removals 重跑。",
-              file=sys.stderr)
+    # 移除既有模型要顯式同意：上游殘缺／改 schema 時，表會整批縮水而 diff 看起來只是「少了幾行」。
+    # 分段消失＝那款越線的請求退回基本價，是同一種風險，一起擋
+    if (removed or removed_lc) and not args.allow_removals:
+        print(f"\n本次會移除 {len(removed)} 款既有模型、{len(removed_lc)} 組分段價；"
+              f"確認上游真的下架了，再加 --allow-removals 重跑。", file=sys.stderr)
         return 1
 
     if not args.dry_run:
-        rendered = render_table(claude, codex, {})
+        rendered = render_table(claude, codex, long_context)
         tmp = TABLE_PATH.with_name(TABLE_PATH.name + ".tmp")
         tmp.write_text(rendered, encoding="utf-8")
         os.replace(tmp, TABLE_PATH)
