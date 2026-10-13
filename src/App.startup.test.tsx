@@ -55,6 +55,12 @@ function stubBootstrap(result: BootstrapResult | null) {
   });
 }
 
+/** 有 live session 的 claude 分頁：關掉它要先確認（isLiveClaudeTab 成立），可以讓關閉確認框畫出來。 */
+const liveTab = (title: string): Tab => ({
+  id: "tab-1", projectPath: "/p/demo", account: "work", title,
+  sessionId: "s-1", status: "ready", kind: "claude",
+});
+
 /** 等 Splash 走完最短顯示 + 淡出後卸載。 */
 async function settleSplash() {
   await act(async () => {
@@ -206,10 +212,6 @@ describe("App 啟動接線", () => {
 // 票 33：殼層的橫幅、Cmd+R 提示與關閉 session 確認框原本寫死中文，英文介面也顯示中文。
 describe("App 殼層文字走 i18n", () => {
   const CJK = /[\u3400-\u9fff\u3000-\u303f\uff00-\uffef]/;
-  const liveTab = (title: string): Tab => ({
-    id: "tab-1", projectPath: "/p/demo", account: "work", title,
-    sessionId: "s-1", status: "ready", kind: "claude",
-  });
   const cmdR = () => new KeyboardEvent("keydown", { key: "r", metaKey: true, cancelable: true, bubbles: true });
 
   beforeEach(() => {
@@ -481,5 +483,46 @@ describe("App：精靈的開啟來源與 ×", () => {
 
     expect(ui.queryByTestId("splash")).not.toBeNull();
     expect(ui.getByTestId("onboarding-done").closest("[inert]")).not.toBeNull();
+  });
+
+  // 票 43：關閉確認框不擋 Tab（票 45），可以在它底下開出設定頁。這時開精靈，主畫面連同確認框一起 inert，
+  // 確認框卻疊在精靈上面——看得到、按不到。所以兩個入口整個不動作：精靈不開、設定頁不關、確認框留著
+  it.each([
+    ["重跑引導", "settings-rerun"],
+    ["繼續移機", "settings-resume"],
+  ])("關閉確認框顯示中按設定頁「%s」：精靈不開，設定頁與確認框都還在", async (_entry, button) => {
+    useAppStore.setState({ tabs: [liveTab("demo")], pendingCloseTabId: "tab-1" });
+    const ui = render(<App />);
+    await openSettings(ui);
+    expect(ui.queryByRole("alertdialog")).not.toBeNull();
+
+    await act(async () => { ui.getByTestId(button).click(); });
+    expect(ui.queryByTestId("onboarding")).toBeNull();
+    expect(ui.queryByTestId("settings")).not.toBeNull();
+    expect(ui.queryByRole("alertdialog")).not.toBeNull();
+  });
+
+  // 「確認框顯示中」抽成 closeConfirmOpen 時改到三處既有判斷：快捷鍵 handler、modalOpen 旗標、畫確認框的條件。
+  // 畫確認框有 i18n 那組守，前兩處之前沒有測試守。
+  // 確認框都在開機後才出現，effect 的依賴陣列漏掉它就會一直讀到開機時的 false
+  it("關閉確認框顯示中按 Cmd+,：不開設定頁", async () => {
+    const ui = render(<App />);
+    await settleSplash();
+    act(() => { useAppStore.setState({ tabs: [liveTab("demo")], pendingCloseTabId: "tab-1" }); });
+    expect(ui.queryByRole("alertdialog")).not.toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", metaKey: true, cancelable: true, bubbles: true }));
+    });
+    expect(ui.queryByTestId("settings")).toBeNull();
+  });
+
+  it("關閉確認框顯示中 modalOpen 為 true", async () => {
+    render(<App />);
+    await settleSplash();
+    expect(useAppStore.getState().modalOpen).toBe(false);
+
+    act(() => { useAppStore.setState({ tabs: [liveTab("demo")], pendingCloseTabId: "tab-1" }); });
+    expect(useAppStore.getState().modalOpen).toBe(true);
   });
 });

@@ -111,11 +111,13 @@ function App() {
     setOnboardingFrom(null);
     setResumeMigration(null);   // 續作是一次性的入口，關掉就不再套用
   };
-  // 設定頁的兩個入口（重跑引導、繼續移機）：關掉設定頁再開精靈，兩個 modal 不疊在一起。
-  // 精靈已經開著時整個不動作（票 42）：按下去會把首次啟動的精靈改成「從設定頁開」而多出 ×，「繼續移機」還會把
-  // 續作資料塞進正在跑的精靈。精靈開著時主畫面是 inert（票 43），鍵盤走不到這裡；這是第二道防線
+  // 設定頁的兩個入口（重跑引導、繼續移機）：關掉設定頁再開精靈，兩個 modal 不疊在一起。以下兩種情況整個不動作：
+  // - 精靈已經開著（票 42）：會把首次啟動的精靈改成「從設定頁開」而多出 ×，「繼續移機」還會把續作資料塞進正在跑的
+  //   精靈。精靈開著時主畫面是 inert（票 43），鍵盤走不到這裡；這是第二道防線
+  // - 關閉確認框顯示中（票 43）：精靈一開，主畫面連同確認框一起 inert，確認框（z-index 500）卻還疊在精靈上面——
+  //   看得到、按不到。確認框不擋 Tab（票 45），在它底下開得出設定頁，所以走得到這裡
   const openOnboardingFromSettings = (resume: MigrationResume | null) => {
-    if (showOnboarding) return;
+    if (showOnboarding || closeConfirmOpen) return;
     setShowSettings(false);
     setResumeMigration(resume);
     setOnboardingFrom("settings");
@@ -145,6 +147,11 @@ function App() {
     const t = s.tabs.find((x) => x.id === id);
     return t && isLiveClaudeTab(t) ? displayTabTitle(s.tabs, t) : null;
   });
+  // 確認框「實際顯示中」：用 pendingTitle 而非 raw id——id 懸空時框不顯示，下方懸空清理 effect 執行前的那一
+  // render tick 也不能算開著，否則快捷鍵會被靜默鎖死。兩邊都寫 !== null：寫成 `pendingCloseTabId && …` 型別會是
+  // string | boolean | null。不要加型別註記：畫確認框時 TypeScript 靠這個常數的推導把 pendingCloseTabId、
+  // pendingTitle 收窄成 string，寫成 `: boolean` 就失去收窄、編譯失敗
+  const closeConfirmOpen = pendingCloseTabId !== null && pendingTitle !== null;
   const claudeFound = useAppStore((s) => s.claudeFound);
   const permissionError = useAppStore((s) => s.permissionError);
 
@@ -219,9 +226,8 @@ function App() {
       // Tauri 預設行為，Splash 期間按 Cmd+W 會直接關掉整個 app。
       if (!splashDone) return;
       if (showOnboarding) return; // 精靈開著時（不論首次啟動或從設定頁開）吃掉所有 meta 快捷鍵（Codex F-6）
-      // 確認框「實際顯示時」才吃掉 meta 快捷鍵（用 pendingTitle 而非 raw id，避免懸空 id 在 cleanup effect
-      // 執行前那一 render tick 仍鎖死快捷鍵——與下方 render 的顯示條件一致）。Enter/Esc 交給框自己處理。
-      if (pendingCloseTabId && pendingTitle !== null) return;
+      // 確認框顯示中吃掉 meta 快捷鍵（判斷見 closeConfirmOpen）；Enter/Esc 交給框自己處理
+      if (closeConfirmOpen) return;
       if (showSettings || showPicker) {
         // modal 開啟時 Cmd+W 關掉 modal（符合「關當前東西」直覺）；其餘快捷鍵不作用
         if (e.key === "w") {
@@ -249,7 +255,7 @@ function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [requestCloseTab, setActive, showSettings, showPicker, showOnboarding, pendingCloseTabId, pendingTitle, splashDone, t]);
+  }, [requestCloseTab, setActive, showSettings, showPicker, showOnboarding, closeConfirmOpen, splashDone, t]);
 
   // 懸空清理：pending 指向的 tab 若已消失或不再是 live session（pendingTitle 回 null，如 sidecar 重啟 markAllTabsEnded），
   // 清掉 pendingCloseTabId——否則框不顯示卻仍讓上面的守門吃掉 Cmd+W/R/1-9，造成快捷鍵被靜默鎖死（Codex Area 3）。
@@ -259,13 +265,12 @@ function App() {
 
   // 任一 modal 開啟 → 寫進 store 單一旗標，供 Terminal 的拖檔 drop gate 判定（modal 期間 drop no-op，
   // design §5；drop 穿透背景 terminal 會破壞 modal 語義）。App 是所有 modal 的開關來源 → 唯一寫入者。
-  // 關閉確認框的「開啟」＝ pendingCloseTabId 有值且 pendingTitle 仍為 live（與 render 顯示條件一致）。
+  // 關閉確認框的「開啟」＝ closeConfirmOpen（與 render 顯示條件一致）。
   // 用 useLayoutEffect：paint 前同步更新旗標，避免「modal 開啟到旗標寫入」之間的 drop 漏判（Codex 階段3）。
   useLayoutEffect(() => {
-    const open =
-      !splashDone || showSettings || showPicker || showOnboarding || (pendingCloseTabId !== null && pendingTitle !== null);
+    const open = !splashDone || showSettings || showPicker || showOnboarding || closeConfirmOpen;
     setModalOpen(open);
-  }, [splashDone, showSettings, showPicker, showOnboarding, pendingCloseTabId, pendingTitle, setModalOpen]);
+  }, [splashDone, showSettings, showPicker, showOnboarding, closeConfirmOpen, setModalOpen]);
 
   // 每 5s raw health poll → 餵 backendStatus 狀態機（suspect/down + up-hysteresis）
   useEffect(() => {
@@ -370,7 +375,7 @@ function App() {
         />
       )}
       {showPicker && <ProjectPicker onClose={() => setShowPicker(false)} />}
-      {pendingCloseTabId && pendingTitle !== null && (
+      {closeConfirmOpen && (
         <CloseConfirm
           title={pendingTitle}
           onConfirm={() => {
