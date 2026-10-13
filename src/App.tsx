@@ -111,6 +111,15 @@ function App() {
     setOnboardingFrom(null);
     setResumeMigration(null);   // 續作是一次性的入口，關掉就不再套用
   };
+  // 設定頁的兩個入口（重跑引導、繼續移機）：關掉設定頁再開精靈，兩個 modal 不疊在一起。
+  // 精靈已經開著時整個不動作（票 42）：精靈開著時鍵盤仍摸得到背後的設定頁（票 43），按下去會把首次啟動的
+  // 精靈改成「從設定頁開」而多出 ×，「繼續移機」還會把續作資料塞進正在跑的精靈
+  const openOnboardingFromSettings = (resume: MigrationResume | null) => {
+    if (showOnboarding) return;
+    setShowSettings(false);
+    setResumeMigration(resume);
+    setOnboardingFrom("settings");
+  };
   const [toast, setToast] = useState<string | null>(null);
   const [restarting, setRestarting] = useState(false);
   const backendStatus = useAppStore((s) => s.backendStatus);
@@ -367,18 +376,8 @@ function App() {
       {showSettings && (
         <Settings
           onClose={() => setShowSettings(false)}
-          // 重跑引導：關掉設定頁再開精靈，兩個 modal 不疊在一起
-          onRerunOnboarding={() => {
-            setShowSettings(false);
-            setResumeMigration(null);   // 重跑引導是從頭走，不是續作
-            setOnboardingFrom("settings");
-          }}
-          // 接續上次沒完成的移機（票 07）：同樣關掉設定頁再開精靈，兩個 modal 不疊在一起
-          onResumeMigration={(resume) => {
-            setShowSettings(false);
-            setResumeMigration(resume);
-            setOnboardingFrom("settings");
-          }}
+          onRerunOnboarding={() => openOnboardingFromSettings(null)}   // 重跑引導是從頭走，不是續作
+          onResumeMigration={openOnboardingFromSettings}               // 接續上次沒完成的移機（票 07）
         />
       )}
       {showPicker && <ProjectPicker onClose={() => setShowPicker(false)} />}
