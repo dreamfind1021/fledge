@@ -151,6 +151,9 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: vi.fn(async () => {}),
 }));
 
+// store 原本的 saveSubscriptions：外殼那組有兩條測試會把它換掉，afterEach 要換回這一份（票 42）
+const realSaveSubscriptions = useAppStore.getState().saveSubscriptions;
+
 const account = { config_dir: "~/.claude", label: "Work" };
 const baseConfig = {
   version: 1,
@@ -222,7 +225,12 @@ describe("Onboarding 精靈外殼", () => {
       loadConfig: async () => {}, // 預設：後端對帳結果與快照一致（仍未落檔）
     });
   });
-  afterEach(cleanup); // vitest 未開 globals → testing-library 不會自動 cleanup
+  afterEach(() => {
+    cleanup(); // vitest 未開 globals → testing-library 不會自動 cleanup
+    // 本組有兩條測試把 store 共用的 saveSubscriptions 換成卡住、失敗的版本（票 42）：
+    // 不換回來的話，之後的測試一送出訂閱就會卡到逾時
+    useAppStore.setState({ saveSubscriptions: realSaveSubscriptions });
+  });
 
   // 試掃失敗是本次唯一沒有行為測試的洩漏路徑（Codex R2 Medium）。catalog 那條 parity 測試
   // 只擋 `{{reason}}` 這個插值位置，擋不住呼叫端直接 `setError(String(e))` 或換個插值名——
