@@ -1,6 +1,6 @@
 /* ===== Onboarding.css — 品牌 token 版 ===== */
 
-/* ── 全螢幕 overlay（onboarding 為強制向導，無關閉鈕）── */
+/* ── 全螢幕 overlay（首次啟動是強制向導、沒有關閉鈕；從設定頁開的右上角有 ×）── */
 /* align-items:center + overflow:hidden 在內容高過視窗時會裁掉頂端且捲不回去（三步精靈
    夠短沒露出來，環境頁一放進來品牌 header 就整塊消失）。改 flex-start + overflow:auto，
    置中交給 .ob-inner 的 margin:auto 0：短內容仍垂直置中、長內容從頂端開始可捲。 */

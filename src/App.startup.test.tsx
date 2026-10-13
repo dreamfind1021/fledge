@@ -30,9 +30,11 @@ vi.mock("./components/Settings", () => ({
 vi.mock("./components/ProjectPicker", () => ({ ProjectPicker: () => <div /> }));
 vi.mock("./components/Onboarding", () => ({
   // 有沒有收到 onDismiss＝畫不畫 ×（× 本身的行為在 Onboarding.test.tsx）；
-  // onboarding-done 代表完成頁的「進入 Fledge」
-  Onboarding: ({ onClose, onDismiss }: { onClose: () => void; onDismiss?: () => void }) => (
-    <div data-testid="onboarding">
+  // onboarding-done 代表完成頁的「進入 Fledge」；data-resume 露出收到的續作來源（沒收到＝空字串）
+  Onboarding: ({ onClose, onDismiss, resume }: {
+    onClose: () => void; onDismiss?: () => void; resume?: { sourceRoot: string };
+  }) => (
+    <div data-testid="onboarding" data-resume={resume?.sourceRoot ?? ""}>
       <button data-testid="onboarding-done" onClick={onClose} />
       {onDismiss && <button data-testid="onboarding-dismiss" onClick={onDismiss} />}
     </div>
@@ -395,5 +397,38 @@ describe("App：精靈的開啟來源與 ×", () => {
     ui.getByTestId("settings-resume").click();
     await waitFor(() => expect(ui.queryByTestId("onboarding")).not.toBeNull());
     expect(ui.queryByTestId("onboarding-dismiss")).not.toBeNull();
+  });
+
+  // 票 42：精靈開著時，鍵盤仍摸得到背後的側欄（根因見票 43），可以在精靈底下開出設定頁。
+  // 這時設定頁的兩個入口整個不動作：不關設定頁，首次啟動的精靈不能因此多出 ×，也不能被塞進續作資料
+  /** 首次啟動開出精靈 → 在精靈底下從側欄開設定頁 */
+  async function openSettingsUnderStartupWizard(ui: ReturnType<typeof render>) {
+    await settleSplash();
+    await waitFor(() => expect(ui.queryByTestId("onboarding")).not.toBeNull());
+    ui.getByTestId("sidebar-settings").click();
+    await waitFor(() => expect(ui.queryByTestId("settings")).not.toBeNull());
+  }
+
+  it("首次啟動的精靈開著時按設定頁「重跑引導」：精靈還在，仍然沒有 ×", async () => {
+    useAppStore.setState({ bootstrap: stubBootstrap({ firstRun: true, projectsError: null }) });
+    const ui = render(<App />);
+    await openSettingsUnderStartupWizard(ui);
+
+    await act(async () => { ui.getByTestId("settings-rerun").click(); });
+    expect(ui.queryByTestId("onboarding")).not.toBeNull();
+    expect(ui.queryByTestId("onboarding-dismiss")).toBeNull();
+    expect(ui.queryByTestId("settings")).not.toBeNull();
+  });
+
+  it("首次啟動的精靈開著時按設定頁「繼續移機」：精靈還在，沒有 ×，也沒收到續作資料", async () => {
+    useAppStore.setState({ bootstrap: stubBootstrap({ firstRun: true, projectsError: null }) });
+    const ui = render(<App />);
+    await openSettingsUnderStartupWizard(ui);
+
+    await act(async () => { ui.getByTestId("settings-resume").click(); });
+    expect(ui.queryByTestId("onboarding")).not.toBeNull();
+    expect(ui.queryByTestId("onboarding-dismiss")).toBeNull();
+    expect(ui.getByTestId("onboarding").getAttribute("data-resume")).toBe("");
+    expect(ui.queryByTestId("settings")).not.toBeNull();
   });
 });

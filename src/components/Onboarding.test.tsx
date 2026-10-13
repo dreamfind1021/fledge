@@ -151,6 +151,9 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
   revealItemInDir: vi.fn(async () => {}),
 }));
 
+// store 原本的 saveSubscriptions：外殼那組有兩條測試會把它換掉，afterEach 要換回這一份（票 42）
+const realSaveSubscriptions = useAppStore.getState().saveSubscriptions;
+
 const account = { config_dir: "~/.claude", label: "Work" };
 const baseConfig = {
   version: 1,
@@ -222,7 +225,12 @@ describe("Onboarding 精靈外殼", () => {
       loadConfig: async () => {}, // 預設：後端對帳結果與快照一致（仍未落檔）
     });
   });
-  afterEach(cleanup); // vitest 未開 globals → testing-library 不會自動 cleanup
+  afterEach(() => {
+    cleanup(); // vitest 未開 globals → testing-library 不會自動 cleanup
+    // 本組有兩條測試把 store 共用的 saveSubscriptions 換成卡住、失敗的版本（票 42）：
+    // 不換回來的話，之後的測試一送出訂閱就會卡到逾時
+    useAppStore.setState({ saveSubscriptions: realSaveSubscriptions });
+  });
 
   // 試掃失敗是本次唯一沒有行為測試的洩漏路徑（Codex R2 Medium）。catalog 那條 parity 測試
   // 只擋 `{{reason}}` 這個插值位置，擋不住呼叫端直接 `setError(String(e))` 或換個插值名——
@@ -1700,7 +1708,7 @@ describe("Onboarding 精靈外殼", () => {
     await waitFor(() => expect(ui.getByText(zh.common.prev).closest("button")!.disabled).toBe(true));
     expect(dismissBtn(ui)!.disabled).toBe(true);
 
-    // 存好時卡片先 onNext() 換頁、才在 finally 設回 false——那時它已卸載，但 setter 是精靈的，照樣送得到
+    // 存好時 onNext() 的換頁與 finally 的 false 在同一次 render 提交（卡片那次才卸載）；setter 是精靈的，照樣送得到
     await act(async () => { release(); });
     await waitFor(() => expect(ui.getByText(zh.done.h)).toBeTruthy());
     expect(dismissBtn(ui)!.disabled).toBe(false);
