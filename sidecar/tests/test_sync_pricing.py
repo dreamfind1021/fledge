@@ -490,15 +490,20 @@ def test_changed_long_context_prints_old_and_new_values(monkeypatch, tmp_path, c
 
 def test_removing_long_context_requires_explicit_flag(monkeypatch, tmp_path, capsys):
     """分段消失＝那款越線的請求退回基本價，與上游殘缺造成模型整批消失是同一種風險（spec §4.4）。"""
+    target = tmp_path / "pricing_table.py"
     monkeypatch.setattr(sync, "fetch_upstream", lambda local: UPSTREAM)   # opus-9 仍在上游，但沒有分段
-    monkeypatch.setattr(sync, "TABLE_PATH", tmp_path / "pricing_table.py")
+    monkeypatch.setattr(sync, "TABLE_PATH", target)
     monkeypatch.setattr(sync.current, "CLAUDE_LONG_CONTEXT",
                         {"claude-opus-9": (200000, (10.0, 50.0, 12.5, 20.0, 1.0))})
     monkeypatch.setattr(sys, "argv", ["sync_pricing.py", "--no-check-local"])
     assert sync.main() == 1
     assert "移除分段 claude-opus-9：(200000, (10.0, 50.0, 12.5, 20.0, 1.0))" in capsys.readouterr().out
+    assert not target.exists()          # 擋下時不得寫檔——回 1 但表已被清空，正是這張票要修的錯帳
     monkeypatch.setattr(sys, "argv", ["sync_pricing.py", "--no-check-local", "--allow-removals"])
     assert sync.main() == 0
+    namespace: dict = {}
+    exec(compile(target.read_text(encoding="utf-8"), "pricing_table.py", "exec"), namespace)
+    assert namespace["CLAUDE_LONG_CONTEXT"] == {}     # 同意移除之後，分段才真的拿掉
 
 def test_write_happens_only_after_all_blocking_checks(monkeypatch, tmp_path):
     """整檔覆蓋是破壞性的：價格不合法時不得先寫檔再回報（Codex 審查 finding #1）。"""
