@@ -1039,7 +1039,7 @@ dependencies = [
 
 [[package]]
 name = "fledge"
-version = "1.12.1"
+version = "1.12.2"
 dependencies = [
  "serde",
  "serde_json",
