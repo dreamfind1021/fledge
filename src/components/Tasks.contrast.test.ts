@@ -121,6 +121,9 @@ const TEXT: [string, string, string, Backdrop][] = [
     [".tk-md 連結", ".tk-md a", "color", "drawer"],
     // 票 25：離場筆記的 `# 標題`；票 26＋27 起右欄內容直接坐落在抽屜卡片（drawer）上
     [".tk-md 一級標題", ".tk-md h1", "color", "drawer"],
+    // spec §4.1.8：刪除線淡一階（--faint），右欄與編輯器預覽都要過 4.5:1
+    [".tk-md 刪除線", ".tk-md del", "color", "drawer"],
+    [".tk-md 刪除線（編輯器預覽）", ".tk-md del", "color", "editor"],
     // 整頁編輯器（spec §6.2／§6.4，task 10 review FIX 4）：坐落在編輯器底色上的文字；
     // 「未儲存」、預覽／取消文字鈕、預覽裡的內文、工具鈕是票 28 第四批 4b 補的（soft-tiles spec §6.5）
     [".ed-title 正常文字", ".ed-title", "color", "editor"],

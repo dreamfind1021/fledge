@@ -63,3 +63,33 @@ describe("markdownLite・escape 與 URL 邊界（spec §9.4）", () => {
     expect(out).not.toContain("<table");
   });
 });
+
+// 多行接回同一行（spec §4.1.5）：整段一起解析行內語法，再看畫面上換行左右兩個字決定要不要插空格
+describe("markdownLite・換行接回同一行（spec §4.1.5）", () => {
+  afterEach(cleanup);
+
+  it("中文接中文不插空格", () => expect(html("第一行\n第二行")).toBe("<p>第一行第二行</p>"));
+  it("英文接英文放一個空格", () => expect(html("a\nb")).toBe("<p>a b</p>"));
+  it("中英相接放一個空格", () => expect(html("Andrew Ng\n那份")).toBe("<p>Andrew Ng 那份</p>"));
+  it("行頭行尾的半形空白與 tab 去掉，全形空白留著", () => expect(html("  第一行 \t\n　第二行")).toBe("<p>第一行　第二行</p>"));
+  it("換行前是粗體：看粗體裡的字", () => expect(html("完成**設定**\n接著測試")).toBe("<p>完成<strong>設定</strong>接著測試</p>"));
+  it("換行後是粗體：看粗體裡的字", () => expect(html("完成\n**設定**")).toBe("<p>完成<strong>設定</strong></p>"));
+  it("換行前是行內碼", () => expect(html("完成`設定`\n接著")).toBe("<p>完成<code>設定</code>接著</p>"));
+  it("換行前是刪除線", () => expect(html("完成~~設定~~\n接著")).toBe("<p>完成<del>設定</del>接著</p>"));
+  it("換行前是連結", () => expect(html("見[說明](https://x.y/z)\n再處理")).toBe('<p>見<a href="https://x.y/z">說明</a>再處理</p>'));
+  it("粗體可以跨行，裡面的換行照同一條規則", () => expect(html("**跨\n行**")).toBe("<p><strong>跨行</strong></p>"));
+  it("被 safeHref 擋下的連結是文字，看的是 )", () => expect(html("[說明](javascript:x)\n再處理")).toBe("<p>[說明](javascript:x) 再處理</p>"));
+  it("引用也一樣", () => expect(html("> 第一行\n> **第二**行")).toBe("<blockquote><p>第一行<strong>第二</strong>行</p></blockquote>"));
+  it("中性標點接中文不插空格", () => expect(html("等等…\n接著")).toBe("<p>等等…接著</p>"));
+  it("中性標點接英文照樣插空格", () => expect(html("wait…\nnext")).toBe("<p>wait… next</p>"));
+  it("中文接中性標點不插空格", () => expect(html("中文\n“引號”")).toBe("<p>中文“引號”</p>"));
+  it("破折號兩側都是中文時不插空格", () => expect(html("前面——\n後面")).toBe("<p>前面——後面</p>"));
+});
+
+describe("markdownLite・刪除線（spec §4.1.4）", () => {
+  afterEach(cleanup);
+
+  it("~~文字~~ 是刪除線", () => expect(html("~~刪~~ 留")).toBe("<p><del>刪</del> 留</p>"));
+  it("行內碼裡的 ~~ 不解析", () => expect(html("`~~x~~`")).toBe("<p><code>~~x~~</code></p>"));
+  it("刪除線的內容不再解析", () => expect(html("~~**x**~~")).toBe("<p><del>**x**</del></p>"));
+});

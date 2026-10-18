@@ -166,6 +166,8 @@
 .tk-md li { margin: 3px 0; }
 .tk-md blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .tk-md a { color: var(--primary-text); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--primary) 40%, transparent); }
+/* 刪除線淡一階、保留預設的線（spec §4.1.8） */
+.tk-md del { color: var(--faint); }
 
 /* 動作：滑過或鍵盤走到才顯形。用 opacity 不用 display——位置得留著，否則整列會在 hover 時跳動 */
 .tk-acts { flex-shrink: 0; display: flex; gap: 2px; opacity: 0; transition: opacity .12s ease; }
