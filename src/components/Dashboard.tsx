@@ -17,6 +17,9 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
   const [data, setData] = useState<UsageDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [codex, setCodex] = useState<CodexUsage | null>(null);
+  // 時間相關的顯示（Codex 時間進度線、用太快、「今天」）在 render 時讀 Date.now()。成本 API 連續回同一個錯誤時
+  // setError 拿到同一個字串、頁面不會重畫，這些顯示會停在舊的時間；每輪輪詢換一次 clock，畫面照輪詢節奏跟上時間（Codex 合併前審查）
+  const [, setClock] = useState(0);
   const timer = useRef<number | null>(null);
 
   // Codex 實時額度（獨立節奏，不隨 30s 檔案掃描）：開啟即抓、開著每 15 分鐘、
@@ -41,6 +44,7 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
     let cancelled = false;
     async function tick() {
       if (!shouldPoll({ isActiveTab: isActive, documentHidden: document.hidden })) return;
+      setClock(Date.now());
       try {
         const d = await fetchUsageDashboard(port, DASH_DAYS);
         if (!cancelled && d) { setData(d); setError(null); }

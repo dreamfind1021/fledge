@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, cleanup, waitFor } from "@testing-library/react";
+import { render, cleanup, waitFor, act } from "@testing-library/react";
 import i18n from "../i18n";
 import Dashboard from "./Dashboard";
 import { fetchUsageDashboard, fetchCodexUsage, type UsageDashboard } from "../lib/sidecar";
+import { POLL_INTERVAL_MS } from "../lib/usagePoll";
 
 // 整頁 render：sidecar 換成假的，字串用真的 en／zh-TW catalog（票 46，spec §6）。
 // Dashboard.test.tsx 用回傳 key 的假 t 測「選了哪個 key」；這裡測插值真的帶出數字、資料真的接到元件上
@@ -180,5 +181,47 @@ describe("Dashboard 整頁：每日成本最後一欄的「今天」（票 46，
   it("英文：Today", async () => {
     const ui = await shown("en", payload());
     expect(ui.container.querySelector(".dash-daily-axis .is-today")?.textContent).toBe("Today");
+  });
+});
+
+describe("Dashboard 整頁：成本 API 連續失敗時，時間相關的顯示仍照輪詢節奏更新（票 46，Codex 合併前審查）", () => {
+  afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
+  beforeEach(() => {
+    vi.mocked(fetchUsageDashboard).mockReset();
+    vi.mocked(fetchCodexUsage).mockReset();
+    // 只假輪詢用的 setInterval：testing-library 的等待用 setTimeout，不受影響
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  });
+  // 第一次成功、之後每次都回同一個錯誤。setError 拿到同一個字串不會重畫，畫面要靠輪詢本身重畫才跟得上時間
+  const failingAfterFirst = async () => {
+    await i18n.changeLanguage("zh-TW");
+    vi.mocked(fetchUsageDashboard).mockResolvedValueOnce(payload()).mockRejectedValue(new Error("HTTP 500"));
+    const ui = render(<Dashboard port={1} isActive />);
+    await ui.findByText("proj");
+    await waitFor(() => { if (!ui.container.querySelector(".dash-stale")) throw new Error("還沒收到第二次的錯誤"); });
+    return ui;
+  };
+  const poll = () => act(async () => { vi.advanceTimersByTime(POLL_INTERVAL_MS); });
+
+  it("跨過 Codex 重置時間：下一輪輪詢（仍失敗）後，進度線與黃色消失", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000 * 1000);
+    vi.mocked(fetchCodexUsage).mockResolvedValue({ source: "live", observed_at: 1, plan_type: "prolite",
+      primary: { used_percent: 80, window_minutes: 10080, resets_at: 1_800_000_000 + 5040 * 60 } });
+    const ui = await failingAfterFirst();
+    const c = ui.container;
+    await waitFor(() => { if (!c.querySelector(".dash-bar.is-ahead")) throw new Error("還沒畫出變黃的額度條"); });
+    now.mockReturnValue((1_800_000_000 + 5041 * 60) * 1000);
+    await poll();
+    expect({ pace: c.querySelector(".dash-pace"), ahead: c.querySelector(".is-ahead") }).toEqual({ pace: null, ahead: null });
+  });
+
+  it("跨過午夜：下一輪輪詢（仍失敗）後，最後一欄從「今天」換成日期", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 9, 18, 23, 59).getTime());   // payload 的日期是 2026-10-18
+    vi.mocked(fetchCodexUsage).mockResolvedValue({ source: "unavailable", failure_reason: "network", observed_at: null });
+    const c = (await failingAfterFirst()).container;
+    expect(c.querySelector(".dash-daily-axis .is-today")?.textContent).toBe("今天");
+    now.mockReturnValue(new Date(2026, 9, 19, 0, 1).getTime());
+    await poll();
+    expect([...c.querySelectorAll(".dash-daily-axis > span")].map((e) => e.textContent)).toEqual(["10/18"]);
   });
 });
