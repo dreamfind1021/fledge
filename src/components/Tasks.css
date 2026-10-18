@@ -30,7 +30,7 @@
 .tree-item.is-all { font-weight: 700; margin-bottom: 4px; }
 .tree-item.is-all svg { color: var(--dim); }
 .tree-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 固定軌道（票 26，spec §11.6）：填充長度＝未完成／樹上最大值，進行中段暗琥珀，數字在軌道裡。
+/* 固定軌道（票 26，spec §11.6）：填充長度＝min(未完成, 10)／10（2026-10-19 起 10 張畫滿，TasksTree.tsx 的 TRACK_FULL），進行中段暗琥珀，數字在軌道裡。
    軌道數字用 --text（對軌道／填充／進行中段都過 4.5:1，--text-2 對進行中段只有 4.11）；0 與 +N 是文字，--dim */
 .tree-n { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
 .tree-trk { position: relative; display: inline-block; flex-shrink: 0; width: 64px; height: 16px; border-radius: 8px; background: color-mix(in srgb, var(--surface) 70%, var(--bg)); overflow: hidden; }
@@ -191,6 +191,8 @@
 .tk-md td { color: var(--dim); background: var(--bg); vertical-align: top; padding: 6px 7px; }
 .tk-md td:first-child { border-radius: var(--row-radius) 0 0 var(--row-radius); }
 .tk-md td:last-child { border-radius: 0 var(--row-radius) var(--row-radius) 0; }
+/* 只有一格的列同時是 first-child 與 last-child，上一條會把左邊的圓角蓋掉；這條要寫在它後面 */
+.tk-md td:only-child { border-radius: var(--row-radius); }
 /* 編輯器的底就是 --bg：預覽裡的磚改用清單票列的 --sidebar，否則看不出一列一列 */
 .full-editor .tk-md td { background: var(--sidebar); }
 

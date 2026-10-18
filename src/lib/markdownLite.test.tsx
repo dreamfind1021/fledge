@@ -159,4 +159,17 @@ describe("markdownLite・任何輸入都不丟例外（spec §4.1.7）", () => {
     const doc = [`|${" a |".repeat(100)}`, `|${"---|".repeat(100)}`, ...Array(100).fill("|")].join("\n");
     expect(html(doc).match(/<td>/g)?.length).toBe(100);
   });
+
+  // 不卡住（spec §4.1.7，最終審查 M1）：去行頭行尾空白與分隔列的正規式不可以對很長的空白退化成平方時間
+  const ms = (src: string) => { const t = performance.now(); renderMarkdownLite(src); return performance.now() - t; };
+  it("一行裡夾 10 萬個空白，1 秒內渲染完", () => expect(ms(`a${" ".repeat(100000)}b`)).toBeLessThan(1000));
+  it("分隔列夾 6 萬個空白，1 秒內渲染完", () => expect(ms(`| a |\n|--${" ".repeat(60000)}x`)).toBeLessThan(1000));
+});
+
+// 清單的兩個邊界（最終審查 M2）
+describe("markdownLite・清單的空白邊界", () => {
+  afterEach(cleanup);
+
+  it("項目行裡的 U+2028 照樣是清單項目", () => expect(html("- a b")).toBe("<ul><li>a b</li></ul>"));
+  it("兩個空格接全形空白開頭的行是續行，全形空白留著", () => expect(html("- 第一行\n  　第二行")).toBe("<ul><li>第一行　第二行</li></ul>"));
 });

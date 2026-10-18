@@ -124,8 +124,10 @@ describe("待辦面板三欄版面", () => {
   it("表格：儲存格照預設規則斷行（不准 overflow-wrap: anywhere，數字會被拆成兩行）", () => expect(hasDecl(css, ".tk-md td", "overflow-wrap")).toBe(false));
   it("行內碼可以任意斷（表格裡不撐寬整張表、段落裡不撐寬右欄）", () => expect(decl(css, ".tk-md code", "overflow-wrap")).toBe("anywhere"));
   it("表格：右欄窄到放不下時在表格裡左右捲", () => expect(decl(css, ".tk-md .tk-tbl", "overflow-x")).toBe("auto"));
+  // 只有一格的列同時是 first-child 與 last-child，後寫的那條會把左邊的圓角蓋掉（最終審查 M5）
+  it("表格：只有一格的列四個角都是圓的", () => expect(decl(css, ".tk-md td:only-child", "border-radius")).toBe("var(--row-radius)"));
 
-  // spec §11.6：軌道寬、最小填充寬（放得下兩位數）、擱置槽固定寬（軌道上下對齊）只寫在 CSS，TS 只給百分比
+  // spec §11.6：軌道寬、最小填充寬、擱置槽固定寬（軌道上下對齊）只寫在 CSS，TS 只給百分比
   // 填充最小 8px（2026-10-19 spec §4.4）：數字在軌道右端、不在填充裡，22px「放得下兩位數」的理由不成立；
   // 22px 會讓 10 張畫滿時 1～3 張一樣長
   it("專案樹軌道：軌道 64px、填充最小 8px、擱置槽最小 18px", () => {

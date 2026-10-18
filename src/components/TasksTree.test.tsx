@@ -197,7 +197,11 @@ describe("TasksTree：未開待辦收合", () => {
     fireEvent.click(toggle(c)!);
     expect(toggle(c)?.getAttribute("aria-expanded")).toBe("true");
   });
-  it("選中的專案屬於未開待辦時，收起狀態也顯示它", () => expect(names(tree("/p/o"))).toEqual(["z", "o"]));
+  it("選中的專案屬於未開待辦時，收起狀態也顯示它，而且反白", () => {
+    const c = tree("/p/o");
+    expect(names(c)).toEqual(["z", "o"]);
+    expect(c.querySelector(".tree-item.active .tree-name")?.textContent).toBe("o");
+  });
   it("沒有未開待辦時沒有收合鈕", () => {
     const { container } = render(<TasksTree data={data([IDLE[0]])} selected={null} onSelect={() => {}} t={t} />);
     expect(toggle(container)).toBeNull();

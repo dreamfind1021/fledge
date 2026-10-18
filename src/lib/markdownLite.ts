@@ -48,8 +48,14 @@ function inline(text: string): ReactNode[] {
   return out;
 }
 
-// 只去半形空白與 tab：String.prototype.trim() 也會去掉全形空白 U+3000，作者拿它縮排時那是看得見的字（spec §4.1.5 第 1 點）
-const strip = (s: string) => s.replace(/^[ \t]+|[ \t]+$/g, "");
+// 只去半形空白與 tab：String.prototype.trim() 也會去掉全形空白 U+3000，作者拿它縮排時那是看得見的字（spec §4.1.5 第 1 點）。
+// 用迴圈不用 /[ \t]+$/：後者在「字＋很長的空白＋字」上每個起點都掃到底，10 萬個空白要 3 秒（最終審查 M1）
+const strip = (s: string) => {
+  let a = 0, b = s.length;
+  while (a < b && (s[a] === " " || s[a] === "\t")) a++;
+  while (b > a && (s[b - 1] === " " || s[b - 1] === "\t")) b--;
+  return s.slice(a, b);
+};
 
 // 換行兩側都是中日文字、或一邊中日文字一邊中性標點 → 直接接上；其餘放一個半形空格（spec §4.1.5 第 3、4 點）。
 // 中性標點中英文都會用，所以只有另一邊是中日文字時才不插空格
@@ -78,7 +84,8 @@ function joined(lines: string[]): ReactNode[] {
 const HR = /^ {0,3}(-{3,}|\*{3,})[ \t]*$/;
 // 表格（spec §4.1.3）：| 開頭的行＋欄數相同的分隔列。切欄不支援 \| 跳脫，行內碼裡的 | 一樣會切（同 GFM）
 const PIPE = /^[ \t]*\|/;
-const SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+// 兩段 \s* 之間一定隔著 |：寫成 \s*\|?\s* 時，比對失敗會把一串空白在兩段之間每種切法都試一次（最終審查 M1）
+const SEP = /^\s*(?:\|\s*)?:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)*(?:\|\s*)?$/;
 const cells = (row: string) => {
   let s = strip(row);
   if (s.startsWith("|")) s = s.slice(1);
@@ -87,7 +94,8 @@ const cells = (row: string) => {
 };
 
 // 清單項目行（spec §4.1.2）：縮排、符號（- 或最多 9 位數字加 .）、內文。縮排 0～1 格是第一層，2 格以上是子項目（只有一層）
-const ITEM = /^( *)(-|\d{1,9}\.) (.*)$/;
+// s 旗標：內文裡的 U+2028／U+2029 也算內文，否則整行掉出清單（最終審查 M2）
+const ITEM = /^( *)(-|\d{1,9}\.) (.*)$/s;
 type Item = { text: string[]; kids: List[] };
 type List = { ordered: boolean; start: number; items: Item[] };
 const listOf = (marker: string): List => ({ ordered: marker !== "-", start: marker === "-" ? 1 : parseInt(marker, 10), items: [] });
@@ -154,8 +162,10 @@ export function renderMarkdownLite(src: string): ReactNode[] {
           if (!sub || sub.ordered !== (m[2] !== "-")) { sub = listOf(m[2]); parent.kids.push(sub); }
           cur = { text: [m[3]], kids: [] };
           sub.items.push(cur);
-        } else if (/^ {2,}\S/.test(lines[i])) {
-          cur.text.push(lines[i]);                               // 續行：接在最近的那一項，內容一律當文字
+        } else if (/^ {2,}/.test(lines[i]) && lines[i].trim() !== "") {
+          // 續行：接在最近的那一項，內容一律當文字。「非空白」跟外層判斷空行用同一個定義（trim 只拿來判斷、不拿來去空白）：
+          // 寫成 \S 會讓「兩個空格＋全形空白」開頭的行掉出清單（最終審查 M2）
+          cur.text.push(lines[i]);
         } else break;                                            // 空行、沒縮排的非項目行：清單結束，交回外層重新判斷
         i++;
       }
