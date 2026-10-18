@@ -164,6 +164,9 @@
 .tk-md pre code { background: none; padding: 0; }
 .tk-md ul { margin: 0 0 10px; padding-left: 19px; }
 .tk-md li { margin: 3px 0; }
+/* 編號清單多留 3px 給兩位數編號；子清單緊貼父項目（spec §4.1.8） */
+.tk-md ol { margin: 0 0 10px; padding-left: 22px; }
+.tk-md li > ul, .tk-md li > ol { margin: 3px 0 0; }
 .tk-md blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .tk-md a { color: var(--primary-text); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--primary) 40%, transparent); }
 /* 刪除線淡一階、保留預設的線（spec §4.1.8） */

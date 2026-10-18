@@ -93,3 +93,29 @@ describe("markdownLite・刪除線（spec §4.1.4）", () => {
   it("行內碼裡的 ~~ 不解析", () => expect(html("`~~x~~`")).toBe("<p><code>~~x~~</code></p>"));
   it("刪除線的內容不再解析", () => expect(html("~~**x**~~")).toBe("<p><del>**x**</del></p>"));
 });
+
+// 清單（spec §4.1.2）：第一層從縮排 0～1 格的項目行開始；縮排 2 格以上是子項目（只有一層）或續行
+describe("markdownLite・清單（spec §4.1.2）", () => {
+  afterEach(cleanup);
+
+  it("編號清單", () => expect(html("1. a\n2. b")).toBe("<ol><li>a</li><li>b</li></ol>"));
+  it("起始號照第一項", () => expect(html("6. a\n7. b")).toBe('<ol start="6"><li>a</li><li>b</li></ol>'));
+  it("起始號只放數字", () => expect(html("007. a")).toBe('<ol start="7"><li>a</li></ol>'));
+  it("十位數以上不算項目", () => expect(html("1234567890. x")).toBe("<p>1234567890. x</p>"));
+  it("符號換種類就開新清單", () => expect(html("- a\n1. b")).toBe("<ul><li>a</li></ul><ol><li>b</li></ol>"));
+  it("縮排 1 格也算第一層", () => expect(html(" - a\n - b")).toBe("<ul><li>a</li><li>b</li></ul>"));
+  it("- 下面掛編號子項目", () => expect(html("- a\n  1. b\n  2. c")).toBe("<ul><li>a<ol><li>b</li><li>c</li></ol></li></ul>"));
+  it("編號下面掛 - 子項目", () => expect(html("1. a\n   - b")).toBe("<ol><li>a<ul><li>b</li></ul></li></ol>"));
+  it("子清單換種類就在同一個父項目下開新子清單", () => expect(html("- a\n  - b\n  1. c")).toBe("<ul><li>a<ul><li>b</li></ul><ol><li>c</li></ol></li></ul>"));
+  it("縮排 4 格的項目行也算子項目", () => expect(html("- a\n    - b")).toBe("<ul><li>a<ul><li>b</li></ul></li></ul>"));
+  it("子項目之後回到第一層", () => expect(html("- a\n  - b\n- c")).toBe("<ul><li>a<ul><li>b</li></ul></li><li>c</li></ul>"));
+  it("續行接在第一層項目後面", () => expect(html("- 第一行\n  第二行")).toBe("<ul><li>第一行第二行</li></ul>"));
+  it("續行接在子項目後面", () => expect(html("- a\n  - b\n    c")).toBe("<ul><li>a<ul><li>b c</li></ul></li></ul>"));
+  it("續行跨過行內格式", () => expect(html("- 第一行\n  **第二**行")).toBe("<ul><li>第一行<strong>第二</strong>行</li></ul>"));
+  it("續行的內容一律當文字", () => expect(html("- a\n  > b")).toBe("<ul><li>a &gt; b</li></ul>"));
+  it("空行結束清單", () => expect(html("- a\n\n- b")).toBe("<ul><li>a</li></ul><ul><li>b</li></ul>"));
+  it("被空行隔開的編號清單，第二份從它的號碼開始", () => expect(html("1. a\n\n2. b")).toBe('<ol><li>a</li></ol><ol start="2"><li>b</li></ol>'));
+  it("沒縮排的文字結束清單", () => expect(html("- a\nb")).toBe("<ul><li>a</li></ul><p>b</p>"));
+  it("縮排 2 格的項目行接在段落後面時是段落文字", () => expect(html("文字\n  - b")).toBe("<p>文字 - b</p>"));
+  it("清單可以緊接在段落後面", () => expect(html("說明：\n1. a")).toBe("<p>說明：</p><ol><li>a</li></ol>"));
+});

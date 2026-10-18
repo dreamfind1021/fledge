@@ -71,6 +71,16 @@ function joined(lines: string[]): ReactNode[] {
   });
 }
 
+// 清單項目行（spec §4.1.2）：縮排、符號（- 或最多 9 位數字加 .）、內文。縮排 0～1 格是第一層，2 格以上是子項目（只有一層）
+const ITEM = /^( *)(-|\d{1,9}\.) (.*)$/;
+type Item = { text: string[]; kids: List[] };
+type List = { ordered: boolean; start: number; items: Item[] };
+const listOf = (marker: string): List => ({ ordered: marker !== "-", start: marker === "-" ? 1 : parseInt(marker, 10), items: [] });
+// 起始號用第一項的數字，之後的數字不看、由瀏覽器依序編號；第一項是 1 時不寫 start
+const renderList = (l: List): ReactNode => createElement(l.ordered ? "ol" : "ul",
+  { key: k(), start: l.ordered && l.start !== 1 ? l.start : undefined },
+  ...l.items.map((it) => createElement("li", { key: k() }, ...joined(it.text), ...it.kids.map(renderList))));
+
 export function renderMarkdownLite(src: string): ReactNode[] {
   keySeq = 0;
   const lines = src.replace(/\r\n?/g, "\n").split("\n");
@@ -93,11 +103,31 @@ export function renderMarkdownLite(src: string): ReactNode[] {
     }
     if (line.startsWith("# ")) { flushPara(); out.push(createElement("h1", { key: k() }, ...inline(line.slice(2)))); i++; continue; }
     if (line.startsWith("## ")) { flushPara(); out.push(createElement("h2", { key: k() }, ...inline(line.slice(3)))); i++; continue; }
-    if (line.startsWith("- ")) {
+    const first = ITEM.exec(line);
+    if (first && first[1].length < 2) {
       flushPara();
-      const items: ReactNode[] = [];
-      while (i < lines.length && lines[i].startsWith("- ")) items.push(createElement("li", { key: k() }, ...inline(lines[i++].slice(2))));
-      out.push(createElement("ul", { key: k() }, ...items));
+      const top = listOf(first[2]);
+      let cur: Item = { text: [first[3]], kids: [] };
+      top.items.push(cur);
+      i++;
+      while (i < lines.length) {
+        const m = ITEM.exec(lines[i]);
+        if (m && m[1].length < 2) {
+          if ((m[2] !== "-") !== top.ordered) break;            // 符號換種類 → 這份清單結束，下一輪開新的
+          cur = { text: [m[3]], kids: [] };
+          top.items.push(cur);
+        } else if (m) {                                          // 子項目：掛在上一個第一層項目下面
+          const parent = top.items[top.items.length - 1];
+          let sub = parent.kids[parent.kids.length - 1];
+          if (!sub || sub.ordered !== (m[2] !== "-")) { sub = listOf(m[2]); parent.kids.push(sub); }
+          cur = { text: [m[3]], kids: [] };
+          sub.items.push(cur);
+        } else if (/^ {2,}\S/.test(lines[i])) {
+          cur.text.push(lines[i]);                               // 續行：接在最近的那一項，內容一律當文字
+        } else break;                                            // 空行、沒縮排的非項目行：清單結束，交回外層重新判斷
+        i++;
+      }
+      out.push(renderList(top));
       continue;
     }
     if (line.startsWith("> ")) {
