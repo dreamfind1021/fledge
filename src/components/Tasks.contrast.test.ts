@@ -35,6 +35,9 @@ const backdropsOf = (theme: ThemeId) => {
     active: token("active", theme),
     // 抽屜卡片（spec §11.5）：右欄內容坐落在 .tasks-col-detail 的底色上。從 CSS 讀，不寫死 token
     drawer: paintColor(".tasks-col-detail", "background"),
+    // 票內文的表格每列一塊磚（spec §4.1.8）：右欄與編輯器預覽各一種磚色，都從 CSS 讀
+    mdCell: paintColor(".tk-md td", "background"),
+    mdCellEditor: paintColor(".full-editor .tk-md td", "background"),
     // 清單的磚塊與元件（spec §11.5）：全部從 CSS 讀
     tile: paintColor(".tk-row", "background"),
     tileHover: paintColor(".tk-row:hover", "background"),
@@ -124,6 +127,12 @@ const TEXT: [string, string, string, Backdrop][] = [
     // spec §4.1.8：刪除線淡一階（--faint），右欄與編輯器預覽都要過 4.5:1
     [".tk-md 刪除線", ".tk-md del", "color", "drawer"],
     [".tk-md 刪除線（編輯器預覽）", ".tk-md del", "color", "editor"],
+    [".tk-md 三級標題", ".tk-md h3", "color", "drawer"],
+    [".tk-md 三級標題（編輯器預覽）", ".tk-md h3", "color", "editor"],
+    [".tk-md 表頭", ".tk-md th", "color", "drawer"],
+    [".tk-md 表頭（編輯器預覽）", ".tk-md th", "color", "editor"],
+    [".tk-md 儲存格（右欄的磚）", ".tk-md td", "color", "mdCell"],
+    [".tk-md 儲存格（編輯器預覽的磚）", ".tk-md td", "color", "mdCellEditor"],
     // 整頁編輯器（spec §6.2／§6.4，task 10 review FIX 4）：坐落在編輯器底色上的文字；
     // 「未儲存」、預覽／取消文字鈕、預覽裡的內文、工具鈕是票 28 第四批 4b 補的（soft-tiles spec §6.5）
     [".ed-title 正常文字", ".ed-title", "color", "editor"],
@@ -213,6 +222,13 @@ describe.each(THEMES)("%s：待辦面板的顏色對比", (theme) => {
   it.each(TEXT)("%s 對背景至少 4.5:1", (_label, selector, prop, backdrop) => {
     expect(worst(token(paintToken(selector, prop), theme), B[backdrop])).toBeGreaterThanOrEqual(4.5);
   });
+});
+
+// 表格的磚要跟它坐落的底色不同（spec §4.1.8）：編輯器的底就是 --bg，預覽裡的磚若照右欄用 --bg 就看不出來
+describe.each(THEMES)("%s：票內文表格的磚看得出來", (theme) => {
+  const B = backdropsOf(theme);
+  it("右欄的磚跟抽屜卡片不同色", () => expect(B.mdCell).not.toBe(B.drawer));
+  it("編輯器預覽的磚跟編輯器底不同色", () => expect(B.mdCellEditor).not.toBe(B.editor));
 });
 
 describe("待辦面板的顏色規則", () => {

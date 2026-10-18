@@ -1,12 +1,15 @@
 import { cloneElement, createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 
-// markdown 小子集（spec §9）。只認工具列會插入的八種語法，其餘原樣當文字。
-// 例外是 `# `（票 25）：工具列不插，但離場筆記 state.md 的第一行固定是 `# 專案 — 狀態`，不認就每份都露出 `#`。
+// markdown 小子集（票 3 spec §9；2026-10-19 擴充，docs/superpowers/specs/2026-10-19-tasks-panel-polish-design.md §4.1）。
+// 認得：標題（# ～ ###）、粗體、斜體、刪除線、行內碼、清單（編號、一層子項目、續行）、引用、程式碼區塊、表格、分隔線、連結。
+// 範圍以 2026-10-19 對真實票與離場筆記的盤點為準：盤點裡沒出現的寫法不支援，照段落文字處理；
+// 刻意構造的輸入只保證不丟例外、不卡住（每一輪判斷至少吃掉一行）。
 //
 // **輸出 React 元素，不組 HTML 字串**（§9.4 第三條）：React 自己處理屬性值與文字內容的
 // escape，`href` 裡的引號不可能跳脫屬性。自己組字串就得自己寫兩套 encoder，而且會忘。
 //
-// 0 新依賴：專案沒有任何 markdown 套件。之後不夠用要換套件是小改動——這是純函式，呼叫點只有預覽。
+// 0 新依賴：專案沒有任何 markdown 套件。換成 react-markdown＋remark-gfm 量過要多 157 KB（前端 JS +15%），
+// 使用者選擇自己擴充（spec §2）。
 
 let keySeq = 0;
 const k = () => `m${keySeq++}`;
@@ -71,6 +74,18 @@ function joined(lines: string[]): ReactNode[] {
   });
 }
 
+// 分隔線：整行只有 3 個以上的 - 或 *，前面最多 3 個空格（spec §4.1.1 第 3 點）
+const HR = /^ {0,3}(-{3,}|\*{3,})[ \t]*$/;
+// 表格（spec §4.1.3）：| 開頭的行＋欄數相同的分隔列。切欄不支援 \| 跳脫，行內碼裡的 | 一樣會切（同 GFM）
+const PIPE = /^[ \t]*\|/;
+const SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+const cells = (row: string) => {
+  let s = strip(row);
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  return s.split("|").map(strip);
+};
+
 // 清單項目行（spec §4.1.2）：縮排、符號（- 或最多 9 位數字加 .）、內文。縮排 0～1 格是第一層，2 格以上是子項目（只有一層）
 const ITEM = /^( *)(-|\d{1,9}\.) (.*)$/;
 type Item = { text: string[]; kids: List[] };
@@ -103,6 +118,22 @@ export function renderMarkdownLite(src: string): ReactNode[] {
     }
     if (line.startsWith("# ")) { flushPara(); out.push(createElement("h1", { key: k() }, ...inline(line.slice(2)))); i++; continue; }
     if (line.startsWith("## ")) { flushPara(); out.push(createElement("h2", { key: k() }, ...inline(line.slice(3)))); i++; continue; }
+    if (line.startsWith("### ")) { flushPara(); out.push(createElement("h3", { key: k() }, ...inline(line.slice(4)))); i++; continue; }
+    if (HR.test(line)) { flushPara(); out.push(createElement("hr", { key: k() })); i++; continue; }
+    if (PIPE.test(line) && i + 1 < lines.length && SEP.test(lines[i + 1]) && cells(lines[i + 1]).length === cells(line).length) {
+      flushPara();
+      const head = cells(line);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && PIPE.test(lines[i])) rows.push(cells(lines[i++]));
+      // 欄數照表頭：資料列少的補空格、多的捨掉
+      const tr = (cols: string[], tag: "th" | "td") =>
+        createElement("tr", { key: k() }, ...head.map((_, j) => createElement(tag, { key: k() }, ...inline(cols[j] ?? ""))));
+      out.push(createElement("div", { key: k(), className: "tk-tbl" }, createElement("table", null,
+        createElement("thead", null, tr(head, "th")),
+        createElement("tbody", null, ...rows.map((r) => tr(r, "td"))))));
+      continue;
+    }
     const first = ITEM.exec(line);
     if (first && first[1].length < 2) {
       flushPara();

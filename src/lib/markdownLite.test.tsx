@@ -13,10 +13,10 @@ describe("markdownLite・白名單語法", () => {
 
   it("標題", () => expect(html("## 標題")).toBe("<h2>標題</h2>"));
   // 票 25：state.md 第一行固定是 `# 專案 — 狀態`，不認的話每份離場筆記都露出一個 `#`
-  it("一級標題；# 後沒有空白不算，### 不在子集裡照樣原樣", () => {
+  it("一級標題；# 後沒有空白不算，#### 以上照樣原樣", () => {
     expect(html("# 標題\n\n內文")).toBe("<h1>標題</h1><p>內文</p>");
     expect(html("#標題")).toBe("<p>#標題</p>");
-    expect(html("### 三級")).toBe("<p>### 三級</p>");
+    expect(html("#### 四級")).toBe("<p>#### 四級</p>");
   });
   it("粗體與斜體", () => expect(html("a **b** *c*")).toBe("<p>a <strong>b</strong> <em>c</em></p>"));
   it("行內程式碼裡的星號不解析", () => expect(html("`**x**`")).toBe("<p><code>**x**</code></p>"));
@@ -56,12 +56,10 @@ describe("markdownLite・escape 與 URL 邊界（spec §9.4）", () => {
     expect(a?.getAttributeNames()).toEqual(["href"]);
     expect(container.innerHTML).not.toContain('onmouseover="');
   });
-  it("表格原樣顯示", () => {
-    const src = "| a | b |\n|---|---|";
-    const out = html(src);
-    expect(out).toContain("| a | b |");
-    expect(out).not.toContain("<table");
-  });
+  // 2026-10-19 起認得表格（spec §4.1.3）；沒有分隔列的 | 行仍是段落文字
+  it("沒有分隔列的 | 行照樣原樣", () => expect(html("| a | b |\n| 1 | 2 |")).toBe("<p>| a | b | | 1 | 2 |</p>"));
+  it("表格儲存格裡的危險連結不產生 <a>", () => expect(html("| a |\n|---|\n| [t](javascript:x) |"))
+    .toBe('<div class="tk-tbl"><table><thead><tr><th>a</th></tr></thead><tbody><tr><td>[t](javascript:x)</td></tr></tbody></table></div>'));
 });
 
 // 多行接回同一行（spec §4.1.5）：整段一起解析行內語法，再看畫面上換行左右兩個字決定要不要插空格
@@ -118,4 +116,40 @@ describe("markdownLite・清單（spec §4.1.2）", () => {
   it("沒縮排的文字結束清單", () => expect(html("- a\nb")).toBe("<ul><li>a</li></ul><p>b</p>"));
   it("縮排 2 格的項目行接在段落後面時是段落文字", () => expect(html("文字\n  - b")).toBe("<p>文字 - b</p>"));
   it("清單可以緊接在段落後面", () => expect(html("說明：\n1. a")).toBe("<p>說明：</p><ol><li>a</li></ol>"));
+});
+
+// 標題、分隔線、表格（spec §4.1.1、§4.1.3）
+describe("markdownLite・標題、分隔線、表格（spec §4.1.1、§4.1.3）", () => {
+  afterEach(cleanup);
+
+  it("三級標題", () => expect(html("### 三級")).toBe("<h3>三級</h3>"));
+  it("--- 是分隔線", () => expect(html("---")).toBe("<hr>"));
+  it("*** 是分隔線", () => expect(html("***")).toBe("<hr>"));
+  it("前面 3 個空格也算分隔線", () => expect(html("   ---")).toBe("<hr>"));
+  it("後面有空白也算分隔線", () => expect(html("---  ")).toBe("<hr>"));
+  it("前面 4 個空格不算分隔線", () => expect(html("    ---")).toBe("<p>---</p>"));
+  it("段落後面接 --- 是分隔線", () => expect(html("a\n---")).toBe("<p>a</p><hr>"));
+  it("標準表格", () => expect(html("| a | b |\n|---|---|\n| 1 | 2 |")).toBe('<div class="tk-tbl"><table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table></div>'));
+  it("分隔列的欄數不同時不是表格", () => expect(html("| a | b |\n|---|\n| 1 | 2 |")).toBe("<p>| a | b | |---| | 1 | 2 |</p>"));
+  it("資料列欄數不足補空格、過多捨去", () => expect(html("| a | b |\n|---|---|\n| 1 |\n| 1 | 2 | 3 |")).toBe('<div class="tk-tbl"><table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td></td></tr><tr><td>1</td><td>2</td></tr></tbody></table></div>'));
+  it("沒有資料列", () => expect(html("| a |\n|---|")).toBe('<div class="tk-tbl"><table><thead><tr><th>a</th></tr></thead><tbody></tbody></table></div>'));
+  it("儲存格裡的行內語法", () => expect(html("| **a** | `b` |\n|---|---|")).toBe('<div class="tk-tbl"><table><thead><tr><th><strong>a</strong></th><th><code>b</code></th></tr></thead><tbody></tbody></table></div>'));
+  it("表格可以緊接在段落後面", () => expect(html("說明：\n| a |\n|---|")).toBe('<p>說明：</p><div class="tk-tbl"><table><thead><tr><th>a</th></tr></thead><tbody></tbody></table></div>'));
+  it("對齊冒號接受但不使用", () => expect(html("| a |\n|:---:|")).toBe('<div class="tk-tbl"><table><thead><tr><th>a</th></tr></thead><tbody></tbody></table></div>'));
+});
+
+// 刻意構造的輸入只保證不丟例外（spec §4.1.7）。片段涵蓋每一條逐行規則的開頭與它們的交界；固定種子，紅了可以重現
+describe("markdownLite・任何輸入都不丟例外（spec §4.1.7）", () => {
+  afterEach(cleanup);
+  const PIECES = ["- a", "1. b", "  - c", "  2. d", "    e", "  f", "| x | y |", "|---|---|", "|---|", "| 1 |", "```", "", "# h", "## h",
+    "### h", "---", "***", "> q", "~~s~~", "**b**", "`c`", "中文", "6. g", "   - h", "|", "-", "1."];
+
+  it("固定種子隨機組出 500 份文件，每份都渲染成功", () => {
+    let seed = 20261019;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (let n = 0; n < 500; n++) {
+      const doc = Array.from({ length: 1 + Math.floor(rnd() * 12) }, () => PIECES[Math.floor(rnd() * PIECES.length)]).join("\n");
+      expect(() => html(doc), doc).not.toThrow();
+    }
+  });
 });

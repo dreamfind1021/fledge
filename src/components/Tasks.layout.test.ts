@@ -113,6 +113,12 @@ describe("待辦面板三欄版面", () => {
     expect(hasDecl(css, ".d-body", "border")).toBe(false);
   });
 
+  // 票內文的表格（spec §4.1.8）：jsdom 量不到換行，只守宣告；畫面由收尾的量測看
+  it("表格：表頭不換行", () => expect(decl(css, ".tk-md th", "white-space")).toBe("nowrap"));
+  it("表格：儲存格照預設規則斷行（不准 overflow-wrap: anywhere，數字會被拆成兩行）", () => expect(hasDecl(css, ".tk-md td", "overflow-wrap")).toBe(false));
+  it("行內碼可以任意斷（表格裡不撐寬整張表、段落裡不撐寬右欄）", () => expect(decl(css, ".tk-md code", "overflow-wrap")).toBe("anywhere"));
+  it("表格：右欄窄到放不下時在表格裡左右捲", () => expect(decl(css, ".tk-md .tk-tbl", "overflow-x")).toBe("auto"));
+
   // spec §11.6：軌道寬、最小填充寬（放得下兩位數）、擱置槽固定寬（軌道上下對齊）只寫在 CSS，TS 只給百分比
   it("專案樹軌道：軌道 64px、填充最小 22px、擱置槽最小 18px", () => {
     expect(decl(css, ".tree-trk", "width")).toBe("64px");
