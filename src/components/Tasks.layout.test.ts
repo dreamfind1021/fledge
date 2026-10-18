@@ -113,6 +113,12 @@ describe("待辦面板三欄版面", () => {
     expect(hasDecl(css, ".d-body", "border")).toBe(false);
   });
 
+  // 下一步最多 3 行，超過的在第 3 行尾端以「…」截斷（2026-10-19 spec §4.2）：點卡片本來就會在右欄打開完整的離場筆記
+  it("下一步最多 3 行：display 是 -webkit-box", () => expect(decl(css, ".tasks-next-tx", "display")).toBe("-webkit-box"));
+  it("下一步最多 3 行：直的排", () => expect(decl(css, ".tasks-next-tx", "-webkit-box-orient")).toBe("vertical"));
+  it("下一步最多 3 行：行數是 3", () => expect(decl(css, ".tasks-next-tx", "-webkit-line-clamp")).toBe("3"));
+  it("下一步最多 3 行：超出的藏起來", () => expect(decl(css, ".tasks-next-tx", "overflow")).toBe("hidden"));
+
   // 票內文的表格（spec §4.1.8）：jsdom 量不到換行，只守宣告；畫面由收尾的量測看
   it("表格：表頭不換行", () => expect(decl(css, ".tk-md th", "white-space")).toBe("nowrap"));
   it("表格：儲存格照預設規則斷行（不准 overflow-wrap: anywhere，數字會被拆成兩行）", () => expect(hasDecl(css, ".tk-md td", "overflow-wrap")).toBe(false));

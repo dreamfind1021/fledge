@@ -59,7 +59,8 @@
 /* 選中 12% 不是 demo 的 22%：22% 時琥珀標籤只有 4.08:1（spec §11.9，Codex spec R1） */
 .tasks-next.is-on { background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 12%, var(--active)), var(--active) 70%); }
 .tasks-next-lab { display: flex; align-items: center; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--primary-text); margin-bottom: 3px; }
-.tasks-next-tx { font-size: 14px; line-height: 1.6; color: var(--text); }
+/* 最多 3 行、超過的在第 3 行尾端以「…」截斷（2026-10-19 spec §4.2）：點卡片本來就會在右欄打開完整的離場筆記。Tauri 的 WebKit 支援這組寫法 */
+.tasks-next-tx { font-size: 14px; line-height: 1.6; color: var(--text); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 /* 右上只有一個「›」，沒有文字；--faint 是非文字用途（3:1 門檻） */
 .tasks-next-more { margin-left: auto; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); font-size: 14px; line-height: 1; }
 
