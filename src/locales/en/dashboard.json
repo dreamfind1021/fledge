@@ -9,7 +9,7 @@
                "days": "{{n}}-day", "hours": "{{n}}-hour", "minutes": "{{n}}-min",
                "codexLoading": "Loading…", "pace": "{{n}}% of window elapsed",
                "codexUnavailable": "Live quota unavailable", "codexReauth": "Sign in to Codex again to see quota" },
-  "daily": { "title": "Daily cost ({{days}} days)", "other": "Other" },
+  "daily": { "title": "Daily cost ({{days}} days)", "other": "Other", "today": "Today" },
   "models": { "title": "Model breakdown ({{days}} days)", "other": "Other ({{n}})" },
   "hourly": { "title": "Activity by hour ({{days}} days)", "dow": "Mon,Tue,Wed,Thu,Fri,Sat,Sun" },
   "projects": { "title": "Project usage ({{days}} days)", "project": "Project", "claude": "Claude",

@@ -51,3 +51,17 @@ describe("模型分布的排名長條（票 46，spec §4.5）", () => {
     expect(decl(css, ".dash-mbars", "grid-template-columns")).toBe("max-content 1fr");
   });
 });
+
+describe("每日成本的最高金額與頭尾日期（票 46，spec §4.4）", () => {
+  // 位置由 TSX 給 left: x%＋translateX(-x%)：這裡守的是「它們是疊在圖上的絕對定位、不斷行」，
+  // 圖上方留 16px 給最高金額。標籤彼此不相交、不越界由 headless Chrome 量
+  it("圖上方留 16px；最高金額與日期都是絕對定位、不斷行", () => {
+    expect(decl(css, ".dash-daily-wrap", "padding-top")).toBe("16px");
+    expect(decl(css, ".dash-daily-wrap", "position")).toBe("relative");
+    expect(decl(css, ".dash-daily-peak", "position")).toBe("absolute");
+    expect(decl(css, ".dash-daily-peak", "white-space")).toBe("nowrap");
+    expect(decl(css, ".dash-daily-axis", "position")).toBe("relative");
+    expect(decl(css, ".dash-daily-axis > span", "position")).toBe("absolute");
+    expect(decl(css, ".dash-daily-axis > span", "white-space")).toBe("nowrap");
+  });
+});

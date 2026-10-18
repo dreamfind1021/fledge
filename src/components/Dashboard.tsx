@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { fetchUsageDashboard, fetchCodexUsage, UsageDashboard, CodexUsage, CodexUsageWindow } from "../lib/sidecar";
 import { shouldPoll, POLL_INTERVAL_MS, CODEX_USAGE_INTERVAL_MS } from "../lib/usagePoll";
 import { fmtUSD, fmtPct, fmtDayClock, codexWindowLabel } from "../lib/usageFormat";
-import { colorIndex, isAheadOfPace, mergeTempProjects, MODEL_COLORS, rankModels, windowElapsedPct } from "../lib/dashboardLogic";
+import { colorIndex, endLabels, isAheadOfPace, labelX, localDateKey, mergeTempProjects, MODEL_COLORS, peakIndex, rankModels,
+         windowElapsedPct } from "../lib/dashboardLogic";
 import type { ModelRanking } from "../lib/dashboardLogic";
 import "./Dashboard.css";
 
@@ -202,17 +203,30 @@ export function DailyChart({ daily, ranking, days, t }: {
   const colorOf = (m: string) => MODEL_COLORS[colorIndex(ranking, m)];
   // 全域排序：同色段不跨日跳位
   const rank = (m: string) => { const i = ranking.order.indexOf(m); return i < 0 ? 999 : i; };
+  // 最高金額與頭尾日期（spec §4.4）：位置都用比例算法，最左那欄靠左、最右那欄靠右，不會超出圖
+  const peak = peakIndex(daily.map((d) => d.total));
+  const at = (i: number) => { const x = labelX(i, daily.length); return { left: `${x}%`, transform: `translateX(-${x}%)` }; };
   return (
     <div className="dash-panel dash-daily-panel">
       <div className="dash-panel-title">{t("daily.title", { days })}</div>
-      <div className="dash-daily">
-        {daily.map((d) => (
-          <div key={d.date} className="dash-daily-col" title={`${d.date} ${fmtUSD(d.total)}`}
-               style={{ height: `${Math.max(2, (d.total / max) * 100)}%` }}>
-            {Object.entries(d.by_model).sort((x, y) => rank(x[0]) - rank(y[0])).map(([m, c]) => (
-              <i key={m} style={{ flex: c, background: colorOf(m) }} />
-            ))}
-          </div>
+      <div className="dash-daily-wrap">
+        {peak != null && <span className="dash-daily-peak" style={at(peak)}>{fmtUSD(daily[peak].total)}</span>}
+        <div className="dash-daily">
+          {daily.map((d) => (
+            <div key={d.date} className="dash-daily-col" title={`${d.date} ${fmtUSD(d.total)}`}
+                 style={{ height: `${Math.max(2, (d.total / max) * 100)}%` }}>
+              {Object.entries(d.by_model).sort((x, y) => rank(x[0]) - rank(y[0])).map(([m, c]) => (
+                <i key={m} style={{ flex: c, background: colorOf(m) }} />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="dash-daily-axis">
+        {endLabels(daily.map((d) => d.date), localDateKey(Date.now())).map((l) => (
+          <span key={l.index} className={l.text == null ? "is-today" : undefined} style={at(l.index)}>
+            {l.text ?? t("daily.today")}
+          </span>
         ))}
       </div>
       <div className="dash-legend">

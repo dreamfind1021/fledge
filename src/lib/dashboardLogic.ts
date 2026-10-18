@@ -66,3 +66,30 @@ export function windowElapsedPct(win: Pick<CodexUsageWindow, "window_minutes" | 
 const AHEAD_MARGIN = 10;
 export const isAheadOfPace = (usedPct: number, elapsedPct: number | null) =>
   elapsedPct != null && usedPct - elapsedPct >= AHEAD_MARGIN;
+
+// ── 每日成本：最高金額與頭尾日期（票 46，spec §4.4）──
+/** 合計最高的那一天（同額取較早）；全部是 0 或沒有資料回 null＝不標 */
+export function peakIndex(totals: number[]): number | null {
+  let best: number | null = null;
+  totals.forEach((v, i) => { if (v > 0 && (best == null || v > totals[best])) best = i; });
+  return best;
+}
+
+/** 第 i 欄（共 n 欄）標籤的位置：left: x% 再 translateX(-x%)。最左那欄靠左、最右那欄靠右、中間平滑過渡；
+ *  左緣 x·(W−w) ≥ 0、右緣 x·(W−w)+w ≤ W——標籤比圖窄就一定不越界，不必量字寬 */
+export const labelX = (i: number, n: number) => ((i + 0.5) / n) * 100;
+
+/** "2026-09-19" → "9/19" */
+export const monthDay = (date: string) => `${Number(date.slice(5, 7))}/${Number(date.slice(8, 10))}`;
+
+/** 本地日期鍵 YYYY-MM-DD（同 fmtDayClock 的寫法；sidecar 的 daily 也是照本地日期分組） */
+export const localDateKey = (ms: number) => new Date(ms).toLocaleDateString("en-CA");
+
+/** 只標頭尾兩個（demo 上的月初標籤使用者選擇拿掉：資料裡混進未來日期時會彼此疊字）。
+ *  每一欄最多一個標籤：只有一天時只用最後一欄的規則。text 為 null＝今天 */
+export function endLabels(dates: string[], todayKey: string): { index: number; text: string | null }[] {
+  const n = dates.length;
+  if (n === 0) return [];
+  const last = { index: n - 1, text: dates[n - 1] === todayKey ? null : monthDay(dates[n - 1]) };
+  return n === 1 ? [last] : [{ index: 0, text: monthDay(dates[0]) }, last];
+}

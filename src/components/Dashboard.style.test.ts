@@ -80,6 +80,18 @@ describe("模型分布的軌道數字（票 46，spec §4.5）", () => {
   });
 });
 
+// 票 46，spec §4.4：每日成本的日期與最高金額坐在卡片底色上（.dash-panel 的 background）
+describe("每日成本的日期與最高金額", () => {
+  it.each<[ThemeId, string, string]>(THEMES.flatMap((theme) => [
+    [theme, "日期", ".dash-daily-axis"] as [ThemeId, string, string],
+    [theme, "今天", ".dash-daily-axis > .is-today"] as [ThemeId, string, string],
+    [theme, "最高金額", ".dash-daily-peak"] as [ThemeId, string, string],
+  ]))("%s：%s對卡片底色至少 4.5:1", (theme, _label, selector) => {
+    expect(worst(token(paintToken(selector, "color"), theme), cssRules(dash, theme).paintColor(".dash-panel", "background")))
+      .toBeGreaterThanOrEqual(4.5);
+  });
+});
+
 // 票 46，spec §4.3：用量比時間多 10 點以上，Codex 進度條改用 --warning（class 由 CodexPanel 給，Dashboard.test.tsx 守）
 describe("Codex 進度條用太快時變黃", () => {
   it("is-ahead 的填充用 --warning", () => {

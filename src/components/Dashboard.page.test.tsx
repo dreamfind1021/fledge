@@ -163,3 +163,22 @@ describe("Dashboard 整頁：模型分布與每日成本用同一份排名（票
     });
   });
 });
+
+describe("Dashboard 整頁：每日成本最後一欄的「今天」（票 46，spec §4.4）", () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+  beforeEach(() => {
+    vi.mocked(fetchUsageDashboard).mockReset();
+    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue({ source: "unavailable", failure_reason: "network", observed_at: null });
+    vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 9, 18, 12, 0).getTime());   // payload 的日期是 2026-10-18
+  });
+
+  it("中文：今天", async () => {
+    const ui = await shown("zh-TW", payload());
+    expect(ui.container.querySelector(".dash-daily-axis .is-today")?.textContent).toBe("今天");
+  });
+
+  it("英文：Today", async () => {
+    const ui = await shown("en", payload());
+    expect(ui.container.querySelector(".dash-daily-axis .is-today")?.textContent).toBe("Today");
+  });
+});

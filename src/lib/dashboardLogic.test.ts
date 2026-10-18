@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { colorIndex, isAheadOfPace, isTempPath, mergeTempProjects, rankModels, windowElapsedPct } from "./dashboardLogic";
+import { colorIndex, endLabels, isAheadOfPace, isTempPath, labelX, localDateKey, mergeTempProjects, monthDay, peakIndex, rankModels, windowElapsedPct } from "./dashboardLogic";
 
 // 票 46，spec §4.5：模型分布與每日成本共用的排名（取代圓餅的 donutParts）
 describe("模型排名", () => {
@@ -96,5 +96,36 @@ describe("Codex 額度的時間進度", () => {
     expect(isAheadOfPace(60, 50)).toBe(true);
     expect(isAheadOfPace(59.99, 50)).toBe(false);
     expect(isAheadOfPace(100, null)).toBe(false);
+  });
+});
+
+// 票 46，spec §4.4
+describe("每日成本：最高金額與頭尾日期", () => {
+  it("最高的那一天；同額取較早；全部是 0 或沒有資料不標", () => {
+    expect([[1, 5, 3], [5, 1, 5], [0, 0], []].map(peakIndex)).toEqual([1, 0, null, null]);
+  });
+
+  it("標籤位置：第 i 欄中心的比例（第一欄靠左、正中間 50、最後一欄靠右）", () => {
+    expect([labelX(0, 31), labelX(15, 31), labelX(30, 31)].map((x) => Math.round(x * 1000) / 1000)).toEqual([1.613, 50, 98.387]);
+  });
+
+  // 本地日期鍵：用剛過午夜與快到午夜兩個時刻，正時區（如台灣）與負時區換成 UTC 都會差一天，改用 UTC 取日期的錯才抓得到
+  it("M/D 不補零；本地日期鍵是 YYYY-MM-DD（照本地日期，不是 UTC）", () => {
+    expect([monthDay("2026-09-19"), monthDay("2027-01-05"),
+      localDateKey(new Date(2026, 9, 18, 0, 30).getTime()), localDateKey(new Date(2026, 9, 18, 23, 30).getTime())])
+      .toEqual(["9/19", "1/5", "2026-10-18", "2026-10-18"]);
+  });
+
+  it("只標頭尾：第一欄 M/D、最後一欄是今天寫「今天」（text 為 null），否則寫 M/D；中間的月初不標", () => {
+    expect(endLabels(["2026-09-30", "2026-10-01", "2026-10-18"], "2026-10-18"))
+      .toEqual([{ index: 0, text: "9/30" }, { index: 2, text: null }]);
+    expect(endLabels(["2026-12-30", "2027-01-02"], "2027-01-03"))
+      .toEqual([{ index: 0, text: "12/30" }, { index: 1, text: "1/2" }]);
+  });
+
+  it("只有一天時只有一個標籤（用最後一欄的規則）；沒有資料沒有標籤", () => {
+    expect(endLabels(["2026-10-18"], "2026-10-18")).toEqual([{ index: 0, text: null }]);
+    expect(endLabels(["2026-10-17"], "2026-10-18")).toEqual([{ index: 0, text: "10/17" }]);
+    expect(endLabels([], "2026-10-18")).toEqual([]);
   });
 });

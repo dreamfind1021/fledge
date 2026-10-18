@@ -169,3 +169,36 @@ describe("DailyChart：顏色、色段順序、圖例跟模型分布同一份排
     expect(legend[4].querySelector("i")?.style.background).toBe("var(--faint)");
   });
 });
+
+// 票 46，spec §4.4：最高那天標金額、只標頭尾兩個日期。「今天」照本地日期判斷，時鐘固定在 2026-10-18 中午（本地）
+describe("DailyChart：最高金額與頭尾日期", () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+  const flat = rankModels([model("a", 1)]);
+  const days = (...rows: [string, number][]) => rows.map(([date, total]) => ({ date, by_model: { a: total }, total }));
+  const shown = (d: UsageDashboard["daily"]) => {
+    vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 9, 18, 12, 0).getTime());
+    return render(<DailyChart daily={d} ranking={flat} days={30} t={t} />).container;
+  };
+
+  it("最高那天的長條上方標金額，位置用比例算法（3 欄的第 2 欄＝50%）", () => {
+    const peak = shown(days(["2026-10-16", 1], ["2026-10-17", 9], ["2026-10-18", 2])).querySelector<HTMLElement>(".dash-daily-peak");
+    expect(peak?.textContent).toBe("$9.00");
+    expect([peak?.style.left, peak?.style.transform]).toEqual(["50%", "translateX(-50%)"]);
+  });
+
+  it("全部是 0 → 不標最高金額", () => {
+    expect(shown(days(["2026-10-17", 0], ["2026-10-18", 0])).querySelector(".dash-daily-peak")).toBeNull();
+  });
+
+  it("頭尾兩個日期：第一欄 M/D、最後一欄是今天寫「今天」並加 is-today；位置分別在第一欄與最後一欄", () => {
+    const labels = [...shown(days(["2026-09-30", 1], ["2026-10-01", 2], ["2026-10-18", 3])).querySelectorAll<HTMLElement>(".dash-daily-axis > span")];
+    expect(labels.map((e) => e.textContent)).toEqual(["9/30", "daily.today"]);
+    expect(labels.map((e) => e.className)).toEqual(["", "is-today"]);
+    expect(labels[1].style.left).toBe(`${(2.5 / 3) * 100}%`);
+  });
+
+  it("最後一欄不是今天 → 寫日期", () => {
+    const labels = [...shown(days(["2026-10-16", 1], ["2026-10-17", 2])).querySelectorAll(".dash-daily-axis > span")];
+    expect(labels.map((e) => e.textContent)).toEqual(["10/16", "10/17"]);
+  });
+});

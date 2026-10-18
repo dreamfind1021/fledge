@@ -280,6 +280,40 @@
   width: 100%;
   /* flex 比例由 inline style 的 flex 屬性控制（各 model 成本比例）*/
 }
+/* 最高金額與頭尾日期（票 46，spec §4.4）：位置都由 TSX 給 left: x%＋translateX(-x%)（x＝那一欄中心的比例），
+   最左那欄靠左、最右那欄靠右，標籤比圖窄就一定不越界。圖上方留 16px 給最高金額 */
+.dash-daily-wrap {
+  position: relative;
+  padding-top: 16px;
+}
+.dash-daily-peak {
+  position: absolute;
+  top: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  color: var(--dim);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.dash-daily-axis {
+  position: relative;
+  height: 14px;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--faint);
+}
+.dash-daily-axis > span {
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+}
+.dash-daily-axis > .is-today {
+  color: var(--dim);
+  font-family: var(--font-ui);
+}
 .dash-legend {
   display: flex;
   gap: 14px;
