@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { render, cleanup, waitFor } from "@testing-library/react";
 import i18n from "../i18n";
 import Dashboard from "./Dashboard";
 import { fetchUsageDashboard, fetchCodexUsage, type UsageDashboard } from "../lib/sidecar";
@@ -82,5 +82,32 @@ describe("Dashboard 整頁：暫存資料夾合併列的字（票 46，spec §4.
     const ui = await shown("en", withTemp());
     expect(ui.queryByText("Temporary folders")).not.toBeNull();
     expect(ui.queryByText("2 folder(s)")).not.toBeNull();
+  });
+});
+
+describe("Dashboard 整頁：Codex 一整條（票 46，spec §4.3）", () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+  beforeEach(() => { vi.mocked(fetchUsageDashboard).mockReset(); });
+
+  it("版面由上而下：數字卡、Codex 一整條、每日成本（獨佔一整排）、模型＋時段那一列、專案表", async () => {
+    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue({ source: "unavailable", failure_reason: "network", observed_at: null });
+    const ui = await shown("zh-TW", payload());
+    const root = ui.container.querySelector(".dash-root")!;
+    expect([...root.children].map((e) => e.className)).toEqual(
+      ["dash-head", "dash-kpi", "dash-win-card dash-cx-strip", "dash-panel dash-daily-panel", "dash-row", "dash-panel"]);
+  });
+
+  it("進度線的提示字：時間已過 50%", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000 * 1000);
+    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue({ source: "live", observed_at: 1, plan_type: "prolite",
+      primary: { used_percent: 1, window_minutes: 10080, resets_at: 1_800_000_000 + 5040 * 60 } });
+    const ui = await shown("zh-TW", payload());
+    // Codex 額度是另一個 effect 抓的，專案名出現時它不一定到了：等線畫出來，再斷言字
+    const pace = await waitFor(() => {
+      const e = ui.container.querySelector(".dash-pace");
+      if (!e) throw new Error("還沒畫出進度線");
+      return e;
+    });
+    expect(pace.getAttribute("title")).toBe("時間已過 50%");
   });
 });

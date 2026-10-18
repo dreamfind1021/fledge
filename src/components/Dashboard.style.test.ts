@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { THEMES, type ThemeId } from "../lib/themeIds";
-import { baseOf, cssRules, hasDecl, lineTokenHits, token, worst } from "../testing/cssRules";
+import { baseOf, cssRules, decl, hasDecl, lineTokenHits, token, worst } from "../testing/cssRules";
 
 // 觀測面板的樣式防線——票 28 第三批，spec docs/planning/soft-tiles-app-wide-design.md §4.6。
 // jsdom 不套 CSS，這裡只能讀 CSS 原始碼驗宣告；畫面由 headless 截圖與真機驗收看。
@@ -59,6 +59,13 @@ describe("專案表每列一塊暗磚、圖例與長條滑過不畫線（spec D3
 // spec §1.5／§4.6：防的是「以後不小心把線加回來」——最可能的形狀是新增元件時照抄舊寫法
 // `border: 1px solid var(--border)`。定點斷言只看得到既有的選擇器，這條連新增的選擇器也看得到。
 // 不防刻意繞過（寫死顏色另有 index.tokens.test.ts 擋；TSX inline style 靠審查）。
+// 票 46，spec §4.3：用量比時間多 10 點以上，Codex 進度條改用 --warning（class 由 CodexPanel 給，Dashboard.test.tsx 守）
+describe("Codex 進度條用太快時變黃", () => {
+  it("is-ahead 的填充用 --warning", () => {
+    expect(decl(dash, ".dash-bar.is-codex.is-ahead > i", "background")).toContain("var(--warning)");
+  });
+});
+
 describe("觀測面板的 CSS 不再引用分隔線 token（spec §1.5、§4.6）", () => {
   it("--border／--divider／--term-divider 零次", () => {
     const { hits, scanned } = lineTokenHits(["/src/components/Dashboard.css"]);

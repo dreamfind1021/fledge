@@ -1,5 +1,5 @@
 // 面板邏輯純函式（design §11）——元件只負責渲染，邏輯在此測試
-import type { UsageDashboard } from "./sidecar";
+import type { CodexUsageWindow, UsageDashboard } from "./sidecar";
 
 export interface DonutPart { label: string; cost: number; fromDeg: number; toDeg: number }
 
@@ -37,3 +37,19 @@ export function mergeTempProjects(projects: ProjectUsage[]): ProjectRow[] {
   };
   return [...projects.filter((p) => !isTempPath(p.path)), merged].sort((a, b) => b.total - a.total);
 }
+
+// ── Codex 額度：時間進度線與「用太快」（票 46，spec §4.3、§8）──
+/** 窗口的時間過了多少（0～100）。全部用 epoch 秒（resets_at 是秒，Date.now() 是毫秒、呼叫端先除以 1000）。
+ *  缺資料、不是有限正數、或已到／已過重置時間回 null＝不畫線：Codex 額度 15 分鐘才重抓一次，
+ *  重置後手上還是重置前的資料，畫出來會是 100%（而且多半是黃的），兩者都是錯的 */
+export function windowElapsedPct(win: Pick<CodexUsageWindow, "window_minutes" | "resets_at">, nowSec: number): number | null {
+  const { window_minutes: minutes, resets_at: resetsAt } = win;
+  if (minutes == null || resetsAt == null || !Number.isFinite(minutes) || !Number.isFinite(resetsAt) || minutes <= 0) return null;
+  if (resetsAt <= nowSec) return null;
+  return Math.min(100, Math.max(0, (1 - (resetsAt - nowSec) / (minutes * 60)) * 100));
+}
+
+// 用量比時間進度多 10 個百分點以上才算用太快：照字面「超過就算」的話，剛重置時一用就黃（使用者 2026-10-18 選定）
+const AHEAD_MARGIN = 10;
+export const isAheadOfPace = (usedPct: number, elapsedPct: number | null) =>
+  elapsedPct != null && usedPct - elapsedPct >= AHEAD_MARGIN;

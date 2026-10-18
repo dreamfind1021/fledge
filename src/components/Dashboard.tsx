@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { fetchUsageDashboard, fetchCodexUsage, UsageDashboard, CodexUsage, CodexUsageWindow } from "../lib/sidecar";
 import { shouldPoll, POLL_INTERVAL_MS, CODEX_USAGE_INTERVAL_MS } from "../lib/usagePoll";
 import { fmtUSD, fmtPct, fmtDayClock, codexWindowLabel } from "../lib/usageFormat";
-import { donutParts, mergeTempProjects } from "../lib/dashboardLogic";
+import { donutParts, isAheadOfPace, mergeTempProjects, windowElapsedPct } from "../lib/dashboardLogic";
 import "./Dashboard.css";
 
 // 期間天數只有這一個來源：請求帶它；標題寫 payload 的 scan_meta.days（掃描中 sidecar 回上一份成功的資料，
@@ -84,10 +84,9 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
         })}</div>
       )}
       <KpiBar kpi={data.kpi} days={days} t={t} />
-      <div className="dash-row dash-row-usage">
-        <DailyChart daily={data.daily} days={days} t={t} />
-        <CodexPanel codex={codex} t={t} />
-      </div>
+      {/* Codex 額度是數字卡下方一整條、每日成本獨佔一整排（票 46，spec §4.3）：並排時 Codex 卡被拉到跟長條圖一樣高，內容只佔一行 */}
+      <CodexPanel codex={codex} t={t} />
+      <DailyChart daily={data.daily} days={days} t={t} />
       <div className="dash-row">
         <ModelDonut models={data.models} days={days} t={t} />
         <HourlyHeatmap hourly={data.hourly} days={days} t={t} />
@@ -138,21 +137,29 @@ export function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
   // null＝這個分頁還沒抓到第一筆（每次開儀表板都要等 app-server 啟動），不是失敗
   const status = codex == null ? "windows.codexLoading"
     : reauth ? "windows.codexReauth" : "windows.codexUnavailable";
+  const wins: { win: CodexUsageWindow; fallback: "fiveHour" | "weekly" }[] = [];
+  if (live?.primary) {
+    wins.push({ win: live.primary, fallback: "fiveHour" });
+    if (live.secondary) wins.push({ win: live.secondary, fallback: "weekly" });
+  }
+  const nowSec = Date.now() / 1000;
+  // 一整條：左邊標題，右邊每個窗口一行「名稱｜進度條｜百分比 · 重置時間」。多個窗口共用 .dash-cx-rows 這一個 grid 的欄寬，
+  // 每條進度條一樣長（取代票 35 第 3 題的兩行排法：那是為了窄卡片裡兩條不等長、被擠到 0，佔整排之後兩個理由都不成立）
   return (
-    <div className="dash-windows">
-      <div className="dash-win-card">
-        <div className="dash-win-title">
-          {t("windows.codex")}
-          {live?.plan_type ? <span className="dash-badge">{live.plan_type}</span> : null}
-        </div>
-        {live?.primary ? (<>
-          <Gauge label={winLabel(live.primary, "fiveHour", t)} win={live.primary} t={t} />
-          {live.secondary &&
-            <Gauge label={winLabel(live.secondary, "weekly", t)} win={live.secondary} t={t} />}
-        </>) : (
-          <div className="dash-win-meta">{t(status)}</div>
-        )}
+    <div className="dash-win-card dash-cx-strip">
+      <div className="dash-win-title">
+        {t("windows.codex")}
+        {live?.plan_type ? <span className="dash-badge">{live.plan_type}</span> : null}
       </div>
+      {wins.length > 0 ? (
+        <div className="dash-cx-rows">
+          {wins.map(({ win, fallback }) => (
+            <QuotaRow key={fallback} label={winLabel(win, fallback, t)} win={win} nowSec={nowSec} t={t} />
+          ))}
+        </div>
+      ) : (
+        <div className="dash-win-meta">{t(status)}</div>
+      )}
     </div>
   );
 }
@@ -163,15 +170,24 @@ function winLabel(win: CodexUsageWindow, fallback: "fiveHour" | "weekly", t: T):
   return "n" in l ? t(`windows.${l.key}`, { n: l.n }) : t(`windows.${l.key}`);
 }
 
-function Gauge({ label, win, t }: { label: string; win: CodexUsageWindow; t: T }) {
+// 一個窗口＝grid 的三格。條上的細直線＝窗口時間過了多少；用量比時間多 10 點以上條變黃（spec §4.3、§8）
+function QuotaRow({ label, win, nowSec, t }: { label: string; win: CodexUsageWindow; nowSec: number; t: T }) {
   const resets = win.resets_at != null
     ? t("windows.resets", { time: fmtDayClock(win.resets_at, t("time.yesterday")) }) : "";
+  const elapsed = windowElapsedPct(win, nowSec);
   return (
-    <div className="dash-gauge">
-      <span className="dash-gauge-label">{label}</span>
-      <div className="dash-bar is-codex"><i style={{ width: `${Math.min(100, win.used_percent)}%` }} /></div>
-      <span className="dash-gauge-meta">{Math.round(win.used_percent)}%{resets ? ` · ${resets}` : ""}</span>
-    </div>
+    <>
+      <span className="dash-cx-label">{label}</span>
+      <div className="dash-cx-bar">
+        <div className={`dash-bar is-codex${isAheadOfPace(win.used_percent, elapsed) ? " is-ahead" : ""}`}>
+          <i style={{ width: `${Math.min(100, win.used_percent)}%` }} />
+        </div>
+        {elapsed != null && (
+          <b className="dash-pace" style={{ left: `${elapsed}%` }} title={t("windows.pace", { n: Math.round(elapsed) })} />
+        )}
+      </div>
+      <span className="dash-cx-meta">{Math.round(win.used_percent)}%{resets ? ` · ${resets}` : ""}</span>
+    </>
   );
 }
 
@@ -188,7 +204,7 @@ function DailyChart({ daily, days, t }: { daily: UsageDashboard["daily"]; days: 
   // 全域排序：以 30 天總量 rank 決定每日色段順序，同色段不跨日跳位
   const rank = (m: string) => { const i = order.indexOf(m); return i < 0 ? 999 : i; };
   return (
-    <div className="dash-panel">
+    <div className="dash-panel dash-daily-panel">
       <div className="dash-panel-title">{t("daily.title", { days })}</div>
       <div className="dash-daily">
         {daily.map((d) => (

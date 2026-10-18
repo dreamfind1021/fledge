@@ -121,13 +121,7 @@
   letter-spacing: -.3px;
 }
 
-/* ── 窗口列 ── */
-.dash-windows {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-  margin-bottom: 14px;
-}
+/* ── Codex 額度卡 ── */
 .dash-win-card {
   background: var(--surface);
   box-shadow: var(--shadow-sm);
@@ -183,30 +177,59 @@
   background: linear-gradient(90deg, var(--session), color-mix(in srgb, var(--session) 70%, var(--text)));
 }
 
-/* ── Gauge（Codex 窗口格）── */
-/* 兩行：上面名稱在左、百分比與重置時間在右，下面一整條進度條——任何寬度兩條都一樣長、左右對齊（票 35 第 3 題）。
-   一行排法時條寬＝卡寬扣掉右邊的文字，重置時間長短不同兩條就不一樣長，窗口 800 時還會被擠到 0 */
-.dash-gauge {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-areas: "label meta" "bar bar";
-  align-items: center;
-  gap: 6px 10px;
-  margin-top: 10px;
+/* 用量比時間進度多 10 個百分點以上：填充改用 --warning（票 46，spec §4.3、§8）。class 由 CodexPanel 判斷後給 */
+.dash-bar.is-codex.is-ahead > i {
+  background: linear-gradient(90deg, var(--warning), color-mix(in srgb, var(--warning) 70%, var(--text)));
 }
-.dash-gauge-label {
-  grid-area: label;
+
+/* ── Codex 額度：數字卡下方一整條（票 46，spec §4.3）──
+   左邊標題、右邊窗口清單；寬度不夠放一行時標題自己一行（flex-wrap＋清單最少 240px）。
+   取代票 35 第 3 題的兩行排法：那是為了窄卡片裡兩條不等長、窗口 800 時被擠到 0；佔整排之後兩個理由都不成立。
+   寫在 .dash-win-card 之後：權重相同，內距要蓋過它的 14px 16px */
+.dash-cx-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 12px 16px;
+  margin-bottom: 5px;
+}
+.dash-cx-strip > .dash-win-title {
+  margin-bottom: 0;
+}
+.dash-cx-strip > .dash-win-meta {
+  margin-top: 0;
+}
+/* 每個窗口一行「名稱｜進度條｜百分比 · 重置時間」，所有窗口共用這一個 grid 的欄寬：每條進度條一樣長 */
+.dash-cx-rows {
+  flex: 1;
+  min-width: 240px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px 12px;
+  align-items: center;
+}
+.dash-cx-label {
   color: var(--dim);
   font-size: 11.5px;
 }
-.dash-gauge > .dash-bar {
-  grid-area: bar;
-}
-.dash-gauge-meta {
-  grid-area: meta;
+.dash-cx-meta {
   color: var(--dim);
   font-size: 11px;
   font-family: var(--font-mono);
+}
+/* 時間進度線：畫在「窗口時間過了多少」的位置，上下各比條多出 3px。.dash-bar 是 overflow: hidden，線要掛在外面這層 */
+.dash-cx-bar {
+  position: relative;
+}
+.dash-pace {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text);
 }
 
 /* ── 面板共用 ── */
@@ -228,6 +251,10 @@
 }
 
 /* ── 每日成本堆疊長條 ── */
+/* 獨佔一整排（票 46，spec §4.3）：跟下一列的縫同 5px，不用 .dash-panel 的 14px */
+.dash-daily-panel {
+  margin-bottom: 5px;
+}
 .dash-daily {
   display: flex;
   align-items: flex-end;
@@ -284,14 +311,6 @@
   margin-bottom: 5px;
 }
 .dash-row > .dash-panel {
-  margin-bottom: 0;
-}
-/* 窄的時候每日成本＋Codex 那一列也是一欄。要明寫：這條跟 .dash-row 權重相同、寫在後面，
-   窄的時候生效的是它；寬版的 1.5fr 1fr（每日成本寬、Codex 額度窄）在檔尾的寬版區塊（票 35 第 2 題） */
-.dash-row-usage {
-  grid-template-columns: 1fr;
-}
-.dash-row-usage > .dash-windows {
   margin-bottom: 0;
 }
 
@@ -460,7 +479,5 @@
 @container dash (min-width: 720px) {
   .dash-kpi { grid-template-columns: repeat(5, 1fr); }
   .dash-row { grid-template-columns: 1fr 1.3fr; }
-  /* 每日成本（寬）+ Codex 額度（窄）同一行 */
-  .dash-row-usage { grid-template-columns: 1.5fr 1fr; }
   .dash-proj-path { display: block; }
 }

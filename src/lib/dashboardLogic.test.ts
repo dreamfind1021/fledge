@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { donutParts, isTempPath, mergeTempProjects } from "./dashboardLogic";
+import { donutParts, isAheadOfPace, isTempPath, mergeTempProjects, windowElapsedPct } from "./dashboardLogic";
 
 describe("dashboardLogic", () => {
   it("donutParts：取前 4 名＋其餘合併為 rest，角度總和 360", () => {
@@ -45,5 +45,37 @@ describe("暫存資料夾合併成一列", () => {
   it("沒有暫存資料夾就原樣回傳，不多出合併列", () => {
     const input = [proj("/Users/u/a", 5, 0, 1), proj("/Users/u/b", 1, 0, 1)];
     expect(mergeTempProjects(input)).toEqual(input);
+  });
+});
+
+// 票 46，spec §4.3、§8
+describe("Codex 額度的時間進度", () => {
+  const now = 1_000_000;
+  const w = (minutes: number | null, resetsAt: number | null) => ({ window_minutes: minutes, resets_at: resetsAt });
+
+  it("全部用 epoch 秒：窗口剛開始 0、過一半 50、5 小時窗口只剩 1 分鐘約 99.67", () => {
+    expect(windowElapsedPct(w(10080, now + 10080 * 60), now)).toBe(0);
+    expect(windowElapsedPct(w(10080, now + 5040 * 60), now)).toBe(50);
+    expect(windowElapsedPct(w(300, now + 60), now)).toBeCloseTo(99.667, 2);
+  });
+
+  it("剩餘時間比窗口還長（時鐘偏差）→ 夾在 0", () => {
+    expect(windowElapsedPct(w(300, now + 400 * 60), now)).toBe(0);
+  });
+
+  it("重置當下與已過重置時間 → null（資料是重置前抓的，不畫）", () => {
+    expect(windowElapsedPct(w(300, now), now)).toBeNull();
+    expect(windowElapsedPct(w(300, now - 1), now)).toBeNull();
+  });
+
+  it("缺資料或不是有限正數 → null", () => {
+    expect([w(null, now + 60), w(300, null), w(0, now + 60), w(-5, now + 60), w(NaN, now + 60), w(300, NaN), w(Infinity, now + 60)]
+      .map((x) => windowElapsedPct(x, now))).toEqual([null, null, null, null, null, null, null]);
+  });
+
+  it("用太快：用量比時間多 10 點以上（未四捨五入）才算；沒有時間進度就不算", () => {
+    expect(isAheadOfPace(60, 50)).toBe(true);
+    expect(isAheadOfPace(59.99, 50)).toBe(false);
+    expect(isAheadOfPace(100, null)).toBe(false);
   });
 });
