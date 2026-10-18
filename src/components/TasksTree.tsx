@@ -30,6 +30,10 @@ const safeCount = (n: number | null) => (Number.isInteger(n) && (n as number) >=
 const doingOf = (p: TasksProjectRow, n: number) =>
   Number.isInteger(p.doing) && (p.doing as number) >= 0 && (p.doing as number) <= n ? (p.doing as number) : 0;
 
+// 長條畫滿的張數（2026-10-19 spec §4.4）：10 張以上一樣滿，要看數字分。舊版以使用中各列的最大值為滿格，
+// 最大的專案一大（47 張），其他 1～8 張全被 CSS 的最短長度撐成一樣長
+const TRACK_FULL = 10;
+
 // 專案樹（spec §5.2）：只有專案名＋數字，沒有第二行（D2）。
 // asPage：窄等級把樹攤成一頁（等於現在的總覽），列寬拉滿、藏頂端與「所有專案」。
 export function TasksTree({ data, selected, onSelect, t, asPage = false }: {
@@ -47,8 +51,6 @@ export function TasksTree({ data, selected, onSelect, t, asPage = false }: {
   // 收起時只留目前選中的那一個：不必在選取時自動展開，收合鈕也永遠有作用
   const shownChips = idleOpen ? chips : chips.filter((p) => p.path === selected);
   const { total, unreadable } = summarize(projects);
-  // 軌道的尺度：使用中各列有效數字的最大值（spec §11.6 第 1 點）。n > 0 才畫軌道，所以不會除以 0
-  const max = Math.max(0, ...rows.map((p) => okCount(p) ?? 0));
 
   const item = (p: TasksProjectRow, dim: boolean) => {
     const n = okCount(p);
@@ -59,16 +61,19 @@ export function TasksTree({ data, selected, onSelect, t, asPage = false }: {
         {dim ? null : n !== null ? (
           <span className="tree-n">
             {n > 0 ? (
-              // 固定軌道（D22）：填充長度＝n／樹上最大值；最小寬、軌道寬由 CSS 決定，這裡只給百分比
+              // 固定軌道（D22）：填充長度＝min(n, TRACK_FULL)／TRACK_FULL；最小寬、軌道寬由 CSS 決定，這裡只給百分比
               <span className="tree-trk">
-                <span className="tree-fill" style={{ width: `${(n / max) * 100}%` }}>
+                <span className="tree-fill" style={{ width: `${(Math.min(n, TRACK_FULL) / TRACK_FULL) * 100}%` }}>
                   {doingOf(p, n) > 0 ? <span className="tree-doing" style={{ width: `${(doingOf(p, n) / n) * 100}%` }} /> : null}
                 </span>
                 <span className="tree-num">{n}</span>
               </span>
             ) : n}
             {/* 擱置槽每列都在（空的也在），軌道才上下對齊 */}
-            <span className="pk">{safeCount(p.parked) > 0 ? `+${safeCount(p.parked)}` : ""}</span>
+            {/* +N 滑過寫出是什麼（2026-10-19 spec §4.4）；在專案按鈕裡面，滑到別處仍是按鈕的路徑提示 */}
+            <span className="pk" title={safeCount(p.parked) > 0 ? t("tree.parkedTitle", { n: safeCount(p.parked) }) : undefined}>
+              {safeCount(p.parked) > 0 ? `+${safeCount(p.parked)}` : ""}
+            </span>
           </span>
         ) : p.tasks_status === "absent" ? null : (
           // unavailable、認不得的狀態、ok 但數字是壞的，全部走這一支：fail-safe 落在警告那一側

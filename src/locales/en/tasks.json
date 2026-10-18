@@ -114,7 +114,8 @@
     "closeDetail": "Close"
   },
   "tree": {
-    "allProjects": "All projects"
+    "allProjects": "All projects",
+    "parkedTitle": "{{n}} parked"
   },
   "detail": {
     "noteTitle": "Resume note",

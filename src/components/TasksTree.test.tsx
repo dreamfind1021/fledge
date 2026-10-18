@@ -45,15 +45,15 @@ describe("TasksTree", () => {
     expect(row("d").querySelector(".tree-una")).not.toBeNull();
   });
 
-  // spec §11.6：填充長度＝n／樹上最大值；進行中段＝d／n；擱置槽每列都在
-  it("軌道：填充寬＝n／最大值、進行中段＝d／n、數字在軌道裡、擱置槽每列都在", () => {
+  // 填充長度＝n／10、10 張以上畫滿（2026-10-19 spec §4.4，取代 spec §11.6 的「n／樹上最大值」）；進行中段＝d／n；擱置槽每列都在
+  it("軌道：填充寬＝n／10、進行中段＝d／n、數字在軌道裡、擱置槽每列都在", () => {
     const { container } = render(<TasksTree data={data([
       proj({ path: "/p/a", name: "a", unfinished: 4, doing: 1, parked: 2 }),
       proj({ path: "/p/b", name: "b", unfinished: 2 }),
     ])} selected={null} onSelect={() => {}} t={t} />);
     const [a, b] = [...container.querySelectorAll(".tree-item:not(.is-all)")];
-    expect((a.querySelector(".tree-fill") as HTMLElement).style.width).toBe("100%");
-    expect((b.querySelector(".tree-fill") as HTMLElement).style.width).toBe("50%");
+    expect((a.querySelector(".tree-fill") as HTMLElement).style.width).toBe("40%");
+    expect((b.querySelector(".tree-fill") as HTMLElement).style.width).toBe("20%");
     expect((a.querySelector(".tree-doing") as HTMLElement).style.width).toBe("25%");
     expect(b.querySelector(".tree-doing")).toBeNull();
     expect(a.querySelector(".tree-trk .tree-num")?.textContent).toBe("4");
@@ -61,30 +61,53 @@ describe("TasksTree", () => {
     expect(b.querySelector(".tree-n .pk")?.textContent).toBe("");            // 槽在、是空的
   });
 
-  it("0 張：不畫軌道、只寫 0；最大值只看有數字的列（讀不到、absent、ok 但壞值都不算）", () => {
+  it("0 張：不畫軌道、只寫 0；讀不到、absent、ok 但壞值都不影響別人的寬度", () => {
     const { container } = render(<TasksTree data={data([
       proj({ path: "/p/a", name: "a", unfinished: 2 }),
       proj({ path: "/p/z", name: "z", unfinished: 0 }),
       proj({ path: "/p/c", name: "c", tasks_status: "unavailable", unfinished: null, doing: null, parked: null, doing_tasks: null, recent_tasks: null }),
-      proj({ path: "/p/d", name: "d", unfinished: 9.5 }),          // ok 但壞值 → 讀不到；比 a 大，天真的 max 會把它算進去
+      proj({ path: "/p/d", name: "d", unfinished: 9.5 }),          // ok 但壞值 → 讀不到
       proj({ path: "/p/m", name: "m", tasks_status: "absent", unfinished: 0, next_step: "go" }),
     ])} selected={null} onSelect={() => {}} t={t} />);
     const row = (name: string) => [...container.querySelectorAll(".tree-item")].find((x) => x.querySelector(".tree-name")?.textContent === name)!;
-    expect((row("a").querySelector(".tree-fill") as HTMLElement).style.width).toBe("100%");
+    expect((row("a").querySelector(".tree-fill") as HTMLElement).style.width).toBe("20%");
     expect(row("z").querySelector(".tree-trk")).toBeNull();
     expect(row("z").querySelector(".tree-n")?.textContent).toBe("0");
     expect(row("m").querySelector(".tree-n")).toBeNull();
   });
 
-  // Review Focus 2：一個專案很大時，小專案的填充照比例很小，最小寬交給 CSS 的 min-width（layout 測試守）
-  it("最大值 200、自己 1 張 → 填充 0.5%（最小寬由 CSS 保證），數字照寫", () => {
+  // 一個專案很大時（200 張），小專案照樣是 n／10：舊版以最大值為滿格，小專案全被最短長度撐成一樣長（2026-10-19 spec §1 第 4 點）
+  it("別的專案再大也不影響自己的寬度：200 張旁邊的 1 張是 10%，數字照寫", () => {
     const { container } = render(<TasksTree data={data([
       proj({ path: "/p/a", name: "a", unfinished: 200 }),
       proj({ path: "/p/b", name: "b", unfinished: 1 }),
     ])} selected={null} onSelect={() => {}} t={t} />);
     const b = [...container.querySelectorAll(".tree-item:not(.is-all)")][1];
-    expect((b.querySelector(".tree-fill") as HTMLElement).style.width).toBe("0.5%");
+    expect((b.querySelector(".tree-fill") as HTMLElement).style.width).toBe("10%");
     expect(b.querySelector(".tree-num")?.textContent).toBe("1");
+  });
+  it("10 張畫滿", () => {
+    const { container } = render(<TasksTree data={data([proj({ unfinished: 10 })])} selected={null} onSelect={() => {}} t={t} />);
+    expect((container.querySelector(".tree-fill") as HTMLElement).style.width).toBe("100%");
+  });
+  it("10 張以上也是畫滿", () => {
+    const { container } = render(<TasksTree data={data([proj({ unfinished: 47 })])} selected={null} onSelect={() => {}} t={t} />);
+    expect((container.querySelector(".tree-fill") as HTMLElement).style.width).toBe("100%");
+  });
+
+  // 擱置的 +N 滑過時寫出是什麼（2026-10-19 spec §4.4）：字串來自真的 catalog
+  it("擱置提示（英文）：滑到 +N 上寫出幾張擱置", () => {
+    const { container } = render(<TasksTree data={data([proj({ parked: 2 })])} selected={null} onSelect={() => {}} t={t} />);
+    expect(container.querySelector(".tree-n .pk")?.getAttribute("title")).toBe("2 parked");
+  });
+  it("擱置提示（中文）：滑到 +N 上寫出幾張擱置", async () => {
+    await i18n.changeLanguage("zh-TW");
+    const { container } = render(<TasksTree data={data([proj({ parked: 2 })])} selected={null} onSelect={() => {}} t={t} />);
+    expect(container.querySelector(".tree-n .pk")?.getAttribute("title")).toBe("2 張擱置");
+  });
+  it("沒有擱置時沒有提示", () => {
+    const { container } = render(<TasksTree data={data([proj({ parked: 0 })])} selected={null} onSelect={() => {}} t={t} />);
+    expect(container.querySelector(".tree-n .pk")?.hasAttribute("title")).toBe(false);
   });
 
   // runtime JSON 沒驗證。doing 只有 0..n 的整數才算（doing 是 unfinished 的子集，超過 n 代表資料壞了）；
