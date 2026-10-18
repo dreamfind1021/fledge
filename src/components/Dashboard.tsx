@@ -130,6 +130,9 @@ export function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
   const live = codex?.source === "live" ? codex : null;
   // 失敗不端陳舊數字（會重現原失準 bug）：依 failure_reason 誠實顯示「不可用／需重新登入」
   const reauth = codex?.failure_reason === "unauthorized" || codex?.failure_reason === "no_auth";
+  // null＝這個分頁還沒抓到第一筆（每次開儀表板都要等 app-server 啟動），不是失敗
+  const status = codex == null ? "windows.codexLoading"
+    : reauth ? "windows.codexReauth" : "windows.codexUnavailable";
   return (
     <div className="dash-windows">
       <div className="dash-win-card">
@@ -142,9 +145,7 @@ export function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
           {live.secondary &&
             <Gauge label={winLabel(live.secondary, "weekly", t)} win={live.secondary} t={t} />}
         </>) : (
-          <div className="dash-win-meta">
-            {t(reauth ? "windows.codexReauth" : "windows.codexUnavailable")}
-          </div>
+          <div className="dash-win-meta">{t(status)}</div>
         )}
       </div>
     </div>
