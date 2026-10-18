@@ -301,7 +301,7 @@
   flex: none;
 }
 
-/* ── 分布列：donut + heatmap ── */
+/* ── 分布列：模型分布 + heatmap ── */
 /* 縫 5px，同 .dash-kpi（票 28 第三批，spec D2）。
    窄：每一塊佔整排、由上往下排；寬（≥720）才並排，欄寬比例在檔尾的寬版區塊（票 35 第 2 題） */
 .dash-row {
@@ -314,65 +314,72 @@
   margin-bottom: 0;
 }
 
-/* Donut */
-.dash-donut-wrap {
-  display: flex;
-  gap: 18px;
-  align-items: center;
-}
-.dash-donut {
-  width: 124px;
-  height: 124px;
-  border-radius: 50%;
-  position: relative;
-  flex: none;
-  /* background: conic-gradient(…) 由 inline style 注入 */
-}
-.dash-donut::after {
-  content: "";
-  position: absolute;
-  inset: 26px;
-  border-radius: 50%;
-  background: var(--surface);
-}
-.dash-donut-center {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  z-index: 1;
-}
-/* 12px：洞寬 72px（124 − 2 × 26），14px 時四位數金額 75.6px 壓到圓環；12px 左右各留 3.6px、五位數剛好貼邊（票 35 第 5 題） */
-.dash-donut-center b {
+/* ── 模型分布：排名長條、固定軌道（票 46，spec §4.5；取代圓餅）──
+   名稱一欄寬＝最長的名稱、軌道吃剩下的，各列軌道左緣對齊、一樣長。li 用 display: contents 讓兩格直接進 grid */
+.dash-panel-total {
+  margin-left: auto;
   font-family: var(--font-mono);
   font-size: 12px;
+  color: var(--text);
 }
-.dash-donut-legend {
+.dash-mbars {
   list-style: none;
   margin: 0;
   padding: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 7px 12px;
+  align-items: center;
   font-size: 11.5px;
-  color: var(--dim);
-  flex: 1;
 }
-.dash-donut-legend li {
+.dash-mbars li {
+  display: contents;
+}
+.dash-mbar-name {
+  color: var(--dim);
+  white-space: nowrap;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 3px 0;
+  gap: 7px;
 }
-.dash-donut-legend i {
+.dash-mbar-name > i {
   width: 8px;
   height: 8px;
   border-radius: 2px;
   flex: none;
 }
-.dash-donut-legend em {
-  margin-left: auto;
-  font-style: normal;
+/* 軌道底色同待辦面板的 .tree-trk */
+.dash-mbar-trk {
+  position: relative;
+  height: 18px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface) 70%, var(--bg));
+  overflow: hidden;
+}
+.dash-mbar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 9px;
+}
+/* 填充＝模型色混 38% 進 --surface-2：數字（--text）壓在上面，六個主題五個名次都過 4.5:1（48% 時有四組不到）。
+   名次順序跟 dashboardLogic.ts 的 MODEL_COLORS 一致（Dashboard.style.test.ts 守） */
+.dash-mbar-fill.is-r0 { background: color-mix(in srgb, var(--primary) 38%, var(--surface-2)); }
+.dash-mbar-fill.is-r1 { background: color-mix(in srgb, var(--ai) 38%, var(--surface-2)); }
+.dash-mbar-fill.is-r2 { background: color-mix(in srgb, var(--session) 38%, var(--surface-2)); }
+.dash-mbar-fill.is-r3 { background: color-mix(in srgb, var(--warning) 38%, var(--surface-2)); }
+.dash-mbar-fill.is-r4 { background: color-mix(in srgb, var(--faint) 38%, var(--surface-2)); }
+.dash-mbar-num {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 8px;
+  display: flex;
+  align-items: center;
   font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
   color: var(--text);
 }
 

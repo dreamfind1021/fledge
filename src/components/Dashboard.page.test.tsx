@@ -111,3 +111,55 @@ describe("Dashboard 整頁：Codex 一整條（票 46，spec §4.3）", () => {
     expect(pace.getAttribute("title")).toBe("時間已過 50%");
   });
 });
+
+describe("Dashboard 整頁：模型分布「其他 N 個」與每日成本圖例的「其他」（票 46，spec §4.4、§4.5）", () => {
+  afterEach(cleanup);
+  beforeEach(() => {
+    vi.mocked(fetchUsageDashboard).mockReset();
+    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue({ source: "unavailable", failure_reason: "network", observed_at: null });
+  });
+  const sixModels = () => {
+    const p = payload();
+    p.models = ["m-a", "m-b", "m-c", "m-d", "m-e", "m-f"].map((model, i) =>
+      ({ model, source: "claude", input: 0, output: 0, cache_read: 0, cache_create: 0, cost: 6 - i }));
+    return p;
+  };
+
+  it("中文：其他 2 個、其他", async () => {
+    const ui = await shown("zh-TW", sixModels());
+    expect(ui.queryByText("其他 2 個")).not.toBeNull();
+    expect(ui.queryByText("其他")).not.toBeNull();
+  });
+
+  it("英文：Other (2)、Other", async () => {
+    const ui = await shown("en", sixModels());
+    expect(ui.queryByText("Other (2)")).not.toBeNull();
+    expect(ui.queryByText("Other")).not.toBeNull();
+  });
+});
+
+describe("Dashboard 整頁：模型分布與每日成本用同一份排名（票 46，spec §4.5，Codex plan R1）", () => {
+  afterEach(cleanup);
+  beforeEach(() => {
+    vi.mocked(fetchUsageDashboard).mockReset();
+    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue({ source: "unavailable", failure_reason: "network", observed_at: null });
+  });
+  const model = (name: string, source: string, cost: number) =>
+    ({ model: name, source, input: 0, output: 0, cache_read: 0, cache_create: 0, cost });
+
+  // y 在兩個來源各有一筆、合起來第一名；只看 claude 那一筆的話 x 比較多。整頁畫出來，兩張圖的名次、顏色、圖例要一致
+  it("同名跨來源先合併：兩張圖的名次、色塊、色段、圖例都是 y 第一", async () => {
+    const p = payload();
+    p.models = [model("x", "claude", 10), model("y", "claude", 7), model("y", "codex", 6)];
+    p.daily = [{ date: "2026-10-18", by_model: { x: 10, y: 13 }, total: 23 }];
+    const c = (await shown("zh-TW", p)).container;
+    const bg = (sel: string) => [...c.querySelectorAll<HTMLElement>(sel)].map((e) => e.style.background);
+    expect({
+      bars: [...c.querySelectorAll(".dash-mbar-name")].map((e) => e.textContent), swatches: bg(".dash-mbar-name > i"),
+      legend: [...c.querySelectorAll(".dash-legend > span")].map((e) => e.textContent), segs: bg(".dash-daily-col > i"),
+    }).toEqual({
+      bars: ["y", "x"], swatches: ["var(--primary)", "var(--ai)"],
+      legend: ["y", "x"], segs: ["var(--primary)", "var(--ai)"],
+    });
+  });
+});

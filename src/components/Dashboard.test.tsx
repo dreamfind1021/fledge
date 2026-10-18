@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, cleanup } from "@testing-library/react";
-import { CodexPanel, ProjectsTable } from "./Dashboard";
+import { CodexPanel, DailyChart, ModelBars, ProjectsTable } from "./Dashboard";
+import { rankModels } from "../lib/dashboardLogic";
 import type { CodexUsage, CodexUsageWindow, UsageDashboard } from "../lib/sidecar";
 
 // fake t：回傳 key 本身（帶插值時附上 :n）——測「選了哪個角色 key」，翻譯文案由 parity 測試把關
@@ -112,5 +113,59 @@ describe("ProjectsTable", () => {
     const many = Array.from({ length: 35 }, (_, i) => proj(`/Users/u/p${i}`, 100 - i));
     const { container } = render(<ProjectsTable t={t} days={30} projects={[...many, proj("/tmp/a", 1), proj("/tmp/b", 1)]} />);
     expect(container.querySelectorAll("tbody tr")).toHaveLength(36);
+  });
+});
+
+// 票 46，spec §4.5：模型分布改成排名長條（固定軌道），每日成本的顏色、圖例、色段順序用同一份排名
+const model = (name: string, cost: number, source = "claude"): UsageDashboard["models"][number] =>
+  ({ model: name, source, input: 0, output: 0, cache_read: 0, cache_create: 0, cost });
+
+describe("ModelBars", () => {
+  afterEach(cleanup);
+  const six = rankModels([model("a", 50), model("b", 20), model("c", 15), model("d", 10), model("e", 4), model("f", 1)]);
+
+  it("前 4 名各一列＋「其他 N 個」；填充用第幾名的 class、寬度＝佔總額多少；數字在軌道裡", () => {
+    const { container } = render(<ModelBars ranking={six} days={30} t={t} />);
+    const names = [...container.querySelectorAll(".dash-mbar-name")].map((e) => e.textContent);
+    expect(names).toEqual(["a", "b", "c", "d", "models.other:2"]);
+    const fills = [...container.querySelectorAll<HTMLElement>(".dash-mbar-fill")];
+    expect(fills.map((f) => f.className)).toEqual([0, 1, 2, 3, 4].map((i) => `dash-mbar-fill is-r${i}`));
+    expect(fills.map((f) => f.style.width)).toEqual(["50%", "20%", "15%", "10%", "5%"]);
+    expect([...container.querySelectorAll(".dash-mbar-trk .dash-mbar-num")].map((e) => e.textContent))
+      .toEqual(["$50.00", "$20.00", "$15.00", "$10.00", "$5.00"]);
+  });
+
+  it("「其他」滑過列出被合併的模型與金額；總額在標題右邊", () => {
+    const { container } = render(<ModelBars ranking={six} days={30} t={t} />);
+    expect(container.querySelectorAll(".dash-mbar-name")[4].getAttribute("title")).toBe("e $4.00\nf $1.00");
+    expect(container.querySelector(".dash-panel-title .dash-panel-total")?.textContent).toBe("$100.00");
+  });
+
+  it("沒有任何模型 → 顯示尚無用量紀錄", () => {
+    const { queryByText } = render(<ModelBars ranking={rankModels([])} days={30} t={t} />);
+    expect(queryByText("state.empty")).not.toBeNull();
+  });
+});
+
+describe("DailyChart：顏色、色段順序、圖例跟模型分布同一份排名", () => {
+  afterEach(cleanup);
+  // y 在兩個來源各有一筆、合起來第一名；只看每日資料的話 x 比較多。元件若自己從 daily 排名，顏色就會對調
+  const ranking = rankModels([model("x", 10), model("y", 7), model("y", 6, "codex")]);
+  const daily = [{ date: "2026-10-17", by_model: { x: 10, y: 1 }, total: 11 }];
+
+  it("色段的顏色與由下往上的順序照共用排名（y 第一名用主色、排在最下面）", () => {
+    const { container } = render(<DailyChart daily={daily} ranking={ranking} days={30} t={t} />);
+    const segs = [...container.querySelectorAll<HTMLElement>(".dash-daily-col > i")];
+    expect(segs.map((e) => e.style.background)).toEqual(["var(--primary)", "var(--ai)"]);
+  });
+
+  it("圖例照共用排名；多於 4 個模型時最後一個是灰色的「其他」", () => {
+    const { container } = render(<DailyChart daily={daily} ranking={ranking} days={30} t={t} />);
+    expect([...container.querySelectorAll(".dash-legend > span")].map((e) => e.textContent)).toEqual(["y", "x"]);
+    cleanup();
+    const five = rankModels([model("a", 5), model("b", 4), model("c", 3), model("d", 2), model("e", 1)]);
+    const legend = [...render(<DailyChart daily={daily} ranking={five} days={30} t={t} />).container.querySelectorAll(".dash-legend > span")];
+    expect(legend.map((e) => e.textContent)).toEqual(["a", "b", "c", "d", "daily.other"]);
+    expect(legend[4].querySelector("i")?.style.background).toBe("var(--faint)");
   });
 });

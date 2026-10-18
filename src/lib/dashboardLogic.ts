@@ -1,21 +1,34 @@
 // 面板邏輯純函式（design §11）——元件只負責渲染，邏輯在此測試
 import type { CodexUsageWindow, UsageDashboard } from "./sidecar";
 
-export interface DonutPart { label: string; cost: number; fromDeg: number; toDeg: number }
+// ── 模型排名：模型分布與每日成本共用（票 46，spec §4.5）──
+// 每日成本的色段、圖例與模型分布的長條都照這個名次取色：前 4 名各一色、第 5 名以後灰。
+// 模型分布的填充色另寫在 Dashboard.css 的 .dash-mbar-fill.is-r0～4（淡化版，測試讀得到），順序要跟這裡一致（Dashboard.style.test.ts 守）
+export const MODEL_COLORS = ["var(--primary)", "var(--ai)", "var(--session)", "var(--warning)", "var(--faint)"];
 
-export function donutParts(models: { model: string; cost: number }[]): DonutPart[] {
-  if (models.length === 0) return [];
-  const top = models.slice(0, 4).map((m) => ({ label: m.model, cost: m.cost }));
-  const rest = models.slice(4).reduce((s, m) => s + m.cost, 0);
-  const parts = rest > 0 ? [...top, { label: "…", cost: rest }] : top;
-  const total = Math.max(1e-9, parts.reduce((s, p) => s + p.cost, 0));
-  let acc = 0;
-  return parts.map((p) => {
-    const fromDeg = (acc / total) * 360;
-    acc += p.cost;
-    return { ...p, fromDeg, toDeg: (acc / total) * 360 };
-  });
+export interface ModelPart { model: string; cost: number }
+export interface ModelRanking {
+  order: string[];     // 全部模型名稱：金額由大到小，同額照名稱
+  top: ModelPart[];    // 前 4 名
+  rest: ModelPart[];   // 第 5 名以後（金額為 0 的也在：缺定價的模型成本是 0，不能被藏掉）
+  total: number;
 }
+
+/** sidecar 的 models 以「模型＋來源」分列、每日成本的 by_model 只以名稱合計：先依名稱合併，兩張圖的名次與顏色才對得上 */
+export function rankModels(models: { model: string; cost: number }[]): ModelRanking {
+  const byName = new Map<string, number>();
+  models.forEach((m) => byName.set(m.model, (byName.get(m.model) ?? 0) + m.cost));
+  const sorted = [...byName.entries()].map(([model, cost]) => ({ model, cost }))
+    .sort((a, b) => b.cost - a.cost || (a.model < b.model ? -1 : a.model > b.model ? 1 : 0));
+  return { order: sorted.map((p) => p.model), top: sorted.slice(0, 4), rest: sorted.slice(4),
+           total: sorted.reduce((s, p) => s + p.cost, 0) };
+}
+
+/** MODEL_COLORS 的序號：前 4 名 0～3，第 5 名以後與排名裡沒有的都是 4 */
+export const colorIndex = (ranking: ModelRanking, model: string) => {
+  const i = ranking.order.indexOf(model);
+  return i < 0 || i > 3 ? 4 : i;
+};
 
 // ── 專案表：暫存資料夾合併成一列（票 46，spec §4.1）──
 type ProjectUsage = UsageDashboard["projects"][number];

@@ -1,16 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { donutParts, isAheadOfPace, isTempPath, mergeTempProjects, windowElapsedPct } from "./dashboardLogic";
+import { colorIndex, isAheadOfPace, isTempPath, mergeTempProjects, rankModels, windowElapsedPct } from "./dashboardLogic";
 
-describe("dashboardLogic", () => {
-  it("donutParts：取前 4 名＋其餘合併為 rest，角度總和 360", () => {
-    const models = [5, 4, 3, 2, 1, 0.5].map((cost, i) => ({ model: `m${i}`, cost }));
-    const parts = donutParts(models);
-    expect(parts).toHaveLength(5);
-    expect(parts[4].label).toBe("…");
-    expect(Math.abs(parts.reduce((s, p) => s + (p.toDeg - p.fromDeg), 0) - 360)).toBeLessThan(1e-6);
+// 票 46，spec §4.5：模型分布與每日成本共用的排名（取代圓餅的 donutParts）
+describe("模型排名", () => {
+  const m = (model: string, cost: number) => ({ model, cost });
+
+  it("同名跨來源先合併再排名（金額相加）", () => {
+    const r = rankModels([m("a", 5), m("b", 4), m("b", 3)]);
+    expect(r.order).toEqual(["b", "a"]);
+    expect(r.top).toEqual([m("b", 7), m("a", 5)]);
   });
-  it("donutParts：空清單回空", () => {
-    expect(donutParts([])).toEqual([]);
+
+  it("同額照名稱字母順序", () => {
+    expect(rankModels([m("z", 1), m("a", 1), m("k", 1)]).order).toEqual(["a", "k", "z"]);
+  });
+
+  it("前 4 名各一列，其餘進「其他」：金額為 0 的模型也進，個數照不同名稱算", () => {
+    const r = rankModels([m("a", 9), m("b", 8), m("c", 7), m("d", 6), m("e", 1), m("f", 0), m("e", 1)]);
+    expect(r.top.map((p) => p.model)).toEqual(["a", "b", "c", "d"]);
+    expect(r.rest).toEqual([m("e", 2), m("f", 0)]);
+    expect(r.total).toBe(32);
+  });
+
+  it("4 個以下沒有「其他」；空清單全空", () => {
+    expect(rankModels([m("a", 1), m("b", 2)]).rest).toEqual([]);
+    expect(rankModels([])).toEqual({ order: [], top: [], rest: [], total: 0 });
+  });
+
+  it("顏色序號：前 4 名 0～3，第 5 名以後與排名裡沒有的都是 4（灰）", () => {
+    const r = rankModels([m("a", 9), m("b", 8), m("c", 7), m("d", 6), m("e", 1)]);
+    expect(["a", "b", "c", "d", "e", "zzz"].map((x) => colorIndex(r, x))).toEqual([0, 1, 2, 3, 4, 4]);
   });
 });
 

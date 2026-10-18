@@ -45,10 +45,9 @@ describe("Codex 一整條：多個窗口共用一組欄寬（票 46，spec §4.3
   });
 });
 
-describe("圓餅中間的總額（票 35 第 5 題）", () => {
-  // 洞寬 72px（.dash-donut 124px − 2 × .dash-donut::after 的 inset 26px）：14px 時 $3,609.72 約 75.6px、壓到圓環，
-  // 12px 約 64.8px。實際字寬由 headless Chrome 量（計畫 Task 5 的 donutGap），這裡只守使用者選的字級
-  it("字 12px", () => {
-    expect(decl(css, ".dash-donut-center b", "font-size")).toBe("12px");
+describe("模型分布的排名長條（票 46，spec §4.5）", () => {
+  // 名稱一欄寬＝最長的名稱、軌道吃剩下的：各列軌道左緣對齊、一樣長（取代圓餅與票 35 第 5 題的中間總額字級）
+  it("名稱欄 max-content、軌道 1fr", () => {
+    expect(decl(css, ".dash-mbars", "grid-template-columns")).toBe("max-content 1fr");
   });
 });

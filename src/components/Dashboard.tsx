@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { fetchUsageDashboard, fetchCodexUsage, UsageDashboard, CodexUsage, CodexUsageWindow } from "../lib/sidecar";
 import { shouldPoll, POLL_INTERVAL_MS, CODEX_USAGE_INTERVAL_MS } from "../lib/usagePoll";
 import { fmtUSD, fmtPct, fmtDayClock, codexWindowLabel } from "../lib/usageFormat";
-import { donutParts, isAheadOfPace, mergeTempProjects, windowElapsedPct } from "../lib/dashboardLogic";
+import { colorIndex, isAheadOfPace, mergeTempProjects, MODEL_COLORS, rankModels, windowElapsedPct } from "../lib/dashboardLogic";
+import type { ModelRanking } from "../lib/dashboardLogic";
 import "./Dashboard.css";
 
 // 期間天數只有這一個來源：請求帶它；標題寫 payload 的 scan_meta.days（掃描中 sidecar 回上一份成功的資料，
@@ -68,6 +69,7 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
   }
   const stale = data.scan_meta.state === "scanning" || error != null;
   const days = data.scan_meta.days ?? DASH_DAYS;
+  const ranking = rankModels(data.models);
   return (
     <div className="dash-root">
       <div className="dash-head">
@@ -86,9 +88,9 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
       <KpiBar kpi={data.kpi} days={days} t={t} />
       {/* Codex 額度是數字卡下方一整條、每日成本獨佔一整排（票 46，spec §4.3）：並排時 Codex 卡被拉到跟長條圖一樣高，內容只佔一行 */}
       <CodexPanel codex={codex} t={t} />
-      <DailyChart daily={data.daily} days={days} t={t} />
+      <DailyChart daily={data.daily} ranking={ranking} days={days} t={t} />
       <div className="dash-row">
-        <ModelDonut models={data.models} days={days} t={t} />
+        <ModelBars ranking={ranking} days={days} t={t} />
         <HourlyHeatmap hourly={data.hourly} days={days} t={t} />
       </div>
       <ProjectsTable projects={data.projects} days={days} t={t} />
@@ -191,18 +193,15 @@ function QuotaRow({ label, win, nowSec, t }: { label: string; win: CodexUsageWin
   );
 }
 
-const MODEL_COLORS = ["var(--primary)", "var(--ai)", "var(--session)", "var(--warning)", "var(--faint)"];
-
-function DailyChart({ daily, days, t }: { daily: UsageDashboard["daily"]; days: number; t: T }) {
+// export 僅供 render test（Dashboard.test.tsx）
+export function DailyChart({ daily, ranking, days, t }: {
+  daily: UsageDashboard["daily"]; ranking: ModelRanking; days: number; t: T;
+}) {
   const max = Math.max(0.01, ...daily.map((d) => d.total));
-  // 模型→顏色：以 30 天總成本排序取前 4，其餘灰（與 donut 同邏輯保持色彩一致）
-  const totals = new Map<string, number>();
-  daily.forEach((d) => Object.entries(d.by_model).forEach(([m, c]) =>
-    totals.set(m, (totals.get(m) ?? 0) + c)));
-  const order = [...totals.entries()].sort((x, y) => y[1] - x[1]).map(([m]) => m);
-  const colorOf = (m: string) => MODEL_COLORS[Math.min(order.indexOf(m), 4)] ?? "var(--faint)";
-  // 全域排序：以 30 天總量 rank 決定每日色段順序，同色段不跨日跳位
-  const rank = (m: string) => { const i = order.indexOf(m); return i < 0 ? 999 : i; };
+  // 顏色、色段順序、圖例都照模型分布那份排名（票 46，spec §4.5）：自己從 daily 排的話，同名模型跨來源時兩張圖對不上
+  const colorOf = (m: string) => MODEL_COLORS[colorIndex(ranking, m)];
+  // 全域排序：同色段不跨日跳位
+  const rank = (m: string) => { const i = ranking.order.indexOf(m); return i < 0 ? 999 : i; };
   return (
     <div className="dash-panel dash-daily-panel">
       <div className="dash-panel-title">{t("daily.title", { days })}</div>
@@ -217,34 +216,47 @@ function DailyChart({ daily, days, t }: { daily: UsageDashboard["daily"]; days: 
         ))}
       </div>
       <div className="dash-legend">
-        {order.slice(0, 4).map((m) => (
-          <span key={m}><i style={{ background: colorOf(m) }} />{m}</span>
+        {ranking.top.map((p) => (
+          <span key={p.model}><i style={{ background: colorOf(p.model) }} />{p.model}</span>
         ))}
+        {/* 第 5 名以後的色段是灰的，圖例要說那是什麼 */}
+        {ranking.rest.length > 0 && <span><i style={{ background: MODEL_COLORS[4] }} />{t("daily.other")}</span>}
       </div>
     </div>
   );
 }
 
-function ModelDonut({ models, days, t }: { models: UsageDashboard["models"]; days: number; t: T }) {
-  const parts = donutParts(models);
-  const stops = parts.map((p, i) =>
-    `${MODEL_COLORS[i % MODEL_COLORS.length]} ${p.fromDeg}deg ${p.toDeg}deg`).join(", ");
-  const total = parts.reduce((s, p) => s + p.cost, 0);
+// 排名長條、固定軌道（票 46，spec §4.5，同待辦面板的軌道）：每列一樣長、填充＝佔總額多少、數字在軌道右端。
+// 填充是模型色淡化（.dash-mbar-fill.is-r0～4），數字壓在上面才讀得到。export 僅供 render test
+export function ModelBars({ ranking, days, t }: { ranking: ModelRanking; days: number; t: T }) {
+  const rows = [
+    ...ranking.top.map((p) => ({ label: p.model, cost: p.cost, title: undefined as string | undefined })),
+    ...(ranking.rest.length > 0 ? [{
+      label: t("models.other", { n: ranking.rest.length }),
+      cost: ranking.rest.reduce((s, p) => s + p.cost, 0),
+      title: ranking.rest.map((p) => `${p.model} ${fmtUSD(p.cost)}`).join("\n"),
+    }] : []),
+  ];
   return (
     <div className="dash-panel">
-      <div className="dash-panel-title">{t("models.title", { days })}</div>
-      {parts.length === 0 ? <div className="dash-win-meta">{t("state.empty")}</div> : (
-        <div className="dash-donut-wrap">
-          <div className="dash-donut" style={{ background: `conic-gradient(${stops})` }}>
-            <div className="dash-donut-center"><b>{fmtUSD(total)}</b></div>
-          </div>
-          <ul className="dash-donut-legend">
-            {parts.map((p, i) => (
-              <li key={p.label}><i style={{ background: MODEL_COLORS[i % MODEL_COLORS.length] }} />
-                {p.label} <em>{fmtUSD(p.cost)}</em></li>
-            ))}
-          </ul>
-        </div>
+      <div className="dash-panel-title">
+        {t("models.title", { days })}
+        {rows.length > 0 && <span className="dash-panel-total">{fmtUSD(ranking.total)}</span>}
+      </div>
+      {rows.length === 0 ? <div className="dash-win-meta">{t("state.empty")}</div> : (
+        <ul className="dash-mbars">
+          {rows.map((r, i) => (
+            <li key={i}>
+              <span className="dash-mbar-name" title={r.title}><i style={{ background: MODEL_COLORS[i] }} />{r.label}</span>
+              <span className="dash-mbar-trk">
+                {/* 沒有最小寬度：硬給的話會誇大小額模型的佔比，金額已經寫在軌道右端 */}
+                <span className={`dash-mbar-fill is-r${i}`}
+                      style={{ width: `${ranking.total > 0 ? (r.cost / ranking.total) * 100 : 0}%` }} />
+                <span className="dash-mbar-num">{fmtUSD(r.cost)}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
