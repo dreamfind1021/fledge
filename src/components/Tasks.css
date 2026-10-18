@@ -42,6 +42,10 @@
 .tree-una { font-size: 11px; font-weight: 600; color: var(--warning-text); }
 .tree-item.is-dim .tree-name { color: var(--dim); font-weight: 500; }
 .tree-grp { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); padding: 14px 9px 5px; }
+/* 未開待辦的收合鈕（2026-10-19 spec §4.3）：沿用 .tree-grp 的字級與顏色，清掉按鈕預設的框與底 */
+.tree-grp.is-toggle { display: flex; align-items: center; gap: 5px; width: 100%; border: none; background: transparent; text-align: left; font-family: var(--font-ui); cursor: pointer; border-radius: 6px; }
+.tree-grp.is-toggle:hover { color: var(--text); }
+.tree-grp-n { font-family: var(--font-mono); letter-spacing: 0; }
 /* 窄等級：樹攤成一頁（＝現在的總覽），列寬拉滿；頂端與「所有專案」藏掉（已經在這一頁了） */
 .tree.as-page { width: auto; border-right: none; padding: 0 0 20px; }
 .tree.as-page .tree-head, .tree.as-page .tree-item.is-all { display: none; }

@@ -12,6 +12,9 @@ const proj = (over: Partial<TasksProjectRow> = {}): TasksProjectRow => ({
   doing_tasks: [], recent_tasks: [], tasks_status: "ok", next_step: "", ...over,
 });
 const data = (projects: TasksProjectRow[]): TasksOverview => ({ projects, permission_error: false, recent_days: 7 });
+// 未開待辦預設收起（2026-10-19 spec §4.3）：要看那一組的測試先點收合鈕
+const toggle = (c: HTMLElement) => c.querySelector(".tree-grp.is-toggle") as HTMLElement | null;
+const names = (c: HTMLElement) => [...c.querySelectorAll(".tree-item:not(.is-all) .tree-name")].map((x) => x.textContent);
 
 describe("TasksTree", () => {
   beforeEach(async () => { await i18n.changeLanguage("en"); });
@@ -23,8 +26,8 @@ describe("TasksTree", () => {
       proj({ path: "/p/n", name: "n", tasks_status: "absent", unfinished: 0, next_step: "" }),
       proj({ path: "/p/m", name: "m", tasks_status: "absent", unfinished: 0, next_step: "go" }),
     ])} selected={null} onSelect={() => {}} t={t} />);
-    const names = [...container.querySelectorAll(".tree-item:not(.is-all) .tree-name")].map((x) => x.textContent);
-    expect(names).toEqual(["z", "m", "n"]);                       // 使用中 z、m；未開待辦 n
+    fireEvent.click(toggle(container)!);
+    expect(names(container)).toEqual(["z", "m", "n"]);            // 使用中 z、m；未開待辦 n
     expect(container.querySelector(".tree-item.is-dim .tree-name")?.textContent).toBe("n");
   });
 
@@ -139,4 +142,42 @@ describe("TasksTree", () => {
     expect(container.querySelector(".tree-item.is-all")).not.toBeNull();
     expect(container.querySelectorAll(".tree-item").length).toBe(1);
   });
+});
+
+// 未開待辦收成一行、預設收起（2026-10-19 spec §4.3）
+describe("TasksTree：未開待辦收合", () => {
+  beforeEach(async () => { await i18n.changeLanguage("en"); });
+  afterEach(cleanup);
+  const IDLE = [
+    proj({ path: "/p/z", name: "z" }),
+    proj({ path: "/p/n", name: "n", tasks_status: "absent", unfinished: 0, next_step: "" }),
+    proj({ path: "/p/o", name: "o", tasks_status: "absent", unfinished: 0, next_step: "" }),
+  ];
+  const tree = (selected: string | null = null, asPage = false) =>
+    render(<TasksTree data={data(IDLE)} selected={selected} onSelect={() => {}} t={t} asPage={asPage} />).container;
+
+  it("預設收起：未開待辦的專案都不在", () => expect(names(tree())).toEqual(["z"]));
+  it("收合鈕寫出個數", () => expect(toggle(tree())?.textContent).toBe(`${en.overview.notUsing}2`));
+  it("點了展開：全部出現、順序照 payload", () => {
+    const c = tree();
+    fireEvent.click(toggle(c)!);
+    expect(names(c)).toEqual(["z", "n", "o"]);
+  });
+  it("再點一次收起", () => {
+    const c = tree();
+    fireEvent.click(toggle(c)!);
+    fireEvent.click(toggle(c)!);
+    expect(names(c)).toEqual(["z"]);
+  });
+  it("展開時 aria-expanded 是 true", () => {
+    const c = tree();
+    fireEvent.click(toggle(c)!);
+    expect(toggle(c)?.getAttribute("aria-expanded")).toBe("true");
+  });
+  it("選中的專案屬於未開待辦時，收起狀態也顯示它", () => expect(names(tree("/p/o"))).toEqual(["z", "o"]));
+  it("沒有未開待辦時沒有收合鈕", () => {
+    const { container } = render(<TasksTree data={data([IDLE[0]])} selected={null} onSelect={() => {}} t={t} />);
+    expect(toggle(container)).toBeNull();
+  });
+  it("攤成一頁的樹一樣預設收起", () => expect(names(tree(null, true))).toEqual(["z"]));
 });

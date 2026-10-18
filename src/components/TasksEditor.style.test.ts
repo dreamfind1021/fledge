@@ -55,6 +55,12 @@ describe("票內文的程式碼區塊（spec §6 D4）", () => {
   });
 });
 
+// 2026-10-19 待辦面板調整 spec §4.3：未開待辦的收合鈕是 <button>，要清掉瀏覽器預設的框與底
+describe("專案樹的未開待辦收合鈕", () => {
+  it("收合鈕寫 border: none（G9）", () => expect(lastDecl(tasks, ".tree-grp.is-toggle", "border")).toBe("none"));
+  it("收合鈕的底是透明的", () => expect(lastDecl(tasks, ".tree-grp.is-toggle", "background")).toBe("transparent"));
+});
+
 // 2026-10-19 待辦面板調整 spec §4.1.8：分隔線只留白、表格每列一塊磚，都不畫線
 describe("票內文的分隔線與表格", () => {
   it("分隔線不畫線", () => expect(lastDecl(tasks, ".tk-md hr", "border")).toBe("none"));

@@ -1,4 +1,5 @@
-import { LayoutGrid } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, ChevronRight, LayoutGrid } from "lucide-react";
 import type { TasksOverview as TasksOverviewData, TasksProjectRow } from "../lib/sidecar";
 
 type T = (k: string, o?: Record<string, unknown>) => string;
@@ -38,9 +39,13 @@ export function TasksTree({ data, selected, onSelect, t, asPage = false }: {
   t: T;
   asPage?: boolean;
 }) {
+  // 未開待辦預設收起（2026-10-19 spec §4.3）：只存在這份樹裡、不記住，同側欄「自動發現 N 個」
+  const [idleOpen, setIdleOpen] = useState(false);
   const projects = data?.projects ?? [];
   const rows = projects.filter(speaks);
   const chips = projects.filter((p) => !speaks(p));
+  // 收起時只留目前選中的那一個：不必在選取時自動展開，收合鈕也永遠有作用
+  const shownChips = idleOpen ? chips : chips.filter((p) => p.path === selected);
   const { total, unreadable } = summarize(projects);
   // 軌道的尺度：使用中各列有效數字的最大值（spec §11.6 第 1 點）。n > 0 才畫軌道，所以不會除以 0
   const max = Math.max(0, ...rows.map((p) => okCount(p) ?? 0));
@@ -88,8 +93,13 @@ export function TasksTree({ data, selected, onSelect, t, asPage = false }: {
       </button>
       {rows.length > 0 && <div className="tree-grp">{t("overview.groupInUse")}</div>}
       {rows.map((p) => item(p, false))}
-      {chips.length > 0 && <div className="tree-grp">{t("overview.notUsing")}</div>}
-      {chips.map((p) => item(p, true))}
+      {chips.length > 0 && (
+        <button className="tree-grp is-toggle" aria-expanded={idleOpen} onClick={() => setIdleOpen((o) => !o)}>
+          {idleOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <span>{t("overview.notUsing")}</span><span className="tree-grp-n">{chips.length}</span>
+        </button>
+      )}
+      {shownChips.map((p) => item(p, true))}
     </aside>
   );
 }

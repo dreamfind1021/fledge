@@ -165,6 +165,7 @@ const TEXT: [string, string, string, Backdrop][] = [
     ["樹讀不到警告", ".tree-una", "color", "bg"],
     ["樹未開待辦的淡化名稱", ".tree-item.is-dim .tree-name", "color", "bg"],
     ["樹分組標籤", ".tree-grp", "color", "bg"],
+    ["樹的未開待辦收合鈕（滑過）", ".tree-grp.is-toggle:hover", "color", "bg"],
     ["樹列文字（一般底 --bg）", ".tree-item", "color", "bg"],
     ["樹列文字（反白底 --active）", ".tree-item", "color", "active"],
     // 右欄（票 19，spec §5.5）：.tk-empty／.tk-noedit 坐落在抽屜卡片上（票 26＋27 起 .d-body 透明），

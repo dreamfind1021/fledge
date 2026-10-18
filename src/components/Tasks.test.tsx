@@ -536,6 +536,7 @@ describe("Tasks 面板", () => {
     fetchTasks.mockResolvedValue({ project: "/p/a", tasks_status: "absent", tasks: [], next_step: "", handoff_command: "" });
     saveDraft("/p/a", "01-a.md", { title: "還沒送出的草稿", body: "b", fingerprint: "f" });
     render(<Tasks port={1234} isActive />);
+    fireEvent.click(await tree().findByText(en.overview.notUsing));   // 這個專案在未開待辦，預設收起（2026-10-19 spec §4.3）
     await openProject();
     await waitFor(() => expect(screen.getByText(en.list.empty)).toBeTruthy());
     expect(document.querySelector(".tk-banner.is-draft")).toBeNull();
