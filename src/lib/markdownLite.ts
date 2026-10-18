@@ -126,9 +126,10 @@ export function renderMarkdownLite(src: string): ReactNode[] {
       i += 2;
       const rows: string[][] = [];
       while (i < lines.length && PIPE.test(lines[i])) rows.push(cells(lines[i++]));
-      // 欄數照表頭：資料列少的補空格、多的捨掉
+      // 資料列多的欄捨掉、少的不補：補格會讓輸出隨「表頭欄數 × 列數」放大，幾 KB 的輸入就能畫出幾十萬格（Codex 合併前審查）。
+      // 不補，格數就不會比輸入的 | 多
       const tr = (cols: string[], tag: "th" | "td") =>
-        createElement("tr", { key: k() }, ...head.map((_, j) => createElement(tag, { key: k() }, ...inline(cols[j] ?? ""))));
+        createElement("tr", { key: k() }, ...cols.slice(0, head.length).map((c) => createElement(tag, { key: k() }, ...inline(c))));
       out.push(createElement("div", { key: k(), className: "tk-tbl" }, createElement("table", null,
         createElement("thead", null, tr(head, "th")),
         createElement("tbody", null, ...rows.map((r) => tr(r, "td"))))));

@@ -131,7 +131,8 @@ describe("markdownLite・標題、分隔線、表格（spec §4.1.1、§4.1.3）
   it("段落後面接 --- 是分隔線", () => expect(html("a\n---")).toBe("<p>a</p><hr>"));
   it("標準表格", () => expect(html("| a | b |\n|---|---|\n| 1 | 2 |")).toBe('<div class="tk-tbl"><table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table></div>'));
   it("分隔列的欄數不同時不是表格", () => expect(html("| a | b |\n|---|\n| 1 | 2 |")).toBe("<p>| a | b | |---| | 1 | 2 |</p>"));
-  it("資料列欄數不足補空格、過多捨去", () => expect(html("| a | b |\n|---|---|\n| 1 |\n| 1 | 2 | 3 |")).toBe('<div class="tk-tbl"><table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td></td></tr><tr><td>1</td><td>2</td></tr></tbody></table></div>'));
+  // 欄數不足的列不補格（Codex 合併前審查）：補格會讓輸出隨「表頭欄數 × 列數」放大；真實資料沒有欄數不足的列
+  it("資料列欄數不足不補格、過多捨去", () => expect(html("| a | b |\n|---|---|\n| 1 |\n| 1 | 2 | 3 |")).toBe('<div class="tk-tbl"><table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td></tr><tr><td>1</td><td>2</td></tr></tbody></table></div>'));
   it("沒有資料列", () => expect(html("| a |\n|---|")).toBe('<div class="tk-tbl"><table><thead><tr><th>a</th></tr></thead><tbody></tbody></table></div>'));
   it("儲存格裡的行內語法", () => expect(html("| **a** | `b` |\n|---|---|")).toBe('<div class="tk-tbl"><table><thead><tr><th><strong>a</strong></th><th><code>b</code></th></tr></thead><tbody></tbody></table></div>'));
   it("表格可以緊接在段落後面", () => expect(html("說明：\n| a |\n|---|")).toBe('<p>說明：</p><div class="tk-tbl"><table><thead><tr><th>a</th></tr></thead><tbody></tbody></table></div>'));
@@ -151,5 +152,11 @@ describe("markdownLite・任何輸入都不丟例外（spec §4.1.7）", () => {
       const doc = Array.from({ length: 1 + Math.floor(rnd() * 12) }, () => PIECES[Math.floor(rnd() * PIECES.length)]).join("\n");
       expect(() => html(doc), doc).not.toThrow();
     }
+  });
+
+  // 不卡住（spec §4.1.7，Codex 合併前審查）：短的資料列若照表頭補格，500 欄 × 500 行單獨的 | 只要 5 KB 就產生 25 萬格
+  it("表格的格數不比輸入的 | 多：100 欄表頭接 100 行單獨的 | 只有 100 格", () => {
+    const doc = [`|${" a |".repeat(100)}`, `|${"---|".repeat(100)}`, ...Array(100).fill("|")].join("\n");
+    expect(html(doc).match(/<td>/g)?.length).toBe(100);
   });
 });
