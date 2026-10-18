@@ -1,0 +1,60 @@
+// @vitest-environment jsdom
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { render, cleanup } from "@testing-library/react";
+import i18n from "../i18n";
+import Dashboard from "./Dashboard";
+import { fetchUsageDashboard, fetchCodexUsage, type UsageDashboard } from "../lib/sidecar";
+
+// 整頁 render：sidecar 換成假的，字串用真的 en／zh-TW catalog（票 46，spec §6）。
+// Dashboard.test.tsx 用回傳 key 的假 t 測「選了哪個 key」；這裡測插值真的帶出數字、資料真的接到元件上
+vi.mock("../lib/sidecar", () => ({ fetchUsageDashboard: vi.fn(), fetchCodexUsage: vi.fn() }));
+
+const payload = (meta: Partial<UsageDashboard["scan_meta"]> = {}): UsageDashboard => ({
+  kpi: { month_value: 1, week_value: 1, today_value: 1, claude_cache_hit_rate: 0.5, codex_cache_hit_rate: null,
+         net_roi: 1, subscriptions_total: 0 },
+  daily: [{ date: "2026-10-18", by_model: { "m-a": 3 }, total: 3 }],
+  models: [{ model: "m-a", source: "claude", input: 0, output: 0, cache_read: 0, cache_create: 0, cost: 3 }],
+  projects: [{ path: "/Users/u/proj", claude_cost: 3, codex_cost: 0, total: 3, last_active: 0 }],
+  hourly: Array.from({ length: 7 }, () => Array(24).fill(0)),
+  scan_meta: { state: "ok", missing_pricing: [], ...meta },
+});
+
+// 等資料畫出來（專案名出現）再斷言：找不到時要紅在 expect（AssertionError），不是紅在 findBy 的逾時
+const shown = async (lang: string, data: UsageDashboard) => {
+  await i18n.changeLanguage(lang);
+  vi.mocked(fetchUsageDashboard).mockResolvedValue(data);
+  const ui = render(<Dashboard port={1} isActive />);
+  await ui.findByText("proj");
+  return ui;
+};
+
+describe("Dashboard 整頁：標題的期間（票 46，spec §4.2）", () => {
+  afterEach(cleanup);   // vitest 未開 globals → testing-library 不會自動 cleanup
+  beforeEach(() => {
+    vi.mocked(fetchUsageDashboard).mockReset();
+    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue({ source: "unavailable", failure_reason: "network", observed_at: null });
+  });
+
+  it("請求 30 天；標題的天數來自 scan_meta.days（掃描中拿到 7 天的舊資料就寫 7）", async () => {
+    const ui = await shown("zh-TW", payload({ days: 7 }));
+    expect(ui.queryByText("每日成本（7 天）")).not.toBeNull();
+    expect(ui.queryByText("模型分布（7 天）")).not.toBeNull();
+    expect(ui.queryByText("時段活動（7 天）")).not.toBeNull();
+    expect(ui.queryByText("專案用量（7 天）")).not.toBeNull();
+    expect(ui.queryByText("Cache 命中率（7 天）")).not.toBeNull();
+    expect(vi.mocked(fetchUsageDashboard).mock.calls[0]).toEqual([1, 30]);
+  });
+
+  it("scan_meta.days 沒有值時退回請求的天數", async () => {
+    const ui = await shown("zh-TW", payload());
+    expect(ui.queryByText("模型分布（30 天）")).not.toBeNull();
+  });
+
+  it("英文：天數接在原標題後面", async () => {
+    const ui = await shown("en", payload({ days: 7 }));
+    expect(ui.queryByText("Model breakdown (7 days)")).not.toBeNull();
+    expect(ui.queryByText("Activity by hour (7 days)")).not.toBeNull();
+    expect(ui.queryByText("Project usage (7 days)")).not.toBeNull();
+    expect(ui.queryByText("Cache hit rate (7 days)")).not.toBeNull();
+  });
+});

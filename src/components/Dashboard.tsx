@@ -6,6 +6,10 @@ import { fmtUSD, fmtPct, fmtDayClock, codexWindowLabel } from "../lib/usageForma
 import { donutParts } from "../lib/dashboardLogic";
 import "./Dashboard.css";
 
+// 期間天數只有這一個來源：請求帶它；標題寫 payload 的 scan_meta.days（掃描中 sidecar 回上一份成功的資料，
+// 天數可能跟請求不同——routes/usage.py 的註解寫明以 scan_meta.days 為準），沒有值才退回這個常數（票 46，spec §4.2）
+const DASH_DAYS = 30;
+
 export default function Dashboard({ port, isActive }: { port: number; isActive: boolean }) {
   const { t } = useTranslation("dashboard");
   const [data, setData] = useState<UsageDashboard | null>(null);
@@ -36,7 +40,7 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
     async function tick() {
       if (!shouldPoll({ isActiveTab: isActive, documentHidden: document.hidden })) return;
       try {
-        const d = await fetchUsageDashboard(port);
+        const d = await fetchUsageDashboard(port, DASH_DAYS);
         if (!cancelled && d) { setData(d); setError(null); }
         // d === null（202 首掃中）：保持骨架，下輪再試
       } catch (e) {
@@ -63,6 +67,7 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
     );
   }
   const stale = data.scan_meta.state === "scanning" || error != null;
+  const days = data.scan_meta.days ?? DASH_DAYS;
   return (
     <div className="dash-root">
       <div className="dash-head">
@@ -78,23 +83,23 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
           models: data.scan_meta.missing_pricing.join(t("state.listSeparator")),
         })}</div>
       )}
-      <KpiBar kpi={data.kpi} t={t} />
+      <KpiBar kpi={data.kpi} days={days} t={t} />
       <div className="dash-row dash-row-usage">
-        <DailyChart daily={data.daily} t={t} />
+        <DailyChart daily={data.daily} days={days} t={t} />
         <CodexPanel codex={codex} t={t} />
       </div>
       <div className="dash-row">
-        <ModelDonut models={data.models} t={t} />
-        <HourlyHeatmap hourly={data.hourly} t={t} />
+        <ModelDonut models={data.models} days={days} t={t} />
+        <HourlyHeatmap hourly={data.hourly} days={days} t={t} />
       </div>
-      <ProjectsTable projects={data.projects} t={t} />
+      <ProjectsTable projects={data.projects} days={days} t={t} />
     </div>
   );
 }
 
 type T = (key: string, opts?: Record<string, unknown>) => string;
 
-function KpiBar({ kpi, t }: { kpi: UsageDashboard["kpi"]; t: T }) {
+function KpiBar({ kpi, days, t }: { kpi: UsageDashboard["kpi"]; days: number; t: T }) {
   // 單值卡共用渲染；cacheHit 因需卡內兩行（分源）另外手寫
   const card = (label: string, value: string, extra?: string, isPos?: boolean) => (
     <div key={label} className="dash-kpi-card">
@@ -117,7 +122,7 @@ function KpiBar({ kpi, t }: { kpi: UsageDashboard["kpi"]; t: T }) {
           <span className="dash-kpi-split-label">Codex</span>
           <span className="dash-kpi-split-value">{fmtPct(kpi.codex_cache_hit_rate)}</span>
         </div>
-        <div className="dash-kpi-label">{t("kpi.cacheHit")}</div>
+        <div className="dash-kpi-label">{t("kpi.cacheHit", { days })}</div>
       </div>
       {card(t("kpi.netRoi"), fmtUSD(kpi.net_roi),
             `${t("kpi.subs")} ${fmtUSD(kpi.subscriptions_total)}`, kpi.net_roi > 0)}
@@ -172,7 +177,7 @@ function Gauge({ label, win, t }: { label: string; win: CodexUsageWindow; t: T }
 
 const MODEL_COLORS = ["var(--primary)", "var(--ai)", "var(--session)", "var(--warning)", "var(--faint)"];
 
-function DailyChart({ daily, t }: { daily: UsageDashboard["daily"]; t: T }) {
+function DailyChart({ daily, days, t }: { daily: UsageDashboard["daily"]; days: number; t: T }) {
   const max = Math.max(0.01, ...daily.map((d) => d.total));
   // 模型→顏色：以 30 天總成本排序取前 4，其餘灰（與 donut 同邏輯保持色彩一致）
   const totals = new Map<string, number>();
@@ -184,7 +189,7 @@ function DailyChart({ daily, t }: { daily: UsageDashboard["daily"]; t: T }) {
   const rank = (m: string) => { const i = order.indexOf(m); return i < 0 ? 999 : i; };
   return (
     <div className="dash-panel">
-      <div className="dash-panel-title">{t("daily.title", { days: 30 })}</div>
+      <div className="dash-panel-title">{t("daily.title", { days })}</div>
       <div className="dash-daily">
         {daily.map((d) => (
           <div key={d.date} className="dash-daily-col" title={`${d.date} ${fmtUSD(d.total)}`}
@@ -204,14 +209,14 @@ function DailyChart({ daily, t }: { daily: UsageDashboard["daily"]; t: T }) {
   );
 }
 
-function ModelDonut({ models, t }: { models: UsageDashboard["models"]; t: T }) {
+function ModelDonut({ models, days, t }: { models: UsageDashboard["models"]; days: number; t: T }) {
   const parts = donutParts(models);
   const stops = parts.map((p, i) =>
     `${MODEL_COLORS[i % MODEL_COLORS.length]} ${p.fromDeg}deg ${p.toDeg}deg`).join(", ");
   const total = parts.reduce((s, p) => s + p.cost, 0);
   return (
     <div className="dash-panel">
-      <div className="dash-panel-title">{t("models.title")}</div>
+      <div className="dash-panel-title">{t("models.title", { days })}</div>
       {parts.length === 0 ? <div className="dash-win-meta">{t("state.empty")}</div> : (
         <div className="dash-donut-wrap">
           <div className="dash-donut" style={{ background: `conic-gradient(${stops})` }}>
@@ -229,13 +234,13 @@ function ModelDonut({ models, t }: { models: UsageDashboard["models"]; t: T }) {
   );
 }
 
-function HourlyHeatmap({ hourly, t }: { hourly: number[][]; t: T }) {
+function HourlyHeatmap({ hourly, days, t }: { hourly: number[][]; days: number; t: T }) {
   const max = Math.max(0.0001, ...hourly.flat());
   // dow 標籤從 catalog 讀取（後端 weekday() 0=Monday）
   const dows = t("hourly.dow").split(",");
   return (
     <div className="dash-panel">
-      <div className="dash-panel-title">{t("hourly.title")}</div>
+      <div className="dash-panel-title">{t("hourly.title", { days })}</div>
       <div className="dash-heatmap">
         {hourly.map((row, d) => (
           <Fragment key={d}>
@@ -251,10 +256,10 @@ function HourlyHeatmap({ hourly, t }: { hourly: number[][]; t: T }) {
   );
 }
 
-function ProjectsTable({ projects, t }: { projects: UsageDashboard["projects"]; t: T }) {
+function ProjectsTable({ projects, days, t }: { projects: UsageDashboard["projects"]; days: number; t: T }) {
   return (
     <div className="dash-panel">
-      <div className="dash-panel-title">{t("projects.title")}</div>
+      <div className="dash-panel-title">{t("projects.title", { days })}</div>
       <table className="dash-table">
         <thead><tr><th>{t("projects.project")}</th><th className="dash-th-num">{t("projects.claude")}</th>
           <th className="dash-th-num">{t("projects.codex")}</th><th className="dash-th-num">{t("projects.total")}</th>
