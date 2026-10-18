@@ -114,7 +114,8 @@
     "closeDetail": "關閉"
   },
   "tree": {
-    "allProjects": "所有專案"
+    "allProjects": "所有專案",
+    "parkedTitle": "{{n}} 張擱置"
   },
   "detail": {
     "noteTitle": "離場筆記",

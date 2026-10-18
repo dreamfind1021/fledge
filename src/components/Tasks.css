@@ -30,18 +30,23 @@
 .tree-item.is-all { font-weight: 700; margin-bottom: 4px; }
 .tree-item.is-all svg { color: var(--dim); }
 .tree-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 固定軌道（票 26，spec §11.6）：填充長度＝未完成／樹上最大值，進行中段暗琥珀，數字在軌道裡。
+/* 固定軌道（票 26，spec §11.6）：填充長度＝min(未完成, 10)／10（2026-10-19 起 10 張畫滿，TasksTree.tsx 的 TRACK_FULL），進行中段暗琥珀，數字在軌道裡。
    軌道數字用 --text（對軌道／填充／進行中段都過 4.5:1，--text-2 對進行中段只有 4.11）；0 與 +N 是文字，--dim */
 .tree-n { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
 .tree-trk { position: relative; display: inline-block; flex-shrink: 0; width: 64px; height: 16px; border-radius: 8px; background: color-mix(in srgb, var(--surface) 70%, var(--bg)); overflow: hidden; }
 .tree-item.active .tree-trk { background: color-mix(in srgb, var(--surface) 50%, var(--bg)); }
-.tree-fill { position: absolute; left: 0; top: 0; bottom: 0; min-width: 22px; border-radius: 8px; background: color-mix(in srgb, var(--surface-2) 70%, var(--faint)); overflow: hidden; }
+/* 最短 8px（2026-10-19 spec §4.4）：數字在軌道右端、不在填充裡，最短長度只要畫得出一個小圓頭 */
+.tree-fill { position: absolute; left: 0; top: 0; bottom: 0; min-width: 8px; border-radius: 8px; background: color-mix(in srgb, var(--surface-2) 70%, var(--faint)); overflow: hidden; }
 .tree-doing { position: absolute; left: 0; top: 0; bottom: 0; background: color-mix(in srgb, var(--primary) 38%, var(--surface-2)); }
 .tree-num { position: absolute; top: 0; bottom: 0; right: 6px; display: flex; align-items: center; font-size: 10.5px; font-weight: 600; color: var(--text); }
 .tree-n .pk { display: inline-block; min-width: 18px; color: var(--dim); font-size: 10px; }
 .tree-una { font-size: 11px; font-weight: 600; color: var(--warning-text); }
 .tree-item.is-dim .tree-name { color: var(--dim); font-weight: 500; }
 .tree-grp { font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--dim); padding: 14px 9px 5px; }
+/* 未開待辦的收合鈕（2026-10-19 spec §4.3）：沿用 .tree-grp 的字級與顏色，清掉按鈕預設的框與底 */
+.tree-grp.is-toggle { display: flex; align-items: center; gap: 5px; width: 100%; border: none; background: transparent; text-align: left; font-family: var(--font-ui); cursor: pointer; border-radius: 6px; }
+.tree-grp.is-toggle:hover { color: var(--text); }
+.tree-grp-n { font-family: var(--font-mono); letter-spacing: 0; }
 /* 窄等級：樹攤成一頁（＝現在的總覽），列寬拉滿；頂端與「所有專案」藏掉（已經在這一頁了） */
 .tree.as-page { width: auto; border-right: none; padding: 0 0 20px; }
 .tree.as-page .tree-head, .tree.as-page .tree-item.is-all { display: none; }
@@ -59,7 +64,8 @@
 /* 選中 12% 不是 demo 的 22%：22% 時琥珀標籤只有 4.08:1（spec §11.9，Codex spec R1） */
 .tasks-next.is-on { background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 12%, var(--active)), var(--active) 70%); }
 .tasks-next-lab { display: flex; align-items: center; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--primary-text); margin-bottom: 3px; }
-.tasks-next-tx { font-size: 14px; line-height: 1.6; color: var(--text); }
+/* 最多 3 行、超過的在第 3 行尾端以「…」截斷（2026-10-19 spec §4.2）：點卡片本來就會在右欄打開完整的離場筆記。Tauri 的 WebKit 支援這組寫法 */
+.tasks-next-tx { font-size: 14px; line-height: 1.6; color: var(--text); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 /* 右上只有一個「›」，沒有文字；--faint 是非文字用途（3:1 門檻） */
 .tasks-next-more { margin-left: auto; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); font-size: 14px; line-height: 1; }
 
@@ -157,15 +163,38 @@
 .tk-md strong, .tk-md em, .tk-md h1, .tk-md h2 { color: var(--text); }
 .tk-md h1 { font-size: 15px; font-weight: 800; line-height: 1.5; margin: 18px 0 10px; }
 .tk-md h2 { font-size: 13.5px; font-weight: 700; margin: 16px 0 8px; }
-.tk-md code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
+.tk-md h3 { font-size: 13px; font-weight: 700; color: var(--text); margin: 14px 0 6px; }
+/* 行內碼放不下時可以在任意字元斷（2026-10-19 spec §4.1.8）：長路徑、長識別字沒有空格，不斷的話在表格裡撐寬整張表、在段落裡撐寬整個右欄 */
+.tk-md code { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--surface-2); border-radius: 4px; padding: 1px 5px; }
 /* 程式碼區塊不畫框、底色維持亮一階——在抽屜卡片與編輯器的暗磚上都看得出來；長行換行、不出左右捲軸，同 .tasks-cmd-pre
    （票 28 第四批 4b，soft-tiles spec §6 D4） */
 .tk-md pre { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--surface-2); border-radius: 6px; padding: 9px 11px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; margin: 0 0 10px; }
 .tk-md pre code { background: none; padding: 0; }
 .tk-md ul { margin: 0 0 10px; padding-left: 19px; }
 .tk-md li { margin: 3px 0; }
+/* 編號清單多留 3px 給兩位數編號；子清單緊貼父項目（spec §4.1.8） */
+.tk-md ol { margin: 0 0 10px; padding-left: 22px; }
+.tk-md li > ul, .tk-md li > ol { margin: 3px 0 0; }
 .tk-md blockquote { margin: 0 0 10px; padding-left: 12px; border-left: 2px solid var(--border); }
 .tk-md a { color: var(--primary-text); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--primary) 40%, transparent); }
+/* 刪除線淡一階、保留預設的線（spec §4.1.8） */
+.tk-md del { color: var(--faint); }
+/* 分隔線只留白、不畫線（spec §4.1.8：使用者定過不要線條分隔） */
+.tk-md hr { border: none; height: 0; margin: 18px 0; }
+/* 表格（spec §4.1.8）：每列一塊磚、沒有線。.tk-tbl 的左右捲動只是保險：右欄窄到連表頭都放不下時在表格裡捲，不讓整個右欄跟著捲 */
+.tk-md .tk-tbl { margin: 0 0 12px; overflow-x: auto; }
+.tk-md table { width: 100%; border-collapse: separate; border-spacing: 0 4px; font-size: 12px; line-height: 1.55; }
+/* 表頭不換行：中文標題被擠時會變成一字一行的直排 */
+.tk-md th { color: var(--faint); font-size: 11px; font-weight: 500; text-align: left; white-space: nowrap; vertical-align: bottom; padding: 2px 7px; }
+/* 儲存格照瀏覽器預設的規則斷行：overflow-wrap: anywhere 會讓欄位縮到一個字寬、「38」被拆成兩行。
+   只有行內碼可以任意斷（見上面的 .tk-md code），長的英文識別字才不會把整張表撐寬 */
+.tk-md td { color: var(--dim); background: var(--bg); vertical-align: top; padding: 6px 7px; }
+.tk-md td:first-child { border-radius: var(--row-radius) 0 0 var(--row-radius); }
+.tk-md td:last-child { border-radius: 0 var(--row-radius) var(--row-radius) 0; }
+/* 只有一格的列同時是 first-child 與 last-child，上一條會把左邊的圓角蓋掉；這條要寫在它後面 */
+.tk-md td:only-child { border-radius: var(--row-radius); }
+/* 編輯器的底就是 --bg：預覽裡的磚改用清單票列的 --sidebar，否則看不出一列一列 */
+.full-editor .tk-md td { background: var(--sidebar); }
 
 /* 動作：滑過或鍵盤走到才顯形。用 opacity 不用 display——位置得留著，否則整列會在 hover 時跳動 */
 .tk-acts { flex-shrink: 0; display: flex; gap: 2px; opacity: 0; transition: opacity .12s ease; }
