@@ -58,3 +58,29 @@ describe("Dashboard 整頁：標題的期間（票 46，spec §4.2）", () => {
     expect(ui.queryByText("Cache hit rate (7 days)")).not.toBeNull();
   });
 });
+
+describe("Dashboard 整頁：暫存資料夾合併列的字（票 46，spec §4.1）", () => {
+  afterEach(cleanup);
+  beforeEach(() => {
+    vi.mocked(fetchUsageDashboard).mockReset();
+    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue({ source: "unavailable", failure_reason: "network", observed_at: null });
+  });
+  const withTemp = () => {
+    const p = payload();
+    p.projects.push({ path: "/private/tmp/x", claude_cost: 1, codex_cost: 0, total: 1, last_active: 0 },
+                    { path: "/tmp/y", claude_cost: 1, codex_cost: 0, total: 1, last_active: 0 });
+    return p;
+  };
+
+  it("中文：暫存資料夾、2 個資料夾", async () => {
+    const ui = await shown("zh-TW", withTemp());
+    expect(ui.queryByText("暫存資料夾")).not.toBeNull();
+    expect(ui.queryByText("2 個資料夾")).not.toBeNull();
+  });
+
+  it("英文：Temporary folders、2 folder(s)", async () => {
+    const ui = await shown("en", withTemp());
+    expect(ui.queryByText("Temporary folders")).not.toBeNull();
+    expect(ui.queryByText("2 folder(s)")).not.toBeNull();
+  });
+});

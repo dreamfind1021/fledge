@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from "vitest";
 import { render, cleanup } from "@testing-library/react";
-import { CodexPanel } from "./Dashboard";
-import type { CodexUsage, CodexUsageWindow } from "../lib/sidecar";
+import { CodexPanel, ProjectsTable } from "./Dashboard";
+import type { CodexUsage, CodexUsageWindow, UsageDashboard } from "../lib/sidecar";
 
 // fake t：回傳 key 本身（帶插值時附上 :n）——測「選了哪個角色 key」，翻譯文案由 parity 測試把關
 const t = (key: string, opts?: Record<string, unknown>) =>
@@ -45,5 +45,28 @@ describe("CodexPanel", () => {
     expect(container.querySelectorAll(".dash-gauge")).toHaveLength(0);
     expect(getByText("windows.codexLoading")).toBeTruthy();
     expect(queryByText("windows.codexUnavailable")).toBeNull();   // regression：讀取中被當成失敗
+  });
+});
+
+// 票 46，spec §4.1：暫存資料夾合併成一列、全部列出（拿掉前 30 名上限）
+const proj = (path: string, total: number): UsageDashboard["projects"][number] =>
+  ({ path, claude_cost: total, codex_cost: 0, total, last_active: 0 });
+
+describe("ProjectsTable", () => {
+  afterEach(cleanup);
+  it("暫存資料夾合併成一列、照合計排；名稱與路徑那一行換成合併列的字，滑過看得到每個路徑", () => {
+    const { container } = render(<ProjectsTable t={t} days={30} projects={[
+      proj("/Users/u/big", 100), proj("/private/tmp/a/scratchpad", 3), proj("/Users/u/small", 1), proj("/tmp/b", 4)]} />);
+    const rows = [...container.querySelectorAll("tbody tr")];
+    expect(rows.map((r) => r.querySelector(".dash-proj-name")!.textContent))
+      .toEqual(["big", "projects.tempName", "small"]);
+    expect(rows[1].querySelector(".dash-proj-path")!.textContent).toBe("projects.tempCount:2");
+    expect(rows[1].querySelector("td")!.getAttribute("title")).toBe("/private/tmp/a/scratchpad\n/tmp/b");
+  });
+
+  it("全部列出：35 個真專案＋2 個暫存資料夾 → 36 列（不再只取前 30 名）", () => {
+    const many = Array.from({ length: 35 }, (_, i) => proj(`/Users/u/p${i}`, 100 - i));
+    const { container } = render(<ProjectsTable t={t} days={30} projects={[...many, proj("/tmp/a", 1), proj("/tmp/b", 1)]} />);
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(36);
   });
 });

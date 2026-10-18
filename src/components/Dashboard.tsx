@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { fetchUsageDashboard, fetchCodexUsage, UsageDashboard, CodexUsage, CodexUsageWindow } from "../lib/sidecar";
 import { shouldPoll, POLL_INTERVAL_MS, CODEX_USAGE_INTERVAL_MS } from "../lib/usagePoll";
 import { fmtUSD, fmtPct, fmtDayClock, codexWindowLabel } from "../lib/usageFormat";
-import { donutParts } from "../lib/dashboardLogic";
+import { donutParts, mergeTempProjects } from "../lib/dashboardLogic";
 import "./Dashboard.css";
 
 // 期間天數只有這一個來源：請求帶它；標題寫 payload 的 scan_meta.days（掃描中 sidecar 回上一份成功的資料，
@@ -256,7 +256,8 @@ function HourlyHeatmap({ hourly, days, t }: { hourly: number[][]; days: number; 
   );
 }
 
-function ProjectsTable({ projects, days, t }: { projects: UsageDashboard["projects"]; days: number; t: T }) {
+// export 僅供 render test（Dashboard.test.tsx）
+export function ProjectsTable({ projects, days, t }: { projects: UsageDashboard["projects"]; days: number; t: T }) {
   return (
     <div className="dash-panel">
       <div className="dash-panel-title">{t("projects.title", { days })}</div>
@@ -265,11 +266,12 @@ function ProjectsTable({ projects, days, t }: { projects: UsageDashboard["projec
           <th className="dash-th-num">{t("projects.codex")}</th><th className="dash-th-num">{t("projects.total")}</th>
           <th className="dash-th-num">{t("projects.lastActive")}</th></tr></thead>
         <tbody>
-          {projects.slice(0, 30).map((p) => (
-            <tr key={p.path}>
-              <td title={p.path}>
-                <span className="dash-proj-name">{p.path.split("/").pop() || p.path}</span>
-                <span className="dash-proj-path">{p.path}</span>
+          {/* 全部列出，不設上限：只取前 30 名時，暫存資料夾就能把真專案擠出表外（票 46，spec §4.1） */}
+          {mergeTempProjects(projects).map((p) => (
+            <tr key={p.tempPaths ? "temp" : p.path}>
+              <td title={p.tempPaths ? p.tempPaths.join("\n") : p.path}>
+                <span className="dash-proj-name">{p.tempPaths ? t("projects.tempName") : p.path.split("/").pop() || p.path}</span>
+                <span className="dash-proj-path">{p.tempPaths ? t("projects.tempCount", { n: p.tempPaths.length }) : p.path}</span>
               </td>
               <td>{fmtUSD(p.claude_cost)}</td>
               <td>{p.codex_cost > 0 ? fmtUSD(p.codex_cost) : "—"}</td>
