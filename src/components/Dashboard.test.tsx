@@ -39,4 +39,11 @@ describe("CodexPanel", () => {
     expect(container.querySelectorAll(".dash-gauge")).toHaveLength(0);
     expect(getByText("windows.codexUnavailable")).toBeTruthy();
   });
+
+  it("還沒抓到（null）→ 顯示讀取中，不得顯示不可用訊息", () => {
+    const { container, getByText, queryByText } = render(<CodexPanel codex={null} t={t} />);
+    expect(container.querySelectorAll(".dash-gauge")).toHaveLength(0);
+    expect(getByText("windows.codexLoading")).toBeTruthy();
+    expect(queryByText("windows.codexUnavailable")).toBeNull();   // regression：讀取中被當成失敗
+  });
 });
