@@ -121,13 +121,7 @@
   letter-spacing: -.3px;
 }
 
-/* ── 窗口列 ── */
-.dash-windows {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
-  margin-bottom: 14px;
-}
+/* ── Codex 額度卡 ── */
 .dash-win-card {
   background: var(--surface);
   box-shadow: var(--shadow-sm);
@@ -183,30 +177,59 @@
   background: linear-gradient(90deg, var(--session), color-mix(in srgb, var(--session) 70%, var(--text)));
 }
 
-/* ── Gauge（Codex 窗口格）── */
-/* 兩行：上面名稱在左、百分比與重置時間在右，下面一整條進度條——任何寬度兩條都一樣長、左右對齊（票 35 第 3 題）。
-   一行排法時條寬＝卡寬扣掉右邊的文字，重置時間長短不同兩條就不一樣長，窗口 800 時還會被擠到 0 */
-.dash-gauge {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-areas: "label meta" "bar bar";
-  align-items: center;
-  gap: 6px 10px;
-  margin-top: 10px;
+/* 用量比時間進度多 10 個百分點以上：填充改用 --warning（票 46，spec §4.3、§8）。class 由 CodexPanel 判斷後給 */
+.dash-bar.is-codex.is-ahead > i {
+  background: linear-gradient(90deg, var(--warning), color-mix(in srgb, var(--warning) 70%, var(--text)));
 }
-.dash-gauge-label {
-  grid-area: label;
+
+/* ── Codex 額度：數字卡下方一整條（票 46，spec §4.3）──
+   左邊標題、右邊窗口清單；寬度不夠放一行時標題自己一行（flex-wrap＋清單最少 240px）。
+   取代票 35 第 3 題的兩行排法：那是為了窄卡片裡兩條不等長、窗口 800 時被擠到 0；佔整排之後兩個理由都不成立。
+   寫在 .dash-win-card 之後：權重相同，內距要蓋過它的 14px 16px */
+.dash-cx-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 12px 16px;
+  margin-bottom: 5px;
+}
+.dash-cx-strip > .dash-win-title {
+  margin-bottom: 0;
+}
+.dash-cx-strip > .dash-win-meta {
+  margin-top: 0;
+}
+/* 每個窗口一行「名稱｜進度條｜百分比 · 重置時間」，所有窗口共用這一個 grid 的欄寬：每條進度條一樣長 */
+.dash-cx-rows {
+  flex: 1;
+  min-width: 240px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px 12px;
+  align-items: center;
+}
+.dash-cx-label {
   color: var(--dim);
   font-size: 11.5px;
 }
-.dash-gauge > .dash-bar {
-  grid-area: bar;
-}
-.dash-gauge-meta {
-  grid-area: meta;
+.dash-cx-meta {
   color: var(--dim);
   font-size: 11px;
   font-family: var(--font-mono);
+}
+/* 時間進度線：畫在「窗口時間過了多少」的位置，上下各比條多出 3px。.dash-bar 是 overflow: hidden，線要掛在外面這層 */
+.dash-cx-bar {
+  position: relative;
+}
+.dash-pace {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--text);
 }
 
 /* ── 面板共用 ── */
@@ -228,6 +251,10 @@
 }
 
 /* ── 每日成本堆疊長條 ── */
+/* 獨佔一整排（票 46，spec §4.3）：跟下一列的縫同 5px，不用 .dash-panel 的 14px */
+.dash-daily-panel {
+  margin-bottom: 5px;
+}
 .dash-daily {
   display: flex;
   align-items: flex-end;
@@ -253,6 +280,40 @@
   width: 100%;
   /* flex 比例由 inline style 的 flex 屬性控制（各 model 成本比例）*/
 }
+/* 最高金額與頭尾日期（票 46，spec §4.4）：位置都由 TSX 給 left: x%＋translateX(-x%)（x＝那一欄中心的比例），
+   最左那欄靠左、最右那欄靠右，標籤比圖窄就一定不越界。圖上方留 16px 給最高金額 */
+.dash-daily-wrap {
+  position: relative;
+  padding-top: 16px;
+}
+.dash-daily-peak {
+  position: absolute;
+  top: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  color: var(--dim);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.dash-daily-axis {
+  position: relative;
+  height: 14px;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--faint);
+}
+.dash-daily-axis > span {
+  position: absolute;
+  top: 0;
+  white-space: nowrap;
+}
+.dash-daily-axis > .is-today {
+  color: var(--dim);
+  font-family: var(--font-ui);
+}
 .dash-legend {
   display: flex;
   gap: 14px;
@@ -274,7 +335,7 @@
   flex: none;
 }
 
-/* ── 分布列：donut + heatmap ── */
+/* ── 分布列：模型分布 + heatmap ── */
 /* 縫 5px，同 .dash-kpi（票 28 第三批，spec D2）。
    窄：每一塊佔整排、由上往下排；寬（≥720）才並排，欄寬比例在檔尾的寬版區塊（票 35 第 2 題） */
 .dash-row {
@@ -286,74 +347,73 @@
 .dash-row > .dash-panel {
   margin-bottom: 0;
 }
-/* 窄的時候每日成本＋Codex 那一列也是一欄。要明寫：這條跟 .dash-row 權重相同、寫在後面，
-   窄的時候生效的是它；寬版的 1.5fr 1fr（每日成本寬、Codex 額度窄）在檔尾的寬版區塊（票 35 第 2 題） */
-.dash-row-usage {
-  grid-template-columns: 1fr;
-}
-.dash-row-usage > .dash-windows {
-  margin-bottom: 0;
-}
 
-/* Donut */
-.dash-donut-wrap {
-  display: flex;
-  gap: 18px;
-  align-items: center;
-}
-.dash-donut {
-  width: 124px;
-  height: 124px;
-  border-radius: 50%;
-  position: relative;
-  flex: none;
-  /* background: conic-gradient(…) 由 inline style 注入 */
-}
-.dash-donut::after {
-  content: "";
-  position: absolute;
-  inset: 26px;
-  border-radius: 50%;
-  background: var(--surface);
-}
-.dash-donut-center {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  z-index: 1;
-}
-/* 12px：洞寬 72px（124 − 2 × 26），14px 時四位數金額 75.6px 壓到圓環；12px 左右各留 3.6px、五位數剛好貼邊（票 35 第 5 題） */
-.dash-donut-center b {
+/* ── 模型分布：排名長條、固定軌道（票 46，spec §4.5；取代圓餅）──
+   名稱一欄寬＝最長的名稱、軌道吃剩下的，各列軌道左緣對齊、一樣長。li 用 display: contents 讓兩格直接進 grid */
+.dash-panel-total {
+  margin-left: auto;
   font-family: var(--font-mono);
   font-size: 12px;
+  color: var(--text);
 }
-.dash-donut-legend {
+.dash-mbars {
   list-style: none;
   margin: 0;
   padding: 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 7px 12px;
+  align-items: center;
   font-size: 11.5px;
-  color: var(--dim);
-  flex: 1;
 }
-.dash-donut-legend li {
+.dash-mbars li {
+  display: contents;
+}
+.dash-mbar-name {
+  color: var(--dim);
+  white-space: nowrap;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 3px 0;
+  gap: 7px;
 }
-.dash-donut-legend i {
+.dash-mbar-name > i {
   width: 8px;
   height: 8px;
   border-radius: 2px;
   flex: none;
 }
-.dash-donut-legend em {
-  margin-left: auto;
-  font-style: normal;
+/* 軌道底色同待辦面板的 .tree-trk */
+.dash-mbar-trk {
+  position: relative;
+  height: 18px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--surface) 70%, var(--bg));
+  overflow: hidden;
+}
+.dash-mbar-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 9px;
+}
+/* 填充＝模型色混 38% 進 --surface-2：數字（--text）壓在上面，六個主題五個名次都過 4.5:1（48% 時有四組不到）。
+   名次順序跟 dashboardLogic.ts 的 MODEL_COLORS 一致（Dashboard.style.test.ts 守） */
+.dash-mbar-fill.is-r0 { background: color-mix(in srgb, var(--primary) 38%, var(--surface-2)); }
+.dash-mbar-fill.is-r1 { background: color-mix(in srgb, var(--ai) 38%, var(--surface-2)); }
+.dash-mbar-fill.is-r2 { background: color-mix(in srgb, var(--session) 38%, var(--surface-2)); }
+.dash-mbar-fill.is-r3 { background: color-mix(in srgb, var(--warning) 38%, var(--surface-2)); }
+.dash-mbar-fill.is-r4 { background: color-mix(in srgb, var(--faint) 38%, var(--surface-2)); }
+.dash-mbar-num {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 8px;
+  display: flex;
+  align-items: center;
   font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
   color: var(--text);
 }
 
@@ -460,7 +520,5 @@
 @container dash (min-width: 720px) {
   .dash-kpi { grid-template-columns: repeat(5, 1fr); }
   .dash-row { grid-template-columns: 1fr 1.3fr; }
-  /* 每日成本（寬）+ Codex 額度（窄）同一行 */
-  .dash-row-usage { grid-template-columns: 1.5fr 1fr; }
   .dash-proj-path { display: block; }
 }

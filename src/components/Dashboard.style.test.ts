@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { THEMES, type ThemeId } from "../lib/themeIds";
-import { baseOf, cssRules, hasDecl, lineTokenHits, token, worst } from "../testing/cssRules";
+import { MODEL_COLORS } from "../lib/dashboardLogic";
+import { baseOf, cssRules, decl, hasDecl, lineTokenHits, token, worst } from "../testing/cssRules";
 
 // 觀測面板的樣式防線——票 28 第三批，spec docs/planning/soft-tiles-app-wide-design.md §4.6。
 // jsdom 不套 CSS，這裡只能讀 CSS 原始碼驗宣告；畫面由 headless 截圖與真機驗收看。
@@ -34,9 +35,9 @@ describe("專案表每列一塊暗磚、圖例與長條滑過不畫線（spec D3
     expect(hasDecl(dash, ".dash-table td", "border")).toBe(false);
   });
 
-  it("圓餅圖旁的圖例沒有行線", () => {
-    expect(hasDecl(dash, ".dash-donut-legend li", "border-bottom")).toBe(false);
-    expect(hasDecl(dash, ".dash-donut-legend li", "border")).toBe(false);
+  it("模型分布的清單沒有行線（票 46 取代圓餅的圖例）", () => {
+    expect(hasDecl(dash, ".dash-mbars li", "border-bottom")).toBe(false);
+    expect(hasDecl(dash, ".dash-mbars li", "border")).toBe(false);
   });
 
   it("每日成本長條滑過不畫細框", () => {
@@ -59,6 +60,45 @@ describe("專案表每列一塊暗磚、圖例與長條滑過不畫線（spec D3
 // spec §1.5／§4.6：防的是「以後不小心把線加回來」——最可能的形狀是新增元件時照抄舊寫法
 // `border: 1px solid var(--border)`。定點斷言只看得到既有的選擇器，這條連新增的選擇器也看得到。
 // 不防刻意繞過（寫死顏色另有 index.tokens.test.ts 擋；TSX inline style 靠審查）。
+// 票 46，spec §4.5：軌道數字（--text）壓在填充上。填充是模型色淡化（混進 --surface-2），寫在 CSS 才讀得到；
+// 混 48% 時有四組不到 4.5，所以是 38%。五個名次的顏色順序跟 MODEL_COLORS（每日成本的色段）一致
+describe("模型分布的軌道數字（票 46，spec §4.5）", () => {
+  const RANKS = [0, 1, 2, 3, 4];
+  it.each(THEMES.flatMap((theme) => RANKS.map((i) => [theme, i] as [ThemeId, number])))(
+    "%s：數字對第 %i 名的填充至少 4.5:1", (theme, i) => {
+      expect(worst(token(paintToken(".dash-mbar-num", "color"), theme),
+        cssRules(dash, theme).paintColor(`.dash-mbar-fill.is-r${i}`, "background"))).toBeGreaterThanOrEqual(4.5);
+    });
+
+  it.each(THEMES)("%s：數字對軌道底色至少 4.5:1", (theme) => {
+    expect(worst(token(paintToken(".dash-mbar-num", "color"), theme),
+      cssRules(dash, theme).paintColor(".dash-mbar-trk", "background"))).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each(RANKS)("第 %i 名的填充用 MODEL_COLORS 同一個名次的顏色", (i) => {
+    expect(decl(dash, `.dash-mbar-fill.is-r${i}`, "background")).toContain(MODEL_COLORS[i]);
+  });
+});
+
+// 票 46，spec §4.4：每日成本的日期與最高金額坐在卡片底色上（.dash-panel 的 background）
+describe("每日成本的日期與最高金額", () => {
+  it.each<[ThemeId, string, string]>(THEMES.flatMap((theme) => [
+    [theme, "日期", ".dash-daily-axis"] as [ThemeId, string, string],
+    [theme, "今天", ".dash-daily-axis > .is-today"] as [ThemeId, string, string],
+    [theme, "最高金額", ".dash-daily-peak"] as [ThemeId, string, string],
+  ]))("%s：%s對卡片底色至少 4.5:1", (theme, _label, selector) => {
+    expect(worst(token(paintToken(selector, "color"), theme), cssRules(dash, theme).paintColor(".dash-panel", "background")))
+      .toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// 票 46，spec §4.3：用量比時間多 10 點以上，Codex 進度條改用 --warning（class 由 CodexPanel 給，Dashboard.test.tsx 守）
+describe("Codex 進度條用太快時變黃", () => {
+  it("is-ahead 的填充用 --warning", () => {
+    expect(decl(dash, ".dash-bar.is-codex.is-ahead > i", "background")).toContain("var(--warning)");
+  });
+});
+
 describe("觀測面板的 CSS 不再引用分隔線 token（spec §1.5、§4.6）", () => {
   it("--border／--divider／--term-divider 零次", () => {
     const { hits, scanned } = lineTokenHits(["/src/components/Dashboard.css"]);

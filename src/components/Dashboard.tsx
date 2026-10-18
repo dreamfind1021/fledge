@@ -3,14 +3,23 @@ import { useTranslation } from "react-i18next";
 import { fetchUsageDashboard, fetchCodexUsage, UsageDashboard, CodexUsage, CodexUsageWindow } from "../lib/sidecar";
 import { shouldPoll, POLL_INTERVAL_MS, CODEX_USAGE_INTERVAL_MS } from "../lib/usagePoll";
 import { fmtUSD, fmtPct, fmtDayClock, codexWindowLabel } from "../lib/usageFormat";
-import { donutParts } from "../lib/dashboardLogic";
+import { colorIndex, endLabels, isAheadOfPace, labelX, localDateKey, mergeTempProjects, MODEL_COLORS, peakIndex, rankModels,
+         windowElapsedPct } from "../lib/dashboardLogic";
+import type { ModelRanking } from "../lib/dashboardLogic";
 import "./Dashboard.css";
+
+// 期間天數只有這一個來源：請求帶它；標題寫 payload 的 scan_meta.days（掃描中 sidecar 回上一份成功的資料，
+// 天數可能跟請求不同——routes/usage.py 的註解寫明以 scan_meta.days 為準），沒有值才退回這個常數（票 46，spec §4.2）
+const DASH_DAYS = 30;
 
 export default function Dashboard({ port, isActive }: { port: number; isActive: boolean }) {
   const { t } = useTranslation("dashboard");
   const [data, setData] = useState<UsageDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [codex, setCodex] = useState<CodexUsage | null>(null);
+  // 時間相關的顯示（Codex 時間進度線、用太快、「今天」）在 render 時讀 Date.now()。成本 API 連續回同一個錯誤時
+  // setError 拿到同一個字串、頁面不會重畫，這些顯示會停在舊的時間；每輪輪詢換一次 clock，畫面照輪詢節奏跟上時間（Codex 合併前審查）
+  const [, setClock] = useState(0);
   const timer = useRef<number | null>(null);
 
   // Codex 實時額度（獨立節奏，不隨 30s 檔案掃描）：開啟即抓、開著每 15 分鐘、
@@ -35,8 +44,9 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
     let cancelled = false;
     async function tick() {
       if (!shouldPoll({ isActiveTab: isActive, documentHidden: document.hidden })) return;
+      setClock(Date.now());
       try {
-        const d = await fetchUsageDashboard(port);
+        const d = await fetchUsageDashboard(port, DASH_DAYS);
         if (!cancelled && d) { setData(d); setError(null); }
         // d === null（202 首掃中）：保持骨架，下輪再試
       } catch (e) {
@@ -63,6 +73,8 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
     );
   }
   const stale = data.scan_meta.state === "scanning" || error != null;
+  const days = data.scan_meta.days ?? DASH_DAYS;
+  const ranking = rankModels(data.models);
   return (
     <div className="dash-root">
       <div className="dash-head">
@@ -78,23 +90,22 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
           models: data.scan_meta.missing_pricing.join(t("state.listSeparator")),
         })}</div>
       )}
-      <KpiBar kpi={data.kpi} t={t} />
-      <div className="dash-row dash-row-usage">
-        <DailyChart daily={data.daily} t={t} />
-        <CodexPanel codex={codex} t={t} />
-      </div>
+      <KpiBar kpi={data.kpi} days={days} t={t} />
+      {/* Codex 額度是數字卡下方一整條、每日成本獨佔一整排（票 46，spec §4.3）：並排時 Codex 卡被拉到跟長條圖一樣高，內容只佔一行 */}
+      <CodexPanel codex={codex} t={t} />
+      <DailyChart daily={data.daily} ranking={ranking} days={days} t={t} />
       <div className="dash-row">
-        <ModelDonut models={data.models} t={t} />
-        <HourlyHeatmap hourly={data.hourly} t={t} />
+        <ModelBars ranking={ranking} days={days} t={t} />
+        <HourlyHeatmap hourly={data.hourly} days={days} t={t} />
       </div>
-      <ProjectsTable projects={data.projects} t={t} />
+      <ProjectsTable projects={data.projects} days={days} t={t} />
     </div>
   );
 }
 
 type T = (key: string, opts?: Record<string, unknown>) => string;
 
-function KpiBar({ kpi, t }: { kpi: UsageDashboard["kpi"]; t: T }) {
+function KpiBar({ kpi, days, t }: { kpi: UsageDashboard["kpi"]; days: number; t: T }) {
   // 單值卡共用渲染；cacheHit 因需卡內兩行（分源）另外手寫
   const card = (label: string, value: string, extra?: string, isPos?: boolean) => (
     <div key={label} className="dash-kpi-card">
@@ -117,7 +128,7 @@ function KpiBar({ kpi, t }: { kpi: UsageDashboard["kpi"]; t: T }) {
           <span className="dash-kpi-split-label">Codex</span>
           <span className="dash-kpi-split-value">{fmtPct(kpi.codex_cache_hit_rate)}</span>
         </div>
-        <div className="dash-kpi-label">{t("kpi.cacheHit")}</div>
+        <div className="dash-kpi-label">{t("kpi.cacheHit", { days })}</div>
       </div>
       {card(t("kpi.netRoi"), fmtUSD(kpi.net_roi),
             `${t("kpi.subs")} ${fmtUSD(kpi.subscriptions_total)}`, kpi.net_roi > 0)}
@@ -133,21 +144,29 @@ export function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
   // null＝這個分頁還沒抓到第一筆（每次開儀表板都要等 app-server 啟動），不是失敗
   const status = codex == null ? "windows.codexLoading"
     : reauth ? "windows.codexReauth" : "windows.codexUnavailable";
+  const wins: { win: CodexUsageWindow; fallback: "fiveHour" | "weekly" }[] = [];
+  if (live?.primary) {
+    wins.push({ win: live.primary, fallback: "fiveHour" });
+    if (live.secondary) wins.push({ win: live.secondary, fallback: "weekly" });
+  }
+  const nowSec = Date.now() / 1000;
+  // 一整條：左邊標題，右邊每個窗口一行「名稱｜進度條｜百分比 · 重置時間」。多個窗口共用 .dash-cx-rows 這一個 grid 的欄寬，
+  // 每條進度條一樣長（取代票 35 第 3 題的兩行排法：那是為了窄卡片裡兩條不等長、被擠到 0，佔整排之後兩個理由都不成立）
   return (
-    <div className="dash-windows">
-      <div className="dash-win-card">
-        <div className="dash-win-title">
-          {t("windows.codex")}
-          {live?.plan_type ? <span className="dash-badge">{live.plan_type}</span> : null}
-        </div>
-        {live?.primary ? (<>
-          <Gauge label={winLabel(live.primary, "fiveHour", t)} win={live.primary} t={t} />
-          {live.secondary &&
-            <Gauge label={winLabel(live.secondary, "weekly", t)} win={live.secondary} t={t} />}
-        </>) : (
-          <div className="dash-win-meta">{t(status)}</div>
-        )}
+    <div className="dash-win-card dash-cx-strip">
+      <div className="dash-win-title">
+        {t("windows.codex")}
+        {live?.plan_type ? <span className="dash-badge">{live.plan_type}</span> : null}
       </div>
+      {wins.length > 0 ? (
+        <div className="dash-cx-rows">
+          {wins.map(({ win, fallback }) => (
+            <QuotaRow key={fallback} label={winLabel(win, fallback, t)} win={win} nowSec={nowSec} t={t} />
+          ))}
+        </div>
+      ) : (
+        <div className="dash-win-meta">{t(status)}</div>
+      )}
     </div>
   );
 }
@@ -158,84 +177,116 @@ function winLabel(win: CodexUsageWindow, fallback: "fiveHour" | "weekly", t: T):
   return "n" in l ? t(`windows.${l.key}`, { n: l.n }) : t(`windows.${l.key}`);
 }
 
-function Gauge({ label, win, t }: { label: string; win: CodexUsageWindow; t: T }) {
+// 一個窗口＝grid 的三格。條上的細直線＝窗口時間過了多少；用量比時間多 10 點以上條變黃（spec §4.3、§8）
+function QuotaRow({ label, win, nowSec, t }: { label: string; win: CodexUsageWindow; nowSec: number; t: T }) {
   const resets = win.resets_at != null
     ? t("windows.resets", { time: fmtDayClock(win.resets_at, t("time.yesterday")) }) : "";
+  const elapsed = windowElapsedPct(win, nowSec);
   return (
-    <div className="dash-gauge">
-      <span className="dash-gauge-label">{label}</span>
-      <div className="dash-bar is-codex"><i style={{ width: `${Math.min(100, win.used_percent)}%` }} /></div>
-      <span className="dash-gauge-meta">{Math.round(win.used_percent)}%{resets ? ` · ${resets}` : ""}</span>
-    </div>
+    <>
+      <span className="dash-cx-label">{label}</span>
+      <div className="dash-cx-bar">
+        <div className={`dash-bar is-codex${isAheadOfPace(win.used_percent, elapsed) ? " is-ahead" : ""}`}>
+          <i style={{ width: `${Math.min(100, win.used_percent)}%` }} />
+        </div>
+        {elapsed != null && (
+          <b className="dash-pace" style={{ left: `${elapsed}%` }} title={t("windows.pace", { n: Math.round(elapsed) })} />
+        )}
+      </div>
+      <span className="dash-cx-meta">{Math.round(win.used_percent)}%{resets ? ` · ${resets}` : ""}</span>
+    </>
   );
 }
 
-const MODEL_COLORS = ["var(--primary)", "var(--ai)", "var(--session)", "var(--warning)", "var(--faint)"];
-
-function DailyChart({ daily, t }: { daily: UsageDashboard["daily"]; t: T }) {
+// export 僅供 render test（Dashboard.test.tsx）
+export function DailyChart({ daily, ranking, days, t }: {
+  daily: UsageDashboard["daily"]; ranking: ModelRanking; days: number; t: T;
+}) {
   const max = Math.max(0.01, ...daily.map((d) => d.total));
-  // 模型→顏色：以 30 天總成本排序取前 4，其餘灰（與 donut 同邏輯保持色彩一致）
-  const totals = new Map<string, number>();
-  daily.forEach((d) => Object.entries(d.by_model).forEach(([m, c]) =>
-    totals.set(m, (totals.get(m) ?? 0) + c)));
-  const order = [...totals.entries()].sort((x, y) => y[1] - x[1]).map(([m]) => m);
-  const colorOf = (m: string) => MODEL_COLORS[Math.min(order.indexOf(m), 4)] ?? "var(--faint)";
-  // 全域排序：以 30 天總量 rank 決定每日色段順序，同色段不跨日跳位
-  const rank = (m: string) => { const i = order.indexOf(m); return i < 0 ? 999 : i; };
+  // 顏色、色段順序、圖例都照模型分布那份排名（票 46，spec §4.5）：自己從 daily 排的話，同名模型跨來源時兩張圖對不上
+  const colorOf = (m: string) => MODEL_COLORS[colorIndex(ranking, m)];
+  // 全域排序：同色段不跨日跳位
+  const rank = (m: string) => { const i = ranking.order.indexOf(m); return i < 0 ? 999 : i; };
+  // 最高金額與頭尾日期（spec §4.4）：位置都用比例算法，最左那欄靠左、最右那欄靠右，不會超出圖
+  const peak = peakIndex(daily.map((d) => d.total));
+  const at = (i: number) => { const x = labelX(i, daily.length); return { left: `${x}%`, transform: `translateX(-${x}%)` }; };
   return (
-    <div className="dash-panel">
-      <div className="dash-panel-title">{t("daily.title", { days: 30 })}</div>
-      <div className="dash-daily">
-        {daily.map((d) => (
-          <div key={d.date} className="dash-daily-col" title={`${d.date} ${fmtUSD(d.total)}`}
-               style={{ height: `${Math.max(2, (d.total / max) * 100)}%` }}>
-            {Object.entries(d.by_model).sort((x, y) => rank(x[0]) - rank(y[0])).map(([m, c]) => (
-              <i key={m} style={{ flex: c, background: colorOf(m) }} />
-            ))}
-          </div>
+    <div className="dash-panel dash-daily-panel">
+      <div className="dash-panel-title">{t("daily.title", { days })}</div>
+      <div className="dash-daily-wrap">
+        {peak != null && <span className="dash-daily-peak" style={at(peak)}>{fmtUSD(daily[peak].total)}</span>}
+        <div className="dash-daily">
+          {daily.map((d) => (
+            <div key={d.date} className="dash-daily-col" title={`${d.date} ${fmtUSD(d.total)}`}
+                 style={{ height: `${Math.max(2, (d.total / max) * 100)}%` }}>
+              {Object.entries(d.by_model).sort((x, y) => rank(x[0]) - rank(y[0])).map(([m, c]) => (
+                <i key={m} style={{ flex: c, background: colorOf(m) }} />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="dash-daily-axis">
+        {endLabels(daily.map((d) => d.date), localDateKey(Date.now())).map((l) => (
+          <span key={l.index} className={l.text == null ? "is-today" : undefined} style={at(l.index)}>
+            {l.text ?? t("daily.today")}
+          </span>
         ))}
       </div>
       <div className="dash-legend">
-        {order.slice(0, 4).map((m) => (
-          <span key={m}><i style={{ background: colorOf(m) }} />{m}</span>
+        {ranking.top.map((p) => (
+          <span key={p.model}><i style={{ background: colorOf(p.model) }} />{p.model}</span>
         ))}
+        {/* 第 5 名以後的色段是灰的，圖例要說那是什麼 */}
+        {ranking.rest.length > 0 && <span><i style={{ background: MODEL_COLORS[4] }} />{t("daily.other")}</span>}
       </div>
     </div>
   );
 }
 
-function ModelDonut({ models, t }: { models: UsageDashboard["models"]; t: T }) {
-  const parts = donutParts(models);
-  const stops = parts.map((p, i) =>
-    `${MODEL_COLORS[i % MODEL_COLORS.length]} ${p.fromDeg}deg ${p.toDeg}deg`).join(", ");
-  const total = parts.reduce((s, p) => s + p.cost, 0);
+// 排名長條、固定軌道（票 46，spec §4.5，同待辦面板的軌道）：每列一樣長、填充＝佔總額多少、數字在軌道右端。
+// 填充是模型色淡化（.dash-mbar-fill.is-r0～4），數字壓在上面才讀得到。export 僅供 render test
+export function ModelBars({ ranking, days, t }: { ranking: ModelRanking; days: number; t: T }) {
+  const rows = [
+    ...ranking.top.map((p) => ({ label: p.model, cost: p.cost, title: undefined as string | undefined })),
+    ...(ranking.rest.length > 0 ? [{
+      label: t("models.other", { n: ranking.rest.length }),
+      cost: ranking.rest.reduce((s, p) => s + p.cost, 0),
+      title: ranking.rest.map((p) => `${p.model} ${fmtUSD(p.cost)}`).join("\n"),
+    }] : []),
+  ];
   return (
     <div className="dash-panel">
-      <div className="dash-panel-title">{t("models.title")}</div>
-      {parts.length === 0 ? <div className="dash-win-meta">{t("state.empty")}</div> : (
-        <div className="dash-donut-wrap">
-          <div className="dash-donut" style={{ background: `conic-gradient(${stops})` }}>
-            <div className="dash-donut-center"><b>{fmtUSD(total)}</b></div>
-          </div>
-          <ul className="dash-donut-legend">
-            {parts.map((p, i) => (
-              <li key={p.label}><i style={{ background: MODEL_COLORS[i % MODEL_COLORS.length] }} />
-                {p.label} <em>{fmtUSD(p.cost)}</em></li>
-            ))}
-          </ul>
-        </div>
+      <div className="dash-panel-title">
+        {t("models.title", { days })}
+        {rows.length > 0 && <span className="dash-panel-total">{fmtUSD(ranking.total)}</span>}
+      </div>
+      {rows.length === 0 ? <div className="dash-win-meta">{t("state.empty")}</div> : (
+        <ul className="dash-mbars">
+          {rows.map((r, i) => (
+            <li key={i}>
+              <span className="dash-mbar-name" title={r.title}><i style={{ background: MODEL_COLORS[i] }} />{r.label}</span>
+              <span className="dash-mbar-trk">
+                {/* 沒有最小寬度：硬給的話會誇大小額模型的佔比，金額已經寫在軌道右端 */}
+                <span className={`dash-mbar-fill is-r${i}`}
+                      style={{ width: `${ranking.total > 0 ? (r.cost / ranking.total) * 100 : 0}%` }} />
+                <span className="dash-mbar-num">{fmtUSD(r.cost)}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
 }
 
-function HourlyHeatmap({ hourly, t }: { hourly: number[][]; t: T }) {
+function HourlyHeatmap({ hourly, days, t }: { hourly: number[][]; days: number; t: T }) {
   const max = Math.max(0.0001, ...hourly.flat());
   // dow 標籤從 catalog 讀取（後端 weekday() 0=Monday）
   const dows = t("hourly.dow").split(",");
   return (
     <div className="dash-panel">
-      <div className="dash-panel-title">{t("hourly.title")}</div>
+      <div className="dash-panel-title">{t("hourly.title", { days })}</div>
       <div className="dash-heatmap">
         {hourly.map((row, d) => (
           <Fragment key={d}>
@@ -251,20 +302,22 @@ function HourlyHeatmap({ hourly, t }: { hourly: number[][]; t: T }) {
   );
 }
 
-function ProjectsTable({ projects, t }: { projects: UsageDashboard["projects"]; t: T }) {
+// export 僅供 render test（Dashboard.test.tsx）
+export function ProjectsTable({ projects, days, t }: { projects: UsageDashboard["projects"]; days: number; t: T }) {
   return (
     <div className="dash-panel">
-      <div className="dash-panel-title">{t("projects.title")}</div>
+      <div className="dash-panel-title">{t("projects.title", { days })}</div>
       <table className="dash-table">
         <thead><tr><th>{t("projects.project")}</th><th className="dash-th-num">{t("projects.claude")}</th>
           <th className="dash-th-num">{t("projects.codex")}</th><th className="dash-th-num">{t("projects.total")}</th>
           <th className="dash-th-num">{t("projects.lastActive")}</th></tr></thead>
         <tbody>
-          {projects.slice(0, 30).map((p) => (
-            <tr key={p.path}>
-              <td title={p.path}>
-                <span className="dash-proj-name">{p.path.split("/").pop() || p.path}</span>
-                <span className="dash-proj-path">{p.path}</span>
+          {/* 全部列出，不設上限：只取前 30 名時，暫存資料夾就能把真專案擠出表外（票 46，spec §4.1） */}
+          {mergeTempProjects(projects).map((p) => (
+            <tr key={p.tempPaths ? "temp" : p.path}>
+              <td title={p.tempPaths ? p.tempPaths.join("\n") : p.path}>
+                <span className="dash-proj-name">{p.tempPaths ? t("projects.tempName") : p.path.split("/").pop() || p.path}</span>
+                <span className="dash-proj-path">{p.tempPaths ? t("projects.tempCount", { n: p.tempPaths.length }) : p.path}</span>
               </td>
               <td>{fmtUSD(p.claude_cost)}</td>
               <td>{p.codex_cost > 0 ? fmtUSD(p.codex_cost) : "—"}</td>

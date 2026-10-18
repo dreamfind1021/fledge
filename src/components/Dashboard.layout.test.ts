@@ -15,19 +15,16 @@ describe("觀測面板窄窗口：數字卡、兩欄的列、專案表（票 35 
     expect(decl(css, ".dash-root", "container-name")).toBe("dash");
   });
 
-  it("窄（預設）：數字卡三張一排、兩列上下疊（含每日成本＋Codex 那一列）、專案表不顯示路徑", () => {
+  it("窄（預設）：數字卡三張一排、兩欄的列上下疊、專案表不顯示路徑", () => {
     expect(decl(css, ".dash-kpi", "grid-template-columns")).toBe("repeat(3, 1fr)");
     expect(decl(css, ".dash-row", "grid-template-columns")).toBe("1fr");
-    // .dash-row-usage 跟 .dash-row 權重相同、寫在後面：窄的時候真正生效的是它在基礎等級的欄寬
-    expect(decl(css, ".dash-row-usage", "grid-template-columns")).toBe("1fr");
     expect(decl(css, ".dash-proj-path", "display")).toBe("none");
   });
 
-  it("寬（≥720）：一排五張、兩列並排（每日成本＋Codex 1.5:1、圓餅＋時段 1:1.3）、顯示路徑", () => {
+  it("寬（≥720）：一排五張、模型分布＋時段活動 1:1.3 並排、顯示路徑", () => {
     const b = wide();
     expect(decl(b, ".dash-kpi", "grid-template-columns")).toBe("repeat(5, 1fr)");
     expect(decl(b, ".dash-row", "grid-template-columns")).toBe("1fr 1.3fr");
-    expect(decl(b, ".dash-row-usage", "grid-template-columns")).toBe("1.5fr 1fr");
     expect(decl(b, ".dash-proj-path", "display")).toBe("block");
   });
 
@@ -39,21 +36,32 @@ describe("觀測面板窄窗口：數字卡、兩欄的列、專案表（票 35 
   });
 });
 
-describe("Codex 額度條任何寬度都兩行（票 35 第 3 題）", () => {
-  // 一行排法時條寬＝卡寬扣掉右邊的百分比與重置時間：重置時間長短不同，兩條就不一樣長，窗口 800 時還會被擠到 0
-  it("上面一行名稱在左、百分比與重置時間在右，下面一行整條進度條", () => {
-    expect(decl(css, ".dash-gauge", "grid-template-columns")).toBe("1fr auto");
-    expect(decl(css, ".dash-gauge", "grid-template-areas")).toBe('"label meta" "bar bar"');
-    expect(decl(css, ".dash-gauge-label", "grid-area")).toBe("label");
-    expect(decl(css, ".dash-gauge > .dash-bar", "grid-area")).toBe("bar");
-    expect(decl(css, ".dash-gauge-meta", "grid-area")).toBe("meta");
+describe("Codex 一整條：多個窗口共用一組欄寬（票 46，spec §4.3）", () => {
+  // 取代票 35 第 3 題的兩行排法：一整條佔整排寬，名稱｜進度條｜百分比共用同一組欄寬，每條進度條一樣長
+  it("窗口清單是 auto 1fr auto 的 grid；放不下一行時標題自己一行（flex-wrap、清單最少 240px）", () => {
+    expect(decl(css, ".dash-cx-rows", "grid-template-columns")).toBe("auto 1fr auto");
+    expect(decl(css, ".dash-cx-strip", "flex-wrap")).toBe("wrap");
+    expect(decl(css, ".dash-cx-rows", "min-width")).toBe("240px");
   });
 });
 
-describe("圓餅中間的總額（票 35 第 5 題）", () => {
-  // 洞寬 72px（.dash-donut 124px − 2 × .dash-donut::after 的 inset 26px）：14px 時 $3,609.72 約 75.6px、壓到圓環，
-  // 12px 約 64.8px。實際字寬由 headless Chrome 量（計畫 Task 5 的 donutGap），這裡只守使用者選的字級
-  it("字 12px", () => {
-    expect(decl(css, ".dash-donut-center b", "font-size")).toBe("12px");
+describe("模型分布的排名長條（票 46，spec §4.5）", () => {
+  // 名稱一欄寬＝最長的名稱、軌道吃剩下的：各列軌道左緣對齊、一樣長（取代圓餅與票 35 第 5 題的中間總額字級）
+  it("名稱欄 max-content、軌道 1fr", () => {
+    expect(decl(css, ".dash-mbars", "grid-template-columns")).toBe("max-content 1fr");
+  });
+});
+
+describe("每日成本的最高金額與頭尾日期（票 46，spec §4.4）", () => {
+  // 位置由 TSX 給 left: x%＋translateX(-x%)：這裡守的是「它們是疊在圖上的絕對定位、不斷行」，
+  // 圖上方留 16px 給最高金額。標籤彼此不相交、不越界由 headless Chrome 量
+  it("圖上方留 16px；最高金額與日期都是絕對定位、不斷行", () => {
+    expect(decl(css, ".dash-daily-wrap", "padding-top")).toBe("16px");
+    expect(decl(css, ".dash-daily-wrap", "position")).toBe("relative");
+    expect(decl(css, ".dash-daily-peak", "position")).toBe("absolute");
+    expect(decl(css, ".dash-daily-peak", "white-space")).toBe("nowrap");
+    expect(decl(css, ".dash-daily-axis", "position")).toBe("relative");
+    expect(decl(css, ".dash-daily-axis > span", "position")).toBe("absolute");
+    expect(decl(css, ".dash-daily-axis > span", "white-space")).toBe("nowrap");
   });
 });
