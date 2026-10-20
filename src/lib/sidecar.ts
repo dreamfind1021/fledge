@@ -1131,6 +1131,9 @@ export interface TasksListResponse {
   /** 讀不到時是 null 而不是空清單：空清單與「這個專案沒待辦」在畫面上長得一樣（design §6.3） */
   tasks: TaskRow[] | null;
   next_step: string;
+  /** state.md 第一行 `# <專案名> — <階段名>` 的階段名，「下一步」卡片的標題（2026-10-20）；沒有就是空字串。總覽不帶這欄。
+   *  sidecar 一定會送。寫成可省略，是為了不必改測試裡四十幾處手寫的回應；缺欄時當成沒有標題 */
+  note_stage?: string;
   /** state.md 末尾「貼進新對話的指令」圍籬內的文字（票 21）；沒有就是空字串。總覽不帶這欄 */
   handoff_command: string;
 }

@@ -118,6 +118,10 @@ describe("待辦面板三欄版面", () => {
   it("下一步最多 3 行：直的排", () => expect(decl(css, ".tasks-next-tx", "-webkit-box-orient")).toBe("vertical"));
   it("下一步最多 3 行：行數是 3", () => expect(decl(css, ".tasks-next-tx", "-webkit-line-clamp")).toBe("3"));
   it("下一步最多 3 行：超出的藏起來", () => expect(decl(css, ".tasks-next-tx", "overflow")).toBe("hidden"));
+  // 下一步的標題不截斷、太長就換行（2026-10-20 spec §4.2）；畫面上沒有左右捲動由收尾的 headless 量測看
+  it("下一步標題：沒有空格的長字串也能斷，不撐寬卡片", () => expect(decl(css, ".tasks-next-ti", "overflow-wrap")).toBe("anywhere"));
+  it("下一步標題：不限行數", () => expect(hasDecl(css, ".tasks-next-ti", "-webkit-line-clamp")).toBe(false));
+  it("下一步標題：可以換行", () => expect(hasDecl(css, ".tasks-next-ti", "white-space")).toBe(false));
 
   // 票內文的表格（spec §4.1.8）：jsdom 量不到換行，只守宣告；畫面由收尾的量測看
   it("表格：表頭不換行", () => expect(decl(css, ".tk-md th", "white-space")).toBe("nowrap"));

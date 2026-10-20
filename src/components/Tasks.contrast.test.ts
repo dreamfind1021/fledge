@@ -195,6 +195,10 @@ const TEXT: [string, string, string, Backdrop][] = [
     ["下一步標籤（滑過）", ".tasks-next-lab", "color", "nextHover"],
     ["下一步標籤（選中）", ".tasks-next-lab", "color", "nextOn"],
     ["下一步內文（選中）", ".tasks-next-tx", "color", "nextOn"],
+    // 2026-10-20 spec §4.2：卡片最上面的標題，三種底色都要過
+    ["下一步標題", ".tasks-next-ti", "color", "nextBase"],
+    ["下一步標題（滑過）", ".tasks-next-ti", "color", "nextHover"],
+    ["下一步標題（選中）", ".tasks-next-ti", "color", "nextOn"],
     ["樹的軌道數字（軌道）", ".tree-num", "color", "track"],
     ["樹的軌道數字（選中列軌道）", ".tree-num", "color", "trackActive"],
     ["樹的軌道數字（填充）", ".tree-num", "color", "fill"],
