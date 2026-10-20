@@ -229,6 +229,66 @@ def test_next_step_absent_or_beyond_head_is_empty(tmp_path):
         assert scanner.read_next_step(td.fledge_fd) == ""       # 超出前 20 行就不抓
 
 
+
+def _note_stage(tmp_path, text):
+    """寫一份 state.md，回 `read_note_stage` 的結果。`_setup` 不建 tasks/，所以每一條都同時驗了
+    「tasks/ 不存在照樣讀得到」（同 read_next_step 的規則）。"""
+    config, proj = _setup(tmp_path)
+    fledge = proj / ".fledge"
+    fledge.mkdir()
+    (fledge / "state.md").write_text(text, encoding="utf-8")
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert td.fd is None and td.fledge_fd is not None
+        return scanner.read_note_stage(td.fledge_fd)
+
+
+# 2026-10-20 spec §4.1：「下一步」卡片的標題＝前 20 行第一個 H1 裡、` — ` 後面那段（resume-note skill 寫的格式）
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("# Meeting Agent — spec 審查起手\n\n**下一步**：做 A。\n", "spec 審查起手"),
+        ("# 重構登入流程\n", "重構登入流程"),                       # 沒有 ` — `：整段
+        ("# A — B — C\n", "B — C"),                                 # 只切第一個
+        ("#   A —   階段   \n", "階段"),                            # 切完才去前後空白
+        ("   # A — 縮排的標題\n", "縮排的標題"),                     # 行首空白照樣認得
+        ("## 二級 — 不算\n# A — 真的\n", "真的"),                   # `## ` 不是 H1
+        ("#標題 — 也不算\n# A — 真的\n", "真的"),                   # `#` 後面直接接字也不是
+        ("# A - 連字號\n", "A - 連字號"),                           # 只認 U+2014
+        ("# A \u2013 短破折號\n", "A \u2013 短破折號"),
+        ("# A— 前面沒空格\n", "A— 前面沒空格"),
+        ("# 匯出流程 —失敗重試\n", "匯出流程 —失敗重試"),            # 後面沒空格：不切（Codex spec R2）
+        ("# Fledge — \n", ""),                                      # 空階段名（Codex spec R1）
+        ("# Fledge —    \n", ""),
+        ("# \n# A — 後面的\n", ""),                                  # 單獨的 `# ` 也是 H1（空的），後面的不看
+        ("#\n# A — 後面的\n", ""),                                   # 單獨的 `#` 也是
+        ("# Fledge —\n", "Fledge —"),                               # 行尾空格被刪掉：整行照顯示（spec §9 第 2 點）
+        ("# Fledge — \n\n# 別的 — 階段\n", ""),                    # 第一個 H1 是空的就停，不往下找
+        ("沒有標題\n\n**下一步**：做 A。\n", ""),
+        ("# A — 階段\r\n\r\n**下一步**：做 A。\r\n", "階段"),          # Windows 換行：標題不帶 \r
+        ("\ufeff# A — 階段\n", "階段"),                              # 檔首 BOM（編輯器存檔時加的）不擋住 H1
+        ("# A — \u3000\n", ""),                                     # 階段名只有全形空白＝空的
+        ("x\n" * 19 + "# A — 第 20 行\n", "第 20 行"),
+        ("x\n" * 20 + "# A — 第 21 行\n", ""),                       # 超出前 20 行就不抓
+    ],
+    ids=[
+        "standard", "no-sep", "first-sep-only", "strip-after-split", "indented", "skip-h2", "skip-nospace",
+        "hyphen", "en-dash", "no-space-before", "no-space-after", "empty-trailing-space", "empty-many-spaces",
+        "bare-hash-space", "bare-hash", "dash-at-eol", "empty-first-h1-stops", "no-h1", "crlf", "bom", "fullwidth-space-only",
+        "line-20", "line-21",
+    ],
+)
+def test_note_stage_from_first_h1(tmp_path, text, expected):
+    assert _note_stage(tmp_path, text) == expected
+
+
+def test_note_stage_without_state_md_is_empty(tmp_path):
+    config, proj = _setup(tmp_path)
+    (proj / ".fledge").mkdir()
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        assert td.fledge_fd is not None
+        assert scanner.read_note_stage(td.fledge_fd) == ""
+    assert scanner.read_note_stage(None) == ""                  # `.fledge` 開不起來
+
 def test_handoff_command_is_read_from_state_md_tail(tmp_path):
     """票 21：`## 貼進新對話的指令` 標題之後第一個 ``` 圍籬的內容。
 

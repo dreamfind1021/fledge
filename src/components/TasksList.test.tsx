@@ -12,7 +12,7 @@ const ticket = (over: Partial<TaskRow> = {}): TaskRow => ({
   anomalies: [], fingerprint: "f", path: "/p/a/.fledge/tasks/01-a.md", body: "", editable: true, ...over,
 });
 const list = (tasks: TaskRow[], over: Partial<TasksListResponse> = {}): TasksListResponse =>
-  ({ project: "/p/a", tasks_status: "ok", tasks, next_step: "", handoff_command: "", ...over });
+  ({ project: "/p/a", tasks_status: "ok", tasks, next_step: "", handoff_command: "", note_stage: "", ...over });
 const noop = () => {};
 const props = (over: Partial<Parameters<typeof TasksList>[0]> = {}) => ({
   data: list([ticket()]), projectName: "a", failed: false, notice: "",
@@ -100,6 +100,34 @@ describe("TasksList", () => {
     rerender(<TasksList {...props({ onToggleNote, showNote: true, data: list([ticket()], { next_step: "do x" }) })} />);
     expect(screen.getByLabelText(en.a11y.hideNote).classList.contains("is-on")).toBe(true);
     rerender(<TasksList {...props({ data: list([ticket()]) })} />);
+    expect(container.querySelector(".tasks-next")).toBeNull();
+  });
+
+  // 2026-10-20 spec §4.2：標題（state.md 第一行的階段名）在最上面，「›」跟它同一列；接著才是「下一步」標籤與內文
+  it("下一步卡片有標題：標題列在最上面、› 在標題列，接著是標籤與內文", () => {
+    const { container } = render(<TasksList {...props({ data: list([ticket()], { next_step: "do x", note_stage: "階段名" }) })} />);
+    const card = container.querySelector(".tasks-next")!;
+    expect(card.querySelector(".tasks-next-ti")?.textContent).toBe("階段名");
+    expect([...card.children].map((c) => c.className)).toEqual(["tasks-next-head", "tasks-next-lab", "tasks-next-tx"]);
+    expect(card.querySelector(".tasks-next-head .tasks-next-more")?.textContent).toBe("›");
+    expect(card.querySelectorAll(".tasks-next-more")).toHaveLength(1);
+  });
+
+  it("下一步卡片沒有標題：結構跟加標題之前一樣（標籤列帶 ›、接內文）", () => {
+    const { container } = render(<TasksList {...props({ data: list([ticket()], { next_step: "do x" }) })} />);
+    const card = container.querySelector(".tasks-next")!;
+    expect([...card.children].map((c) => c.className)).toEqual(["tasks-next-lab", "tasks-next-tx"]);
+    expect(card.querySelector(".tasks-next-lab .tasks-next-more")?.textContent).toBe("›");
+  });
+
+  it("標題照原文顯示：HTML 與 markdown 符號都不解析", () => {
+    const { container } = render(<TasksList {...props({ data: list([ticket()], { next_step: "do x", note_stage: "<b>粗</b> `碼`" }) })} />);
+    // 文字內容等於原文，就代表沒有被當成 HTML 解析（解析了會變成「粗 `碼`」）
+    expect(container.querySelector(".tasks-next-ti")?.textContent).toBe("<b>粗</b> `碼`");
+  });
+
+  it("有標題但沒有下一步：整塊不畫", () => {
+    const { container } = render(<TasksList {...props({ data: list([ticket()], { note_stage: "階段名" }) })} />);
     expect(container.querySelector(".tasks-next")).toBeNull();
   });
 

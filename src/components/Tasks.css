@@ -63,6 +63,10 @@
 .tasks-next:hover { background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 16%, var(--hover)), var(--hover) 70%); }
 /* 選中 12% 不是 demo 的 22%：22% 時琥珀標籤只有 4.08:1（spec §11.9，Codex spec R1） */
 .tasks-next.is-on { background: linear-gradient(135deg, color-mix(in srgb, var(--primary) 12%, var(--active)), var(--active) 70%); }
+/* 標題（2026-10-20 spec §4.2）：state.md 第一行的階段名，在卡片最上面，「›」跟它同一列。
+   不截斷、太長就換行；沒有空格的長字串（路徑）也要能斷，不撐寬卡片 */
+.tasks-next-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.tasks-next-ti { flex: 1; min-width: 0; font-size: 15px; font-weight: 700; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
 .tasks-next-lab { display: flex; align-items: center; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--primary-text); margin-bottom: 3px; }
 /* 最多 3 行、超過的在第 3 行尾端以「…」截斷（2026-10-19 spec §4.2）：點卡片本來就會在右欄打開完整的離場筆記。Tauri 的 WebKit 支援這組寫法 */
 .tasks-next-tx { font-size: 14px; line-height: 1.6; color: var(--text); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }

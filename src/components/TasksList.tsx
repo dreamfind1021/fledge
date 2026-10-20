@@ -237,6 +237,8 @@ export function TasksList({
       onCycle={onCycle} onPark={onPark} onDelete={onDelete} onOpen={onOpen} onEdit={onEdit} t={t} />
   );
   // 空的區整段不畫——留一個 0 的標頭只是噪音
+  // 「›」只有一個：有標題時跟標題同一列，沒標題時留在「下一步」標籤列（＝加標題之前的樣子）
+  const more = <span className="tasks-next-more" aria-hidden="true">›</span>;
   const fold = (k: keyof typeof open, label: string, items: TaskRow[]) => items.length > 0 && (
     <>
       <button className="tasks-sec is-toggle" onClick={() => toggle(k)}
@@ -258,7 +260,9 @@ export function TasksList({
           aria-label={t(showNote ? "a11y.hideNote" : "a11y.showNote")} aria-pressed={showNote}
           onClick={onToggleNote}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggleNote(); } }}>
-          <div className="tasks-next-lab">{t("overview.nextStep")}<span className="tasks-next-more" aria-hidden="true">›</span></div>
+          {/* 標題＝state.md 第一行的階段名（2026-10-20 spec §4.2），放最上面，順序跟右欄的筆記一樣 */}
+          {data.note_stage ? <div className="tasks-next-head"><div className="tasks-next-ti">{data.note_stage}</div>{more}</div> : null}
+          <div className="tasks-next-lab">{t("overview.nextStep")}{data.note_stage ? null : more}</div>
           <div className="tasks-next-tx">{data.next_step}</div>
         </div>
       ) : null}

@@ -50,6 +50,12 @@ _NEXT_STEP = re.compile(r"^\*\*(?:下一步|Next)\*\*[:：]\s*(.+)$")
 # `/handoff` skill 寫在 state.md 末尾的段落標題（票 21）。**這個標題從此是格式合約**：
 # skill 那邊改了字，面板會靜默找不到、指令區塊消失。改之前兩邊要一起改。
 _HANDOFF_HEADING = "## 貼進新對話的指令"
+# 「下一步」卡片的標題（2026-10-20）：`/resume-note` skill 寫的第一行是 `# <專案名> — <階段名>`，取分隔符後面那段。
+# **這個分隔符也是格式合約**，與 skill 寫的一模一樣（前後各一個半形空格的 U+2014）；不放寬——放寬成「前面有空格」
+# 會把手寫的 `# 匯出流程 —失敗重試` 切成「失敗重試」（Codex spec R2）。
+_STAGE_SEP = " — "
+# H1＝`#` 後面接空白或行尾；`## `、`#標題` 都不是
+_H1 = re.compile(r"^#(?=\s|$)(.*)$")
 # 圍籬用**近似** CommonMark 的規則：開圍籬＝行首 ≥3 個反引號（可帶語言標記）；關圍籬＝**只含**
 # 反引號的行，且數量 ≥ 開圍籬。兩輪 Codex 各打掉一個「以 ``` 開頭」的變體（R1 漏認 ```text、
 # R2 內文行以 ``` 開頭被提早關閉）——與其再補條件，不如用標準規則。
@@ -357,6 +363,21 @@ def read_next_step(fledge_fd: int | None) -> str:
         m = _NEXT_STEP.match(line.strip())
         if m:
             return m.group(1).strip()
+    return ""
+
+
+def read_note_stage(fledge_fd: int | None) -> str:
+    """從 `.fledge/state.md` 前 20 行的第一個 H1 抽階段名，給「下一步」卡片當標題（2026-10-20 spec §4.1）。
+    讀不到一律回空字串。
+
+    找到 `_STAGE_SEP` 才去前後空白——先去行尾空白會把 `# Fledge — ` 的分隔符弄斷、回「Fledge —」（Codex spec R1）。
+    沒有分隔符就整段當標題（手寫的筆記不一定照 skill 的格式）。第一個 H1 切出來是空的就回空字串、不往下找。
+    檔首的 BOM 先去掉：H1 就在第一行，BOM 不是空白、`lstrip()` 去不掉，會讓標題悄悄消失。"""
+    for line in _read_state_text(fledge_fd).removeprefix("\ufeff").splitlines()[:STATE_HEAD_LINES]:
+        m = _H1.match(line.lstrip())
+        if m:
+            head, sep, rest = m.group(1).partition(_STAGE_SEP)
+            return (rest if sep else head).strip()
     return ""
 
 
