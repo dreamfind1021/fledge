@@ -273,7 +273,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 |------|------|
 | `README.md` | 三支 skill 的對照表、安裝說明（一行裝三支或各裝各的；多帳號建議把各帳號的 `skills/` symlink 到同一個目錄）、`.gitignore` 要自己加、換機器就沒了的取捨 |
 | `fledge-tasks/SKILL.md` | 待辦面板的 AI 那條線：同一支 skill 管開票與讀票，`description` 涵蓋兩類觸發句。**AI 不自行判斷要不要開票**（design §3.1）；撞號寫「最大號+1、檔名已存在就再+1」並明講不保證不撞 |
-| `resume-note/SKILL.md` | 離場筆記：收工時寫 `.fledge/state.md`（覆蓋式、兩級格式）。`**下一步**：` 標籤是與待辦面板總覽的格式合約（前 20 行內；英文介面認 `**Next**:`）。末節「建票收網」只列候選、建票走 `fledge-tasks` |
+| `resume-note/SKILL.md` | 離場筆記：收工時寫 `.fledge/state.md`（覆蓋式、兩級格式）。`**下一步**：` 標籤是與待辦面板總覽的格式合約（前 20 行內；英文介面認 `**Next**:`）。第一行 `# <專案名> — <階段名>` 也是合約（2026-10-20：面板取 ` — ` 後面那段當「下一步」卡片的標題；精簡版不再寫「目前狀態」）。末節「建票收網」只列候選、建票走 `fledge-tasks` |
 | `handoff/SKILL.md` | 換對話交接：呼叫 `resume-note` 寫完整版，再記測試基準、分支狀態、記憶候選，最後產三句貼進新對話的指令。綁作者的 superpowers／SDD 流程，README 明講「當參考」 |
 
 ---

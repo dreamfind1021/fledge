@@ -55,7 +55,7 @@ Overwritten, not appended — it records where things stand now, not history. Hi
 The short form (most wrap-ups):
 
 ```markdown
-# project-name — current state
+# project-name — wire the export filename to config
 
 > Updated: 2026-09-13
 
@@ -69,6 +69,8 @@ The short form (most wrap-ups):
 The full form (for when a phase is done and the next hasn't started) adds five sections: what to load, what state to confirm, the full procedure, working conventions, and things a fresh session needs to know. The template is in the skill.
 
 **The `**Next**:` label is the contract with the panel.** The panel reads only the first 20 lines of the file and recognizes only this label (`**下一步**：` works too, regardless of UI language). If the label isn't in the first 20 lines, the overview column is empty.
+
+**The first line is a contract too.** The panel takes the part after ` — ` in `# project-name — phase` and shows it as the title of the "next step" card, so the phase should say which piece of work this is, not a fixed phrase like "current state". It must be the first line starting with `# ` within the first 20 lines, and the separator is "—" with one space on each side; without it, the panel shows the whole line.
 
 ## Day to day
 
