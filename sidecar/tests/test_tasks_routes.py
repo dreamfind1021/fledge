@@ -199,6 +199,23 @@ def test_list_tasks_carries_handoff_command_but_overview_does_not(tmp_path, monk
         assert "handoff_command" not in row
 
 
+def test_list_tasks_carries_note_stage_but_overview_does_not(tmp_path, monkeypatch):
+    """2026-10-20 spec §4.1：專案頁回 state.md 第一行的階段名，給「下一步」卡片當標題；沒有就是空字串。
+
+    總覽不帶，理由同 handoff_command。"""
+    root, proj = _proj_with_tasks(tmp_path)
+    (proj / ".fledge" / "state.md").write_text("# p1 — 階段名\n\n**下一步**：做 A。\n", encoding="utf-8")
+    bare = root / "bare"
+    bare.mkdir()
+    c = _client(tmp_path, monkeypatch, roots=[{"path": str(root), "default_account": "work"}])
+    assert c.get("/tasks", params={"project": str(proj)}).json()["note_stage"] == "階段名"
+    assert c.get("/tasks", params={"project": str(bare)}).json()["note_stage"] == ""
+    rows = c.get("/tasks/overview").json()["projects"]
+    assert len(rows) == 2                                       # 迴圈跑零次也會綠，先確認兩個專案都在
+    for row in rows:
+        assert "note_stage" not in row
+
+
 def test_list_tasks_requires_token_when_auth_enforced(tmp_path, monkeypatch):
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"version": 1, "accounts": {}, "roots": [], "kms_root": ""}), encoding="utf-8")
