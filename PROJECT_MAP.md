@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-10-20
+- **最後更新：** 2026-10-22
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -53,7 +53,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `api/codex_usage.py` | Codex 實時額度抓取（api/ 層唯一對外出口）：讀 `~/.codex/auth.json` 的 `access_token`+`account_id`→GET `chatgpt.com/backend-api/codex/usage`（Bearer+`chatgpt-account-id`，8s timeout）→正規化 `primary/secondary_window`→`{used_percent,window_minutes,resets_at}`；**token 只進 header 絕不 log/回傳**，任何例外 redaction 成 typed 失敗（no_auth/unauthorized/network/bad_response），不外洩 raw exception | `fetch_codex_usage()`, `normalize_usage()`, `USAGE_URL` |
 | `usage/pricing.py` | 計價公式與模型名正規化（別名/日期後綴/`<synthetic>`→None；**不做 prefix walk**，表外未知款一律 missing）＋兩源計價（USD per MTok ÷1e6、cache 三層讀表內真價、cached⊆input；Claude 有分段的款〔`CLAUDE_LONG_CONTEXT`〕在 input＋cache 5m＋cache 1h＋cache read **大於**門檻時五欄〔含 output〕整組換分段價）；`PRICING_VERSION` 引用表的 `TABLE_VERSION` 供 L2 重算（只跟表的內容走：只改公式不改表時它不變、L2 不重算）。`PINNED`（key→(價, 理由)）／`EXCLUDED`（key→理由）是刻意偏離上游的例外清單，只被 `admin/sync_pricing.py` 讀、不參與 runtime 查表 | `PRICING_VERSION`, `PINNED`, `EXCLUDED`, `normalize_*_model()`, `claude_cost()`, `codex_cost()` |
 | `usage/pricing_table.py` | 定價表本體（**自動生成，勿手改**）：`admin/sync_pricing.py` 從 LiteLLM 整檔重生。Claude 五欄（input／output／cache 5m／cache 1h／cache read）、Claude 分段 `CLAUDE_LONG_CONTEXT`（key→(門檻, 越線後的五欄)，目前只有 Haiku 5.5 的 100K）、Codex 三欄（input／cached／output）。表 key 已套用 pricing.py 的正規化，故等同 runtime 查表用的 key；分段表的 key 一定也在 `CLAUDE_PRICING`；`TABLE_VERSION` = 生成日期 + 三張表內容 sha256[:8]，內容（含分段）一變就變 | `TABLE_VERSION`, `CLAUDE_PRICING`, `CLAUDE_LONG_CONTEXT`, `CODEX_PRICING` |
-| `usage/parser.py` | 兩格式逐行解析→瘦條目 `UsageEntry`（內容層不拋例外：壞行/壞值跳過計數；I/O 例外由呼叫端 wrap）：claude（快篩純最佳化、cache precedence nested 優先、dedup_key、sidechain）＋codex rollout（last/累計差分 clamp、turn_context model、session_meta cwd、rate_limits 末筆） | `UsageEntry`, `CodexFileResult`, `parse_claude_file()`, `parse_codex_file()` |
+| `usage/parser.py` | 兩格式逐行解析→瘦條目 `UsageEntry`（內容層不拋例外：壞行/壞值跳過計數；I/O 例外由呼叫端 wrap）：claude（快篩純最佳化、cache precedence nested 優先、dedup_key、sidechain）＋codex rollout（last/累計差分 clamp、turn_context model、session_meta cwd） | `UsageEntry`, `CodexFileResult`, `parse_claude_file()`, `parse_codex_file()` |
 | `usage/scanner.py` | 兩源檔案發現（回傳一律 realpath）：claude＝各帳號 config_dir/projects 遞迴＋realpath 去重，另回 realpath→account_key 對應表（tie-break 按 account_key 排序取第一、不依 dict 序）；codex＝sessions/archived 的 per-session canonical selection（active>mtime_ns>size>路徑全序；首行窺視 session_id、_PEEK_LIMIT 1MiB） | `claude_files()`, `claude_account_map()`, `_scan_claude()`, `codex_files()` |
 | `usage/cache.py` | L1 記憶體＋L2 磁碟瘦條目快取：(size, mtime_ns) 失效、bounded ThreadPool 平行 parse、`threading.Lock` 序列化、L2 損壞寬 catch 重建、pricing_version 變更只重算 cost 不重 parse、generation 防舊蓋新（同 schema 代才比較）、變動才落盤、atomic write；`RefreshResult` 另暴露 `claude_by_file`（realpath→entries shallow snapshot、只含 claude，防 route/測試 mutate 污染 L1） | `UsageCache`, `FileCacheEntry`, `RefreshResult`, `SCHEMA_VERSION` |
 | `usage/aggregator.py` | dashboard payload 組裝：claude dedup 替換規則（parent>sidechain>token 多者）、synthetic 濾除、KPI（本地時區視窗/Net ROI/分源 cache 命中率）、daily/models/projects（memoized realpath）/hourly（7×24 週一起）聚合（900s bucket memo 消 datetime 成本）；payload 無 blocks（Codex 額度改走 `/usage/codex` 實時、Claude 5hr 卡片移除） | `build_dashboard()` |
@@ -206,7 +206,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `test_usage_pricing.py` | 定價正規化（別名/後綴/synthetic/表外未知款不猜價）＋兩源計價公式＋Claude 分段（門檻嚴格大於／長度四項各自能越線／output 不計入長度／五欄整組換／無分段的款不受影響／Haiku 5.5 官方分段價釘死） |
 | `test_sync_pricing.py` | `admin/sync_pricing.py` 的表建構與渲染（假上游 dict、不連外也不掃本機）：裸 key 過濾／日期版合併／同名不同價視為衝突／PINNED 保值／EXCLUDED 不入表／cached 缺失退回 input 價／已知合理偏離不被防線換掉且仍擋得住二次漂移／新世代不被靜默略過且字首要有世代邊界／非文字產品依 mode 擋掉／查無定價的四種原因分得開（EXCLUDED 優先）／上游正數不論偏離多遠都照收而非改寫／非有限正數才推導並出聲／診斷與建表共用候選（同名多 key 不誤判）／渲染結果可 exec 回原表／版本隨內容變／分段：門檻從欄位名讀、batch 變體不混入、分段 cache 缺層推導並標估值、分段 output 缺值擋下、多門檻與同名分段不一致算衝突、EXCLUDED 連分段不收、PINNED 不管分段、只改分段價或門檻也換版本、dry-run 印新增與改動的分段、移除分段需 `--allow-removals` |
 | `test_derive_theme.py` | `admin/derive_theme.py`：推導主題的現值＝推導結果、淺色配方 `primary`（主色換成指定色）的輸出釘在字面值且不改傳進來的午夜藍基準、CLI 結束碼、改一格恰好點名那一格；結構防線的負對照（同一塊兩次、沒有配方的塊、`[data-theme]:root` 寫法、區塊內重複宣告、午夜藍的 `!important`、漏分號的最後一條等） |
-| `test_usage_parser.py` | 兩格式解析（容錯/cache precedence/差分 clamp/壞 ts/中文 cwd/rate_limits 末筆） |
+| `test_usage_parser.py` | 兩格式解析（容錯/cache precedence/差分 clamp/壞 ts/中文 cwd） |
 | `test_usage_scanner.py` | realpath 去重（symlink 帳號）＋codex canonical 三層 tier＋fallback |
 | `test_codex_usage.py` | Codex 實時額度（normalize_usage 欄位映射/缺鍵→bad_response、fetch no_auth/401→unauthorized/URLError→network/壞 JSON；opener 注入不打真網路、token 進 header） |
 | `test_usage_cache.py` | L1 命中/L2 roundtrip/損壞重建/pricing 重算（含分段：舊公式存的越線紀錄重啟後改算分段價、不重 parse）/generation 防舊蓋新/並發序列化/ghost |

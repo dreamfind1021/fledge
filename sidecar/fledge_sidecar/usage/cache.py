@@ -38,8 +38,6 @@ class FileCacheEntry:
     source: str                      # 'claude' | 'codex'
     entries: list[UsageEntry] = field(default_factory=list)
     skipped: int = 0
-    rate_limits: dict | None = None  # codex 檔內最後 rate_limits
-    rate_limits_ts: float = 0.0
 
 
 @dataclass
@@ -48,7 +46,6 @@ class RefreshResult:
     skipped_lines: int
     parsed_files: int
     total_files: int
-    codex_rate_limits: dict | None   # 全源最新一筆
     generation: int
     claude_by_file: dict[str, list[UsageEntry]]   # realpath→entries shallow-copy（只含 claude）
 
@@ -84,8 +81,7 @@ class UsageCache:
                     entries = [self._reprice(e) for e in entries]
                 files[rp] = FileCacheEntry(
                     size=fc["size"], mtime_ns=fc["mtime_ns"], source=fc["source"],
-                    entries=entries, skipped=fc.get("skipped", 0),
-                    rate_limits=fc.get("rate_limits"), rate_limits_ts=fc.get("rate_limits_ts", 0.0))
+                    entries=entries, skipped=fc.get("skipped", 0))
             self._generation = generation
             self._files = files
             if reprice:
@@ -130,8 +126,7 @@ class UsageCache:
             "generation": self._generation,
             "files": {rp: {
                 "size": fc.size, "mtime_ns": fc.mtime_ns, "source": fc.source,
-                "skipped": fc.skipped, "rate_limits": fc.rate_limits,
-                "rate_limits_ts": fc.rate_limits_ts,
+                "skipped": fc.skipped,
                 "entries": [dataclasses.asdict(e) for e in fc.entries],
             } for rp, fc in self._files.items()},
         }
@@ -182,18 +177,14 @@ class UsageCache:
             self._save_l2()
         all_entries: list[UsageEntry] = []
         skipped_lines = 0
-        rl: dict | None = None
-        rl_ts = -1.0
         for fc in self._files.values():
             all_entries.extend(fc.entries)
             skipped_lines += fc.skipped
-            if fc.rate_limits is not None and fc.rate_limits_ts > rl_ts:
-                rl, rl_ts = fc.rate_limits, fc.rate_limits_ts
         claude_by_file = {rp: list(fc.entries)
                           for rp, fc in self._files.items() if fc.source == "claude"}
         return RefreshResult(entries=all_entries, skipped_lines=skipped_lines,
                              parsed_files=len(to_parse), total_files=len(self._files),
-                             codex_rate_limits=rl, generation=self._generation,
+                             generation=self._generation,
                              claude_by_file=claude_by_file)
 
     def _parse_one(self, item: tuple[str, str, Path]) -> tuple[str, FileCacheEntry | None]:
@@ -206,8 +197,7 @@ class UsageCache:
                 entries, skipped = parse_claude_file(p)
                 return rp, FileCacheEntry(st.st_size, st.st_mtime_ns, source, entries, skipped)
             r: CodexFileResult = parse_codex_file(p)
-            return rp, FileCacheEntry(st.st_size, st.st_mtime_ns, source, r.entries, r.skipped,
-                                      r.rate_limits, r.last_ts)
+            return rp, FileCacheEntry(st.st_size, st.st_mtime_ns, source, r.entries, r.skipped)
         except OSError as exc:
             logger.warning("usage 檔案讀取失敗（本輪略過）：%s（%s）", p, exc)
             return rp, None

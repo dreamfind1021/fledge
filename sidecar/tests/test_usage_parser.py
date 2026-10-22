@@ -108,7 +108,6 @@ def test_codex_parser_delta_and_cumulative_diff(tmp_path: Path):
     # 第二筆只有累計 → 差分：input 1500-1000=500, cached 700-400=300, output 80-50=30
     assert (e2.input_tokens, e2.cache_read_tokens, e2.output_tokens) == (500, 300, 30)
     assert e2.model == "gpt-5.5" and e2.project == "/p/beta" and e2.session_id == "sess-1"
-    assert result.rate_limits is not None and result.rate_limits["plan_type"] == "plus"
     assert result.session_id == "sess-1"
 
 
@@ -129,13 +128,6 @@ def test_codex_missing_session_meta_uses_realpath_key(tmp_path: Path):
     f.write_text(lines, encoding="utf-8")
     result = parse_codex_file(f)
     assert result.session_id == str(f.resolve())  # design §5.2 fallback
-
-
-def test_codex_rate_limits_last_one_wins(tmp_path: Path):
-    f = tmp_path / "rollout-x.jsonl"
-    f.write_text(_codex_lines(), encoding="utf-8")
-    result = parse_codex_file(f)
-    assert result.rate_limits["primary"]["used_percent"] == 5.0  # 第二筆（最後）贏
 
 
 def test_codex_cumulative_diff_clamps_negative(tmp_path: Path):
