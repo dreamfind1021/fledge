@@ -223,8 +223,8 @@ def test_schema_mismatch_rebuild_actually_persists(tmp_path: Path):
     assert disk["version"] == SCHEMA_VERSION and disk["generation"] >= 1
 
 
-def test_removed_file_and_codex_rate_limits_passthrough(tmp_path: Path):
-    # removed/ghost 路徑：檔案消失 → 條目消失且觸發落盤；codex rate_limits 經 cache 傳遞
+def test_removed_file_triggers_ghost_pop(tmp_path: Path):
+    # removed/ghost 路徑：檔案消失 → 條目消失且觸發落盤
     f = _write_claude(tmp_path, "a.jsonl")
     cx = tmp_path / "rollout-1.jsonl"
     cx.write_text("\n".join([
@@ -241,7 +241,6 @@ def test_removed_file_and_codex_rate_limits_passthrough(tmp_path: Path):
     l2 = tmp_path / "usage-v1.json"
     c = UsageCache(l2_path=l2)
     r1 = c.refresh(claude=[f], codex=[cx])
-    assert r1.codex_rate_limits == {"plan_type": "plus"}
     f.unlink()
     r2 = c.refresh(claude=[f], codex=[cx])            # 已消失仍在掃描清單 → ghost pop＋落盤
     assert all(e.source == "codex" for e in r2.entries)

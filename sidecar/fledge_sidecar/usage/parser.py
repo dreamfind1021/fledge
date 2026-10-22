@@ -43,8 +43,6 @@ class CodexFileResult:
     entries: list[UsageEntry]
     skipped: int
     session_id: str
-    rate_limits: dict | None  # 檔內最後一筆 token_count 的 rate_limits
-    last_ts: float            # rate_limits 對應時間（跨檔取最新用）
 
 
 def _parse_ts(raw: str) -> float | None:
@@ -121,8 +119,6 @@ def parse_codex_file(path: Path) -> CodexFileResult:
     cwd = ""
     model_raw: str | None = None
     prev_total: dict | None = None
-    rate_limits: dict | None = None
-    last_ts = 0.0
     with open(path, "rb") as f:
         for line in f:
             try:
@@ -175,9 +171,4 @@ def parse_codex_file(path: Path) -> CodexFileResult:
                     project=cwd, session_id=session_id, dedup_key="",
                     sidechain=False, missing_pricing=missing,
                 ))
-                rl = payload.get("rate_limits")
-                if isinstance(rl, dict):
-                    rate_limits = rl
-                    last_ts = ts
-    return CodexFileResult(entries=entries, skipped=skipped, session_id=session_id,
-                           rate_limits=rate_limits, last_ts=last_ts)
+    return CodexFileResult(entries=entries, skipped=skipped, session_id=session_id)
