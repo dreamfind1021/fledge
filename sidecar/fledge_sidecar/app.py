@@ -32,7 +32,9 @@ async def _lifespan(app: FastAPI):
 
     from fledge_sidecar.usage import account_activity
     account_activity.mark_process_start(time.time())   # 孤兒回收基準（read-time）
+    stop_codex_poll = usage.start_codex_account_poller()  # Codex 帳號每日用量背景更新（spec 5.4）
     yield
+    stop_codex_poll.set()   # 只發停止旗標、不等在途的查詢：關閉不能被拖慢
     # shutdown：關所有 PTY session，避免 claude 子進程 orphan
     sessions.close_all_sessions()
 

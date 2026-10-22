@@ -4,8 +4,6 @@
 替身講的是我們自己定義的協定——真 CLI 改版替身照樣綠，所以另有人工發行驗收（design §3）。"""
 import json
 import os
-import stat
-import sys
 import time
 from pathlib import Path
 
@@ -292,56 +290,6 @@ def test_fetch_account_usage_errors_are_typed(tmp_path: Path, method, err, reaso
 
 
 # ---- AppServerSession（真子進程 ＋ 假 codex 腳本）----
-
-FAKE_CODEX = r'''#!%(py)s
-import json, os, sys, time
-mode = os.environ.get("FAKE_CODEX_MODE", "normal")
-out = os.environ.get("FAKE_CODEX_OUT")
-if out:
-    with open(out, "w") as f:
-        json.dump({"pid": os.getpid(), "CODEX_HOME": os.environ.get("CODEX_HOME"), "argv": sys.argv[1:]}, f)
-if mode == "silent":
-    time.sleep(60); sys.exit(0)
-def emit(o): sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
-for line in sys.stdin:
-    try: m = json.loads(line)
-    except json.JSONDecodeError: continue
-    if "id" not in m: continue                          # 通知（initialized）不回
-    if mode == "noise":
-        sys.stdout.write("warning: something on stdout\n"); sys.stdout.flush()
-        emit({"jsonrpc": "2.0", "method": "remoteControl/status/changed", "params": {"status": "disabled"}})
-    if m["method"] == "initialize":
-        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"userAgent": "fake", "codexHome": os.environ.get("CODEX_HOME")}})
-        if mode == "exit-after-init": sys.exit(0)
-    elif m["method"] == "account/read":
-        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"account": {"type": "chatgpt", "planType": "plus"}, "requiresOpenaiAuth": True}})
-    elif m["method"] == "account/rateLimits/read":
-        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"accountId": "acc-fake", "rateLimits": {"planType": "plus",
-              "primary": {"usedPercent": 12, "windowDurationMins": 300, "resetsAt": 1789408745}, "secondary": None}}})
-    elif m["method"] == "account/usage/read":
-        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"dailyUsageBuckets": [{"startDate": "2026-10-21", "tokens": 7}],
-              "summary": {"lifetimeTokens": 7}}})
-    elif m["method"] == "model/list":
-        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"data": [{"id": "m", "model": "gpt-fake", "isDefault": True}],
-              "nextCursor": None}})
-    else:
-        emit({"jsonrpc": "2.0", "id": m["id"], "error": {"code": -32601, "message": "method not found"}})
-'''
-
-
-@pytest.fixture
-def fake_codex(tmp_path, monkeypatch):
-    """PATH 上放一支講同一套協定的假 codex；回 (執行檔路徑, 它會寫 pid／env 的檔案)。"""
-    script = tmp_path / "bin" / "codex"
-    script.parent.mkdir()
-    script.write_text(FAKE_CODEX % {"py": sys.executable}, encoding="utf-8")
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
-    out = tmp_path / "fake-codex-out.json"
-    monkeypatch.setenv("FAKE_CODEX_OUT", str(out))
-    home = tmp_path / ".codex"
-    home.mkdir()
-    return script, out, home
-
 
 def _session_fetch(script, home, *, timeout=8.0):
     return codex_usage.fetch_codex_usage(
