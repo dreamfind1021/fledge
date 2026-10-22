@@ -13,9 +13,10 @@ from fastapi.responses import JSONResponse
 
 from fledge_sidecar.api.codex_usage import fetch_codex_usage
 from fledge_sidecar.app_config import AppConfig, default_config_path
-from fledge_sidecar.usage.aggregator import build_dashboard
+from fledge_sidecar.usage import codex_account_store
+from fledge_sidecar.usage.aggregator import build_codex_unattributed, build_dashboard
 from fledge_sidecar.usage.cache import UsageCache
-from fledge_sidecar.usage.scanner import _scan_claude, codex_files
+from fledge_sidecar.usage.scanner import _scan_claude, codex_config_model, codex_files
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -62,6 +63,11 @@ def _scan_sync(days: int) -> dict:
     now = time.time()
     payload = build_dashboard(r.entries, config.subscriptions, now=now, days=days,
                               roots=[r["path"] for r in config.roots])
+    # 估算值獨立成一塊，不混進 KPI／每日／模型／專案那些量到的數字（spec §3）
+    history = codex_account_store.load(codex_account_store.default_path())
+    payload["codex_unattributed"] = build_codex_unattributed(
+        r.entries, history.accounts, days=days, now=now,
+        price_model=codex_config_model(_codex_home()) or history.default_model)
     payload["scan_meta"].update({
         "state": "ok", "generation": r.generation, "files": r.total_files,
         "skipped_lines": r.skipped_lines, "scanned_at": now, "error": None,

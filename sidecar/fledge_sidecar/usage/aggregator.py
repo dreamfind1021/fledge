@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fledge_sidecar.paths import resolve_best_effort
+from fledge_sidecar.usage import pricing
 from fledge_sidecar.usage.parser import UsageEntry
 
 # 專案路徑正規化 memo（symlink resolve 走 syscall，聚合每輪重用）
 _canon_cache: dict[str, str] = {}
+_EPOCH_ORDINAL = date(1970, 1, 1).toordinal()
 
 
 def _total_tokens(e: UsageEntry) -> int:
@@ -167,4 +169,52 @@ def build_dashboard(entries: list[UsageEntry], subscriptions: list[dict], now: f
                                         key=lambda kv: -(kv[1]["claude_cost"] + kv[1]["codex_cost"]))],
         "hourly": hourly,
         "scan_meta": {"missing_pricing": sorted(missing)},   # route 層補 state/generation 等
+    }
+
+
+def _utc_day(day: str) -> int:
+    """'YYYY-MM-DD' → 1970-01-01 起第幾天；與條目的 int(ts // 86400) 是同一把尺（UTC 切日）。"""
+    return date.fromisoformat(day).toordinal() - _EPOCH_ORDINAL
+
+
+def build_codex_unattributed(entries: list[UsageEntry], accounts: dict[str, dict[str, int]], *,
+                             days: int, now: float, price_model: str | None) -> dict | None:
+    """Codex「未歸屬用量」＝所有帳號的每日用量加總 − 本機 rollout（spec 5.3）。只保證單一帳號正確。
+
+    期間：最近 days 天內、任一帳號有資料的日期裡，從最新一天往回數的那一段連續日期，遇到第一個缺日就停——
+    還沒發布的當天與 Fledge 關太久的空檔都排除，期間也不會被空檔切成好幾段。某帳號在期間內缺某天＝0。
+    切日用 UTC（上游時區未確認，spec §7）。**先整段加總、最後才相減一次**：逐日歸零會把跨午夜錯位的
+    負差丟掉、正差留下，每天累積高估。佔比的分母是 0 → None。
+    估價：price_model 在本機**全部** codex 紀錄的 sum(cost)／sum(input+output)；沒有該模型的紀錄、或都查無定價 → None。
+    期間內沒有任何日期 → None（前端整行不出現）。"""
+    today = int(now // 86400)
+    present = {_utc_day(d) for acc in accounts.values() for d in acc}
+    present = {d for d in present if today - days < d <= today}
+    if not present:
+        return None
+    last = first = max(present)
+    while first - 1 in present:
+        first -= 1
+    account_tokens = sum(t for acc in accounts.values() for d, t in acc.items() if first <= _utc_day(d) <= last)
+    model = pricing.normalize_codex_model(price_model) if price_model else None
+    local_tokens = rate_cost = rate_tokens = 0
+    for e in entries:
+        if e.source != "codex":
+            continue
+        # codex 的 input_tokens 已含 cached（parser 照 rollout 原值存），帳號的每日 tokens 也是輸入＋輸出
+        if first <= int(e.ts // 86400) <= last:
+            local_tokens += e.input_tokens + e.output_tokens
+        if e.model == model and not e.missing_pricing:
+            rate_cost += e.cost
+            rate_tokens += e.input_tokens + e.output_tokens
+    tokens = max(0, account_tokens - local_tokens)
+    return {
+        "tokens": tokens,
+        "account_tokens": account_tokens,
+        "share": tokens / account_tokens if account_tokens else None,
+        "days": last - first + 1,
+        "start_date": date.fromordinal(first + _EPOCH_ORDINAL).isoformat(),
+        "end_date": date.fromordinal(last + _EPOCH_ORDINAL).isoformat(),
+        "price_model": model,
+        "cost": tokens * rate_cost / rate_tokens if rate_tokens else None,
     }

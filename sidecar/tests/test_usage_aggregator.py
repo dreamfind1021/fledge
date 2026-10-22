@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from fledge_sidecar.usage.aggregator import build_dashboard
+from fledge_sidecar.usage.aggregator import build_codex_unattributed, build_dashboard
 from fledge_sidecar.usage.parser import UsageEntry
 
 NOW = datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc).timestamp()
@@ -143,3 +143,82 @@ def test_zero_token_unpriced_entry_not_in_warning():
               input_tokens=500)
     d = build_dashboard([zero, real], subscriptions=[], now=NOW)
     assert d["scan_meta"]["missing_pricing"] == ["gpt-9-future"]
+
+
+# ---- build_codex_unattributed（spec 5.3、§6-2、§6-10）：NOW＝2026-06-12 10:00 UTC ----
+
+def _cx(day_hour: str, inp: int, out: int, *, model="gpt-6.1-sol", cost=0.0, cached=0, missing=False):
+    """一筆本機 codex 條目；day_hour 是 UTC 的 'YYYY-MM-DD HH:MM'。"""
+    ts = datetime.strptime(day_hour, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp()
+    return _e(ts=ts, source="codex", model=model, cost=cost, dedup="", missing=missing,
+              input_tokens=inp, output_tokens=out, cache_read_tokens=cached)
+
+
+def _ua(entries, accounts, *, days=30, price_model="gpt-6.1-sol"):
+    return build_codex_unattributed(entries, accounts, days=days, now=NOW, price_model=price_model)
+
+
+def test_unattributed_sums_first_then_subtracts_once():
+    """§6-2：同一筆用量帳號算 06-10、本機算 06-11（跨午夜），兩天總量相同 → 差額 0。逐日歸零會多出 100。"""
+    out = _ua([_cx("2026-06-11 00:30", 140, 10)], {"acc-1": {"2026-06-10": 100, "2026-06-11": 50}})
+    assert out == {"tokens": 0, "account_tokens": 150, "share": 0.0, "days": 2,
+                   "start_date": "2026-06-10", "end_date": "2026-06-11",
+                   "price_model": "gpt-6.1-sol", "cost": 0.0}
+
+
+def test_unattributed_uses_only_the_latest_contiguous_run():
+    """§6-2：缺日之前的日期不進期間，那幾天的本機用量也不扣。本機 token＝輸入＋輸出（輸入已含快取）。"""
+    out = _ua([_cx("2026-06-07 12:00", 1000, 0), _cx("2026-06-10 12:00", 20, 5, cached=15)],
+              {"acc-1": {"2026-06-07": 10, "2026-06-09": 20, "2026-06-10": 30}})
+    assert (out["start_date"], out["end_date"], out["days"]) == ("2026-06-09", "2026-06-10", 2)
+    assert (out["account_tokens"], out["tokens"]) == (50, 25)
+
+
+def test_unattributed_zero_account_total_has_null_share():
+    """§6-2：期間帳號加總為 0 → 佔比 None，payload 照常產生。"""
+    out = _ua([], {"acc-1": {"2026-06-11": 0}})
+    assert out["tokens"] == 0 and out["account_tokens"] == 0 and out["share"] is None
+
+
+def test_unattributed_sums_accounts_and_missing_day_is_zero():
+    """所有帳號加總；某帳號在期間內沒有某一天＝0。"""
+    out = _ua([], {"acc-a": {"2026-06-10": 100, "2026-06-11": 50}, "acc-b": {"2026-06-11": 30}})
+    assert (out["start_date"], out["account_tokens"], out["tokens"], out["share"]) == ("2026-06-10", 180, 180, 1.0)
+
+
+def test_unattributed_local_beyond_account_clamps_to_zero_and_ignores_claude():
+    out = _ua([_cx("2026-06-11 08:00", 120, 30), _e(ts=NOW - 60)], {"acc-1": {"2026-06-11": 100}})
+    assert (out["tokens"], out["share"]) == (0, 0.0)
+    claude_same_day = datetime(2026, 6, 11, 12, 0, tzinfo=timezone.utc).timestamp()
+    out = _ua([_e(ts=claude_same_day, input_tokens=999)], {"acc-1": {"2026-06-11": 100}})
+    assert out["tokens"] == 100                                    # 期間內的 claude 條目不算本機 codex 用量
+
+
+def test_unattributed_window_edges():
+    """最近 days 天＝今天往回數 days 天（含今天）；以外的日期不進期間，全在外面 → None。"""
+    assert _ua([], {"acc-1": {"2026-05-13": 7}}) is None
+    assert _ua([], {"acc-1": {"2026-05-14": 7}})["start_date"] == "2026-05-14"
+    assert _ua([], {"acc-1": {"2026-06-13": 7}}) is None         # 未來的日期也不算
+    assert _ua([], {}) is None
+    assert _ua([], {"acc-1": {"2026-06-05": 7}}, days=7) is None
+
+
+def test_unattributed_cost_uses_all_local_entries_of_the_price_model():
+    """單價＝該模型在本機**全部**紀錄的 sum(cost)/sum(輸入＋輸出)，不限期間；別的模型、查無定價的不算。"""
+    entries = [_cx("2026-03-01 12:00", 900, 100, cost=2.0),            # 期間外也算進單價
+               _cx("2026-06-11 12:00", 900, 100, cost=1.0),
+               _cx("2026-06-11 13:00", 1000, 0, model="gpt-6-astra", cost=50.0),
+               _cx("2026-06-11 14:00", 1000, 0, cost=0.0, missing=True)]
+    out = _ua(entries, {"acc-1": {"2026-06-11": 13000}}, price_model="gpt-6.1-sol-2026-05-01")
+    assert out["price_model"] == "gpt-6.1-sol"                     # 去掉日期後綴才對得上條目
+    assert out["tokens"] == 10000                                  # 13000 −（1000＋1000＋1000）
+    assert out["cost"] == 10000 * 3.0 / 2000
+
+
+def test_unattributed_cost_is_none_without_a_usable_price():
+    """§6-10：查無定價、本機沒有該模型紀錄、沒有估價模型 → 金額 None（前端顯示「—」）。"""
+    acc = {"acc-1": {"2026-06-11": 100}}
+    assert _ua([_cx("2026-06-11 12:00", 10, 0, model="gpt-x", missing=True)], acc, price_model="gpt-x")["cost"] is None
+    assert _ua([_cx("2026-06-11 12:00", 10, 0, model="gpt-6-astra", cost=1.0)], acc)["cost"] is None
+    out = _ua([_cx("2026-06-11 12:00", 10, 0, cost=1.0)], acc, price_model=None)
+    assert out["cost"] is None and out["price_model"] is None
