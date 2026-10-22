@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import { CodexPanel, DailyChart, ModelBars, ProjectsTable } from "./Dashboard";
 import { rankModels } from "../lib/dashboardLogic";
-import type { CodexUsage, CodexUsageWindow, UsageDashboard } from "../lib/sidecar";
+import type { CodexUnattributed, CodexUsage, CodexUsageWindow, UsageDashboard } from "../lib/sidecar";
 
 // fake t：回傳 key 本身（帶插值時附上 :n）——測「選了哪個角色 key」，翻譯文案由 parity 測試把關
 const t = (key: string, opts?: Record<string, unknown>) =>
@@ -52,6 +52,62 @@ describe("CodexPanel", () => {
     const { queryByText } = render(
       <CodexPanel codex={{ source: "unavailable", failure_reason: "unauthorized", observed_at: null }} t={t} />);
     expect(queryByText("windows.codexReauth")).not.toBeNull();
+  });
+});
+
+// spec 5.5（demo 選 A）：額度列下方一行「未歸屬用量｜條｜百分比 · token ≈ 金額」，跟即時額度互不相干
+const UA: CodexUnattributed = { tokens: 414_123_456, account_tokens: 491_095_848, share: 0.84, days: 10,
+  start_date: "2026-10-12", end_date: "2026-10-21", price_model: "gpt-6.1-sol", cost: 140.23 };
+
+describe("CodexPanel：未歸屬用量", () => {
+  afterEach(cleanup);
+  const meta = (c: HTMLElement) => c.querySelector(".dash-cx-rows")!.lastElementChild!.textContent;
+
+  it("沒有（null）→ 不畫那一行，額度列照舊", () => {
+    const { container, queryByText } = render(<CodexPanel codex={live(win(10080))} unattributed={null} t={t} />);
+    expect(container.querySelector(".is-unattr")).toBeNull();
+    expect(container.querySelectorAll(".dash-cx-bar")).toHaveLength(1);
+    expect(queryByText("windows.unattributed")).toBeNull();
+  });
+
+  it("有 → 額度列下面多一行：條長＝佔比、數字＝百分比 · token ≈ 金額", () => {
+    const { container } = render(<CodexPanel codex={live(win(10080))} unattributed={UA} lang="zh-TW" t={t} />);
+    const rows = container.querySelector(".dash-cx-rows")!;
+    expect(rows.children).toHaveLength(6);                                   // 兩行 × 三格
+    expect(rows.children[3].textContent).toBe("windows.unattributed");       // 排在額度那一行後面
+    expect(container.querySelector<HTMLElement>(".dash-bar.is-unattr > i")?.style.width).toBe("84%");
+    expect(meta(container)).toBe("84% · windows.unattributedTokens:4.1億 ≈ $140.23");
+  });
+
+  it("即時額度失敗 → 照樣顯示不可用訊息，也照樣畫未歸屬用量", () => {
+    const { container, queryByText } = render(
+      <CodexPanel codex={{ source: "unavailable", failure_reason: "network", observed_at: null }} unattributed={UA} t={t} />);
+    expect(queryByText("windows.codexUnavailable")).not.toBeNull();
+    expect(container.querySelectorAll(".is-codex")).toHaveLength(0);
+    expect(container.querySelectorAll(".is-unattr")).toHaveLength(1);
+  });
+
+  it("即時額度還在讀取（null）→ 讀取中與未歸屬用量並存", () => {
+    const { container, queryByText } = render(<CodexPanel codex={null} unattributed={UA} t={t} />);
+    expect(queryByText("windows.codexLoading")).not.toBeNull();
+    expect(container.querySelectorAll(".is-unattr")).toHaveLength(1);
+  });
+
+  it("佔比 null（期間帳號用量是 0）→ 條是空的、數字不帶百分比", () => {
+    const { container } = render(<CodexPanel codex={null} lang="zh-TW" t={t}
+      unattributed={{ ...UA, tokens: 0, account_tokens: 0, share: null, cost: 0 }} />);
+    expect(container.querySelector<HTMLElement>(".dash-bar.is-unattr > i")?.style.width).toBe("0%");
+    expect(meta(container)).toBe("windows.unattributedTokens:0 ≈ $0.00");
+  });
+
+  it("金額 null → 顯示「—」", () => {
+    const { container } = render(<CodexPanel codex={null} lang="zh-TW" t={t} unattributed={{ ...UA, cost: null }} />);
+    expect(meta(container)).toBe("84% · windows.unattributedTokens:4.1億 ≈ —");
+  });
+
+  it("英文語系用 M／K", () => {
+    const { container } = render(<CodexPanel codex={null} lang="en" t={t} unattributed={UA} />);
+    expect(meta(container)).toBe("84% · windows.unattributedTokens:414.1M ≈ $140.23");
   });
 });
 

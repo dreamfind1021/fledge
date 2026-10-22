@@ -1,10 +1,10 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { fetchUsageDashboard, fetchCodexUsage, UsageDashboard, CodexUsage, CodexUsageWindow } from "../lib/sidecar";
+import { fetchUsageDashboard, fetchCodexUsage, UsageDashboard, CodexUsage, CodexUsageWindow, CodexUnattributed } from "../lib/sidecar";
 import { shouldPoll, POLL_INTERVAL_MS, CODEX_USAGE_INTERVAL_MS } from "../lib/usagePoll";
-import { fmtUSD, fmtPct, fmtDayClock, codexWindowLabel } from "../lib/usageFormat";
-import { colorIndex, endLabels, isAheadOfPace, labelX, localDateKey, mergeTempProjects, MODEL_COLORS, peakIndex, rankModels,
-         windowElapsedPct } from "../lib/dashboardLogic";
+import { fmtUSD, fmtPct, fmtDayClock, fmtTokenCount, codexWindowLabel } from "../lib/usageFormat";
+import { colorIndex, endLabels, isAheadOfPace, labelX, localDateKey, mergeTempProjects, MODEL_COLORS, monthDay, peakIndex,
+         rankModels, windowElapsedPct } from "../lib/dashboardLogic";
 import type { ModelRanking } from "../lib/dashboardLogic";
 import "./Dashboard.css";
 
@@ -13,7 +13,7 @@ import "./Dashboard.css";
 const DASH_DAYS = 30;
 
 export default function Dashboard({ port, isActive }: { port: number; isActive: boolean }) {
-  const { t } = useTranslation("dashboard");
+  const { t, i18n } = useTranslation("dashboard");
   const [data, setData] = useState<UsageDashboard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [codex, setCodex] = useState<CodexUsage | null>(null);
@@ -92,7 +92,7 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
       )}
       <KpiBar kpi={data.kpi} days={days} t={t} />
       {/* Codex 額度是數字卡下方一整條、每日成本獨佔一整排（票 46，spec §4.3）：並排時 Codex 卡被拉到跟長條圖一樣高，內容只佔一行 */}
-      <CodexPanel codex={codex} t={t} />
+      <CodexPanel codex={codex} unattributed={data.codex_unattributed ?? null} lang={i18n.language} t={t} />
       <DailyChart daily={data.daily} ranking={ranking} days={days} t={t} />
       <div className="dash-row">
         <ModelBars ranking={ranking} days={days} t={t} />
@@ -137,7 +137,10 @@ function KpiBar({ kpi, days, t }: { kpi: UsageDashboard["kpi"]; days: number; t:
 }
 
 // export 僅供 render test（Dashboard.test.tsx）——app 內只由 Dashboard 使用
-export function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
+// unattributed 來自成本掃描（/usage/dashboard），跟即時額度（/usage/codex）互不相干：額度失敗或讀取中也照樣畫
+export function CodexPanel({ codex, unattributed = null, lang = "en", t }: {
+  codex: CodexUsage | null; unattributed?: CodexUnattributed | null; lang?: string; t: T;
+}) {
   const live = codex?.source === "live" ? codex : null;
   // 失敗不端陳舊數字（會重現原失準 bug）：依 failure_reason 誠實顯示「不可用／需重新登入」
   const reauth = codex?.failure_reason === "unauthorized" || codex?.failure_reason === "no_auth";
@@ -158,14 +161,14 @@ export function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
         {t("windows.codex")}
         {live?.plan_type ? <span className="dash-badge">{live.plan_type}</span> : null}
       </div>
-      {wins.length > 0 ? (
+      {wins.length === 0 && <div className="dash-win-meta">{t(status)}</div>}
+      {(wins.length > 0 || unattributed) && (
         <div className="dash-cx-rows">
           {wins.map(({ win, fallback }) => (
             <QuotaRow key={fallback} label={winLabel(win, fallback, t)} win={win} nowSec={nowSec} t={t} />
           ))}
+          {unattributed && <UnattributedRow u={unattributed} lang={lang} t={t} />}
         </div>
-      ) : (
-        <div className="dash-win-meta">{t(status)}</div>
       )}
     </div>
   );
@@ -175,6 +178,27 @@ export function CodexPanel({ codex, t }: { codex: CodexUsage | null; t: T }) {
 function winLabel(win: CodexUsageWindow, fallback: "fiveHour" | "weekly", t: T): string {
   const l = codexWindowLabel(win.window_minutes, fallback);
   return "n" in l ? t(`windows.${l.key}`, { n: l.n }) : t(`windows.${l.key}`);
+}
+
+// 未歸屬用量（spec 5.5，demo 選 A）：跟額度一樣「名稱｜條｜數字」，條＝佔帳號用量的比例、用中性灰跟額度的青色分開。
+// 是估算值：tooltip 寫期間、估價模型，以及「帳號總用量扣掉本機紀錄」
+function UnattributedRow({ u, lang, t }: { u: CodexUnattributed; lang: string; t: T }) {
+  const tip = t("windows.unattributedTip", {
+    days: u.days, start: monthDay(u.start_date), end: monthDay(u.end_date),
+    cost: u.cost != null ? t("windows.unattributedCost", { model: u.price_model }) : t("windows.unattributedNoCost"),
+  });
+  const tokens = t("windows.unattributedTokens", { n: fmtTokenCount(u.tokens, lang) });
+  return (
+    <>
+      <span className="dash-cx-label" title={tip}>{t("windows.unattributed")}</span>
+      <div className="dash-cx-bar" title={tip}>
+        <div className="dash-bar is-unattr"><i style={{ width: `${(u.share ?? 0) * 100}%` }} /></div>
+      </div>
+      <span className="dash-cx-meta" title={tip}>
+        {u.share != null ? `${fmtPct(u.share)} · ` : ""}{tokens} ≈ {u.cost != null ? fmtUSD(u.cost) : "—"}
+      </span>
+    </>
+  );
 }
 
 // 一個窗口＝grid 的三格。條上的細直線＝窗口時間過了多少；用量比時間多 10 點以上條變黃（spec §4.3、§8）

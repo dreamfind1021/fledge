@@ -177,6 +177,11 @@
   background: linear-gradient(90deg, var(--session), color-mix(in srgb, var(--session) 70%, var(--text)));
 }
 
+/* 未歸屬用量（估算值）：條＝佔帳號用量的比例，用中性灰，跟額度的青色分開、不被看成另一條額度（spec 5.5，demo 選 A） */
+.dash-bar.is-unattr > i {
+  background: color-mix(in srgb, var(--dim) 75%, var(--surface-2));
+}
+
 /* 用量比時間進度多 10 個百分點以上：填充改用 --warning（票 46，spec §4.3、§8）。class 由 CodexPanel 判斷後給 */
 .dash-bar.is-codex.is-ahead > i {
   background: linear-gradient(90deg, var(--warning), color-mix(in srgb, var(--warning) 70%, var(--text)));

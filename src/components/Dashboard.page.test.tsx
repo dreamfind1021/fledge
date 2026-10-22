@@ -225,3 +225,46 @@ describe("Dashboard 整頁：成本 API 連續失敗時，時間相關的顯示�
     expect([...c.querySelectorAll(".dash-daily-axis > span")].map((e) => e.textContent)).toEqual(["10/18"]);
   });
 });
+
+// spec 5.5、§6-11：未歸屬用量那一行的真字串（中英文各一），即時額度失敗時照樣出現
+describe("Dashboard 整頁：Codex 未歸屬用量", () => {
+  afterEach(cleanup);
+  beforeEach(() => {
+    vi.mocked(fetchUsageDashboard).mockReset();
+    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue({ source: "unavailable", failure_reason: "network", observed_at: null });
+  });
+  const withUa = (cost: number | null = 140.23): UsageDashboard => ({ ...payload(), codex_unattributed: {
+    tokens: 414_123_456, account_tokens: 491_095_848, share: 0.84, days: 10,
+    start_date: "2026-10-12", end_date: "2026-10-21", price_model: "gpt-6.1-sol", cost } });
+  // 最後一個 .dash-cx-label 所在那一行；沒有任何一行時回 null（讓斷言紅在 expect，不是紅在 TypeError）
+  const row = (c: HTMLElement) => {
+    const label = [...c.querySelectorAll<HTMLElement>(".dash-cx-label")].pop();
+    return label ? { label: label.textContent, meta: label.parentElement!.lastElementChild!.textContent, tip: label.title } : null;
+  };
+
+  it("中文：百分比 · 億 token ≈ 金額；tooltip 寫期間、估價模型與資料來源", async () => {
+    const ui = await shown("zh-TW", withUa());
+    await waitFor(() => { if (!ui.queryByText("實時額度暫時無法取得")) throw new Error("即時額度還沒回來"); });
+    expect(row(ui.container)).toEqual({
+      label: "未歸屬用量", meta: "84% · 4.1億 token ≈ $140.23",
+      tip: "近 10 天（10/12–10/21）帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。金額以 gpt-6.1-sol 估算。" });
+  });
+
+  it("英文：M tokens；tooltip 英文版", async () => {
+    const ui = await shown("en", withUa());
+    expect(row(ui.container)).toEqual({
+      label: "Unattributed", meta: "84% · 414.1M tokens ≈ $140.23",
+      tip: "10-day span (10/12–10/21): account total minus local records — includes reviews, other devices and cloud. Cost estimated at gpt-6.1-sol prices." });
+  });
+
+  it("金額估不出來：數字寫「—」、tooltip 說無法估算", async () => {
+    const ui = await shown("zh-TW", withUa(null));
+    expect(row(ui.container)).toEqual({ label: "未歸屬用量", meta: "84% · 4.1億 token ≈ —",
+      tip: "近 10 天（10/12–10/21）帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。無法估算金額。" });
+  });
+
+  it("沒有（null）→ 整頁照常、沒有這一行", async () => {
+    const ui = await shown("zh-TW", { ...payload(), codex_unattributed: null });
+    expect(ui.queryByText("未歸屬用量")).toBeNull();
+  });
+});

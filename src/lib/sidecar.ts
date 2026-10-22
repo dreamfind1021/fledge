@@ -972,6 +972,9 @@ export interface UsageDashboard {
     last_active: number;
   }[];
   hourly: number[][];
+  // 估算值（帳號總用量扣掉本機紀錄），不混進上面那些量到的數字。null＝歷史檔在期間內沒有任何日期；
+  // 冷掃失敗的 error-only 形狀沒有這個鍵
+  codex_unattributed?: CodexUnattributed | null;
   scan_meta: {
     state: "ok" | "scanning" | "error";
     generation?: number;
@@ -985,6 +988,19 @@ export interface UsageDashboard {
 
 /** 202（首掃）回 null；200 但無 kpi（冷啟掃描失敗的 error-only 形狀）throw 帶後端訊息；
  *  其餘錯誤 throw（呼叫端保留舊資料顯示 stale）。 */
+/** Codex「未歸屬用量」（sidecar `build_codex_unattributed`）：期間＝最新一段連續日期（UTC）。
+ *  share 在期間帳號加總為 0 時是 null；cost 在估價模型查無定價或本機沒有它的紀錄時是 null。 */
+export interface CodexUnattributed {
+  tokens: number;
+  account_tokens: number;
+  share: number | null;
+  days: number;
+  start_date: string;
+  end_date: string;
+  price_model: string | null;
+  cost: number | null;
+}
+
 export async function fetchUsageDashboard(
   port: number,
   days = 30,

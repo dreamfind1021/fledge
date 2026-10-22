@@ -22,6 +22,11 @@ export function fmtTokens(n: number): string {
   return String(n);
 }
 
+/** token 數量依語系縮寫（Intl compact）：中文 4.1億／35.1萬、英文 414.1M／351.2K，最多一位小數。 */
+export function fmtTokenCount(n: number, lang: string): string {
+  return new Intl.NumberFormat(lang, { notation: "compact", maximumFractionDigits: 1 }).format(n);
+}
+
 /** Codex 額度窗口的標籤角色。fiveHour/weekly 是已知窗口的固定文案 key；
  *  其餘回帶數值的動態 key（days/hours/minutes），由呼叫端插值 i18n。 */
 export type WindowLabel =
