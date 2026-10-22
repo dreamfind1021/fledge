@@ -116,14 +116,15 @@ def test_merge_waits_for_lock_and_rereads_inside_it(tmp_path: Path):
 @pytest.mark.parametrize("content", [
     b"{not json",
     b"\xff\xfe\x00garbage",
-    json.dumps({"version": 2, "accounts": {}, "default_model": None, "fetches": []}).encode(),
+    json.dumps({"version": 0, "accounts": {}, "default_model": None, "fetches": []}).encode(),
+    json.dumps({"version": True, "accounts": {}, "default_model": None, "fetches": []}).encode(),
     json.dumps({"version": 1, "accounts": {"acc-1": {"2026-10-21": "5"}}, "default_model": None,
                 "fetches": []}).encode(),
     json.dumps({"version": 1, "accounts": {"acc-1": {"2026-10-21": -1}}, "default_model": None,
                 "fetches": []}).encode(),
     json.dumps({"version": 1, "accounts": {"acc-1": {"10/21": 5}}, "default_model": None, "fetches": []}).encode(),
     json.dumps({"version": 1, "accounts": {"acc-1": {}}, "default_model": None}).encode(),
-], ids=["not-json", "not-utf8", "other-version", "str-tokens", "negative-tokens", "bad-date", "no-fetches"])
+], ids=["not-json", "not-utf8", "other-version", "bool-version", "str-tokens", "negative-tokens", "bad-date", "no-fetches"])
 def test_corrupt_file_is_kept_aside_and_started_fresh(tmp_path: Path, caplog, content):
     """§6-7：原檔改名保留、記 warning、從空的重新開始——不可直接覆蓋。"""
     p = _file(tmp_path)
@@ -134,6 +135,24 @@ def test_corrupt_file_is_kept_aside_and_started_fresh(tmp_path: Path, caplog, co
     assert len(kept) == 1 and kept[0].read_bytes() == content
     assert store.load(p).accounts == {"acc-1": {"2026-10-21": 5}}
     assert any(kept[0].name in r.getMessage() for r in caplog.records)
+
+
+def test_newer_version_is_left_alone(tmp_path: Path):
+    """較新的 Fledge 寫的歷史檔（version 比本版大）不是壞檔：這一輪放棄寫入、原檔不動、不改名，讀取端當成空的。
+    打包版與 dev 版常同時開——舊版若把它當壞檔改名，新版累積的歷史就從卡片上消失（合併前審查）。"""
+    p = _file(tmp_path)
+    content = json.dumps({"version": 2, "accounts": {"acc-1": {"2026-10-20": 1}}, "default_model": None,
+                          "fetches": []}).encode()
+    p.write_bytes(content)
+    raised = None
+    try:
+        store.merge(p, "acc-1", {"2026-10-21": 5}, None, now=NOW)
+    except Exception as exc:  # noqa: BLE001 —— 先比內容，再看拋的是不是 NewerVersionError
+        raised = exc
+    assert p.read_bytes() == content
+    assert not [x for x in tmp_path.iterdir() if ".corrupt-" in x.name]
+    assert type(raised).__name__ == "NewerVersionError"
+    assert store.load(p).accounts == {}
 
 
 def test_load_of_corrupt_file_is_empty_and_leaves_it_alone(tmp_path: Path):

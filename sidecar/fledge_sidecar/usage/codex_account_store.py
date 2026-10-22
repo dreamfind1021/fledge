@@ -30,6 +30,11 @@ RETENTION_DAYS = 400
 MAX_FETCHES = 240          # 每 3 小時抓一次 ≈ 30 天
 
 
+class NewerVersionError(Exception):
+    """歷史檔是較新的 Fledge 寫的（version 比本版大）。不是壞檔：寫入端這一輪不碰它，讀取端當成空的。
+    打包版與 dev 版常同時開，舊版若把新格式當壞檔改名，新版累積的歷史就從卡片上消失。"""
+
+
 @dataclass
 class AccountUsageHistory:
     accounts: dict[str, dict[str, int]] = field(default_factory=dict)
@@ -45,9 +50,13 @@ def default_path() -> Path:
 
 
 def _parse(raw: bytes) -> AccountUsageHistory:
-    """檔案內容 → 歷史。任何一處形狀不對都拋 ValueError（JSON／UTF-8 解碼錯誤本來就是它的子類）。"""
+    """檔案內容 → 歷史。任何一處形狀不對都拋 ValueError（JSON／UTF-8 解碼錯誤本來就是它的子類）；
+    version 是比本版大的整數則拋 NewerVersionError（不是壞檔）。"""
     data = json.loads(raw.decode("utf-8"))
-    if not isinstance(data, dict) or data.get("version") != VERSION:
+    version = data.get("version") if isinstance(data, dict) else None
+    if type(version) is int and version > VERSION:
+        raise NewerVersionError(f"歷史檔版本 {version} 比本版 {VERSION} 新")
+    if type(version) is not int or version != VERSION:   # True == 1 在 Python 成立，所以比型別
         raise ValueError("version")
     accounts = data.get("accounts")
     if not isinstance(accounts, dict):
