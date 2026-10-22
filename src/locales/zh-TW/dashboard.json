@@ -10,7 +10,7 @@
                "codexLoading": "讀取中…", "pace": "時間已過 {{n}}%",
                "codexUnavailable": "實時額度暫時無法取得", "codexReauth": "需重新登入 Codex 才能顯示額度",
                "unattributed": "未歸屬用量", "unattributedTokens": "{{n}} token",
-               "unattributedTip": "近 {{days}} 天（{{start}}–{{end}}）帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。{{cost}}",
+               "unattributedTip": "{{start}}–{{end}}（{{days}} 天）帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。{{cost}}",
                "unattributedCost": "金額以 {{model}} 估算。", "unattributedNoCost": "無法估算金額。" },
   "daily": { "title": "每日成本（{{days}} 天）", "other": "其他", "today": "今天" },
   "models": { "title": "模型分布（{{days}} 天）", "other": "其他 {{n}} 個" },

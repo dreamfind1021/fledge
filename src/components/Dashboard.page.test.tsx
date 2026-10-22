@@ -242,12 +242,14 @@ describe("Dashboard 整頁：Codex 未歸屬用量", () => {
     return label ? { label: label.textContent, meta: label.parentElement!.lastElementChild!.textContent, tip: label.title } : null;
   };
 
+  // 期間只寫起訖與天數、不寫「近」：背景停更時（登出、上游改版）這一行會停在最後那段，寫「近」就成了假敘述，
+  // 也跟英文的 "10-day span" 說的不是同一件事（合併前審查）
   it("中文：百分比 · 億 token ≈ 金額；tooltip 寫期間、估價模型與資料來源", async () => {
     const ui = await shown("zh-TW", withUa());
     await waitFor(() => { if (!ui.queryByText("實時額度暫時無法取得")) throw new Error("即時額度還沒回來"); });
     expect(row(ui.container)).toEqual({
       label: "未歸屬用量", meta: "84% · 4.1億 token ≈ $140.23",
-      tip: "近 10 天（10/12–10/21）帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。金額以 gpt-6.1-sol 估算。" });
+      tip: "10/12–10/21（10 天）帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。金額以 gpt-6.1-sol 估算。" });
   });
 
   it("英文：M tokens；tooltip 英文版", async () => {
@@ -260,7 +262,7 @@ describe("Dashboard 整頁：Codex 未歸屬用量", () => {
   it("金額估不出來：數字寫「—」、tooltip 說無法估算", async () => {
     const ui = await shown("zh-TW", withUa(null));
     expect(row(ui.container)).toEqual({ label: "未歸屬用量", meta: "84% · 4.1億 token ≈ —",
-      tip: "近 10 天（10/12–10/21）帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。無法估算金額。" });
+      tip: "10/12–10/21（10 天）帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。無法估算金額。" });
   });
 
   it("沒有（null）→ 整頁照常、沒有這一行", async () => {
