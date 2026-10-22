@@ -142,6 +142,155 @@ def test_fetch_session_factory_failure_is_network(tmp_path: Path):
     assert out["failure_reason"] == "network"
 
 
+class _RecordingSession:
+    """記下 AppServerSession 收到的 timeout，然後當成 spawn 失敗——測預設 factory 用哪一個預算。"""
+    seen: list = []
+    def __init__(self, codex_bin, codex_home, *, timeout):
+        _RecordingSession.seen.append(timeout)
+        raise OSError("spawn failed")
+
+
+@pytest.mark.parametrize("fetch, budget", [
+    (lambda home: codex_usage.fetch_codex_usage(home, now=1.0, which=lambda n: "/x/codex"), "REQUEST_TIMEOUT"),
+    (lambda home: codex_usage.fetch_codex_account_usage(home, which=lambda n: "/x/codex"), "ACCOUNT_USAGE_TIMEOUT"),
+], ids=["rate-limits", "account-usage"])
+def test_default_session_uses_its_own_budget(tmp_path: Path, monkeypatch, fetch, budget):
+    """背景查詢不面對使用者，預算比互動查詢寬；兩個入口各用各的（spec 5.1）。"""
+    (tmp_path / ".codex").mkdir()
+    monkeypatch.setattr(codex_usage, "AppServerSession", _RecordingSession)
+    _RecordingSession.seen = []
+    assert fetch(tmp_path / ".codex")["failure_reason"] == "network"
+    assert _RecordingSession.seen == [getattr(codex_usage, budget)]
+
+
+# ---- normalize_account_usage（純函式：三個回應 → 帳號每日用量）----
+
+def _usage(*buckets):
+    return {"dailyUsageBuckets": list(buckets), "summary": {"lifetimeTokens": 0}}
+
+
+def _acct(account_id="acc-1"):
+    return {"accountId": account_id, "rateLimits": _rl()["rateLimits"]}
+
+
+def _models(*items):
+    return {"data": list(items), "nextCursor": None}
+
+
+SOL = {"id": "gpt-6.1-sol", "model": "gpt-6.1-sol", "isDefault": True}
+ASTRA = {"id": "gpt-6-astra", "model": "gpt-6-astra", "isDefault": False}
+
+
+def test_normalize_account_usage_full():
+    out = codex_usage.normalize_account_usage(
+        _usage({"startDate": "2026-10-12", "tokens": 65830431}, {"startDate": "2026-10-13", "tokens": 0}),
+        _acct("acc-1"), _models(ASTRA, SOL))
+    assert out == {"source": "live", "account_key": "acc-1",
+                   "daily": {"2026-10-12": 65830431, "2026-10-13": 0}, "default_model": "gpt-6.1-sol"}
+
+
+def test_normalize_account_usage_empty_buckets_is_live():
+    out = codex_usage.normalize_account_usage(_usage(), _acct(), _models(SOL))
+    assert out["source"] == "live" and out["daily"] == {}
+
+
+@pytest.mark.parametrize("usage", [
+    {"summary": {}},
+    {"dailyUsageBuckets": None, "summary": {}},
+    _usage("2026-10-12"),
+    _usage({"tokens": 5}),
+    _usage({"startDate": "2026/10/12", "tokens": 5}),
+    _usage({"startDate": "2026-10-12T00:00:00Z", "tokens": 5}),
+    _usage({"startDate": "2026-13-01", "tokens": 5}),
+    _usage({"startDate": "20261012", "tokens": 5}),
+    _usage({"startDate": "2026-10-12", "tokens": "5"}),
+    _usage({"startDate": "2026-10-12", "tokens": True}),
+    _usage({"startDate": "2026-10-12", "tokens": 1.5}),
+    _usage({"startDate": "2026-10-12", "tokens": -1}),
+    _usage({"startDate": "2026-10-12", "tokens": 5}, {"startDate": "2026-10-12", "tokens": 6}),
+    _usage({"startDate": "2026-10-12", "tokens": 5}, {"startDate": "2026-10-13"}),
+], ids=["no-buckets", "null-buckets", "bucket-not-dict", "no-date", "slash-date", "datetime", "bad-month", "basic-format",
+        "str-tokens", "bool-tokens", "float-tokens", "negative-tokens", "duplicate-date", "second-bad"])
+def test_normalize_account_usage_bad_buckets_is_bad_response(usage):
+    """協定標 experimental：任何一筆形狀不對就整筆不收，不寫入半套資料（spec 5.1）。"""
+    out = codex_usage.normalize_account_usage(usage, _acct(), _models(SOL))
+    assert out == {"source": "unavailable", "failure_reason": "bad_response", "observed_at": None}
+
+
+@pytest.mark.parametrize("rate_limits", [
+    _acct(None), _acct(""), {"rateLimits": _rl()["rateLimits"]}, _acct(42),
+], ids=["null", "empty", "missing", "not-str"])
+def test_normalize_account_usage_without_account_id_is_bad_response(rate_limits):
+    """只用 accountId 當帳號識別，沒有就那一輪不寫入（spec 5.1、§6-6）。"""
+    out = codex_usage.normalize_account_usage(
+        _usage({"startDate": "2026-10-12", "tokens": 5}), rate_limits, _models(SOL))
+    assert out == {"source": "unavailable", "failure_reason": "bad_response", "observed_at": None}
+
+
+@pytest.mark.parametrize("models, expected", [
+    (_models(ASTRA), None),
+    (_models({"id": "x", "model": None, "isDefault": True}, SOL), "gpt-6.1-sol"),
+    (_models({"id": "x", "model": "gpt-x", "isDefault": "true"}, SOL), "gpt-6.1-sol"),
+    ({"data": None}, None),
+    (None, None),
+], ids=["no-default", "skip-null-model", "isdefault-must-be-true", "null-data", "null-result"])
+def test_normalize_account_usage_default_model(models, expected):
+    """預設模型只拿來估價：找不到給 None，不讓整筆失敗。"""
+    out = codex_usage.normalize_account_usage(_usage(), _acct(), models)
+    assert out["source"] == "live" and out["default_model"] == expected
+
+
+# ---- fetch_codex_account_usage（閘門與 fetch_codex_usage 同一套）----
+
+ACCOUNT_OK = {"account/read": CHATGPT,
+              "account/usage/read": _usage({"startDate": "2026-10-21", "tokens": 2474188}),
+              "account/rateLimits/read": _acct("acc-1"), "model/list": _models(SOL)}
+
+
+def _fetch_account(tmp_path, responses, *, which=lambda name: "/opt/homebrew/bin/codex"):
+    home = tmp_path / ".codex"
+    home.mkdir(parents=True)
+    session = _FakeSession(responses)
+    return codex_usage.fetch_codex_account_usage(home, session_factory=lambda: session, which=which), session
+
+
+def test_fetch_account_usage_success_order_and_close(tmp_path: Path):
+    out, s = _fetch_account(tmp_path, ACCOUNT_OK)
+    assert out == {"source": "live", "account_key": "acc-1",
+                   "daily": {"2026-10-21": 2474188}, "default_model": "gpt-6.1-sol"}
+    assert s.calls == ["account/read", "account/usage/read", "account/rateLimits/read", "model/list"]
+    assert s.closed
+
+
+def test_fetch_account_usage_not_logged_in_stops_at_gate(tmp_path: Path):
+    out, s = _fetch_account(tmp_path, {**ACCOUNT_OK, "account/read": {"account": None}})
+    assert out["failure_reason"] == "no_auth" and s.calls == ["account/read"] and s.closed
+
+
+def test_fetch_account_usage_gates_without_spawning(tmp_path: Path):
+    spawned = []
+    out = codex_usage.fetch_codex_account_usage(
+        tmp_path / ".codex", session_factory=lambda: spawned.append(1), which=lambda n: "/x/codex")
+    assert out["failure_reason"] == "no_auth" and spawned == []
+    (tmp_path / ".codex").mkdir()
+    out = codex_usage.fetch_codex_account_usage(
+        tmp_path / ".codex", session_factory=lambda: spawned.append(1), which=lambda n: None)
+    assert out["failure_reason"] == "no_codex" and spawned == []
+
+
+@pytest.mark.parametrize("method, err, reason", [
+    ("account/usage/read", RpcError(-32601, "method not found"), "bad_response"),
+    ("account/usage/read", RpcError(-32603, "GET https://chatgpt.com/backend-api/x failed: 401 Unauthorized"),
+     "unauthorized"),
+    ("account/rateLimits/read", TimeoutError(), "network"),
+    ("model/list", OSError("stdout closed"), "network"),
+], ids=["usage-method-missing", "usage-401", "rate-limits-timeout", "models-eof"])
+def test_fetch_account_usage_errors_are_typed(tmp_path: Path, method, err, reason):
+    out, s = _fetch_account(tmp_path, {**ACCOUNT_OK, method: err})
+    assert out == {"source": "unavailable", "failure_reason": reason, "observed_at": None}
+    assert s.closed
+
+
 # ---- AppServerSession（真子進程 ＋ 假 codex 腳本）----
 
 FAKE_CODEX = r'''#!%(py)s
@@ -167,8 +316,14 @@ for line in sys.stdin:
     elif m["method"] == "account/read":
         emit({"jsonrpc": "2.0", "id": m["id"], "result": {"account": {"type": "chatgpt", "planType": "plus"}, "requiresOpenaiAuth": True}})
     elif m["method"] == "account/rateLimits/read":
-        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"rateLimits": {"planType": "plus",
+        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"accountId": "acc-fake", "rateLimits": {"planType": "plus",
               "primary": {"usedPercent": 12, "windowDurationMins": 300, "resetsAt": 1789408745}, "secondary": None}}})
+    elif m["method"] == "account/usage/read":
+        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"dailyUsageBuckets": [{"startDate": "2026-10-21", "tokens": 7}],
+              "summary": {"lifetimeTokens": 7}}})
+    elif m["method"] == "model/list":
+        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"data": [{"id": "m", "model": "gpt-fake", "isDefault": True}],
+              "nextCursor": None}})
     else:
         emit({"jsonrpc": "2.0", "id": m["id"], "error": {"code": -32601, "message": "method not found"}})
 '''
@@ -206,6 +361,18 @@ def test_app_server_round_trip_is_live_and_passes_codex_home(fake_codex, monkeyp
     time.sleep(0.2)
     with pytest.raises(ProcessLookupError):
         os.kill(info["pid"], 0)                                  # 子進程已回收，沒有殘留
+
+
+def test_app_server_account_usage_round_trip(fake_codex):
+    script, out, home = fake_codex
+    res = codex_usage.fetch_codex_account_usage(
+        home, which=lambda n: str(script),
+        session_factory=lambda: codex_usage.AppServerSession(str(script), home, timeout=8.0))
+    assert res == {"source": "live", "account_key": "acc-fake", "daily": {"2026-10-21": 7}, "default_model": "gpt-fake"}
+    info = json.loads(out.read_text())
+    time.sleep(0.2)
+    with pytest.raises(ProcessLookupError):
+        os.kill(info["pid"], 0)                                  # 子進程已回收
 
 
 def test_app_server_ignores_notifications_and_non_json_lines(fake_codex, monkeypatch):
