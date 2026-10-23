@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 import { CodexPanel, DailyChart, ModelBars, ProjectsTable } from "./Dashboard";
 import { rankModels } from "../lib/dashboardLogic";
-import type { CodexUsage, CodexUsageWindow, UsageDashboard } from "../lib/sidecar";
+import type { CodexUnattributed, CodexUsage, CodexUsageWindow, UsageDashboard } from "../lib/sidecar";
 
 // fake t：回傳 key 本身（帶插值時附上 :n）——測「選了哪個角色 key」，翻譯文案由 parity 測試把關
 const t = (key: string, opts?: Record<string, unknown>) =>
@@ -52,6 +52,91 @@ describe("CodexPanel", () => {
     const { queryByText } = render(
       <CodexPanel codex={{ source: "unavailable", failure_reason: "unauthorized", observed_at: null }} t={t} />);
     expect(queryByText("windows.codexReauth")).not.toBeNull();
+  });
+});
+
+// spec 5.5（demo 放法 1）：額度列下方一行「未歸屬用量｜灰條｜約 X%」，X＝這一輪已用百分比 × 未歸屬比例。
+// 用的是畫額度那條的同一個 used_percent：兩條一定同時歸零、灰條不會比它長
+const UA: CodexUnattributed = { share: 0.83, share_start: "2026-10-16", share_end: "2026-10-22", share_days: 7,
+  price_model: "gpt-6.1-sol", previous: null };
+const RESETS = 1_793_382_480;                 // 背景紀錄的「這一輪」與即時額度的重置時間（同一輪）
+const PREV = { start_date: "2026-10-16", end_date: "2026-10-22", days: 7, tokens: 121_885_787,
+  account_tokens: 147_315_030, share: 0.83, cost: 47.71, current_resets_at: RESETS };
+const weekly = (used: number, resets: number | null = null): CodexUsageWindow =>
+  ({ used_percent: used, window_minutes: 10080, resets_at: resets });
+const span = (used: number, minutes: number): CodexUsageWindow => ({ used_percent: used, window_minutes: minutes, resets_at: null });
+
+describe("CodexPanel：未歸屬用量", () => {
+  afterEach(cleanup);
+  const meta = (c: HTMLElement) => c.querySelector(".dash-cx-rows")!.lastElementChild!.textContent;
+  const bar = (c: HTMLElement) => c.querySelector<HTMLElement>(".dash-bar.is-unattr > i")?.style.width;
+
+  it("沒有（null）→ 不畫那一行，額度列照舊", () => {
+    const { container, queryByText } = render(<CodexPanel codex={live(weekly(30))} unattributed={null} t={t} />);
+    expect(container.querySelector(".is-unattr")).toBeNull();
+    expect(container.querySelectorAll(".dash-cx-bar")).toHaveLength(1);
+    expect(queryByText("windows.unattributed")).toBeNull();
+  });
+
+  it("有 → 額度列下面多一行：灰條寬＝已用 × 比例、數字＝約 X%（四捨五入）", () => {
+    const { container } = render(<CodexPanel codex={live(weekly(30))} unattributed={UA} t={t} />);
+    const rows = container.querySelector(".dash-cx-rows")!;
+    expect(rows.children).toHaveLength(6);                                   // 兩行 × 三格
+    expect(rows.children[3].textContent).toBe("windows.unattributed");       // 排在額度那一行後面
+    expect(bar(container)).toBe("24.9%");
+    expect(meta(container)).toBe("windows.unattributedEst:25");
+  });
+
+  it("用長度至少一天的窗口裡最長的那個，不看 primary／secondary 的位置", () => {
+    const { container } = render(<CodexPanel codex={live(span(80, 1440), weekly(30))} unattributed={UA} t={t} />);
+    expect(meta(container)).toBe("windows.unattributedEst:25");
+  });
+
+  it("只有 5 小時窗口 → 不畫那一行（沒有完整的日子可對應）", () => {
+    const { container } = render(<CodexPanel codex={live(span(50, 300))} unattributed={UA} t={t} />);
+    expect(container.querySelector(".is-unattr")).toBeNull();
+  });
+
+  it("即時額度失敗 → 顯示不可用訊息、不畫那一行（估計要用這一輪已用的百分比）", () => {
+    const { container, queryByText } = render(
+      <CodexPanel codex={{ source: "unavailable", failure_reason: "network", observed_at: null }} unattributed={UA} t={t} />);
+    expect(queryByText("windows.codexUnavailable")).not.toBeNull();
+    expect(container.querySelector(".is-unattr")).toBeNull();
+  });
+
+  it("即時額度還在讀取（null）→ 讀取中、不畫那一行", () => {
+    const { container, queryByText } = render(<CodexPanel codex={null} unattributed={UA} t={t} />);
+    expect(queryByText("windows.codexLoading")).not.toBeNull();
+    expect(container.querySelector(".is-unattr")).toBeNull();
+  });
+
+  it("剛重置（已用 0%）→ 灰條 0%、約 0%：跟額度那條一起歸零", () => {
+    const { container } = render(<CodexPanel codex={live(weekly(0))} unattributed={UA} t={t} />);
+    expect(bar(container)).toBe("0%");
+    expect(meta(container)).toBe("windows.unattributedEst:0");
+  });
+
+  it("灰條最長 100%", () => {
+    const { container } = render(<CodexPanel codex={live(weekly(150))} unattributed={{ ...UA, share: 0.9 }} t={t} />);
+    expect(bar(container)).toBe("100%");
+  });
+
+  const tipOf = (resets: number | null, u: CodexUnattributed) =>
+    render(<CodexPanel codex={live(weekly(30, resets))} unattributed={u} t={t} />)
+      .container.querySelector<HTMLElement>(".dash-cx-meta:last-child")!.title;
+
+  it("tooltip：本輪估計＋比例的期間；有上一輪才多一行", () => {
+    expect(tipOf(RESETS, UA)).toBe("windows.unattributedTipNow:25\nwindows.unattributedTipShare");
+    cleanup();
+    expect(tipOf(RESETS, { ...UA, previous: PREV })).toBe(
+      "windows.unattributedTipNow:25\nwindows.unattributedTipShare\nwindows.unattributedTipPrev");
+  });
+
+  // 提早重置後即時額度馬上換到新的一輪，背景紀錄最多晚 3 小時才跟上：那時 previous 是相對於舊的一輪算的，
+  // 其實是前兩輪。兩邊的重置時間對不上（差 10 分鐘以上）就不顯示上一輪（合併前審查）
+  it("即時額度已換到新的一輪（背景紀錄還沒跟上）→ 不顯示上一輪", () => {
+    expect(tipOf(RESETS + 3 * 86400, { ...UA, previous: PREV })).toBe(
+      "windows.unattributedTipNow:25\nwindows.unattributedTipShare");
   });
 });
 

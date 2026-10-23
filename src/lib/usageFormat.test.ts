@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtUSD, fmtPct, fmtTokens, fmtClock, fmtDayClock, codexWindowLabel } from "./usageFormat";
+import { fmtUSD, fmtPct, fmtTokens, fmtTokenCount, fmtClock, fmtDayClock, codexWindowLabel } from "./usageFormat";
 
 describe("usageFormat", () => {
   it("fmtUSD：常規/小額/零/負數", () => {
@@ -14,6 +14,12 @@ describe("usageFormat", () => {
     expect(fmtTokens(1_234_567)).toBe("1.2M");
     expect(fmtTokens(12_345)).toBe("12.3K");
     expect(fmtTokens(999)).toBe("999");
+  });
+  it("fmtTokenCount：中文用億／萬、英文用 M／K，最多一位小數", () => {
+    expect([414_123_456, 351_234, 1_234, 0].map((n) => fmtTokenCount(n, "zh-TW")))
+      .toEqual(["4.1億", "35.1萬", "1234", "0"]);
+    expect([414_123_456, 351_234, 1_234, 0].map((n) => fmtTokenCount(n, "en")))
+      .toEqual(["414.1M", "351.2K", "1.2K", "0"]);
   });
   it("fmtClock：epoch → HH:mm（固定時區斷言用 UTC 注入）", () => {
     // 1780304700 = 2026-06-01T09:05:00Z（2026-01-01T00:00:00Z=1767225600 + 151d + 9h05m）

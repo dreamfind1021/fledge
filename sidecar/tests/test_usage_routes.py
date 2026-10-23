@@ -25,6 +25,7 @@ def _env(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("FLEDGE_CONFIG_PATH", str(cfg))
     monkeypatch.setenv("FLEDGE_CODEX_HOME", str(tmp_path / "codex"))     # 不存在 → 空源
     monkeypatch.setenv("FLEDGE_USAGE_CACHE", str(tmp_path / "usage-v1.json"))
+    monkeypatch.setenv("FLEDGE_CODEX_ACCOUNT_USAGE", str(tmp_path / "codex-account-usage.json"))
     usage_route.reset_state_for_tests()
 
 
@@ -69,6 +70,65 @@ def test_dashboard_returns_last_good_while_rescanning(tmp_path: Path, monkeypatc
         _poll_ok(client)
         resp = client.get("/usage/dashboard")      # 已有 snapshot → 永遠 200
         assert resp.status_code == 200
+
+
+def _days_ago(n: int) -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(time.time() - n * 86400))
+
+
+def _write_history(tmp_path: Path) -> None:
+    """前天已定稿（1000）、昨天是最新的一天（還沒定稿，不進比例）。"""
+    (tmp_path / "codex-account-usage.json").write_text(json.dumps({
+        "version": 2, "accounts": {"acc-1": {_days_ago(2): 1000, _days_ago(1): 5}}, "final": {"acc-1": [_days_ago(2)]},
+        "windows": {}, "default_model": "gpt-6.1-sol", "fetches": []}), encoding="utf-8")
+
+
+def test_dashboard_carries_codex_unattributed(tmp_path: Path, monkeypatch):
+    """歷史檔有資料 → payload 帶 codex_unattributed；估價模型先看 config.toml，沒有才用歷史檔存的預設模型（spec 5.3-5）。"""
+    _env(tmp_path, monkeypatch)
+    _write_history(tmp_path)
+    with TestClient(create_app()) as client:
+        ua = _poll_ok(client)["codex_unattributed"]
+    assert ua == {"share": 1.0, "share_start": _days_ago(2), "share_end": _days_ago(2), "share_days": 1,
+                  "price_model": "gpt-6.1-sol", "previous": None}
+    (tmp_path / "codex").mkdir()
+    (tmp_path / "codex" / "config.toml").write_text('model = "gpt-6-astra"\n', encoding="utf-8")
+    usage_route.reset_state_for_tests()
+    with TestClient(create_app()) as client:
+        assert _poll_ok(client)["codex_unattributed"]["price_model"] == "gpt-6-astra"
+
+
+def test_dashboard_codex_unattributed_is_null_without_history(tmp_path: Path, monkeypatch):
+    _env(tmp_path, monkeypatch)
+    with TestClient(create_app()) as client:
+        data = _poll_ok(client)
+    assert "codex_unattributed" in data and data["codex_unattributed"] is None
+
+
+def test_dashboard_picks_up_history_written_while_running(tmp_path: Path, monkeypatch):
+    """背景第一次抓完（啟動後約 1 分鐘）歷史檔才出現：下一輪掃描就讀到，不必重開儀表板或重啟 sidecar。"""
+    _env(tmp_path, monkeypatch)
+    with TestClient(create_app()) as client:
+        assert _poll_ok(client)["codex_unattributed"] is None
+        _write_history(tmp_path)
+        usage_route._state["scanned_at"] = 0.0      # 強制 stale → 下一請求觸發 rescan（平常是 25 秒後）
+        client.get("/usage/dashboard")
+        for _ in range(50):
+            ua = client.get("/usage/dashboard").json().get("codex_unattributed")
+            if ua is not None:
+                break
+            time.sleep(0.05)
+    assert ua is not None and ua["share"] == 1.0
+
+
+def test_dashboard_survives_a_corrupt_history_file(tmp_path: Path, monkeypatch):
+    """歷史檔壞掉時儀表板照常（這一塊是 null）；讀取端不動壞檔，留給下一次背景寫入改名保留。"""
+    _env(tmp_path, monkeypatch)
+    (tmp_path / "codex-account-usage.json").write_bytes(b"{not json")
+    with TestClient(create_app()) as client:
+        data = _poll_ok(client)
+    assert data["codex_unattributed"] is None and data["kpi"]["subscriptions_total"] == 100.0
+    assert (tmp_path / "codex-account-usage.json").read_bytes() == b"{not json"
 
 
 def test_put_subscriptions_validates(tmp_path: Path, monkeypatch):

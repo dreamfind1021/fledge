@@ -1,6 +1,7 @@
 import json
 import os
 import select
+import stat
 import subprocess
 import sys
 import textwrap
@@ -14,6 +15,69 @@ def _default_test_unauth(monkeypatch):
     """預設讓所有測試以 opt-out（無認證）跑——既有測試不必逐一帶 token。
     要測 enforced 的測試自行 monkeypatch.delenv('FLEDGE_TEST_UNAUTH') + setenv('FLEDGE_TOKEN')。"""
     monkeypatch.setenv("FLEDGE_TEST_UNAUTH", "1")
+
+
+@pytest.fixture(autouse=True)
+def _no_codex_account_poll(monkeypatch):
+    """app 的 lifespan 會起 Codex 帳號用量的背景更新；測試預設一律不起，不得啟動真的 codex、打到 OpenAI
+    （spec 5.4）。要測背景更新本身的測試自行 monkeypatch.delenv('FLEDGE_TEST_NO_CODEX_POLL')。"""
+    monkeypatch.setenv("FLEDGE_TEST_NO_CODEX_POLL", "1")
+
+
+# 假 codex：講 app-server 同一套 JSON-RPC 的 Python 腳本（test_codex_usage 與 test_codex_account_poll 共用，
+# 出現第二個使用點才抽進來，比照 make_staging）。FAKE_CODEX_MODE：normal／noise（夾雜通知與非 JSON 行）／
+# silent（不讀 stdin、睡 60 秒）／exit-after-init／hang-usage（account/usage/read 不回，寫 FAKE_CODEX_MARKER 後
+# 繼續讀 stdin，EOF 才結束——跟真的 app-server 一樣）。
+FAKE_CODEX = r'''#!%(py)s
+import json, os, sys, time
+mode = os.environ.get("FAKE_CODEX_MODE", "normal")
+out = os.environ.get("FAKE_CODEX_OUT")
+if out:
+    with open(out, "w") as f:
+        json.dump({"pid": os.getpid(), "CODEX_HOME": os.environ.get("CODEX_HOME"), "argv": sys.argv[1:]}, f)
+if mode == "silent":
+    time.sleep(60); sys.exit(0)
+def emit(o): sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    try: m = json.loads(line)
+    except json.JSONDecodeError: continue
+    if "id" not in m: continue                          # 通知（initialized）不回
+    if mode == "noise":
+        sys.stdout.write("warning: something on stdout\n"); sys.stdout.flush()
+        emit({"jsonrpc": "2.0", "method": "remoteControl/status/changed", "params": {"status": "disabled"}})
+    if m["method"] == "initialize":
+        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"userAgent": "fake", "codexHome": os.environ.get("CODEX_HOME")}})
+        if mode == "exit-after-init": sys.exit(0)
+    elif m["method"] == "account/read":
+        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"account": {"type": "chatgpt", "planType": "plus"}, "requiresOpenaiAuth": True}})
+    elif m["method"] == "account/rateLimits/read":
+        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"accountId": "acc-fake", "rateLimits": {"planType": "plus",
+              "primary": {"usedPercent": 12, "windowDurationMins": 300, "resetsAt": 1789408745}, "secondary": None}}})
+    elif m["method"] == "account/usage/read" and mode == "hang-usage":
+        open(os.environ["FAKE_CODEX_MARKER"], "w").close()       # 通知測試：已經卡在這裡，不回、繼續讀 stdin 直到 EOF
+    elif m["method"] == "account/usage/read":
+        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"dailyUsageBuckets": [{"startDate": "2026-10-21", "tokens": 7}],
+              "summary": {"lifetimeTokens": 7}}})
+    elif m["method"] == "model/list":
+        emit({"jsonrpc": "2.0", "id": m["id"], "result": {"data": [{"id": "m", "model": "gpt-fake", "isDefault": True}],
+              "nextCursor": None}})
+    else:
+        emit({"jsonrpc": "2.0", "id": m["id"], "error": {"code": -32601, "message": "method not found"}})
+'''
+
+
+@pytest.fixture
+def fake_codex(tmp_path, monkeypatch):
+    """PATH 上放一支講同一套協定的假 codex；回 (執行檔路徑, 它會寫 pid／env 的檔案)。"""
+    script = tmp_path / "bin" / "codex"
+    script.parent.mkdir()
+    script.write_text(FAKE_CODEX % {"py": sys.executable}, encoding="utf-8")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    out = tmp_path / "fake-codex-out.json"
+    monkeypatch.setenv("FAKE_CODEX_OUT", str(out))
+    home = tmp_path / ".codex"
+    home.mkdir()
+    return script, out, home
 
 
 def make_staging(base: Path, *, home: str = "/Users/olduser") -> Path:

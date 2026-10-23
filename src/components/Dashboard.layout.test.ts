@@ -43,6 +43,13 @@ describe("Codex 一整條：多個窗口共用一組欄寬（票 46，spec §4.3
     expect(decl(css, ".dash-cx-strip", "flex-wrap")).toBe("wrap");
     expect(decl(css, ".dash-cx-rows", "min-width")).toBe("240px");
   });
+
+  // 標題跟清單同一行時，英文「未歸屬用量」那一行的數字把條擠到 35px（正式 CSS、面板 546px＝預設窗口 800 量；
+  // spec 5.5，demo docs/planning/demos/2026-10-23-codex-unattributed-stale 放法 3）。標題自己一行後是 194px
+  it("窄（預設窗口 800）：標題自己一行、清單用整張卡寬；寬（≥720）還原成同一行", () => {
+    expect(decl(css, ".dash-cx-strip > .dash-win-title", "flex-basis")).toBe("100%");
+    expect(decl(wide(), ".dash-cx-strip > .dash-win-title", "flex-basis")).toBe("auto");
+  });
 });
 
 describe("模型分布的排名長條（票 46，spec §4.5）", () => {

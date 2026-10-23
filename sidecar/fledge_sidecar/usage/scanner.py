@@ -10,6 +10,7 @@ session_id 以首行 session_meta 窺視；無法取得則以 realpath 自成一
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 from fledge_sidecar.app_config import AppConfig
@@ -112,3 +113,15 @@ def codex_files(codex_home: Path) -> list[Path]:
         except OSError:
             continue
     return sorted(out)
+
+
+def codex_config_model(codex_home: Path) -> str | None:
+    """`config.toml` 頂層的 `model`，給「未歸屬用量」估價用（spec 5.3-5）。
+    沒檔、讀不懂、沒設或不是字串 → None；`profile` 之類的覆寫不處理（已知限制）。"""
+    try:
+        with open(codex_home / "config.toml", "rb") as f:
+            data = tomllib.load(f)
+    except (OSError, ValueError):   # TOMLDecodeError 與 UTF-8 解碼錯誤都是 ValueError
+        return None
+    model = data.get("model")
+    return model if isinstance(model, str) and model else None

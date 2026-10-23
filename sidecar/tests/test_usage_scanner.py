@@ -3,8 +3,10 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from fledge_sidecar.app_config import AppConfig
-from fledge_sidecar.usage.scanner import claude_files, codex_files
+from fledge_sidecar.usage.scanner import claude_files, codex_config_model, codex_files
 
 
 def _config_with_accounts(tmp_path: Path, dirs: dict[str, str]) -> AppConfig:
@@ -185,3 +187,19 @@ def test_claude_account_map_canonical_robust_to_ancestor_symlink(tmp_path):
     m = claude_account_map(cfg)
     rp = str((work_proj / "s.jsonl").resolve())
     assert m[rp] == "work"   # 祖先 symlink 不影響：work（真實 projects）仍勝
+
+
+@pytest.mark.parametrize("content, expected", [
+    (None, None),
+    (b'model = "gpt-6-astra"\n', "gpt-6-astra"),
+    (b'[profiles.fast]\nmodel = "gpt-6.1-luna"\n', None),
+    (b'model = 5\n', None),
+    (b'model = ""\n', None),
+    (b'model = "gpt-6-astra\n', None),
+    (b'model = "\xff"\n', None),
+], ids=["no-file", "top-level", "profile-only", "not-str", "empty", "bad-toml", "bad-utf8"])
+def test_codex_config_model(tmp_path: Path, content, expected):
+    """估價模型先看 config.toml 頂層 model；profile 覆寫不處理（spec 5.3-5、§7）。"""
+    if content is not None:
+        (tmp_path / "config.toml").write_bytes(content)
+    assert codex_config_model(tmp_path) == expected

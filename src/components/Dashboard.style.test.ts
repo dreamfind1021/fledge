@@ -93,6 +93,15 @@ describe("每日成本的日期與最高金額", () => {
 });
 
 // 票 46，spec §4.3：用量比時間多 10 點以上，Codex 進度條改用 --warning（class 由 CodexPanel 給，Dashboard.test.tsx 守）
+// spec 5.5：未歸屬用量是估算值，條用中性灰、不能跟額度一樣用 --session（青色）被看成另一條額度
+describe("未歸屬用量的條", () => {
+  it("用 --dim 調出的中性灰，不用額度的 --session", () => {
+    const bg = decl(dash, ".dash-bar.is-unattr > i", "background");
+    expect(bg).toContain("var(--dim)");
+    expect(bg).not.toContain("var(--session)");
+  });
+});
+
 describe("Codex 進度條用太快時變黃", () => {
   it("is-ahead 的填充用 --warning", () => {
     expect(decl(dash, ".dash-bar.is-codex.is-ahead > i", "background")).toContain("var(--warning)");

@@ -14,10 +14,14 @@ Homebrew OpenSSL 能過，下午能過晚上不能。任何自己打的客戶端
             no_codex（找不到 codex 執行檔）、unauthorized（token 被拒）、bad_response（協定形狀不對）、
             network（逾時／子進程死了／spawn 失敗）。前端只認 no_auth／unauthorized（顯示「需重新登入」），
             其餘一律「暫時無法取得」。
+
+另有 `fetch_codex_account_usage`：背景抓帳號每日用量（design：docs/planning/codex-unattributed-usage-design.md §5.1），
+閘門與失敗碼跟上面同一套。
 """
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import re
@@ -25,6 +29,7 @@ import shutil
 import subprocess
 import threading
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
@@ -33,6 +38,12 @@ from fledge_sidecar import __version__
 # 整段查詢（spawn → initialize → account/read → rateLimits/read）共用的預算；清理另有 CLEANUP_TIMEOUT
 REQUEST_TIMEOUT = 8.0
 CLEANUP_TIMEOUT = 3.0
+# 背景抓帳號每日用量不面對使用者，預算比互動查詢寬（實測三個查詢合計約 2 秒）
+ACCOUNT_USAGE_TIMEOUT = 30.0
+# 未歸屬用量估計用的額度窗口至少要一天：5 小時窗口沒有完整的日子可對應（spec 5.1）；
+# 最多 32 天：更長的不可能是真的窗口，存進去之後算上一輪會逐日迴圈卡死（合併前審查）
+MIN_ESTIMATE_WINDOW_MINUTES = 1440
+MAX_ESTIMATE_WINDOW_MINUTES = 32 * 1440
 _AUTH_REJECTED = re.compile(r"\b(?:401|403)\b|Unauthorized", re.IGNORECASE)
 
 
@@ -170,23 +181,22 @@ class AppServerSession:
         # stdout 留給讀取執行緒收尾（子進程退了它會讀到 EOF 自己結束），這裡不主動關以免與它競爭
 
 
-def fetch_codex_usage(
-    codex_home: Path, now: float, *,
-    session_factory: Callable[[], Any] | None = None,
-    which: Callable[[str], str | None] = shutil.which,
+def _with_chatgpt_session(
+    codex_home: Path, body: Callable[[Any], dict], *,
+    session_factory: Callable[[], Any] | None, which: Callable[[str], str | None], timeout: float,
 ) -> dict:
-    """抓實時 codex 額度。任何失敗回 typed unavailable，絕不外洩例外原文。
+    """兩個抓取共用的閘門與失敗碼對應。任何失敗回 typed unavailable，絕不外洩例外原文。
 
     閘門順序（design §2 流程）：目錄不在 → no_auth（不 spawn；空目錄會讓 app-server 建一整套 sqlite）
-    → 找不到 codex → no_codex → spawn → account/read 判登入 → rateLimits/read。
-    `session_factory`／`which` 是測試注入點。"""
+    → 找不到 codex → no_codex → spawn → account/read 判登入 → body(session)。
+    body 拋的 RpcError／OSError／TimeoutError 照同一套對應轉碼。"""
     home = Path(codex_home)
     if not home.is_dir():
         return _fail("no_auth")
     codex_bin = which("codex")
     if not codex_bin:
         return _fail("no_codex")
-    factory = session_factory or (lambda: AppServerSession(codex_bin, home))
+    factory = session_factory or (lambda: AppServerSession(codex_bin, home, timeout=timeout))
     try:
         session = factory()
     except (OSError, TimeoutError, RpcError):
@@ -200,7 +210,7 @@ def fetch_codex_usage(
             return _fail("no_auth")
         if not isinstance(account, dict) or account.get("type") != "chatgpt":
             return _fail("unsupported_auth")
-        result = session.call("account/rateLimits/read", {})
+        return body(session)
     except RpcError as exc:
         return _fail("unauthorized" if _AUTH_REJECTED.search(exc.message) else "bad_response")
     except (OSError, TimeoutError):
@@ -212,4 +222,98 @@ def fetch_codex_usage(
             session.close()
         except Exception:  # noqa: BLE001 —— 清理失敗不能蓋掉已經拿到的結果
             pass
-    return normalize_rate_limits(result, now)
+
+
+def fetch_codex_usage(
+    codex_home: Path, now: float, *,
+    session_factory: Callable[[], Any] | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+) -> dict:
+    """抓實時 codex 額度：過閘門後問 account/rateLimits/read。
+    `session_factory`／`which` 是測試注入點。"""
+    return _with_chatgpt_session(
+        codex_home, lambda s: normalize_rate_limits(s.call("account/rateLimits/read", {}), now),
+        session_factory=session_factory, which=which, timeout=REQUEST_TIMEOUT)
+
+
+def is_iso_date(value: object) -> bool:
+    """`YYYY-MM-DD` 而且是真的日期。帳號用量的日期在 API 回應與歷史檔都是這個格式，兩邊都用這支驗。
+    比對 isoformat() 往返：fromisoformat 也收 `20261012`、ISO 週日期，那些不是上游給的格式。"""
+    if not isinstance(value, str):
+        return False
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
+def _estimate_window(rate_limits: object) -> dict | None:
+    """rateLimits/read → 長度至少一天的窗口裡最長的那個 {start, resets_at}；找不到給 None，不算失敗（spec 5.1）。
+    週窗口曾被 API 放在 primary，不能看位置。起點＝重置時間往前推一個窗口長度（提早重置後 resetsAt 會變成
+    重置當下＋窗口長度，是推論，spec §7）。重置時間不是有限數也當成沒有：歷史檔的讀取端不收 inf／NaN，
+    寫進去會讓下一次讀檔判成壞檔、整份改名重來（Codex plan R1）。窗口長度換不成整數（inf／NaN）或超過 32 天
+    也當成沒有，不讓整輪抓取失敗（合併前審查）。"""
+    rl = rate_limits.get("rateLimits") if isinstance(rate_limits, dict) else None
+    if not isinstance(rl, dict):
+        return None
+
+    def parsed(w: object) -> dict | None:
+        try:
+            return _window(w)
+        except (OverflowError, ValueError):   # windowDurationMins 是 inf／NaN：int() 換不了
+            return None
+    wins = [w for w in (parsed(rl.get("primary")), parsed(rl.get("secondary")))
+            if w and w["window_minutes"]
+            and MIN_ESTIMATE_WINDOW_MINUTES <= w["window_minutes"] <= MAX_ESTIMATE_WINDOW_MINUTES
+            and w["resets_at"] is not None and math.isfinite(w["resets_at"])]
+    if not wins:
+        return None
+    w = max(wins, key=lambda x: x["window_minutes"])
+    return {"start": w["resets_at"] - w["window_minutes"] * 60, "resets_at": w["resets_at"]}
+
+
+def normalize_account_usage(usage: object, rate_limits: object, models: object) -> dict:
+    """三個回應 → {"source": "live", "account_key", "daily": {date: tokens}, "default_model", "window"}。
+
+    account/usage/read 是協定標 experimental、官方 README 沒寫的方法：每日 buckets 有任何一筆形狀不對
+    就整筆 bad_response，不交出半套資料（spec 5.1）。帳號只認 rateLimits/read 的 accountId——null 也是
+    bad_response，不退回 email 雜湊（同一個帳號時而拿到 accountId、時而退回雜湊，歷史會被拆成兩份）。
+    預設模型只拿來估價、額度窗口只拿來決定「上一輪」是哪幾天，找不到都給 None、不算失敗。"""
+    buckets = usage.get("dailyUsageBuckets") if isinstance(usage, dict) else None
+    if not isinstance(buckets, list):
+        return _fail("bad_response")
+    daily: dict[str, int] = {}
+    for b in buckets:
+        day = b.get("startDate") if isinstance(b, dict) else None
+        tokens = b.get("tokens") if isinstance(b, dict) else None
+        if (not is_iso_date(day) or day in daily
+                or not isinstance(tokens, int) or isinstance(tokens, bool) or tokens < 0):
+            return _fail("bad_response")
+        daily[day] = tokens
+    account_key = rate_limits.get("accountId") if isinstance(rate_limits, dict) else None
+    if not isinstance(account_key, str) or not account_key:
+        return _fail("bad_response")
+    data = models.get("data") if isinstance(models, dict) else None
+    default_model = next(
+        (m["model"] for m in (data if isinstance(data, list) else [])
+         if isinstance(m, dict) and m.get("isDefault") is True and isinstance(m.get("model"), str) and m["model"]),
+        None)
+    return {"source": "live", "account_key": account_key, "daily": daily, "default_model": default_model,
+            "window": _estimate_window(rate_limits)}
+
+
+def fetch_codex_account_usage(
+    codex_home: Path, *,
+    session_factory: Callable[[], Any] | None = None,
+    which: Callable[[str], str | None] = shutil.which,
+) -> dict:
+    """背景抓帳號每日用量（spec 5.1）：過閘門後，同一個連線依序問每日用量 → 帳號 id 與額度窗口 → 預設模型。
+    失敗回 typed unavailable，呼叫端據此不寫入任何東西。"""
+    def body(session: Any) -> dict:
+        usage = session.call("account/usage/read", {})
+        rate_limits = session.call("account/rateLimits/read", {})
+        models = session.call("model/list", {})
+        return normalize_account_usage(usage, rate_limits, models)
+
+    return _with_chatgpt_session(codex_home, body, session_factory=session_factory, which=which,
+                                 timeout=ACCOUNT_USAGE_TIMEOUT)
