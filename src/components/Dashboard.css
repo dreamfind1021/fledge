@@ -188,7 +188,7 @@
 }
 
 /* ── Codex 額度：數字卡下方一整條（票 46，spec §4.3）──
-   左邊標題、右邊窗口清單；寬度不夠放一行時標題自己一行（flex-wrap＋清單最少 240px）。
+   左邊標題、右邊窗口清單；面板窄於 720px（預設窗口 800 落在這裡）時標題一律自己一行，寬版寬度不夠時也會換行（flex-wrap＋清單最少 240px）。
    取代票 35 第 3 題的兩行排法：那是為了窄卡片裡兩條不等長、窗口 800 時被擠到 0；佔整排之後兩個理由都不成立。
    寫在 .dash-win-card 之後：權重相同，內距要蓋過它的 14px 16px */
 .dash-cx-strip {
@@ -199,8 +199,11 @@
   padding: 12px 16px;
   margin-bottom: 5px;
 }
+/* 窄：標題自己一行、清單用整張卡寬。跟清單同一行時，英文「未歸屬用量」那一行的數字會把條擠到 35px
+   （正式 CSS、面板 546px 量，未歸屬用量 spec 5.5）。寬版在檔尾還原 */
 .dash-cx-strip > .dash-win-title {
   margin-bottom: 0;
+  flex-basis: 100%;
 }
 .dash-cx-strip > .dash-win-meta {
   margin-top: 0;
@@ -526,4 +529,5 @@
   .dash-kpi { grid-template-columns: repeat(5, 1fr); }
   .dash-row { grid-template-columns: 1fr 1.3fr; }
   .dash-proj-path { display: block; }
+  .dash-cx-strip > .dash-win-title { flex-basis: auto; }
 }
