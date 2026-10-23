@@ -169,14 +169,12 @@ async def usage_codex():
 
 
 def refresh_codex_account_usage() -> None:
-    """抓一次帳號每日用量、併進歷史檔。失敗只記 log、不重試；不寫入任何東西，已存的資料不動。"""
-    now = time.time()
-    res = fetch_codex_account_usage(_codex_home())
+    """抓一次帳號每日用量、併進歷史檔。整段（抓取＋合併）在跨程序鎖裡（spec 5.2）：抓取要交給 refresh 在鎖內做，
+    不能在這裡先抓好再交進去。失敗只記 log、不重試；不寫入任何東西，已存的資料不動。"""
+    res = codex_account_store.refresh(codex_account_store.default_path(),
+                                      lambda: fetch_codex_account_usage(_codex_home()), time.time())
     if res.get("source") != "live":
         logger.warning("codex 帳號用量抓取失敗：%s", res.get("failure_reason"))
-        return
-    codex_account_store.merge(codex_account_store.default_path(), res["account_key"], res["daily"],
-                              res["default_model"], now)
 
 
 def _codex_account_loop(stop: threading.Event) -> None:

@@ -1,4 +1,5 @@
 """Codex 帳號每日用量的背景更新（spec 5.4、§6-6／8／9）：routes/usage.py 的 refresh／poller 與 app lifespan。"""
+import fcntl
 import json
 import os
 import signal
@@ -17,7 +18,9 @@ from fledge_sidecar.routes import usage as usage_route
 from fledge_sidecar.usage import codex_account_store
 
 _SIDECAR_ROOT = Path(__file__).parents[1]
-LIVE = {"source": "live", "account_key": "acc-1", "daily": {"2026-10-21": 5}, "default_model": "gpt-6.1-sol"}
+WINDOW = {"start": 1792195200.0, "resets_at": 1792800000.0}
+LIVE = {"source": "live", "account_key": "acc-1", "daily": {"2026-10-21": 5}, "default_model": "gpt-6.1-sol",
+        "window": WINDOW}
 
 
 def _poll_threads():
@@ -34,6 +37,7 @@ def test_refresh_merges_into_history(tmp_path: Path, monkeypatch):
     usage_route.refresh_codex_account_usage()
     h = codex_account_store.load(tmp_path / "h.json")
     assert h.accounts == {"acc-1": {"2026-10-21": 5}} and h.default_model == "gpt-6.1-sol"
+    assert h.windows == {"acc-1": [WINDOW]}               # 額度窗口跟著寫進去（spec 5.2）
     assert [f["count"] for f in h.fetches] == [1]
     assert homes == [tmp_path / "codex"]                  # 跟儀表板讀同一個 codex home
 
@@ -46,11 +50,31 @@ def test_refresh_failure_writes_nothing(tmp_path: Path, monkeypatch, reason):
     monkeypatch.setattr(usage_route, "fetch_codex_account_usage",
                         lambda home, **kw: {"source": "unavailable", "failure_reason": reason, "observed_at": None})
     usage_route.refresh_codex_account_usage()
-    assert list(tmp_path.iterdir()) == []                 # 沒有檔案時不建檔、也不建鎖
-    codex_account_store.merge(p, "acc-1", {"2026-10-20": 1}, None, now=1.0)
+    assert [x.name for x in tmp_path.iterdir()] == ["h.json.lock"]   # 不建歷史檔（鎖檔會建：抓取在鎖內，spec 5.2）
+    codex_account_store.refresh(p, lambda: LIVE, 1.0)
     before = p.read_bytes()
     usage_route.refresh_codex_account_usage()
     assert p.read_bytes() == before
+
+
+def test_refresh_fetches_inside_the_lock(tmp_path: Path, monkeypatch):
+    """另一個 Fledge 拿著鎖時，背景更新連抓都還沒開始（spec 5.2，Codex spec R2 high）：不能先在鎖外抓好、
+    再把結果交進鎖裡——那樣先抓到舊數字的那個晚一步寫入，會把往上修過的數字蓋回去。"""
+    p = tmp_path / "h.json"
+    monkeypatch.setenv("FLEDGE_CODEX_ACCOUNT_USAGE", str(p))
+    fetched = []
+    monkeypatch.setattr(usage_route, "fetch_codex_account_usage", lambda home, **kw: fetched.append(1) or LIVE)
+    lock = os.open(str(p) + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(lock, fcntl.LOCK_EX)
+    t = threading.Thread(target=usage_route.refresh_codex_account_usage)
+    try:
+        t.start()
+        time.sleep(0.3)
+        assert fetched == []                              # 卡在鎖上，還沒抓
+    finally:
+        os.close(lock)
+        t.join(5)
+    assert fetched == [1] and codex_account_store.load(p).accounts == {"acc-1": {"2026-10-21": 5}}
 
 
 # ---- poller 與 lifespan ----
