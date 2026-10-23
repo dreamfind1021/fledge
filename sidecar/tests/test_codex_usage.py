@@ -177,6 +177,8 @@ def _models(*items):
 
 SOL = {"id": "gpt-6.1-sol", "model": "gpt-6.1-sol", "isDefault": True}
 ASTRA = {"id": "gpt-6-astra", "model": "gpt-6-astra", "isDefault": False}
+# _rl() 的週窗口：10080 分鐘、1789839716 重置 → 起點往前推 7 天
+WEEK = {"start": 1789839716.0 - 10080 * 60, "resets_at": 1789839716.0}
 
 
 def test_normalize_account_usage_full():
@@ -184,7 +186,7 @@ def test_normalize_account_usage_full():
         _usage({"startDate": "2026-10-12", "tokens": 65830431}, {"startDate": "2026-10-13", "tokens": 0}),
         _acct("acc-1"), _models(ASTRA, SOL))
     assert out == {"source": "live", "account_key": "acc-1",
-                   "daily": {"2026-10-12": 65830431, "2026-10-13": 0}, "default_model": "gpt-6.1-sol"}
+                   "daily": {"2026-10-12": 65830431, "2026-10-13": 0}, "default_model": "gpt-6.1-sol", "window": WEEK}
 
 
 def test_normalize_account_usage_empty_buckets_is_live():
@@ -238,6 +240,31 @@ def test_normalize_account_usage_default_model(models, expected):
     assert out["source"] == "live" and out["default_model"] == expected
 
 
+def _rl_with(primary, secondary):
+    return {"accountId": "acc-1", "rateLimits": {"planType": "plus", "primary": primary, "secondary": secondary}}
+
+
+def _w(mins, resets=1790000000, pct=10):
+    return {"usedPercent": pct, "windowDurationMins": mins, "resetsAt": resets}
+
+
+@pytest.mark.parametrize("rate_limits, expected", [
+    (_rl_with(_w(10080), _w(300)), {"start": 1790000000.0 - 10080 * 60, "resets_at": 1790000000.0}),
+    (_rl_with(_w(1440, 1789500000), _w(10080)), {"start": 1790000000.0 - 10080 * 60, "resets_at": 1790000000.0}),
+    (_rl_with(_w(300), None), None),
+    (_rl_with(_w(300), {"usedPercent": 5, "windowDurationMins": 10080, "resetsAt": None}), None),
+    (_rl_with(_w(10080, float("inf")), None), None),
+    ({"accountId": "acc-1"}, None),
+], ids=["weekly-in-primary", "longest-of-two-day-windows", "only-5h", "no-resets-at", "non-finite-resets-at",
+        "no-rate-limits"])
+def test_normalize_account_usage_window(rate_limits, expected):
+    """額度窗口（spec 5.1）：取長度至少一天的窗口裡最長的那個，不看 primary／secondary 的位置；
+    起點＝重置時間往前推一個窗口長度。找不到不算失敗：每日用量照收，只是這一輪沒有窗口。
+    重置時間不是有限數（上游回 1e309 之類，JSON 解成 inf）也當成沒有：寫進歷史檔會讓下一次讀檔判成壞檔（Codex plan R1）。"""
+    out = codex_usage.normalize_account_usage(_usage(), rate_limits, _models(SOL))
+    assert out["source"] == "live" and out["window"] == expected
+
+
 # ---- fetch_codex_account_usage（閘門與 fetch_codex_usage 同一套）----
 
 ACCOUNT_OK = {"account/read": CHATGPT,
@@ -255,7 +282,7 @@ def _fetch_account(tmp_path, responses, *, which=lambda name: "/opt/homebrew/bin
 def test_fetch_account_usage_success_order_and_close(tmp_path: Path):
     out, s = _fetch_account(tmp_path, ACCOUNT_OK)
     assert out == {"source": "live", "account_key": "acc-1",
-                   "daily": {"2026-10-21": 2474188}, "default_model": "gpt-6.1-sol"}
+                   "daily": {"2026-10-21": 2474188}, "default_model": "gpt-6.1-sol", "window": WEEK}
     assert s.calls == ["account/read", "account/usage/read", "account/rateLimits/read", "model/list"]
     assert s.closed
 
@@ -316,7 +343,8 @@ def test_app_server_account_usage_round_trip(fake_codex):
     res = codex_usage.fetch_codex_account_usage(
         home, which=lambda n: str(script),
         session_factory=lambda: codex_usage.AppServerSession(str(script), home, timeout=8.0))
-    assert res == {"source": "live", "account_key": "acc-fake", "daily": {"2026-10-21": 7}, "default_model": "gpt-fake"}
+    assert res == {"source": "live", "account_key": "acc-fake", "daily": {"2026-10-21": 7}, "default_model": "gpt-fake",
+                   "window": None}                       # 假 codex 只有 5 小時窗口
     info = json.loads(out.read_text())
     time.sleep(0.2)
     with pytest.raises(ProcessLookupError):

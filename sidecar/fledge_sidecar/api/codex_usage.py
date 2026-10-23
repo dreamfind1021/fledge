@@ -21,6 +21,7 @@ Homebrew OpenSSL 能過，下午能過晚上不能。任何自己打的客戶端
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import re
@@ -39,6 +40,8 @@ REQUEST_TIMEOUT = 8.0
 CLEANUP_TIMEOUT = 3.0
 # 背景抓帳號每日用量不面對使用者，預算比互動查詢寬（實測三個查詢合計約 2 秒）
 ACCOUNT_USAGE_TIMEOUT = 30.0
+# 未歸屬用量估計用的額度窗口至少要一天：5 小時窗口沒有完整的日子可對應（spec 5.1）
+MIN_ESTIMATE_WINDOW_MINUTES = 1440
 _AUTH_REJECTED = re.compile(r"\b(?:401|403)\b|Unauthorized", re.IGNORECASE)
 
 
@@ -242,13 +245,30 @@ def is_iso_date(value: object) -> bool:
         return False
 
 
+def _estimate_window(rate_limits: object) -> dict | None:
+    """rateLimits/read → 長度至少一天的窗口裡最長的那個 {start, resets_at}；找不到給 None，不算失敗（spec 5.1）。
+    週窗口曾被 API 放在 primary，不能看位置。起點＝重置時間往前推一個窗口長度（提早重置後 resetsAt 會變成
+    重置當下＋窗口長度，是推論，spec §7）。重置時間不是有限數也當成沒有：歷史檔的讀取端不收 inf／NaN，
+    寫進去會讓下一次讀檔判成壞檔、整份改名重來（Codex plan R1）。"""
+    rl = rate_limits.get("rateLimits") if isinstance(rate_limits, dict) else None
+    if not isinstance(rl, dict):
+        return None
+    wins = [w for w in (_window(rl.get("primary")), _window(rl.get("secondary")))
+            if w and w["window_minutes"] and w["window_minutes"] >= MIN_ESTIMATE_WINDOW_MINUTES
+            and w["resets_at"] is not None and math.isfinite(w["resets_at"])]
+    if not wins:
+        return None
+    w = max(wins, key=lambda x: x["window_minutes"])
+    return {"start": w["resets_at"] - w["window_minutes"] * 60, "resets_at": w["resets_at"]}
+
+
 def normalize_account_usage(usage: object, rate_limits: object, models: object) -> dict:
-    """三個回應 → {"source": "live", "account_key", "daily": {date: tokens}, "default_model"}。
+    """三個回應 → {"source": "live", "account_key", "daily": {date: tokens}, "default_model", "window"}。
 
     account/usage/read 是協定標 experimental、官方 README 沒寫的方法：每日 buckets 有任何一筆形狀不對
     就整筆 bad_response，不交出半套資料（spec 5.1）。帳號只認 rateLimits/read 的 accountId——null 也是
     bad_response，不退回 email 雜湊（同一個帳號時而拿到 accountId、時而退回雜湊，歷史會被拆成兩份）。
-    預設模型只拿來估價，找不到給 None、不算失敗。"""
+    預設模型只拿來估價、額度窗口只拿來決定「上一輪」是哪幾天，找不到都給 None、不算失敗。"""
     buckets = usage.get("dailyUsageBuckets") if isinstance(usage, dict) else None
     if not isinstance(buckets, list):
         return _fail("bad_response")
@@ -268,7 +288,8 @@ def normalize_account_usage(usage: object, rate_limits: object, models: object) 
         (m["model"] for m in (data if isinstance(data, list) else [])
          if isinstance(m, dict) and m.get("isDefault") is True and isinstance(m.get("model"), str) and m["model"]),
         None)
-    return {"source": "live", "account_key": account_key, "daily": daily, "default_model": default_model}
+    return {"source": "live", "account_key": account_key, "daily": daily, "default_model": default_model,
+            "window": _estimate_window(rate_limits)}
 
 
 def fetch_codex_account_usage(
@@ -276,7 +297,7 @@ def fetch_codex_account_usage(
     session_factory: Callable[[], Any] | None = None,
     which: Callable[[str], str | None] = shutil.which,
 ) -> dict:
-    """背景抓帳號每日用量（spec 5.1）：過閘門後，同一個連線依序問每日用量 → 帳號 id → 預設模型。
+    """背景抓帳號每日用量（spec 5.1）：過閘門後，同一個連線依序問每日用量 → 帳號 id 與額度窗口 → 預設模型。
     失敗回 typed unavailable，呼叫端據此不寫入任何東西。"""
     def body(session: Any) -> dict:
         usage = session.call("account/usage/read", {})
