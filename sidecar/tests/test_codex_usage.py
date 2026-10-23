@@ -254,13 +254,17 @@ def _w(mins, resets=1790000000, pct=10):
     (_rl_with(_w(300), None), None),
     (_rl_with(_w(300), {"usedPercent": 5, "windowDurationMins": 10080, "resetsAt": None}), None),
     (_rl_with(_w(10080, float("inf")), None), None),
+    (_rl_with(_w(float("inf")), None), None),
+    (_rl_with(_w(10 ** 300), None), None),
     ({"accountId": "acc-1"}, None),
 ], ids=["weekly-in-primary", "longest-of-two-day-windows", "only-5h", "no-resets-at", "non-finite-resets-at",
-        "no-rate-limits"])
+        "infinite-duration", "absurd-duration", "no-rate-limits"])
 def test_normalize_account_usage_window(rate_limits, expected):
     """額度窗口（spec 5.1）：取長度至少一天的窗口裡最長的那個，不看 primary／secondary 的位置；
     起點＝重置時間往前推一個窗口長度。找不到不算失敗：每日用量照收，只是這一輪沒有窗口。
-    重置時間不是有限數（上游回 1e309 之類，JSON 解成 inf）也當成沒有：寫進歷史檔會讓下一次讀檔判成壞檔（Codex plan R1）。"""
+    重置時間不是有限數（上游回 1e309 之類，JSON 解成 inf）也當成沒有：寫進歷史檔會讓下一次讀檔判成壞檔（Codex plan R1）。
+    窗口長度是 inf 或長得離譜（超過 32 天）也當成沒有：前者會讓整輪抓取失敗，後者存進去之後算上一輪時逐日迴圈卡死
+    （合併前審查）。"""
     out = codex_usage.normalize_account_usage(_usage(), rate_limits, _models(SOL))
     assert out["source"] == "live" and out["window"] == expected
 

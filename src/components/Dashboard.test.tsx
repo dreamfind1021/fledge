@@ -59,9 +59,11 @@ describe("CodexPanel", () => {
 // 用的是畫額度那條的同一個 used_percent：兩條一定同時歸零、灰條不會比它長
 const UA: CodexUnattributed = { share: 0.83, share_start: "2026-10-16", share_end: "2026-10-22", share_days: 7,
   price_model: "gpt-6.1-sol", previous: null };
+const RESETS = 1_793_382_480;                 // 背景紀錄的「這一輪」與即時額度的重置時間（同一輪）
 const PREV = { start_date: "2026-10-16", end_date: "2026-10-22", days: 7, tokens: 121_885_787,
-  account_tokens: 147_315_030, share: 0.83, cost: 47.71 };
-const weekly = (used: number): CodexUsageWindow => ({ used_percent: used, window_minutes: 10080, resets_at: null });
+  account_tokens: 147_315_030, share: 0.83, cost: 47.71, current_resets_at: RESETS };
+const weekly = (used: number, resets: number | null = null): CodexUsageWindow =>
+  ({ used_percent: used, window_minutes: 10080, resets_at: resets });
 const span = (used: number, minutes: number): CodexUsageWindow => ({ used_percent: used, window_minutes: minutes, resets_at: null });
 
 describe("CodexPanel：未歸屬用量", () => {
@@ -119,12 +121,22 @@ describe("CodexPanel：未歸屬用量", () => {
     expect(bar(container)).toBe("100%");
   });
 
-  it("tooltip：本輪估計＋比例的期間；有上一輪才多一行", () => {
-    const tip = (u: CodexUnattributed) => render(<CodexPanel codex={live(weekly(30))} unattributed={u} t={t} />)
+  const tipOf = (resets: number | null, u: CodexUnattributed) =>
+    render(<CodexPanel codex={live(weekly(30, resets))} unattributed={u} t={t} />)
       .container.querySelector<HTMLElement>(".dash-cx-meta:last-child")!.title;
-    expect(tip(UA)).toBe("windows.unattributedTipNow:25\nwindows.unattributedTipShare");
+
+  it("tooltip：本輪估計＋比例的期間；有上一輪才多一行", () => {
+    expect(tipOf(RESETS, UA)).toBe("windows.unattributedTipNow:25\nwindows.unattributedTipShare");
     cleanup();
-    expect(tip({ ...UA, previous: PREV })).toBe("windows.unattributedTipNow:25\nwindows.unattributedTipShare\nwindows.unattributedTipPrev");
+    expect(tipOf(RESETS, { ...UA, previous: PREV })).toBe(
+      "windows.unattributedTipNow:25\nwindows.unattributedTipShare\nwindows.unattributedTipPrev");
+  });
+
+  // 提早重置後即時額度馬上換到新的一輪，背景紀錄最多晚 3 小時才跟上：那時 previous 是相對於舊的一輪算的，
+  // 其實是前兩輪。兩邊的重置時間對不上（差 10 分鐘以上）就不顯示上一輪（合併前審查）
+  it("即時額度已換到新的一輪（背景紀錄還沒跟上）→ 不顯示上一輪", () => {
+    expect(tipOf(RESETS + 3 * 86400, { ...UA, previous: PREV })).toBe(
+      "windows.unattributedTipNow:25\nwindows.unattributedTipShare");
   });
 });
 

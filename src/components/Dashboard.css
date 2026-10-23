@@ -177,7 +177,8 @@
   background: linear-gradient(90deg, var(--session), color-mix(in srgb, var(--session) 70%, var(--text)));
 }
 
-/* 未歸屬用量（估算值）：條＝佔帳號用量的比例，用中性灰，跟額度的青色分開、不被看成另一條額度（spec 5.5，demo 選 A） */
+/* 未歸屬用量（估算值）：條＝估計這一輪被未歸屬用量吃掉的額度，用中性灰，跟額度的青色分開、不被看成另一條額度
+   （spec 5.5，demo 放法 1） */
 .dash-bar.is-unattr > i {
   background: color-mix(in srgb, var(--dim) 75%, var(--surface-2));
 }

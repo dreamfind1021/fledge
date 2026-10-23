@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from fledge_sidecar.usage.aggregator import build_codex_unattributed, build_dashboard
+from fledge_sidecar.usage.codex_account_store import day_label, day_number
 from fledge_sidecar.usage.parser import UsageEntry
 
 NOW = datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc).timestamp()
@@ -235,7 +236,8 @@ def test_previous_window_figures():
     """一天歸給它中午 12 點所在的那一輪：上一輪＝06-04～06-10。帳號 (4+…+10)×10＝490、本機 5＋7＝12。"""
     out = _ua(LOCAL, ACC, FIN, {"acc-1": [PREV, CUR]})["previous"]
     assert out == {"start_date": "2026-06-04", "end_date": "2026-06-10", "days": 7, "tokens": 478,
-                   "account_tokens": 490, "share": pytest.approx(478 / 490), "cost": pytest.approx(478 * 0.002)}
+                   "account_tokens": 490, "share": pytest.approx(478 / 490), "cost": pytest.approx(478 * 0.002),
+                   "current_resets_at": CUR["resets_at"]}      # 前端拿它核對即時額度是不是同一輪（合併前審查）
 
 
 @pytest.mark.parametrize("windows, final, now", [
@@ -249,6 +251,17 @@ def test_previous_window_is_none(windows, final, now):
     """只有一筆（裝好後第一輪）／這一輪已過 resets_at（紀錄落後）／兩輪中間有空檔（可能漏看了幾輪）／
     上一輪有任何一天不是完整日 → 沒有上一輪（spec 5.3-4）。"""
     assert _ua(LOCAL, ACC, final, windows, now=now)["previous"] is None
+
+
+def test_previous_window_longer_than_a_month_is_ignored():
+    """窗口長度超過 32 天（上游回了離譜的 windowDurationMins）→ 不算上一輪；起點是 -6e301 這種值也不會逐日迴圈卡住
+    （合併前審查）。日子全部定稿，擋下它的只有長度。"""
+    days = [day_label(d) for d in range(day_number("2026-04-01"), day_number("2026-06-11"))]
+    acc, fin = {"acc-1": {d: 1 for d in days}}, {"acc-1": days}
+    long_prev = {"start": CUR["start"] - 40 * 86400, "resets_at": CUR["start"]}
+    assert _ua([], acc, fin, {"acc-1": [long_prev, CUR]})["previous"] is None
+    huge = {"start": -6e301, "resets_at": CUR["start"]}
+    assert _ua([], acc, fin, {"acc-1": [huge, CUR]})["previous"] is None
 
 
 def test_previous_window_tolerates_a_small_gap():

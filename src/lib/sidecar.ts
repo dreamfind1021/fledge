@@ -988,9 +988,8 @@ export interface UsageDashboard {
 
 /** 202（首掃）回 null；200 但無 kpi（冷啟掃描失敗的 error-only 形狀）throw 帶後端訊息；
  *  其餘錯誤 throw（呼叫端保留舊資料顯示 stale）。 */
-/** Codex「未歸屬用量」（sidecar `build_codex_unattributed`）：期間＝最新一段連續日期（UTC）。
- *  share 在期間帳號加總為 0 時是 null；cost 在估價模型查無定價或本機沒有它的紀錄時是 null。 */
-/** 上一輪（已結束的額度窗口）的實數：帳號加總扣掉本機紀錄（spec 5.3-4）。 */
+/** 上一輪（已結束的額度窗口）的實數：帳號加總扣掉本機紀錄（spec 5.3-4）。current_resets_at＝算它時背景紀錄的
+ *  「這一輪」重置時間，前端拿來核對即時額度是不是同一輪。share／cost 是 null＝帳號加總 0／估不出金額。 */
 export interface CodexUnattributedPrevious {
   start_date: string;
   end_date: string;
@@ -999,6 +998,7 @@ export interface CodexUnattributedPrevious {
   account_tokens: number;
   share: number | null;
   cost: number | null;
+  current_resets_at: number;
 }
 /** Codex 未歸屬用量（spec 5.3）：最近幾個完整日的未歸屬比例＋上一輪。沒有比例時整塊是 null。 */
 export interface CodexUnattributed {

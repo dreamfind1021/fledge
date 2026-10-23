@@ -177,6 +177,8 @@ def build_dashboard(entries: list[UsageEntry], subscriptions: list[dict], now: f
 # 未歸屬比例取最近 7 個完整日；最新的完整日比今天早超過 8 天 → 背景停太久，不給比例（spec 5.3-2）
 UNATTRIBUTED_SHARE_DAYS = 7
 UNATTRIBUTED_MAX_AGE_DAYS = 8
+# 上一輪最長 32 天：更長的不是真的窗口（上游回了離譜的長度），也避免對幾萬年的日期逐日迴圈（合併前審查）
+UNATTRIBUTED_MAX_WINDOW_SEC = 32 * 86400
 
 
 def _codex_tokens_by_day(entries: list[UsageEntry]) -> dict[int, int]:
@@ -206,8 +208,8 @@ def _token_rate(entries: list[UsageEntry], model: str | None) -> float | None:
     return cost / tokens if tokens else None
 
 
-def _previous_window(accounts, windows, complete: set[int], local: dict[int, int], now: float,
-                     rate: float | None) -> dict | None:
+def _previous_window(accounts: dict[str, dict[str, int]], windows: dict[str, list[dict]], complete: set[int],
+                     local: dict[int, int], now: float, rate: float | None) -> dict | None:
     """上一輪的實數（spec 5.3-4）。窗口紀錄取最後一筆 start 最晚的那個帳號：按 start 排序後最後一筆是這一輪、
     前一筆是上一輪。這一輪已過 resets_at（紀錄落後）、兩輪中間有空檔（可能漏看了幾輪）、對應的日子有任何一天
     不是完整日 → None。一天歸給它中午 12 點所在的那一輪；提早重置時上一輪在這一輪的 start 結束。"""
@@ -218,6 +220,8 @@ def _previous_window(accounts, windows, complete: set[int], local: dict[int, int
     if now >= cur["resets_at"] or prev["resets_at"] < cur["start"] - WINDOW_TOLERANCE_SEC:
         return None
     end = min(prev["resets_at"], cur["start"])
+    if end - prev["start"] > UNATTRIBUTED_MAX_WINDOW_SEC:
+        return None
     days = [d for d in range(day_of(prev["start"]), day_of(end) + 1) if prev["start"] <= day_noon(d) < end]
     if not days or any(d not in complete for d in days):
         return None
@@ -227,6 +231,8 @@ def _previous_window(accounts, windows, complete: set[int], local: dict[int, int
         "tokens": tokens, "account_tokens": account_tokens,
         "share": tokens / account_tokens if account_tokens else None,
         "cost": tokens * rate if rate is not None else None,
+        # 算這個上一輪時的「這一輪」：提早重置後背景紀錄最多晚 3 小時，前端拿它核對即時額度是不是同一輪
+        "current_resets_at": cur["resets_at"],
     }
 
 

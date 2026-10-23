@@ -139,6 +139,9 @@ function KpiBar({ kpi, days, t }: { kpi: UsageDashboard["kpi"]; days: number; t:
 // 未歸屬用量的估計用哪個額度窗口：長度至少一天的窗口裡最長的那個（跟 sidecar 記窗口的規則一樣，spec 5.1）。
 // 不看 primary／secondary 的位置：週窗口曾被 API 放在 primary；5 小時窗口沒有完整的日子可對應
 const MIN_ESTIMATE_WINDOW_MINUTES = 1440;
+// 上一輪是相對於背景紀錄的「這一輪」算的；提早重置後即時額度馬上換到新的一輪，背景紀錄最多晚 3 小時才跟上，
+// 那時 previous 其實是前兩輪。重置時間差 10 分鐘以上就不是同一輪、不顯示上一輪（合併前審查；容忍跟 sidecar 一樣）
+const SAME_WINDOW_SEC = 600;
 function estimateWindow(wins: CodexUsageWindow[]): CodexUsageWindow | null {
   const day = wins.filter((w) => (w.window_minutes ?? 0) >= MIN_ESTIMATE_WINDOW_MINUTES);
   return day.length ? day.reduce((a, b) => ((b.window_minutes ?? 0) > (a.window_minutes ?? 0) ? b : a)) : null;
@@ -195,7 +198,8 @@ function winLabel(win: CodexUsageWindow, fallback: "fiveHour" | "weekly", t: T):
 function UnattributedRow({ u, win, lang, t }: { u: CodexUnattributed; win: CodexUsageWindow; lang: string; t: T }) {
   const est = Math.min(100, win.used_percent * u.share);
   const n = Math.round(est);
-  const p = u.previous;
+  const p = u.previous && win.resets_at != null
+    && Math.abs(win.resets_at - u.previous.current_resets_at) < SAME_WINDOW_SEC ? u.previous : null;
   const tip = [
     t("windows.unattributedTipNow", { n, used: Math.round(win.used_percent), share: fmtPct(u.share) }),
     t("windows.unattributedTipShare", { days: u.share_days, start: monthDay(u.share_start), end: monthDay(u.share_end) }),

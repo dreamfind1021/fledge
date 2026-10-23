@@ -229,14 +229,15 @@ describe("Dashboard 整頁：成本 API 連續失敗時，時間相關的顯示�
 // spec 5.5、§6-6：未歸屬用量那一行的真字串（中英文），要有即時額度才畫
 describe("Dashboard 整頁：Codex 未歸屬用量", () => {
   afterEach(cleanup);
+  const RESETS = 1_793_382_480;
   const LIVE_30 = { source: "live" as const, observed_at: 1, plan_type: "prolite",
-    primary: { used_percent: 30, window_minutes: 10080, resets_at: null } };
+    primary: { used_percent: 30, window_minutes: 10080, resets_at: RESETS } };
   beforeEach(() => {
     vi.mocked(fetchUsageDashboard).mockReset();
     vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue(LIVE_30);
   });
   const PREV = { start_date: "2026-10-16", end_date: "2026-10-22", days: 7, tokens: 121_885_787,
-    account_tokens: 147_315_030, share: 0.8274, cost: 47.71 as number | null };
+    account_tokens: 147_315_030, share: 0.8274, cost: 47.71 as number | null, current_resets_at: RESETS };
   const withUa = (previous: typeof PREV | null = PREV): UsageDashboard => ({ ...payload(), codex_unattributed: {
     share: 0.83, share_start: "2026-10-16", share_end: "2026-10-22", share_days: 7, price_model: "gpt-6.1-sol", previous } });
   // Codex 額度是另一個 effect 抓的：等「未歸屬用量」那一行畫出來；等不到時回 null，讓斷言紅在 expect
