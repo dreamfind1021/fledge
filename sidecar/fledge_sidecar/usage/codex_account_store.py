@@ -55,6 +55,11 @@ def day_of(ts: float) -> int:
     return int(ts // 86400)
 
 
+def day_noon(n: int) -> float:
+    """第 n 天中午 12 點（epoch 秒）。跟 day_of 是同一個切日規則：改切日時兩個一起改。"""
+    return n * 86400 + 43200
+
+
 def day_number(day: str) -> int:
     """'YYYY-MM-DD' → 跟 day_of 同一把尺的天數。"""
     return date.fromisoformat(day).toordinal() - _EPOCH_ORDINAL

@@ -71,7 +71,7 @@ def _scan_sync(days: int) -> dict:
     # 估算值獨立成一塊，不混進 KPI／每日／模型／專案那些量到的數字（spec §3）
     history = codex_account_store.load(codex_account_store.default_path())
     payload["codex_unattributed"] = build_codex_unattributed(
-        r.entries, history.accounts, days=days, now=now,
+        r.entries, history.accounts, history.final, history.windows, now=now,
         price_model=codex_config_model(_codex_home()) or history.default_model)
     payload["scan_meta"].update({
         "state": "ok", "generation": r.generation, "files": r.total_files,

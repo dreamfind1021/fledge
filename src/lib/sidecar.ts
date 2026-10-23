@@ -990,15 +990,24 @@ export interface UsageDashboard {
  *  其餘錯誤 throw（呼叫端保留舊資料顯示 stale）。 */
 /** Codex「未歸屬用量」（sidecar `build_codex_unattributed`）：期間＝最新一段連續日期（UTC）。
  *  share 在期間帳號加總為 0 時是 null；cost 在估價模型查無定價或本機沒有它的紀錄時是 null。 */
-export interface CodexUnattributed {
+/** 上一輪（已結束的額度窗口）的實數：帳號加總扣掉本機紀錄（spec 5.3-4）。 */
+export interface CodexUnattributedPrevious {
+  start_date: string;
+  end_date: string;
+  days: number;
   tokens: number;
   account_tokens: number;
   share: number | null;
-  days: number;
-  start_date: string;
-  end_date: string;
-  price_model: string | null;
   cost: number | null;
+}
+/** Codex 未歸屬用量（spec 5.3）：最近幾個完整日的未歸屬比例＋上一輪。沒有比例時整塊是 null。 */
+export interface CodexUnattributed {
+  share: number;
+  share_start: string;
+  share_end: string;
+  share_days: number;
+  price_model: string | null;
+  previous: CodexUnattributedPrevious | null;
 }
 
 export async function fetchUsageDashboard(

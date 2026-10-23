@@ -226,47 +226,67 @@ describe("Dashboard 整頁：成本 API 連續失敗時，時間相關的顯示�
   });
 });
 
-// spec 5.5、§6-11：未歸屬用量那一行的真字串（中英文各一），即時額度失敗時照樣出現
+// spec 5.5、§6-6：未歸屬用量那一行的真字串（中英文），要有即時額度才畫
 describe("Dashboard 整頁：Codex 未歸屬用量", () => {
   afterEach(cleanup);
+  const LIVE_30 = { source: "live" as const, observed_at: 1, plan_type: "prolite",
+    primary: { used_percent: 30, window_minutes: 10080, resets_at: null } };
   beforeEach(() => {
     vi.mocked(fetchUsageDashboard).mockReset();
-    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue({ source: "unavailable", failure_reason: "network", observed_at: null });
+    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue(LIVE_30);
   });
-  const withUa = (cost: number | null = 140.23): UsageDashboard => ({ ...payload(), codex_unattributed: {
-    tokens: 414_123_456, account_tokens: 491_095_848, share: 0.84, days: 10,
-    start_date: "2026-10-12", end_date: "2026-10-21", price_model: "gpt-6.1-sol", cost } });
-  // 最後一個 .dash-cx-label 所在那一行；沒有任何一行時回 null（讓斷言紅在 expect，不是紅在 TypeError）
-  const row = (c: HTMLElement) => {
-    const label = [...c.querySelectorAll<HTMLElement>(".dash-cx-label")].pop();
-    return label ? { label: label.textContent, meta: label.parentElement!.lastElementChild!.textContent, tip: label.title } : null;
+  const PREV = { start_date: "2026-10-16", end_date: "2026-10-22", days: 7, tokens: 121_885_787,
+    account_tokens: 147_315_030, share: 0.8274, cost: 47.71 as number | null };
+  const withUa = (previous: typeof PREV | null = PREV): UsageDashboard => ({ ...payload(), codex_unattributed: {
+    share: 0.83, share_start: "2026-10-16", share_end: "2026-10-22", share_days: 7, price_model: "gpt-6.1-sol", previous } });
+  // Codex 額度是另一個 effect 抓的：等「未歸屬用量」那一行畫出來；等不到時回 null，讓斷言紅在 expect
+  const row = async (c: HTMLElement) => {
+    try {
+      await waitFor(() => { if (c.querySelectorAll(".dash-cx-label").length < 2) throw new Error("那一行還沒畫"); });
+    } catch { return null; }
+    const label = [...c.querySelectorAll<HTMLElement>(".dash-cx-label")].pop()!;
+    return { label: label.textContent, meta: label.parentElement!.lastElementChild!.textContent, tip: label.title };
   };
 
-  // 期間只寫起訖與天數、不寫「近」：背景停更時（登出、上游改版）這一行會停在最後那段，寫「近」就成了假敘述，
-  // 也跟英文的 "10-day span" 說的不是同一件事（合併前審查）
-  it("中文：百分比 · 億 token ≈ 金額；tooltip 寫期間、估價模型與資料來源", async () => {
+  it("中文：約 X%；tooltip 寫本輪估計的算式、比例的期間、上一輪的實數", async () => {
+    const ui = await shown("zh-TW", withUa());
+    expect(await row(ui.container)).toEqual({ label: "未歸屬用量", meta: "約 25%", tip:
+      "本輪估計用掉約 25% 額度＝這一輪已用 30% × 未歸屬比例 83%。\n" +
+      "比例取 10/16–10/22（7 天）：帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。估算值。\n" +
+      "上一輪（10/16–10/22，7 天）：1.2億 token ≈ $47.71，佔帳號用量 83%。金額以 gpt-6.1-sol 估算。" });
+  });
+
+  it("英文", async () => {
+    const ui = await shown("en", withUa());
+    expect(await row(ui.container)).toEqual({ label: "Unattributed", meta: "≈ 25%", tip:
+      "This window: about 25% of quota = 30% used × 83% unattributed share.\n" +
+      "Share from the 7-day span 10/16–10/22: account total minus local records — includes reviews, other devices and cloud. Estimate.\n" +
+      "Last window (7-day span 10/16–10/22): 121.9M tokens ≈ $47.71, 83% of account usage. Cost estimated at gpt-6.1-sol prices." });
+  });
+
+  it("沒有上一輪（裝好後第一輪、重置後約一天內）→ tooltip 只有本輪那兩行", async () => {
+    const ui = await shown("zh-TW", withUa(null));
+    expect((await row(ui.container))?.tip).toBe(
+      "本輪估計用掉約 25% 額度＝這一輪已用 30% × 未歸屬比例 83%。\n" +
+      "比例取 10/16–10/22（7 天）：帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。估算值。");
+  });
+
+  it("上一輪金額估不出來：寫「—」與無法估算", async () => {
+    const ui = await shown("zh-TW", withUa({ ...PREV, cost: null }));
+    expect((await row(ui.container))?.tip.split("\n")[2]).toBe(
+      "上一輪（10/16–10/22，7 天）：1.2億 token ≈ —，佔帳號用量 83%。無法估算金額。");
+  });
+
+  it("即時額度讀不到 → 沒有這一行", async () => {
+    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue({ source: "unavailable", failure_reason: "network", observed_at: null });
     const ui = await shown("zh-TW", withUa());
     await waitFor(() => { if (!ui.queryByText("實時額度暫時無法取得")) throw new Error("即時額度還沒回來"); });
-    expect(row(ui.container)).toEqual({
-      label: "未歸屬用量", meta: "84% · 4.1億 token ≈ $140.23",
-      tip: "10/12–10/21（10 天）帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。金額以 gpt-6.1-sol 估算。" });
-  });
-
-  it("英文：M tokens；tooltip 英文版", async () => {
-    const ui = await shown("en", withUa());
-    expect(row(ui.container)).toEqual({
-      label: "Unattributed", meta: "84% · 414.1M tokens ≈ $140.23",
-      tip: "10-day span (10/12–10/21): account total minus local records — includes reviews, other devices and cloud. Cost estimated at gpt-6.1-sol prices." });
-  });
-
-  it("金額估不出來：數字寫「—」、tooltip 說無法估算", async () => {
-    const ui = await shown("zh-TW", withUa(null));
-    expect(row(ui.container)).toEqual({ label: "未歸屬用量", meta: "84% · 4.1億 token ≈ —",
-      tip: "10/12–10/21（10 天）帳號總用量扣掉本機紀錄，包含審查、其他裝置與雲端。無法估算金額。" });
+    expect(ui.queryByText("未歸屬用量")).toBeNull();
   });
 
   it("沒有（null）→ 整頁照常、沒有這一行", async () => {
     const ui = await shown("zh-TW", { ...payload(), codex_unattributed: null });
+    await waitFor(() => { if (!ui.container.querySelector(".dash-cx-label")) throw new Error("額度那一行還沒畫"); });
     expect(ui.queryByText("未歸屬用量")).toBeNull();
   });
 });

@@ -72,24 +72,25 @@ def test_dashboard_returns_last_good_while_rescanning(tmp_path: Path, monkeypatc
         assert resp.status_code == 200
 
 
-def _yesterday() -> str:
-    return time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400))
+def _days_ago(n: int) -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(time.time() - n * 86400))
 
 
-def _write_history(tmp_path: Path, days: dict) -> None:
+def _write_history(tmp_path: Path) -> None:
+    """前天已定稿（1000）、昨天是最新的一天（還沒定稿，不進比例）。"""
     (tmp_path / "codex-account-usage.json").write_text(json.dumps({
-        "version": 1, "accounts": {"acc-1": days}, "default_model": "gpt-6.1-sol", "fetches": []}), encoding="utf-8")
+        "version": 2, "accounts": {"acc-1": {_days_ago(2): 1000, _days_ago(1): 5}}, "final": {"acc-1": [_days_ago(2)]},
+        "windows": {}, "default_model": "gpt-6.1-sol", "fetches": []}), encoding="utf-8")
 
 
 def test_dashboard_carries_codex_unattributed(tmp_path: Path, monkeypatch):
     """歷史檔有資料 → payload 帶 codex_unattributed；估價模型先看 config.toml，沒有才用歷史檔存的預設模型（spec 5.3-5）。"""
     _env(tmp_path, monkeypatch)
-    day = _yesterday()
-    _write_history(tmp_path, {day: 1000})
+    _write_history(tmp_path)
     with TestClient(create_app()) as client:
         ua = _poll_ok(client)["codex_unattributed"]
-    assert ua == {"tokens": 1000, "account_tokens": 1000, "share": 1.0, "days": 1, "start_date": day,
-                  "end_date": day, "price_model": "gpt-6.1-sol", "cost": None}
+    assert ua == {"share": 1.0, "share_start": _days_ago(2), "share_end": _days_ago(2), "share_days": 1,
+                  "price_model": "gpt-6.1-sol", "previous": None}
     (tmp_path / "codex").mkdir()
     (tmp_path / "codex" / "config.toml").write_text('model = "gpt-6-astra"\n', encoding="utf-8")
     usage_route.reset_state_for_tests()
@@ -109,7 +110,7 @@ def test_dashboard_picks_up_history_written_while_running(tmp_path: Path, monkey
     _env(tmp_path, monkeypatch)
     with TestClient(create_app()) as client:
         assert _poll_ok(client)["codex_unattributed"] is None
-        _write_history(tmp_path, {_yesterday(): 1000})
+        _write_history(tmp_path)
         usage_route._state["scanned_at"] = 0.0      # 強制 stale → 下一請求觸發 rescan（平常是 25 秒後）
         client.get("/usage/dashboard")
         for _ in range(50):
@@ -117,7 +118,7 @@ def test_dashboard_picks_up_history_written_while_running(tmp_path: Path, monkey
             if ua is not None:
                 break
             time.sleep(0.05)
-    assert ua is not None and ua["account_tokens"] == 1000
+    assert ua is not None and ua["share"] == 1.0
 
 
 def test_dashboard_survives_a_corrupt_history_file(tmp_path: Path, monkeypatch):

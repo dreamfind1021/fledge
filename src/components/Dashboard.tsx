@@ -136,8 +136,16 @@ function KpiBar({ kpi, days, t }: { kpi: UsageDashboard["kpi"]; days: number; t:
   );
 }
 
+// 未歸屬用量的估計用哪個額度窗口：長度至少一天的窗口裡最長的那個（跟 sidecar 記窗口的規則一樣，spec 5.1）。
+// 不看 primary／secondary 的位置：週窗口曾被 API 放在 primary；5 小時窗口沒有完整的日子可對應
+const MIN_ESTIMATE_WINDOW_MINUTES = 1440;
+function estimateWindow(wins: CodexUsageWindow[]): CodexUsageWindow | null {
+  const day = wins.filter((w) => (w.window_minutes ?? 0) >= MIN_ESTIMATE_WINDOW_MINUTES);
+  return day.length ? day.reduce((a, b) => ((b.window_minutes ?? 0) > (a.window_minutes ?? 0) ? b : a)) : null;
+}
+
 // export 僅供 render test（Dashboard.test.tsx）——app 內只由 Dashboard 使用
-// unattributed 來自成本掃描（/usage/dashboard），跟即時額度（/usage/codex）互不相干：額度失敗或讀取中也照樣畫
+// unattributed 來自成本掃描（/usage/dashboard）；估計要乘這一輪已用的百分比，所以有即時額度才畫（spec 5.5）
 export function CodexPanel({ codex, unattributed = null, lang = "en", t }: {
   codex: CodexUsage | null; unattributed?: CodexUnattributed | null; lang?: string; t: T;
 }) {
@@ -152,6 +160,7 @@ export function CodexPanel({ codex, unattributed = null, lang = "en", t }: {
     wins.push({ win: live.primary, fallback: "fiveHour" });
     if (live.secondary) wins.push({ win: live.secondary, fallback: "weekly" });
   }
+  const quota = estimateWindow(wins.map((w) => w.win));
   const nowSec = Date.now() / 1000;
   // 一整條：左邊標題，右邊每個窗口一行「名稱｜進度條｜百分比 · 重置時間」。多個窗口共用 .dash-cx-rows 這一個 grid 的欄寬，
   // 每條進度條一樣長（取代票 35 第 3 題的兩行排法：那是為了窄卡片裡兩條不等長、被擠到 0，佔整排之後兩個理由都不成立）
@@ -162,12 +171,12 @@ export function CodexPanel({ codex, unattributed = null, lang = "en", t }: {
         {live?.plan_type ? <span className="dash-badge">{live.plan_type}</span> : null}
       </div>
       {wins.length === 0 && <div className="dash-win-meta">{t(status)}</div>}
-      {(wins.length > 0 || unattributed) && (
+      {wins.length > 0 && (
         <div className="dash-cx-rows">
           {wins.map(({ win, fallback }) => (
             <QuotaRow key={fallback} label={winLabel(win, fallback, t)} win={win} nowSec={nowSec} t={t} />
           ))}
-          {unattributed && <UnattributedRow u={unattributed} lang={lang} t={t} />}
+          {unattributed && quota && <UnattributedRow u={unattributed} win={quota} lang={lang} t={t} />}
         </div>
       )}
     </div>
@@ -180,23 +189,30 @@ function winLabel(win: CodexUsageWindow, fallback: "fiveHour" | "weekly", t: T):
   return "n" in l ? t(`windows.${l.key}`, { n: l.n }) : t(`windows.${l.key}`);
 }
 
-// 未歸屬用量（spec 5.5，demo 選 A）：跟額度一樣「名稱｜條｜數字」，條＝佔帳號用量的比例、用中性灰跟額度的青色分開。
-// 是估算值：tooltip 寫期間、估價模型，以及「帳號總用量扣掉本機紀錄」
-function UnattributedRow({ u, lang, t }: { u: CodexUnattributed; lang: string; t: T }) {
-  const tip = t("windows.unattributedTip", {
-    days: u.days, start: monthDay(u.start_date), end: monthDay(u.end_date),
-    cost: u.cost != null ? t("windows.unattributedCost", { model: u.price_model }) : t("windows.unattributedNoCost"),
-  });
-  const tokens = t("windows.unattributedTokens", { n: fmtTokenCount(u.tokens, lang) });
+// 未歸屬用量（spec 5.5，demo 放法 1）：「名稱｜灰條｜約 X%」，X＝估計這一輪被未歸屬用量吃掉的額度＝已用 × 比例。
+// 已用百分比用畫額度那條的同一個數字：兩條一定同時歸零、灰條不會比它長。中性灰跟額度的青色分開。
+// 是估算值：tooltip 寫算式、比例的期間；有上一輪時加上一輪的實數（token、金額、佔帳號用量）
+function UnattributedRow({ u, win, lang, t }: { u: CodexUnattributed; win: CodexUsageWindow; lang: string; t: T }) {
+  const est = Math.min(100, win.used_percent * u.share);
+  const n = Math.round(est);
+  const p = u.previous;
+  const tip = [
+    t("windows.unattributedTipNow", { n, used: Math.round(win.used_percent), share: fmtPct(u.share) }),
+    t("windows.unattributedTipShare", { days: u.share_days, start: monthDay(u.share_start), end: monthDay(u.share_end) }),
+    ...(p ? [t("windows.unattributedTipPrev", {
+      days: p.days, start: monthDay(p.start_date), end: monthDay(p.end_date),
+      tokens: t("windows.unattributedTokens", { n: fmtTokenCount(p.tokens, lang) }),
+      cost: p.cost != null ? fmtUSD(p.cost) : "—", share: fmtPct(p.share),
+      note: p.cost != null ? t("windows.unattributedCost", { model: u.price_model }) : t("windows.unattributedNoCost"),
+    })] : []),
+  ].join("\n");
   return (
     <>
       <span className="dash-cx-label" title={tip}>{t("windows.unattributed")}</span>
       <div className="dash-cx-bar" title={tip}>
-        <div className="dash-bar is-unattr"><i style={{ width: `${(u.share ?? 0) * 100}%` }} /></div>
+        <div className="dash-bar is-unattr"><i style={{ width: `${est}%` }} /></div>
       </div>
-      <span className="dash-cx-meta" title={tip}>
-        {u.share != null ? `${fmtPct(u.share)} · ` : ""}{tokens} ≈ {u.cost != null ? fmtUSD(u.cost) : "—"}
-      </span>
+      <span className="dash-cx-meta" title={tip}>{t("windows.unattributedEst", { n })}</span>
     </>
   );
 }

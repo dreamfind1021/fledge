@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from fledge_sidecar.paths import resolve_best_effort
 from fledge_sidecar.usage import pricing
+from fledge_sidecar.usage.codex_account_store import (
+    WINDOW_TOLERANCE_SEC, day_label, day_noon, day_number, day_of,
+)
 from fledge_sidecar.usage.parser import UsageEntry
 
 # 專案路徑正規化 memo（symlink resolve 走 syscall，聚合每輪重用）
 _canon_cache: dict[str, str] = {}
-_EPOCH_ORDINAL = date(1970, 1, 1).toordinal()
 
 
 def _total_tokens(e: UsageEntry) -> int:
@@ -172,49 +174,87 @@ def build_dashboard(entries: list[UsageEntry], subscriptions: list[dict], now: f
     }
 
 
-def _utc_day(day: str) -> int:
-    """'YYYY-MM-DD' → 1970-01-01 起第幾天；與條目的 int(ts // 86400) 是同一把尺（UTC 切日）。"""
-    return date.fromisoformat(day).toordinal() - _EPOCH_ORDINAL
+# 未歸屬比例取最近 7 個完整日；最新的完整日比今天早超過 8 天 → 背景停太久，不給比例（spec 5.3-2）
+UNATTRIBUTED_SHARE_DAYS = 7
+UNATTRIBUTED_MAX_AGE_DAYS = 8
 
 
-def build_codex_unattributed(entries: list[UsageEntry], accounts: dict[str, dict[str, int]], *,
-                             days: int, now: float, price_model: str | None) -> dict | None:
-    """Codex「未歸屬用量」＝所有帳號的每日用量加總 − 本機 rollout（spec 5.3）。只保證單一帳號正確。
-
-    期間：最近 days 天內、任一帳號有資料的日期裡，從最新一天往回數的那一段連續日期，遇到第一個缺日就停——
-    還沒發布的當天與 Fledge 關太久的空檔都排除，期間也不會被空檔切成好幾段。某帳號在期間內缺某天＝0。
-    切日用 UTC（上游時區未確認，spec §7）。**先整段加總、最後才相減一次**：逐日歸零會把跨午夜錯位的
-    負差丟掉、正差留下，每天累積高估。佔比的分母是 0 → None。
-    估價：price_model 在本機**全部** codex 紀錄的 sum(cost)／sum(input+output)；沒有該模型的紀錄、或都查無定價 → None。
-    期間內沒有任何日期 → None（前端整行不出現）。"""
-    today = int(now // 86400)
-    present = {_utc_day(d) for acc in accounts.values() for d in acc}
-    present = {d for d in present if today - days < d <= today}
-    if not present:
-        return None
-    last = first = max(present)
-    while first - 1 in present:
-        first -= 1
-    account_tokens = sum(t for acc in accounts.values() for d, t in acc.items() if first <= _utc_day(d) <= last)
-    model = pricing.normalize_codex_model(price_model) if price_model else None
-    local_tokens = rate_cost = rate_tokens = 0
+def _codex_tokens_by_day(entries: list[UsageEntry]) -> dict[int, int]:
+    """本機 codex 用量按天加總。codex 的 input_tokens 已含 cached（parser 照 rollout 原值存），
+    帳號的每日 tokens 也是輸入＋輸出。"""
+    out: dict[int, int] = defaultdict(int)
     for e in entries:
-        if e.source != "codex":
-            continue
-        # codex 的 input_tokens 已含 cached（parser 照 rollout 原值存），帳號的每日 tokens 也是輸入＋輸出
-        if first <= int(e.ts // 86400) <= last:
-            local_tokens += e.input_tokens + e.output_tokens
-        if e.model == model and not e.missing_pricing:
-            rate_cost += e.cost
-            rate_tokens += e.input_tokens + e.output_tokens
-    tokens = max(0, account_tokens - local_tokens)
+        if e.source == "codex":
+            out[day_of(e.ts)] += e.input_tokens + e.output_tokens
+    return out
+
+
+def _unattributed(accounts: dict[str, dict[str, int]], local: dict[int, int], days: set[int]) -> tuple[int, int]:
+    """期間內的（差額, 帳號加總）。**先整段加總、最後才相減一次**：逐日歸零會把跨午夜錯位的負差丟掉、正差留下，
+    每天累積高估。某帳號缺某天＝0。"""
+    account_tokens = sum(t for acc in accounts.values() for d, t in acc.items() if day_number(d) in days)
+    return max(0, account_tokens - sum(local.get(d, 0) for d in days)), account_tokens
+
+
+def _token_rate(entries: list[UsageEntry], model: str | None) -> float | None:
+    """估價單價＝本機**全部**該模型紀錄的 sum(cost)/sum(輸入＋輸出)；沒有紀錄或都查無定價 → None。"""
+    cost = tokens = 0
+    for e in entries:
+        if e.source == "codex" and e.model == model and not e.missing_pricing:
+            cost += e.cost
+            tokens += e.input_tokens + e.output_tokens
+    return cost / tokens if tokens else None
+
+
+def _previous_window(accounts, windows, complete: set[int], local: dict[int, int], now: float,
+                     rate: float | None) -> dict | None:
+    """上一輪的實數（spec 5.3-4）。窗口紀錄取最後一筆 start 最晚的那個帳號：按 start 排序後最後一筆是這一輪、
+    前一筆是上一輪。這一輪已過 resets_at（紀錄落後）、兩輪中間有空檔（可能漏看了幾輪）、對應的日子有任何一天
+    不是完整日 → None。一天歸給它中午 12 點所在的那一輪；提早重置時上一輪在這一輪的 start 結束。"""
+    ws = max(windows.values(), key=lambda w: w[-1]["start"] if w else float("-inf"), default=[])
+    if len(ws) < 2:
+        return None
+    prev, cur = ws[-2], ws[-1]
+    if now >= cur["resets_at"] or prev["resets_at"] < cur["start"] - WINDOW_TOLERANCE_SEC:
+        return None
+    end = min(prev["resets_at"], cur["start"])
+    days = [d for d in range(day_of(prev["start"]), day_of(end) + 1) if prev["start"] <= day_noon(d) < end]
+    if not days or any(d not in complete for d in days):
+        return None
+    tokens, account_tokens = _unattributed(accounts, local, set(days))
     return {
-        "tokens": tokens,
-        "account_tokens": account_tokens,
+        "start_date": day_label(days[0]), "end_date": day_label(days[-1]), "days": len(days),
+        "tokens": tokens, "account_tokens": account_tokens,
         "share": tokens / account_tokens if account_tokens else None,
-        "days": last - first + 1,
-        "start_date": date.fromordinal(first + _EPOCH_ORDINAL).isoformat(),
-        "end_date": date.fromordinal(last + _EPOCH_ORDINAL).isoformat(),
+        "cost": tokens * rate if rate is not None else None,
+    }
+
+
+def build_codex_unattributed(entries: list[UsageEntry], accounts: dict[str, dict[str, int]],
+                             final: dict[str, list[str]], windows: dict[str, list[dict]], *,
+                             now: float, price_model: str | None) -> dict | None:
+    """Codex「未歸屬用量」（spec 5.3）：未歸屬比例＋上一輪的實數。只保證單一帳號正確。
+
+    完整日＝已定稿的日期（同一次回應裡已經有更晚的日期；最新那天出現後還會變）。比例：最新的完整日往回數最多
+    7 天，遇到不是完整日的就停；最新的完整日比今天早超過 8 天、或期間帳號加總是 0 → None（前端整行不出現）。
+    本輪估計＝這一輪已用百分比 × 比例，由前端用畫額度那條的同一個數字算（兩條一定同時歸零），後端不讀即時額度。"""
+    complete = {day_number(d) for days in final.values() for d in days}
+    if not complete:
+        return None
+    last = max(complete)
+    if last < day_of(now) - UNATTRIBUTED_MAX_AGE_DAYS:
+        return None
+    first = last
+    while first - 1 in complete and last - first + 1 < UNATTRIBUTED_SHARE_DAYS:
+        first -= 1
+    local = _codex_tokens_by_day(entries)
+    tokens, account_tokens = _unattributed(accounts, local, set(range(first, last + 1)))
+    if not account_tokens:
+        return None
+    model = pricing.normalize_codex_model(price_model) if price_model else None
+    return {
+        "share": tokens / account_tokens,
+        "share_start": day_label(first), "share_end": day_label(last), "share_days": last - first + 1,
         "price_model": model,
-        "cost": tokens * rate_cost / rate_tokens if rate_tokens else None,
+        "previous": _previous_window(accounts, windows, complete, local, now, _token_rate(entries, model)),
     }
