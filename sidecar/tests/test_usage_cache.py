@@ -31,6 +31,44 @@ def _write_codex(tmp_path: Path, name: str, model: str) -> Path:
     return f
 
 
+def _write_pi(tmp_path: Path, name: str, cost: float = 0.25) -> Path:
+    lines = [
+        json.dumps({"type": "session", "version": 3, "id": "ps", "cwd": "/p", "timestamp": "2026-10-27T02:00:00.000Z"}),
+        json.dumps({"type": "message", "id": "e1", "timestamp": "2026-10-27T02:01:00.000Z",
+                    "message": {"role": "assistant", "provider": "localai", "model": "q",
+                                "usage": {"input": 100, "output": 1, "cacheRead": 0, "cacheWrite": 0, "cost": {"total": cost}}}}),
+    ]
+    f = tmp_path / name
+    f.write_text("\n".join(lines), encoding="utf-8")
+    return f
+
+
+def test_schema_version_bumped_for_pi_source():
+    # 第三個來源進 L2（Pi spec §6.1 #10）：舊 L2 沒有 pi 的條目、也沒有 origin_ts，升版整份重建
+    assert SCHEMA_VERSION == 5
+
+
+def test_refresh_parses_pi_and_l2_roundtrips_origin_ts(tmp_path: Path):
+    f = _write_pi(tmp_path, "pi.jsonl")
+    l2 = tmp_path / "usage-v1.json"
+    r = UsageCache(l2_path=l2).refresh(claude=[], codex=[], pi=[f])
+    assert r.parsed_files == 1 and [e.source for e in r.entries] == ["pi"]
+    assert r.entries[0].origin_ts == 1793066400.0 and r.entries[0].cost == 0.25
+    r2 = UsageCache(l2_path=l2).refresh(claude=[], codex=[], pi=[f])     # 從 L2 載回
+    assert r2.parsed_files == 0 and r2.entries[0].origin_ts == 1793066400.0
+    assert r2.claude_by_file == {}                                      # pi 不混進 claude_by_file
+
+
+def test_pricing_version_mismatch_keeps_pi_cost_as_pi_wrote_it(tmp_path: Path, monkeypatch):
+    """定價表更新 → claude／codex 重算，pi 原值保留（Pi spec §5.3：費用信任 Pi）。"""
+    f = _write_pi(tmp_path, "pi.jsonl", cost=0.75)
+    l2 = tmp_path / "usage-v1.json"
+    UsageCache(l2_path=l2).refresh(claude=[], codex=[], pi=[f])
+    monkeypatch.setattr(pricing, "PRICING_VERSION", "test.pi")
+    r = UsageCache(l2_path=l2).refresh(claude=[], codex=[], pi=[f])
+    assert r.parsed_files == 0 and r.entries[0].cost == 0.75 and r.entries[0].missing_pricing is False
+
+
 def test_refresh_parses_then_hits_cache(tmp_path: Path):
     f = _write_claude(tmp_path, "a.jsonl")
     cache = UsageCache(l2_path=tmp_path / "usage-v1.json")

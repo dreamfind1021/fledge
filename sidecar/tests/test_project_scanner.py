@@ -220,3 +220,104 @@ def test_scan_all_skips_non_dict_and_non_string_path_elements(tmp_path: Path):
     )
     projects, _ = scan_all(config)
     assert [p["name"] for p in projects] == ["proj"]
+
+
+# ── recent 另納入 Pi（Pi spec §6.1 #12）──
+def _pi_home_with(tmp_path: Path, cwd: str, mtime: float, name: str = "s.jsonl") -> Path:
+    import json, os
+    home = tmp_path / "pi-home"
+    d = home / "sessions" / "x"
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / name
+    f.write_text(json.dumps({"type": "session", "version": 3, "id": name, "cwd": cwd}) + "\n", encoding="utf-8")
+    os.utime(f, (mtime, mtime))
+    return home
+
+
+def test_scan_all_recent_includes_pi_sessions_max_with_claude(tmp_path, monkeypatch):
+    from fledge_sidecar import project_scanner
+    root = tmp_path / "r"
+    (root / "proj").mkdir(parents=True)
+    (root / "other").mkdir()
+    proj_path = str((root / "proj").resolve())
+    cfg = AppConfig(path=tmp_path / "config.json", roots=[{"path": str(root), "default_account": "work"}],
+                    accounts={"work": {"config_dir": "/cd/work", "label": "工作"}})
+    home = _pi_home_with(tmp_path, proj_path, 300.0)
+    _pi_home_with(tmp_path, proj_path, 250.0, name="older.jsonl")
+    monkeypatch.setenv("FLEDGE_PI_HOME", str(home))
+    monkeypatch.setattr(project_scanner, "_recent_mtime", lambda cd, p: 100.0 if p == proj_path else None)
+    projects, perm = project_scanner.scan_all(cfg)
+    by = {p["path"]: p for p in projects}
+    assert by[proj_path]["recent"] == 300.0        # Pi 較新 → 取 Pi；兩個 Pi 檔取最新
+    assert by[str((root / "other").resolve())]["recent"] is None
+    assert perm is False
+
+
+def test_scan_all_recent_pi_only_project_and_claude_newer(tmp_path, monkeypatch):
+    from fledge_sidecar import project_scanner
+    root = tmp_path / "r"
+    (root / "proj").mkdir(parents=True)
+    proj_path = str((root / "proj").resolve())
+    cfg = AppConfig(path=tmp_path / "config.json", roots=[{"path": str(root), "default_account": "work"}],
+                    accounts={"work": {"config_dir": "/cd/work", "label": "工作"}})
+    monkeypatch.setenv("FLEDGE_PI_HOME", str(_pi_home_with(tmp_path, proj_path, 50.0)))
+    monkeypatch.setattr(project_scanner, "_recent_mtime", lambda cd, p: None)
+    assert project_scanner.scan_all(cfg)[0][0]["recent"] == 50.0            # 只有 Pi 用過
+    monkeypatch.setattr(project_scanner, "_recent_mtime", lambda cd, p: 90.0)
+    assert project_scanner.scan_all(cfg)[0][0]["recent"] == 90.0            # Claude 較新 → 取 Claude
+
+
+def test_scan_all_pi_recent_is_best_effort_on_unreadable_file_dir_and_home(tmp_path, monkeypatch):
+    """Pi 的 recent 只是側欄提示：拒讀（單檔／子目錄／home 本身，macOS TCC 的三種形狀）一律略過、
+    不碰全域 permission_error、可讀的照算（Codex plan R4：砍掉權限旗標契約）。不 mock，真的 chmod 0。"""
+    from fledge_sidecar import project_scanner
+    root = tmp_path / "r"
+    (root / "proj").mkdir(parents=True)
+    proj_path = str((root / "proj").resolve())
+    cfg = AppConfig(path=tmp_path / "config.json", roots=[{"path": str(root), "default_account": "work"}],
+                    accounts={"work": {"config_dir": "/cd/work", "label": "工作"}})
+    home = _pi_home_with(tmp_path, proj_path, 5.0)                                     # sessions/x/s.jsonl 可讀
+    locked_file = _pi_home_with(tmp_path, "/p/l", 6.0, name="locked.jsonl") / "sessions" / "x" / "locked.jsonl"
+    locked_dir = home / "sessions" / "locked"
+    locked_dir.mkdir()
+    (locked_dir / "t.jsonl").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_PI_HOME", str(home))
+    monkeypatch.setattr(project_scanner, "_recent_mtime", lambda cd, p: None)
+    locked_file.chmod(0)
+    locked_dir.chmod(0)
+    try:
+        projects, perm = project_scanner.scan_all(cfg)
+        assert perm is False and projects[0]["recent"] == 5.0
+        home.chmod(0)                                                                   # home 本身拒讀
+        projects, perm = project_scanner.scan_all(cfg)
+        assert perm is False and projects[0]["recent"] is None
+    finally:
+        home.chmod(0o700)
+        locked_dir.chmod(0o700)
+        locked_file.chmod(0o600)
+
+
+def test_scan_all_pi_session_vanishing_after_header_is_skipped(tmp_path, monkeypatch):
+    """讀完 header、stat 之前檔案被刪（Pi 清 session 的競態）→ 略過那一檔、其餘照算、不拋。
+    沒有專屬變異：拿掉那個 except 會讓這條紅在 FileNotFoundError（不是斷言），驗紅工具不收。"""
+    from fledge_sidecar import project_scanner
+    root = tmp_path / "r"
+    (root / "proj").mkdir(parents=True)
+    proj_path = str((root / "proj").resolve())
+    cfg = AppConfig(path=tmp_path / "config.json", roots=[{"path": str(root), "default_account": "work"}],
+                    accounts={"work": {"config_dir": "/cd/work", "label": "工作"}})
+    home = _pi_home_with(tmp_path, proj_path, 5.0)
+    _pi_home_with(tmp_path, "/p/gone", 6.0, name="gone.jsonl")
+    real = project_scanner.pi_session_header
+
+    def header_then_unlink(path):
+        h = real(path)
+        if path.name == "gone.jsonl":
+            path.unlink()
+        return h
+
+    monkeypatch.setattr(project_scanner, "pi_session_header", header_then_unlink)
+    monkeypatch.setenv("FLEDGE_PI_HOME", str(home))
+    monkeypatch.setattr(project_scanner, "_recent_mtime", lambda cd, p: None)
+    projects, perm = project_scanner.scan_all(cfg)
+    assert perm is False and projects[0]["recent"] == 5.0

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 import time
 from pathlib import Path
 
@@ -49,6 +50,8 @@ def test_dashboard_cold_202_then_ok(tmp_path: Path, monkeypatch):
         assert data["kpi"]["subscriptions_total"] == 100.0
         assert data["scan_meta"]["sources"]["claude"] == "ok"
         assert data["scan_meta"]["sources"]["codex"] == "missing"
+        assert data["scan_meta"]["sources"]["pi"] == "missing"
+        assert data["kpi"]["pi_cache_hit_rate"] is None and data["pi_models"] == []
         assert data["scan_meta"]["generation"] >= 1
         assert isinstance(data["scan_meta"]["cold_scan_ms"], int)   # Task 16 驗收佐證欄位
         assert data["scan_meta"]["days"] == 30
@@ -62,6 +65,28 @@ def test_dashboard_cold_202_then_ok(tmp_path: Path, monkeypatch):
             time.sleep(0.05)
         else:
             raise AssertionError("days=7 未在時限內收斂")
+
+
+def test_dashboard_scans_pi_home(tmp_path: Path, monkeypatch):
+    """`FLEDGE_PI_HOME` 下的 session 檔進儀表板（Pi spec §6.1 #9）：sources.pi ok、pi_models、專案表 pi_tokens。"""
+    _env(tmp_path, monkeypatch)
+    pi_dir = tmp_path / "pi" / "sessions" / "--p-a--"
+    pi_dir.mkdir(parents=True)
+    # 時間用「現在」：pi_models／專案表只看 30 天視窗（_env 的 claude 條目是 6 月、不在視窗內）
+    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    (pi_dir / "s.jsonl").write_text("\n".join([
+        json.dumps({"type": "session", "version": 3, "id": "ps", "cwd": "/p/a", "timestamp": now_iso}),
+        json.dumps({"type": "message", "id": "e1", "timestamp": now_iso,
+                    "message": {"role": "assistant", "provider": "localai", "model": "q",
+                                "usage": {"input": 40, "output": 2, "cacheRead": 0, "cacheWrite": 0, "cost": {"total": 0}}}}),
+    ]), encoding="utf-8")
+    monkeypatch.setenv("FLEDGE_PI_HOME", str(tmp_path / "pi"))
+    with TestClient(create_app()) as client:
+        data = _poll_ok(client)
+        assert data["scan_meta"]["sources"]["pi"] == "ok"
+        assert data["pi_models"] == [{"model": "localai/q", "tokens": 42, "calls": 1}]
+        assert [(p["path"], p["pi_tokens"], p["claude_cost"]) for p in data["projects"]] == [("/p/a", 42, 0.0)]
+        assert abs(data["kpi"]["pi_cache_hit_rate"] - 0.0) < 1e-9
 
 
 def test_dashboard_returns_last_good_while_rescanning(tmp_path: Path, monkeypatch):

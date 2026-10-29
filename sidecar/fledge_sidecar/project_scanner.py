@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from fledge_sidecar.app_config import AppConfig, usable_entry
+from fledge_sidecar.paths import resolve_best_effort
+from fledge_sidecar.usage.scanner import pi_home, pi_session_header
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,28 @@ def _recent_mtime(config_dir: Path, project_path: str) -> float | None:
     return max(f.stat().st_mtime for f in jsonls)
 
 
+def _pi_recent(home: Path) -> dict[str, float]:
+    """Pi 用過的專案 → 最新 session 檔的 mtime（Pi spec §6.1 #12）。整個 sessions/ 只掃一次、讀每檔第一行的 cwd，
+    不逐專案 glob（Pi 的目錄名編碼跟 Claude 不同、不值得再寫一份）。cwd 走 resolve 跟 proj["path"] 同款。
+    best-effort：拒讀（檔／子目錄／home）、讀完 header 才消失的檔，一律略過、不標旗標——recent 只是側欄提示
+    （Codex plan B R1～R4：三層旗標契約被連打三輪後砍掉）。rglob 本身會吞掉目錄拒讀，正好是要的語義。"""
+    out: dict[str, float] = {}
+    root = home / "sessions"
+    for f in root.rglob("*.jsonl") if root.is_dir() else ():
+        try:
+            if not f.is_file():
+                continue
+            header = pi_session_header(f)
+            cwd = header.get("cwd") if header else None
+            if not isinstance(cwd, str) or not cwd:
+                continue
+            key = resolve_best_effort(cwd)
+            out[key] = max(out.get(key, 0.0), f.stat().st_mtime)
+        except OSError:
+            continue
+    return out
+
+
 def scan_all(config: AppConfig) -> tuple[list[dict[str, Any]], bool]:
     """合併三來源（spec §5.1）。回 (projects, permission_error)：
     任一 root/recent 讀取撞 PermissionError（macOS TCC）→ 跳過該項、permission_error=True。"""
@@ -86,8 +110,10 @@ def scan_all(config: AppConfig) -> tuple[list[dict[str, Any]], bool]:
     config_dirs = [
         a["config_dir"] for a in config.accounts.values() if a.get("config_dir")
     ]
+    # Pi 也算「用過」（Pi spec §6.1 #12）：一次掃完建表，再跟各帳號的 mtime 取 max
+    pi_recent = _pi_recent(pi_home())
     for proj in by_path.values():
-        best: float | None = None
+        best: float | None = pi_recent.get(proj["path"])
         for cd in config_dirs:
             try:
                 mt = _recent_mtime(Path(cd), proj["path"])

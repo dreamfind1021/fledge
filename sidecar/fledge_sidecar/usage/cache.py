@@ -18,7 +18,7 @@ from pathlib import Path
 
 from fledge_sidecar.usage import pricing
 from fledge_sidecar.usage.parser import (CodexFileResult, UsageEntry,
-                                         parse_claude_file, parse_codex_file)
+                                         parse_claude_file, parse_codex_file, parse_pi_file)
 
 logger = logging.getLogger(__name__)
 
@@ -28,14 +28,15 @@ logger = logging.getLogger(__name__)
 # 3：Claude 裸別名改指現役型號（opus→claude-opus-5-5、sonnet→claude-sonnet-5-5）；
 # 舊存檔裡由別名正規化來的名字同樣回不去，理由同 2。
 # 4：haiku 裸別名改指 claude-haiku-5-5，理由同 3。
-SCHEMA_VERSION = 4
+# 5：第三個來源 pi 進 L2、`UsageEntry` 加 `origin_ts`（Pi spec §6.1 #10）；舊 L2 沒有 pi 的檔，升版整份重掃一次。
+SCHEMA_VERSION = 5
 
 
 @dataclass
 class FileCacheEntry:
     size: int
     mtime_ns: int
-    source: str                      # 'claude' | 'codex'
+    source: str                      # 'claude' | 'codex' | 'pi'
     entries: list[UsageEntry] = field(default_factory=list)
     skipped: int = 0
 
@@ -93,7 +94,9 @@ class UsageCache:
 
     @staticmethod
     def _reprice(e: UsageEntry) -> UsageEntry:
-        """定價更新：保留 token 欄位、僅重算 cost（design §9）。"""
+        """定價更新：保留 token 欄位、僅重算 cost（design §9）。pi 的 cost 是 Pi 自己算的、不走定價表，原值回傳（Pi spec §5.3）。"""
+        if e.source == "pi":
+            return e
         if e.source == "claude":
             norm = pricing.normalize_claude_model(e.model)
             if norm is None:
@@ -139,15 +142,15 @@ class UsageCache:
         os.replace(tmp, self._l2_path)
 
     # ---- refresh ----
-    def refresh(self, claude: list[Path], codex: list[Path]) -> RefreshResult:
+    def refresh(self, claude: list[Path], codex: list[Path], pi: list[Path] | None = None) -> RefreshResult:
         with self._lock:
-            return self._refresh_locked(claude, codex)
+            return self._refresh_locked(claude, codex, pi or [])
 
-    def _refresh_locked(self, claude: list[Path], codex: list[Path]) -> RefreshResult:
+    def _refresh_locked(self, claude: list[Path], codex: list[Path], pi: list[Path]) -> RefreshResult:
         wanted: set[str] = set()
         to_parse: list[tuple[str, str, Path]] = []   # (source, realpath, path)
         ghost_removed = False
-        for source, paths in (("claude", claude), ("codex", codex)):
+        for source, paths in (("claude", claude), ("codex", codex), ("pi", pi)):
             for p in paths:
                 rp = str(p)
                 wanted.add(rp)
@@ -193,8 +196,8 @@ class UsageCache:
         # 在此吸收：本輪略過該檔、下輪掃描自癒——不讓單檔 race 變成整面儀表板 error
         try:
             st = os.stat(p)
-            if source == "claude":
-                entries, skipped = parse_claude_file(p)
+            if source in ("claude", "pi"):
+                entries, skipped = parse_claude_file(p) if source == "claude" else parse_pi_file(p)
                 return rp, FileCacheEntry(st.st_size, st.st_mtime_ns, source, entries, skipped)
             r: CodexFileResult = parse_codex_file(p)
             return rp, FileCacheEntry(st.st_size, st.st_mtime_ns, source, r.entries, r.skipped)

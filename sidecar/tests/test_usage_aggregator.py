@@ -1,21 +1,28 @@
+import itertools
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from fledge_sidecar.usage.aggregator import build_codex_unattributed, build_dashboard
 from fledge_sidecar.usage.codex_account_store import day_label, day_number
-from fledge_sidecar.usage.parser import UsageEntry
+from fledge_sidecar.usage.parser import UsageEntry, parse_pi_file
 
 NOW = datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc).timestamp()
 
 
 def _e(ts=NOW - 60, source="claude", model="claude-opus-4-8", cost=1.0,
-       project="/p/a", dedup="m:r", sidechain=False, missing=False, **tok):
+       project="/p/a", dedup="m:r", sidechain=False, missing=False, origin_ts=0.0, **tok):
     tokens = {"input_tokens": 100, "output_tokens": 10, "cache_read_tokens": 0,
               "cache_create_5m": 0, "cache_create_1h": 0} | tok
     return UsageEntry(ts=ts, source=source, model=model, cost=cost, project=project,
                       session_id="s", dedup_key=dedup, sidechain=sidechain,
-                      missing_pricing=missing, **tokens)
+                      missing_pricing=missing, origin_ts=origin_ts, **tokens)
+
+
+def _pi(model="localai/q", dedup="pi:x:t", project="/p/a", origin_ts=1.0, cost=0.0, **kw):
+    return _e(source="pi", model=model, dedup=dedup, project=project, origin_ts=origin_ts, cost=cost, **kw)
 
 
 def test_claude_dedup_drops_duplicate_key():
@@ -78,6 +85,7 @@ def test_projects_models_daily_hourly_shapes():
     assert len(d["hourly"]) == 7 and all(len(row) == 24 for row in d["hourly"])
     assert len(d["daily"]) >= 1
     assert any(m["model"] == "gpt-5.5" for m in d["models"])
+    assert pa["pi_tokens"] == 0 and d["pi_models"] == [] and d["kpi"]["pi_cache_hit_rate"] is None
 
 
 def test_project_rollup_collapses_worktrees_and_subdirs():
@@ -310,3 +318,109 @@ def test_cost_is_none_without_a_usable_price():
     assert _ua([_cx("2026-06-05 12:00", 10, 0, model="gpt-6-astra", cost=1.0)], ACC, FIN, win)["previous"]["cost"] is None
     out = _ua(priced, ACC, FIN, win, price_model=None)
     assert out["previous"]["cost"] is None and out["price_model"] is None
+
+
+# ── Pi（Pi spec §5.2／§5.5／§5.9／§5.11）──
+def test_pi_entries_only_feed_pi_keys_not_cost_models_daily_hourly():
+    """Pi 的金額不計入任何一欄（§5.9；cost 給 0.25 證明不是靠 0 混過）；token 只進 pi_tokens／pi_cache_hit_rate／pi_models，
+    不進 models（金額表）、daily、hourly。"""
+    d = build_dashboard([_pi(cost=0.25, input_tokens=100, output_tokens=50, cache_read_tokens=300, cache_create_5m=100),
+                         _e(project="/p/b")], subscriptions=[], now=NOW)
+    assert d["kpi"]["today_value"] == 1.0 and d["kpi"]["month_value"] == 1.0
+    pa = next(p for p in d["projects"] if p["path"] == "/p/a")
+    assert (pa["claude_cost"], pa["codex_cost"], pa["total"], pa["pi_tokens"]) == (0.0, 0.0, 0.0, 550)
+    assert pa["last_active"] == NOW - 60
+    assert [m["source"] for m in d["models"]] == ["claude"]
+    assert d["daily"] == [{"date": d["daily"][0]["date"], "by_model": {"claude-opus-4-8": 1.0}, "total": 1.0}]
+    assert sum(map(sum, d["hourly"])) == 1.0
+    assert abs(d["kpi"]["pi_cache_hit_rate"] - 300 / 500) < 1e-9     # 分母 input＋cacheRead＋cacheWrite
+    assert d["pi_models"] == [{"model": "localai/q", "tokens": 550, "calls": 1}]
+
+
+def test_pi_models_sorted_by_tokens_and_summary_counts_in_tokens_but_not_models():
+    """pi/summary 算進 pi_tokens 與命中率、不進 pi_models（§7）；pi_models 依 tokens 由大到小、calls＝計入的條目數。"""
+    d = build_dashboard([
+        _pi(model="localai/small", dedup="pi:1:t", input_tokens=10, output_tokens=0),
+        _pi(model="omlx/big", dedup="pi:2:t", input_tokens=500, output_tokens=0),
+        _pi(model="omlx/big", dedup="pi:3:t", input_tokens=1, output_tokens=0),
+        _pi(model="pi/summary", dedup="pi:4:t", input_tokens=0, output_tokens=0, cache_read_tokens=1000),
+    ], subscriptions=[], now=NOW)
+    assert d["pi_models"] == [{"model": "omlx/big", "tokens": 501, "calls": 2},
+                              {"model": "localai/small", "tokens": 10, "calls": 1}]
+    assert d["projects"][0]["pi_tokens"] == 1511
+    assert abs(d["kpi"]["pi_cache_hit_rate"] - 1000 / 1511) < 1e-9
+
+
+def test_pi_cache_hit_rate_none_without_pi_and_horizon_excludes_old_pi():
+    d = build_dashboard([_e()], subscriptions=[], now=NOW)
+    assert d["kpi"]["pi_cache_hit_rate"] is None and d["pi_models"] == []
+    old = build_dashboard([_pi(ts=NOW - 40 * 86400, cache_read_tokens=50)], subscriptions=[], now=NOW, days=30)
+    assert old["kpi"]["pi_cache_hit_rate"] is None and old["pi_models"] == [] and old["projects"] == []
+
+
+@pytest.mark.parametrize("order", [(0, 1, 2), (2, 1, 0), (1, 2, 0), (0, 2, 1), (1, 0, 2), (2, 0, 1)])
+def test_pi_dedup_keeps_the_copy_from_the_earliest_file_regardless_of_input_order(order):
+    """fork 逐條複製、cwd 可能不同（§5.5）：同鍵取 origin_ts 最小的那份——歸原專案，與輸入順序無關。"""
+    copies = [_pi(dedup="pi:k:t", project="/p/orig", origin_ts=100.0, input_tokens=5),
+              _pi(dedup="pi:k:t", project="/p/fork1", origin_ts=200.0, input_tokens=5),
+              _pi(dedup="pi:k:t", project="/p/fork2", origin_ts=300.0, input_tokens=5)]
+    d = build_dashboard([copies[i] for i in order], subscriptions=[], now=NOW)
+    assert [(p["path"], p["pi_tokens"]) for p in d["projects"]] == [("/p/orig", 15)]
+
+
+def test_pi_dedup_same_origin_prefers_more_tokens_and_empty_key_is_kept():
+    d = build_dashboard([_pi(dedup="pi:k:t", origin_ts=1.0, input_tokens=5, output_tokens=0),
+                         _pi(dedup="pi:k:t", origin_ts=1.0, input_tokens=9, output_tokens=0),
+                         _pi(dedup="", input_tokens=1, output_tokens=0), _pi(dedup="", input_tokens=1, output_tokens=0)],
+                        subscriptions=[], now=NOW)
+    assert d["projects"][0]["pi_tokens"] == 11
+
+
+PI_FIXTURE = Path(__file__).parent / "fixtures" / "pi" / "session-a.jsonl"
+
+
+def _fork(src: Path, dst: Path, *, sid: str, cwd: str, ts: str, parent: str, extra_id: str) -> None:
+    """照 Pi 1.4.0 `forkFrom` 的行為（Pi spec §5.5）：header 換 id／cwd／timestamp（fork 那一刻）、加 parentSession；
+    其餘條目逐條原樣複製（id、timestamp、usage 都保留）；之後在新檔多一則 assistant。"""
+    lines = src.read_text(encoding="utf-8").splitlines()
+    head = json.loads(lines[0])
+    head.update({"id": sid, "cwd": cwd, "timestamp": ts, "parentSession": parent})
+    extra = json.dumps({"type": "message", "id": extra_id, "timestamp": ts,
+                        "message": {"role": "assistant", "provider": "localai", "model": "qwen3.8-27b-q8",
+                                    "usage": {"input": 100, "output": 10, "cacheRead": 0, "cacheWrite": 0, "cost": {"total": 0}}}})
+    dst.write_text("\n".join([json.dumps(head)] + lines[1:] + [extra]) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("order", list(itertools.permutations(range(3))))
+def test_fork_chain_of_three_files_counts_once_and_attributes_by_earliest_file(tmp_path: Path, order):
+    """spec §6.3 的 fork fixture：A（fixture）→ B（較晚、cwd 換 /p/beta、多一則）→ C（更晚、/p/gamma、再多一則），
+    三檔走 parser→aggregator：總 token＝A ＋ 新增的兩則；A 的條目歸 /p/alpha、B 新增的歸 /p/beta、C 新增的歸 /p/gamma；
+    三檔六種輸入順序結果相同。**守的是我們的去重規則**——複製是測試自己做的，上游 forkFrom 若改成重寫 id／timestamp，
+    這條不會知道；那要用真的 `/fork` 檔核對（plan Task 4 真機 #8；spec §10 #4 的已知限制）。"""
+    b = tmp_path / "b.jsonl"
+    c = tmp_path / "c.jsonl"
+    _fork(PI_FIXTURE, b, sid="pi-sess-b", cwd="/p/beta", ts="2026-10-28T00:00:00.000Z", parent="pi-sess-a", extra_id="bbbb0001")
+    _fork(b, c, sid="pi-sess-c", cwd="/p/gamma", ts="2026-10-29T00:00:00.000Z", parent="pi-sess-b", extra_id="cccc0001")
+    files = [PI_FIXTURE, b, c]
+    entries = [e for i in order for e in parse_pi_file(files[i])[0]]
+    now = datetime(2026, 10, 30, 0, 0, tzinfo=timezone.utc).timestamp()
+    d = build_dashboard(entries, subscriptions=[], now=now, days=30)
+    assert {p["path"]: p["pi_tokens"] for p in d["projects"]} == {"/p/alpha": 38877, "/p/beta": 110, "/p/gamma": 110}
+    assert sum(m["tokens"] for m in d["pi_models"]) == 38877 - 28709 + 220      # 摘要 28709 不在 pi_models
+    assert sum(m["calls"] for m in d["pi_models"]) == 5 + 2
+
+
+def test_claude_dedup_rule_untouched_by_pi_rule():
+    """放寬成「dedup_key 非空就去重」後 claude 仍走 parent＞sidechain＞token 多者，不看 origin_ts。"""
+    d = build_dashboard([_e(dedup="m:r", sidechain=True, cost=1.0, origin_ts=0.0),
+                         _e(dedup="m:r", sidechain=False, cost=2.0, origin_ts=5.0)], subscriptions=[], now=NOW)
+    assert d["kpi"]["today_value"] == 2.0
+
+
+def test_projects_with_only_pi_usage_sort_after_same_cost_projects():
+    """排序鍵仍是金額；只有 Pi 用量（金額 0）的專案排在金額同為 0 的專案之後，不管誰先出現（§6.1 #11）。
+    pi 條目給空 dedup_key：去重後的順序是「空 key 的照原順序在前」，pi-only 才會先於 zero 進排序，排序鍵才有事做。"""
+    d = build_dashboard([_pi(project="/p/pi-only", dedup="", input_tokens=10 ** 6),
+                         _e(source="codex", model="unknown-codex", dedup="", project="/p/zero", cost=0.0, missing=True),
+                         _e(project="/p/paid", cost=3.0)], subscriptions=[], now=NOW)
+    assert [p["path"] for p in d["projects"]] == ["/p/paid", "/p/zero", "/p/pi-only"]

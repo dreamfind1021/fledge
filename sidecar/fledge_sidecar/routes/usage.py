@@ -17,7 +17,7 @@ from fledge_sidecar.app_config import AppConfig, default_config_path
 from fledge_sidecar.usage import codex_account_store
 from fledge_sidecar.usage.aggregator import build_codex_unattributed, build_dashboard
 from fledge_sidecar.usage.cache import UsageCache
-from fledge_sidecar.usage.scanner import _scan_claude, codex_config_model, codex_files
+from fledge_sidecar.usage.scanner import _scan_claude, codex_config_model, codex_files, pi_files, pi_home
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -64,7 +64,8 @@ def _scan_sync(days: int) -> dict:
     t0 = time.monotonic()
     cl, _ = _scan_claude(config)
     cx = codex_files(_codex_home())
-    r = cache.refresh(claude=cl, codex=cx)
+    pf = pi_files(pi_home())
+    r = cache.refresh(claude=cl, codex=cx, pi=pf)
     now = time.time()
     payload = build_dashboard(r.entries, config.subscriptions, now=now, days=days,
                               roots=[r["path"] for r in config.roots])
@@ -77,7 +78,8 @@ def _scan_sync(days: int) -> dict:
         "state": "ok", "generation": r.generation, "files": r.total_files,
         "skipped_lines": r.skipped_lines, "scanned_at": now, "error": None,
         "cold_scan_ms": int((time.monotonic() - t0) * 1000), "days": days,
-        "sources": {"claude": "ok" if cl else "missing", "codex": "ok" if cx else "missing"},
+        "sources": {"claude": "ok" if cl else "missing", "codex": "ok" if cx else "missing",
+                    "pi": "ok" if pf else "missing"},
     })
     return payload
 

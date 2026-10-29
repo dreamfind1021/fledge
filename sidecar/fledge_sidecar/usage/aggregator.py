@@ -38,19 +38,27 @@ def _project_root(path: str, roots: list[str]) -> str:
     return best + "/" + rest.split("/", 1)[0]
 
 
+def _replaces(cur: UsageEntry, new: UsageEntry) -> bool:
+    """同 key 時 new 是否取代 cur。claude（design §6）：parent（非 sidechain）勝 sidechain；同類取 token 多者。
+    pi（Pi spec §5.5）：fork 逐條複製、cwd 可能不同——取所在檔案最早的那份（origin_ts 最小），相同取 token 多者；
+    不依賴輸入順序。pi 的 key 帶 `pi:` 前綴，不會跟 claude 的撞鍵。"""
+    if new.source == "pi":
+        return new.origin_ts < cur.origin_ts or (
+            new.origin_ts == cur.origin_ts and _total_tokens(new) > _total_tokens(cur))
+    return (cur.sidechain and not new.sidechain) or (
+        cur.sidechain == new.sidechain and _total_tokens(new) > _total_tokens(cur))
+
+
 def _dedup(entries: list[UsageEntry]) -> list[UsageEntry]:
-    """claude 同 key 替換規則（design §6）：parent（非 sidechain）勝 sidechain；同類取 token 多者。"""
+    """`dedup_key` 非空的條目都去重（claude 與 pi；codex 的 key 是空字串、canonical selection 已保唯一）。"""
     keyed: dict[str, UsageEntry] = {}
     out: list[UsageEntry] = []
     for e in entries:
-        if e.source != "claude" or not e.dedup_key:
+        if not e.dedup_key:
             out.append(e)
             continue
         cur = keyed.get(e.dedup_key)
-        if cur is None:
-            keyed[e.dedup_key] = e
-        elif (cur.sidechain and not e.sidechain) or (
-                cur.sidechain == e.sidechain and _total_tokens(e) > _total_tokens(cur)):
+        if cur is None or _replaces(cur, e):
             keyed[e.dedup_key] = e
     out.extend(keyed.values())
     return out
@@ -85,16 +93,50 @@ def build_dashboard(entries: list[UsageEntry], subscriptions: list[dict], now: f
 
     month = week = today = 0.0
     claude_hit_num = claude_hit_den = codex_hit_num = codex_hit_den = 0
+    pi_hit_num = pi_hit_den = 0
+    # Pi 的模型層級用量（Pi spec §5.11）：另立一鍵不塞進 models——models 是金額表，塞進去會變成 0 元列進「其他」
+    pi_models: dict[str, dict] = defaultdict(lambda: {"tokens": 0, "calls": 0})
     daily: dict[str, dict] = defaultdict(lambda: {"by_model": defaultdict(float), "total": 0.0})
     models: dict[tuple[str, str], dict] = defaultdict(
         lambda: {"input": 0, "output": 0, "cache_read": 0, "cache_create": 0, "cost": 0.0})
     projects: dict[str, dict] = defaultdict(
-        lambda: {"claude_cost": 0.0, "codex_cost": 0.0, "last_active": 0.0})
+        lambda: {"claude_cost": 0.0, "codex_cost": 0.0, "pi_tokens": 0, "last_active": 0.0})
     hourly = [[0.0] * 24 for _ in range(7)]   # [weekday][hour] = cost
     missing: set[str] = set()
     horizon = now - days * 86400
 
+    def _project_key(project: str) -> str:
+        """與側欄專案清單對齊（design §5.3）：路徑 memoized 正規化（resolve symlink）。
+        在聚合端做而非 parser 端——條目存原始事實、政策在讀取端，免 syscall 風暴。
+        再收斂到側欄層級專案根（worktree/子目錄歸母專案）；call-local memo（依 roots）。"""
+        canon = _canon_cache.get(project)
+        if canon is None:
+            canon = resolve_best_effort(project)
+            _canon_cache[project] = canon
+        key = proj_root_cache.get(canon)
+        if key is None:
+            key = _project_root(canon, canon_roots)
+            proj_root_cache[canon] = key
+        return key
+
     for e in entries:
+        if e.source == "pi":
+            # Pi 的金額不計入任何一欄（Pi spec §5.9；本版地端模型恆為 0，日後接雲端要回來加 pi_cost）；
+            # token 只進 pi_tokens／pi_cache_hit_rate／pi_models，不進 models／daily／hourly（那三個都是金額）
+            if e.ts < horizon:
+                continue
+            pi_hit_num += e.cache_read_tokens
+            pi_hit_den += e.input_tokens + e.cache_read_tokens + e.cache_create_5m
+            tokens = _total_tokens(e)
+            if e.project:
+                p = projects[_project_key(e.project)]
+                p["pi_tokens"] += tokens
+                p["last_active"] = max(p["last_active"], e.ts)
+            if e.model != "pi/summary":   # 摘要條目不推定模型，算總量、不列模型（§7）
+                m = pi_models[e.model]
+                m["tokens"] += tokens
+                m["calls"] += 1
+            continue
         # synthetic 不是 API 呼叫（0 成本但帶 token 數＝表格噪音）；
         # missing_pricing 警示本就排除它，面板聚合也一併跳過
         if e.model == "<synthetic>":
@@ -131,18 +173,7 @@ def build_dashboard(entries: list[UsageEntry], subscriptions: list[dict], now: f
         m["cache_create"] += e.cache_create_5m + e.cache_create_1h
         m["cost"] += e.cost
         if e.project:
-            # 與側欄專案清單對齊（design §5.3）：路徑 memoized 正規化（resolve symlink）。
-            # 在聚合端做而非 parser 端——條目存原始事實、政策在讀取端，免 syscall 風暴
-            canon = _canon_cache.get(e.project)
-            if canon is None:
-                canon = resolve_best_effort(e.project)
-                _canon_cache[e.project] = canon
-            # 再收斂到側欄層級專案根（worktree/子目錄歸母專案）；call-local memo（依 roots）
-            key = proj_root_cache.get(canon)
-            if key is None:
-                key = _project_root(canon, canon_roots)
-                proj_root_cache[canon] = key
-            p = projects[key]
+            p = projects[_project_key(e.project)]
             p["claude_cost" if e.source == "claude" else "codex_cost"] += e.cost
             p["last_active"] = max(p["last_active"], e.ts)
         hourly[weekday][hour] += e.cost
@@ -156,19 +187,28 @@ def build_dashboard(entries: list[UsageEntry], subscriptions: list[dict], now: f
     # 分源命中率：某源該視窗無輸入（den=0）回 None，讓前端顯示「—」而非誤導的 0%
     claude_hit_rate = claude_hit_num / claude_hit_den if claude_hit_den else None
     codex_hit_rate = codex_hit_num / codex_hit_den if codex_hit_den else None
+    pi_hit_rate = pi_hit_num / pi_hit_den if pi_hit_den else None
+
+    def _project_sort_key(kv: tuple[str, dict]) -> tuple[float, bool]:
+        # 排序鍵仍是金額；只有 Pi 用量（金額 0）的專案排在金額同為 0 的專案之後（Pi spec §6.1 #11）
+        cost = kv[1]["claude_cost"] + kv[1]["codex_cost"]
+        return (-cost, cost == 0 and kv[1]["pi_tokens"] > 0)
 
     return {
         "kpi": {"month_value": month, "week_value": week, "today_value": today,
                 "claude_cache_hit_rate": claude_hit_rate, "codex_cache_hit_rate": codex_hit_rate,
+                "pi_cache_hit_rate": pi_hit_rate,
                 "net_roi": month - subs_total, "subscriptions_total": subs_total},
         "daily": [{"date": d, "by_model": dict(v["by_model"]), "total": v["total"]}
                   for d, v in sorted(daily.items())],
         "models": [{"model": k[0], "source": k[1], **v}
                    for k, v in sorted(models.items(), key=lambda kv: -kv[1]["cost"])],
         "projects": [{"path": p, "claude_cost": v["claude_cost"], "codex_cost": v["codex_cost"],
-                      "total": v["claude_cost"] + v["codex_cost"], "last_active": v["last_active"]}
-                     for p, v in sorted(projects.items(),
-                                        key=lambda kv: -(kv[1]["claude_cost"] + kv[1]["codex_cost"]))],
+                      "total": v["claude_cost"] + v["codex_cost"], "pi_tokens": v["pi_tokens"],
+                      "last_active": v["last_active"]}
+                     for p, v in sorted(projects.items(), key=_project_sort_key)],
+        "pi_models": [{"model": k, **v}
+                      for k, v in sorted(pi_models.items(), key=lambda kv: -kv[1]["tokens"])],
         "hourly": hourly,
         "scan_meta": {"missing_pricing": sorted(missing)},   # route 層補 state/generation 等
     }

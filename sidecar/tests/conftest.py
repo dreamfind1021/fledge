@@ -24,6 +24,13 @@ def _no_codex_account_poll(monkeypatch):
     monkeypatch.setenv("FLEDGE_TEST_NO_CODEX_POLL", "1")
 
 
+@pytest.fixture(autouse=True)
+def _no_real_pi_home(monkeypatch, tmp_path):
+    """`scan_all`／`_scan_sync` 會掃 Pi 的 session 目錄（Pi spec §6.1 #9／#12）；測試預設指到空的 tmp，
+    不得掃到開發機真的 `~/.pi/agent`（會讓 recent／用量隨本機資料飄）。要測 Pi 的測試自己再 setenv。"""
+    monkeypatch.setenv("FLEDGE_PI_HOME", str(tmp_path / "no-pi-home"))
+
+
 # 假 codex：講 app-server 同一套 JSON-RPC 的 Python 腳本（test_codex_usage 與 test_codex_account_poll 共用，
 # 出現第二個使用點才抽進來，比照 make_staging）。FAKE_CODEX_MODE：normal／noise（夾雜通知與非 JSON 行）／
 # silent（不讀 stdin、睡 60 秒）／exit-after-init／hang-usage（account/usage/read 不回，寫 FAKE_CODEX_MARKER 後
