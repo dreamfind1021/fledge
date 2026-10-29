@@ -28,3 +28,28 @@ describe("TabBar 的 tasks 分頁", () => {
     expect(container.querySelector(".tab-dot")).toBeNull(); // 沒有分派時會落到這個 else 分支
   });
 });
+
+// Pi 分頁不顯示帳號 chip、改顯示 Pi chip（Pi spec §5.8／§6.2 #17）：帳號照帶在 store 裡，畫面上不能露出
+describe("TabBar 的 Pi 分頁", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
+    useAppStore.setState({
+      port: 1234, activeTabId: "c",
+      tabs: [
+        { id: "c", projectPath: "/p", account: "work", title: "fledge", sessionId: "s1", status: "ready", kind: "claude" },
+        { id: "p", projectPath: "/p", account: "work", title: "fledge", sessionId: "s2", status: "ready", kind: "claude", agent: "pi" },
+      ],
+    });
+  });
+  afterEach(cleanup);
+
+  it("claude 分頁有帳號 chip；pi 分頁改成 Pi chip、沒有帳號 chip", () => {
+    render(
+      <DndContext>
+        <TabBar />
+      </DndContext>,
+    );
+    const chips = [...document.querySelectorAll(".tabbar-chip")].map((el) => [el.textContent, el.classList.contains("is-pi")]);
+    expect(chips).toEqual([["work", false], ["Pi", true]]);
+  });
+});

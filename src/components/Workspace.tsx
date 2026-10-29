@@ -1,4 +1,5 @@
 import { useDroppable } from "@dnd-kit/core";
+import { useTranslation } from "react-i18next";
 import { TabBar } from "./TabBar";
 import { Terminal } from "./Terminal";
 import Dashboard from "./Dashboard";
@@ -12,6 +13,7 @@ import "./Workspace.css";
 // ⚠ 終端機區塊保留「全 tab 同時 mount + display 切換」——這是 xterm scrollback
 // 跨 tab 切換不被銷毀的唯一原因；勿改成「只 render active tab 的 Terminal」。
 export function Workspace() {
+  const { t: tApp } = useTranslation("app");
   const tabs = useAppStore((s) => s.tabs);
   const activeTabId = useAppStore((s) => s.activeTabId);
   const port = useAppStore((s) => s.port);
@@ -93,7 +95,12 @@ export function Workspace() {
                     {t.status === "creating" ? (
                       <span className="ws-creating-text">正在開啟 session…</span>
                     ) : (
-                      <span className="ws-error-text">{`開啟失敗：${t.error ?? ""}`}</span>
+                      /* 後端判別碼有對應文案就映射（找不到 agent 的 binary，Pi spec §6.2 #21）；其餘維持原文 */
+                      <span className="ws-error-text">
+                        {t.errorCode === "agent_not_found"
+                          ? tApp("errors.agent_not_found", { agent: t.agent ?? "claude" })
+                          : `開啟失敗：${t.error ?? ""}`}
+                      </span>
                     )}
                   </div>
                 )}

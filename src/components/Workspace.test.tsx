@@ -2,6 +2,8 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { DndContext } from "@dnd-kit/core";
+import i18n from "../i18n";
+import enApp from "../locales/en/app.json";
 import { useAppStore } from "../store/useAppStore";
 import { Workspace } from "./Workspace";
 
@@ -44,5 +46,35 @@ describe("Workspace 的 kind 分派", () => {
     const wrap = screen.getByTestId("tasks-panel").parentElement as HTMLElement;
     expect(wrap.style.paddingLeft).toBe("0px");
     expect([wrap.style.paddingTop, wrap.style.paddingRight, wrap.style.paddingBottom]).toEqual(["4px", "4px", "4px"]);
+  });
+});
+
+// 找不到 agent 的 binary（後端 400 agent_not_found）要顯示可讀文案，不是「開啟失敗：SessionError: createSession failed: 400」
+// （Pi spec §5.7／§6.2 #21）；沒有對應判別碼的錯誤維持原文
+describe("Workspace 的 session 建立失敗", () => {
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
+    useAppStore.setState({
+      port: 1234, projects: [], activeTabId: "e1", config: null,
+      tabs: [
+        { id: "e1", projectPath: "/p", account: "work", title: "fledge", sessionId: null, status: "error", kind: "claude",
+          agent: "pi", error: "SessionError: createSession failed: 400", errorCode: "agent_not_found" },
+        { id: "e2", projectPath: "/p", account: "work", title: "fledge", sessionId: null, status: "error", kind: "claude",
+          error: "SessionError: createSession failed: 500" },
+      ],
+    });
+  });
+  afterEach(cleanup);
+
+  it("agent_not_found → 帶 agent 名的 i18n 文案；其他錯誤 → 原文", () => {
+    render(
+      <DndContext>
+        <Workspace />
+      </DndContext>,
+    );
+    // 用 queryByText＋expect：getByText 找不到時丟的是 TestingLibraryElementError，驗紅工具只認斷言失敗
+    expect(screen.queryByText(enApp.errors.agent_not_found.replace("{{agent}}", "pi"))).not.toBeNull();
+    expect(screen.queryByText("開啟失敗：SessionError: createSession failed: 500")).not.toBeNull();
+    expect(screen.queryByText(/failed: 400/)).toBeNull();
   });
 });

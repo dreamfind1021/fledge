@@ -47,6 +47,16 @@ describe("displayTabTitle", () => {
     expect(displayTabTitle(tabs, mem)).toBe("mem");
   });
 
+  it("同 (path, account) 的 claude 與 pi 各自編號、不互相計入（Pi spec §6.2 #16）", () => {
+    const c1 = ctab("1", "/p", "work");
+    const p1: Tab = { ...ctab("2", "/p", "work"), agent: "pi" };
+    const p2: Tab = { ...ctab("3", "/p", "work"), agent: "pi" };
+    const tabs = [c1, p1, p2];
+    expect(displayTabTitle(tabs, c1)).toBe("fledge");
+    expect(displayTabTitle(tabs, p1)).toBe("fledge");
+    expect(displayTabTitle(tabs, p2)).toBe("fledge #2");
+  });
+
   it("關閉中間分頁後重新編號（原 #3 → #2）", () => {
     const a = ctab("1", "/p", "work");
     const c = ctab("3", "/p", "work");

@@ -8,6 +8,7 @@
   "discovered": "{{count}} auto-discovered",
   "menu": {
     "openClaudeWindow": "Open new Claude window",
+    "openPiWindow": "Open with Pi",
     "openTerminal": "Open with terminal",
     "openWithAccountOnce": "Open with \"{{account}}\" (this time)",
     "setDefaultAccount": "Set default account → {{account}}",

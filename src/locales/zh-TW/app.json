@@ -10,6 +10,9 @@
     "install_guide": "安裝說明",
     "permission_denied": "無法讀取部分資料夾。請到「系統設定 → 隱私權與安全性 → 檔案與資料夾／App 管理」允許 Fledge。"
   },
+  "errors": {
+    "agent_not_found": "找不到 {{agent}}，請先安裝。"
+  },
   "toast": {
     "rescanned": "已重新掃描專案"
   },

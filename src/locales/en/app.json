@@ -10,6 +10,9 @@
     "install_guide": "Install guide",
     "permission_denied": "Some folders can't be read. Allow Fledge under System Settings → Privacy & Security → Files and Folders / App Management."
   },
+  "errors": {
+    "agent_not_found": "{{agent}} not found. Install it first."
+  },
   "toast": {
     "rescanned": "Projects rescanned"
   },

@@ -56,6 +56,11 @@
   /* chip 上的文字是深色，確保在各帳號色背景上可讀。每個主題都是深字，所以不借 --bg（淺色主題的 --bg 是淺的，票 07） */
   color: var(--fill-ink);
 }
+/* Pi 分頁的 chip：固定用 --ai（與儀表板 Pi 條同色）配它的 ink；不走 accountColor（Pi 沒有帳號） */
+.tabbar-chip.is-pi {
+  background: var(--ai);
+  color: var(--ai-ink);
+}
 
 /* 關閉按鈕 */
 .tabbar-close {

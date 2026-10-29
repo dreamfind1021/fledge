@@ -61,7 +61,10 @@ function SortableTab({
       <span className="tabbar-tab-title">
         {t.kind === "dashboard" ? tDash("tabTitle") : t.kind === "memory" ? tMem("tabTitle") : t.kind === "tasks" ? tTasks("tabTitle") : title}
       </span>
-      {t.account && (
+      {/* Pi 分頁：帳號照帶在 store 裡（§5.8）但畫面上不露出，改顯示 Pi chip（Pi spec §6.2 #17） */}
+      {t.kind === "claude" && t.agent === "pi" ? (
+        <span className="tabbar-chip is-pi">Pi</span>
+      ) : t.account && (
         <span className="tabbar-chip" style={{ background: accountColor(t.account) }}>{t.account}</span>
       )}
       <button
