@@ -33,3 +33,14 @@ def test_health_reports_claude_found(monkeypatch):
     monkeypatch.setattr(health_mod.shutil, "which", lambda _: None)
     body = TestClient(create_app()).get("/api/health").json()
     assert body["claude_found"] is False
+
+
+def test_health_reports_agents(monkeypatch):
+    # 每個 agent 一個布林（spec §6.1 #6）；claude_found 保留給既有前端
+    import fledge_sidecar.routes.health as health_mod
+
+    monkeypatch.setattr(health_mod.shutil, "which",
+                        lambda name: "/opt/homebrew/bin/pi" if name == "pi" else None)
+    body = TestClient(create_app()).get("/api/health").json()
+    assert body["agents"] == {"claude": False, "pi": True}
+    assert body["claude_found"] is False

@@ -326,9 +326,28 @@ def test_resolve_command_terminal_fallback_when_no_shell(monkeypatch):
 
 
 def test_resolve_command_claude_default(monkeypatch):
-    from fledge_sidecar.routes.sessions import _resolve_command
+    # 回絕對路徑、不再回裸指令名（spec §5.7）：裸名全靠 PATH，找不到時 FileNotFoundError 冒成 500
+    from fledge_sidecar.routes import sessions as sr
     monkeypatch.delenv("FLEDGE_TEST_COMMAND", raising=False)
-    assert _resolve_command("claude") == ["claude"]
+    monkeypatch.setattr(sr.shutil, "which", lambda name: f"/opt/bin/{name}")
+    assert sr._resolve_command("claude") == ["/opt/bin/claude"]
+
+
+def test_resolve_command_pi_absolute_path_and_ignores_test_command(monkeypatch):
+    # FLEDGE_TEST_COMMAND 只覆蓋 claude（與現況一致）；pi 永遠走 which
+    from fledge_sidecar.routes import sessions as sr
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "cat")
+    monkeypatch.setattr(sr.shutil, "which", lambda name: f"/opt/homebrew/bin/{name}")
+    assert sr._resolve_command("claude", agent="pi") == ["/opt/homebrew/bin/pi"]
+    assert sr._resolve_command("claude", agent="claude") == ["cat"]
+
+
+def test_resolve_command_returns_none_when_agent_missing(monkeypatch):
+    from fledge_sidecar.routes import sessions as sr
+    monkeypatch.delenv("FLEDGE_TEST_COMMAND", raising=False)
+    monkeypatch.setattr(sr.shutil, "which", lambda _name: None)
+    assert sr._resolve_command("claude", agent="pi") is None
+    assert sr._resolve_command("claude", agent="claude") is None
 
 
 def test_resolve_command_test_command_only_affects_claude(monkeypatch):
@@ -360,10 +379,11 @@ def test_create_session_passes_terminal_command(tmp_path, monkeypatch):
 
 
 def test_create_session_defaults_to_claude_when_kind_omitted(tmp_path, monkeypatch):
-    """不傳 kind → 預設 claude（向後相容）。"""
+    """不傳 kind → 預設 claude（向後相容）；命令是 which 解析出的絕對路徑（spec 2026-10-29 §5.7）。"""
     _write_config(tmp_path, monkeypatch)
     monkeypatch.delenv("FLEDGE_TEST_COMMAND", raising=False)
     from fledge_sidecar.routes import sessions as sr
+    monkeypatch.setattr(sr.shutil, "which", lambda name: f"/opt/bin/{name}")
     captured = {}
     real = sr._bridge.create_session
 
@@ -375,7 +395,7 @@ def test_create_session_defaults_to_claude_when_kind_omitted(tmp_path, monkeypat
     client = TestClient(create_app())
     resp = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work"})
     assert resp.status_code == 200
-    assert captured["command"] == ["claude"]
+    assert captured["command"] == ["/opt/bin/claude"]
     client.delete(f"/api/sessions/{resp.json()['session_id']}")
 
 
@@ -493,6 +513,85 @@ def test_install_session_uses_allowlist_command_no_account_env(tmp_path: Path, m
     assert captured["cwd"] == str(Path.home())
     assert captured["project_path"] == str(tmp_path)
     assert "account" not in captured
+
+
+# ── agent=pi（Pi 作為第二種 agent，spec 2026-10-29 §5.7／§5.8／§6.1 #1-#5）────────────────
+
+
+def test_pi_session_runs_pi_without_claude_env_and_without_activity(tmp_path: Path, monkeypatch):
+    # Pi 沒有帳號概念：帳號照常驗（§5.8），但不注入 CLAUDE_CONFIG_DIR、主動剔除它、不進活動歸屬；
+    # 注入 PI_PROGRAM_STATUS=1 讓 Pi 不發支援查詢就送 OSC 7501（§8）
+    _write_config(tmp_path, monkeypatch)
+    from fledge_sidecar.routes import sessions as sr
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "cat")   # 不得影響 pi
+    monkeypatch.setattr(sr.shutil, "which", lambda name: f"/opt/homebrew/bin/{name}")
+    captured = _capture_bridge_create(monkeypatch, "sess-pi")
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": str(tmp_path), "account": "work", "agent": "pi",
+    })
+    assert resp.status_code == 200
+    assert captured["command"] == ["/opt/homebrew/bin/pi"]
+    assert captured["cwd"] == str(tmp_path)
+    assert captured["env_overrides"] == {"PI_PROGRAM_STATUS": "1"}
+    assert "CLAUDE_CONFIG_DIR" in (captured.get("env_remove") or [])
+    assert captured["account"] == "work"                 # wire 上仍帶帳號（§5.8）
+    assert captured["session_id"] not in sr._opened_session_ids   # 不記帳號活動
+
+
+def test_claude_session_still_injects_account_env_and_records_activity(tmp_path: Path, monkeypatch):
+    # 對照組：agent 預設 claude 的行為一字不動
+    _write_config(tmp_path, monkeypatch)
+    from fledge_sidecar.routes import sessions as sr
+    monkeypatch.setenv("FLEDGE_TEST_COMMAND", "cat")
+    captured = _capture_bridge_create(monkeypatch, "sess-claude")
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": str(tmp_path), "account": "work",
+    })
+    assert resp.status_code == 200
+    assert captured["command"] == ["cat"]
+    assert captured["env_overrides"] == {"CLAUDE_CONFIG_DIR": "/tmp/fake-claude"}
+    assert captured.get("env_remove") is None
+    assert captured["session_id"] in sr._opened_session_ids
+
+
+def test_agent_not_found_returns_400_not_500(tmp_path: Path, monkeypatch):
+    # 找不到 binary → 400 agent_not_found（前端據此顯示「找不到 pi」），不是 FileNotFoundError 冒成 500；
+    # 也不能先 record_open 再失敗（會留 phantom live span）
+    _write_config(tmp_path, monkeypatch)
+    from fledge_sidecar.routes import sessions as sr
+    monkeypatch.delenv("FLEDGE_TEST_COMMAND", raising=False)
+    monkeypatch.setattr(sr.shutil, "which", lambda _name: None)
+    captured = _capture_bridge_create(monkeypatch, "never")
+    opened_before = set(sr._opened_session_ids)      # 模組層集合，別的測試可能留有 id：只看有沒有新增
+    client = TestClient(create_app())
+    for agent in ("pi", "claude"):
+        resp = client.post("/api/sessions", json={"path": str(tmp_path), "account": "work", "agent": agent})
+        assert resp.status_code == 400
+        assert resp.json() == {"error": "agent_not_found", "agent": agent}
+    assert captured == {}
+    assert sr._opened_session_ids == opened_before
+
+
+def test_pi_session_still_requires_valid_account(tmp_path: Path, monkeypatch):
+    # §5.8：Pi 不用帳號，但帳號驗證在 agent 分支之前、照常擋。替身擋住 spawn：驗證被跳過時要紅在 400 的斷言，不是真的起 pi
+    _write_config(tmp_path, monkeypatch)
+    from fledge_sidecar.routes import sessions as sr
+    monkeypatch.setattr(sr.shutil, "which", lambda name: f"/opt/homebrew/bin/{name}")
+    captured = _capture_bridge_create(monkeypatch, "never")
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": str(tmp_path), "account": "ghost", "agent": "pi",
+    })
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "unknown_account"
+    assert captured == {}
+
+
+def test_session_rejects_unknown_agent(tmp_path: Path, monkeypatch):
+    _write_config(tmp_path, monkeypatch)
+    resp = TestClient(create_app()).post("/api/sessions", json={
+        "path": str(tmp_path), "account": "work", "agent": "opencode",
+    })
+    assert resp.status_code == 422
 
 
 def test_session_rejects_unknown_field_fail_closed(tmp_path: Path, monkeypatch):

@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -65,6 +66,9 @@ class CreateSessionRequest(BaseModel):
     path: str
     account: str = ""  # install kind 不需帳號；其餘 kind 會驗證
     kind: Literal["claude", "terminal", "install", "login", "backup", "restore"] = "claude"
+    # kind=claude 時跑哪個 agent CLI。獨立欄位、不擴 kind：前端十幾處 `kind === "claude"` 的語意是
+    # 「這是 AI 分頁」，與 binary 無關（spec 2026-10-29 §5.1）
+    agent: Literal["claude", "pi"] = "claude"
     install_id: str | None = None   # kind=install 必填
     login_target: Literal["claude", "codex"] = "claude"  # kind=login 用
     backup_mode: Literal["list", "run"] | None = None    # kind=backup 必填
@@ -84,18 +88,23 @@ def _login_shell() -> str:
     return os.environ.get("SHELL") or "/bin/zsh"
 
 
-def _resolve_command(kind: str = "claude", login_target: str = "claude") -> list[str]:
-    """claude session 跑 claude（測試模式用 FLEDGE_TEST_COMMAND 替代）；
+def _resolve_command(kind: str = "claude", login_target: str = "claude",
+                     agent: str = "claude") -> list[str] | None:
+    """claude session 跑 agent 的 binary（claude／pi，**絕對路徑**；claude 可用 FLEDGE_TEST_COMMAND 替代）；
     terminal session 跑使用者登入 shell（不進 claude），spec §1.2；
-    login session 跑 claude（觸發 OAuth）或 codex login。"""
+    login session 跑 claude（觸發 OAuth）或 codex login。
+
+    agent 分支回 None＝找不到 binary，呼叫端轉 400：裸指令名全靠 PATH，找不到時 spawn 的
+    FileNotFoundError 會冒成 500、前端只看到「Load failed」（spec 2026-10-29 §5.7）。"""
     if kind == "terminal":
         return [_login_shell(), "-l"]
     if kind == "login":
         return ["codex", "login"] if login_target == "codex" else ["claude"]
     test_cmd = os.environ.get("FLEDGE_TEST_COMMAND")
-    if test_cmd:
+    if test_cmd and agent == "claude":
         return test_cmd.split()
-    return ["claude"]
+    found = shutil.which(agent)
+    return [found] if found else None
 
 
 def _apply_flow_control(text: str, flow_gate: asyncio.Event) -> None:
@@ -253,15 +262,24 @@ def create_session(req: CreateSessionRequest):
         return JSONResponse(status_code=400, content={"error": "unknown_account"})
     account = config.accounts[req.account]
     config_dir = account.get("config_dir", "~/.claude")
-    env_overrides = {"CLAUDE_CONFIG_DIR": str(Path(config_dir).expanduser())}
+    # binary 先解析再 record_open：找不到就 400，不留 phantom live span
+    command = _resolve_command(req.kind, req.login_target, req.agent)
+    if command is None:
+        return JSONResponse(status_code=400, content={"error": "agent_not_found", "agent": req.agent})
+    # Pi 沒有帳號概念（模型在 Pi 裡用 /model 切）：帳號照常驗、wire 上照常帶（§5.8），但不注入也不繼承
+    # CLAUDE_CONFIG_DIR；PI_PROGRAM_STATUS=1 讓 Pi 不發支援查詢就送 OSC 7501 狀態回報（xterm.js 不會回答查詢，§8）
+    is_pi = req.kind == "claude" and req.agent == "pi"
+    env_overrides = {"PI_PROGRAM_STATUS": "1"} if is_pi \
+        else {"CLAUDE_CONFIG_DIR": str(Path(config_dir).expanduser())}
 
     session_id = uuid.uuid4().hex
-    if req.kind == "claude":                       # spawn 前記 open（消除 claude 先吐 usage 的競態）
+    attributed = req.kind == "claude" and not is_pi   # 帳號活動只記 claude agent（Pi 不屬於任何帳號）
+    if attributed:                                 # spawn 前記 open（消除 claude 先吐 usage 的競態）
         account_activity.record_open(req.path, req.account, session_id, time.time())
         _opened_session_ids.add(session_id)        # 標記為被歸屬，on_close 才會補 close
     try:
         session = _bridge.create_session(
-            command=_resolve_command(req.kind, req.login_target),
+            command=command,
             # 登入不屬於任何專案（它也不進活動歸屬），跑在 home——與 kind=install 一致。
             # 精靈的登入頁沒有專案路徑可傳，沿用 req.path 只會逼前端編一個假路徑。
             cwd=str(Path.home()) if req.kind == "login" else req.path,
@@ -269,9 +287,10 @@ def create_session(req: CreateSessionRequest):
             project_path=req.path,
             account=req.account,
             session_id=session_id,
+            env_remove=["CLAUDE_CONFIG_DIR"] if is_pi else None,
         )
     except Exception:                              # spawn 失敗 → 補 close（不留 phantom live span）
-        if req.kind == "claude":
+        if attributed:
             _opened_session_ids.discard(session_id)
             account_activity.record_close(session_id, time.time())
         raise
