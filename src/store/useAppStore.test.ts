@@ -255,6 +255,51 @@ describe("useAppStore", () => {
     expect(sidecar.createSession).toHaveBeenCalledTimes(3); // s1, s2, 重啟 s3
   });
 
+  // ── agent=pi（Pi 作為第二種 agent，spec 2026-10-29 §5.1／§5.8／§6.2 #13-#15）──
+  it("openTab agent=pi：同專案同帳號 claude 與 pi 各一個分頁，去重 key 含 agent", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValueOnce("c1").mockResolvedValueOnce("p1");
+    await useAppStore.getState().openTab(proj("/p/pi"));
+    await useAppStore.getState().openTab(proj("/p/pi"), undefined, "claude", false, "pi");
+    expect(useAppStore.getState().tabs).toHaveLength(2);  // 去重 key 不含 agent 時，pi 會聚焦既有 claude、只剩一個
+    const [claudeTab, piTab] = useAppStore.getState().tabs;
+    expect(claudeTab.agent).toBeUndefined();            // 不填＝claude，舊分頁相容
+    expect(piTab.agent).toBe("pi");
+    expect(piTab.account).toBe("work");                 // §5.8：wire 與 store 都照帶專案的帳號
+    expect(sidecar.createSession).toHaveBeenLastCalledWith(1234, { path: "/p/pi", account: "work", kind: "claude", agent: "pi" });
+    // 再開 pi → 聚焦既有 pi；再開 claude → 聚焦既有 claude（兩個方向都不互搶）
+    await useAppStore.getState().openTab(proj("/p/pi"), undefined, "claude", false, "pi");
+    expect(useAppStore.getState().activeTabId).toBe(piTab.id);
+    await useAppStore.getState().openTab(proj("/p/pi"));
+    expect(useAppStore.getState().activeTabId).toBe(claudeTab.id);
+    expect(useAppStore.getState().tabs).toHaveLength(2);
+    expect(sidecar.createSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("restartTab 保留 agent=pi", async () => {
+    vi.mocked(sidecar.createSession).mockResolvedValueOnce("p1").mockResolvedValueOnce("p2");
+    vi.mocked(sidecar.closeSession).mockResolvedValue();
+    await useAppStore.getState().openTab(proj("/p/pr"), undefined, "claude", false, "pi");
+    useAppStore.setState({ projects: [proj("/p/pr")] });
+    await useAppStore.getState().restartTab(useAppStore.getState().tabs[0].id);
+    expect(useAppStore.getState().tabs).toHaveLength(1);
+    expect(useAppStore.getState().tabs[0].agent).toBe("pi");
+    expect(sidecar.createSession).toHaveBeenLastCalledWith(1234, { path: "/p/pr", account: "work", kind: "claude", agent: "pi" });
+  });
+
+  it("createSession 失敗帶判別碼 → tab.errorCode；沒有判別碼 → undefined", async () => {
+    vi.mocked(sidecar.createSession)
+      .mockRejectedValueOnce(Object.assign(new Error("createSession failed: 400"), { code: "agent_not_found" }))
+      .mockRejectedValueOnce(new Error("createSession failed: 500"));
+    await useAppStore.getState().openTab(proj("/p/e1"), undefined, "claude", false, "pi");
+    await useAppStore.getState().openTab(proj("/p/e2"));
+    const [withCode, without] = useAppStore.getState().tabs;
+    expect(withCode.status).toBe("error");
+    expect(withCode.errorCode).toBe("agent_not_found");
+    expect(withCode.error).toContain("400");             // 原文仍留著（Workspace 沒有對應文案時退回它）
+    expect(without.status).toBe("error");
+    expect(without.errorCode).toBeUndefined();
+  });
+
   it("openDashboard 單例：第二次只 focus 不重開", () => {
     useAppStore.getState().openDashboard();
     useAppStore.getState().openDashboard();

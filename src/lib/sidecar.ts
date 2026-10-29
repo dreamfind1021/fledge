@@ -50,6 +50,7 @@ export interface Health {
   ok: boolean;
   version: string;
   claude_found: boolean;
+  agents?: Record<AgentKind, boolean>;  // 每個 agent CLI 一個布林（spec 2026-10-29 §6.1 #6）；舊 sidecar 沒有
 }
 
 /** 輪詢 /api/health 直到回應就緒（或逾時）。
@@ -139,6 +140,9 @@ export async function scanPreview(
 }
 
 export type SessionKind = "claude" | "terminal" | "install" | "login" | "backup" | "restore";
+/** kind=claude 的分頁跑哪個 agent CLI。獨立於 kind：`kind === "claude"` 的語意是「AI 分頁」，與 binary 無關
+ *  （Pi 作為第二種 agent，spec 2026-10-29 §5.1）。 */
+export type AgentKind = "claude" | "pi";
 
 export interface CreateSessionOptions {
   // 工作目錄兼歸屬標記。install 沒有所屬專案（後端固定跑在 home、只把它當 project_path 記錄），
@@ -146,6 +150,7 @@ export interface CreateSessionOptions {
   path: string;
   account?: string;                     // install 不傳：後端不驗帳號、也不注入帳號 env
   kind?: SessionKind;
+  agent?: AgentKind;                    // kind=claude 用；不給＝後端預設 claude（wire 不變）
   installId?: string;                   // kind=install 必填；後端據此查 TOOL_SPECS 取命令
   loginTarget?: "claude" | "codex";     // kind=login 用
   backupMode?: "list" | "run";          // kind=backup 必填；後端據此決定跑不跑 --list
@@ -189,13 +194,14 @@ async function readErrorPayload(
 }
 
 export async function createSession(port: number, opts: CreateSessionOptions): Promise<string> {
-  const { path, account, kind = "claude", installId, loginTarget, backupMode,
+  const { path, account, kind = "claude", agent, installId, loginTarget, backupMode,
           restoreBundle, restoreBundlePath, restoreDest } = opts;
   // 安全不變式（spec §5）：body 只放 allowlist key（install_id），永遠不含命令字串。
   // 未給的欄位一律不放進 body——後端 extra="forbid" 只擋未知欄位，但少送等於用後端預設，
   // 也讓「安裝不帶 account」這件事在 wire 上看得出來。
   const body: Record<string, unknown> = { path, kind };
   if (account !== undefined) body.account = account;
+  if (agent !== undefined) body.agent = agent;
   if (installId !== undefined) body.install_id = installId;
   if (loginTarget !== undefined) body.login_target = loginTarget;
   if (backupMode !== undefined) body.backup_mode = backupMode;

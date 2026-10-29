@@ -137,6 +137,16 @@ describe("createSession kind", () => {
     expect(bodies[0]).toEqual({ path: "", kind: "install", install_id: "homebrew" });
   });
 
+  it("agent 有給才送（pi）；沒給不放，claude 的 wire 不變", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    stubFetch(bodies);
+    const m = await import("./sidecar");
+    await m.createSession(1234, { path: "/x", account: "work", agent: "pi" });
+    await m.createSession(1234, { path: "/x", account: "work" });
+    expect(bodies[0]).toEqual({ path: "/x", account: "work", kind: "claude", agent: "pi" });
+    expect(bodies[1]).toEqual({ path: "/x", account: "work", kind: "claude" });
+  });
+
   it("kind=login 送 login_target", async () => {
     const bodies: Array<Record<string, unknown>> = [];
     stubFetch(bodies);

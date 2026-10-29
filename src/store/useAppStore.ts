@@ -28,6 +28,7 @@ import {
   setAuthToken,
   fetchHealth,
   restartSidecar,
+  type AgentKind,
 } from "../lib/sidecar";
 
 // loadProjects 的 request-id：只套用最新一次 loadProjects 的結果，
@@ -57,7 +58,11 @@ export interface Tab {
   sessionId: string | null; // null = 建立中
   status: "creating" | "ready" | "error" | "offline" | "ended";
   kind: "claude" | "terminal" | "dashboard" | "memory" | "tasks"; // 分頁種類：claude session、純終端機 shell、觀測儀表板、記憶面板或待辦面板
+  /** kind=claude 跑哪個 agent（spec 2026-10-29 §5.1）。不填＝claude：舊分頁與既有測試不必改 */
+  agent?: AgentKind;
   error?: string;
+  /** 建立 session 失敗時後端的判別碼（`SessionError.code`）；Workspace 據此映射 i18n 文案，沒有對應文案才退回 `error` 原文 */
+  errorCode?: string;
   activity?: "working" | "idle"; // 就緒後忙碌態（best-effort，只在 status==="ready" 有意義）
 }
 
@@ -85,7 +90,7 @@ interface AppState {
   setClaudeFound: (found: boolean) => void;
   setPort: (port: number) => void;
   loadProjects: () => Promise<void>;
-  openTab: (project: Project, accountOverride?: string, kind?: "claude" | "terminal", forceNew?: boolean) => Promise<void>;
+  openTab: (project: Project, accountOverride?: string, kind?: "claude" | "terminal", forceNew?: boolean, agent?: AgentKind) => Promise<void>;
   openDashboard: () => void;
   openMemory: () => void;
   openTasks: () => void;
@@ -203,15 +208,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (seq === loadProjectsSeq) set({ projects, permissionError, projectsLoaded: true }); // 只套用最新一次（防並發 stale）
   },
 
-  openTab: async (project, accountOverride, kind = "claude", forceNew = false) => {
+  openTab: async (project, accountOverride, kind = "claude", forceNew = false, agent = "claude") => {
     const { port, tabs } = get();
     if (port == null) return;
     const account = accountOverride ?? project.account;
-    // claude 去重（同專案同帳號聚焦既有）；terminal 不去重、每次都開新分頁（spec §1.3/1.4）。
+    // claude 去重（同專案同帳號同 agent 聚焦既有）；terminal 不去重、每次都開新分頁（spec §1.3/1.4）。
+    // 去重 key 含 agent：否則同專案開 Pi 會搶走既有的 Claude 分頁（Pi spec §6.2 #14）。
     // forceNew（右鍵「開新 claude 視窗」/重啟）跳過去重，強制建新分頁與新 session。
     if (kind === "claude" && !forceNew) {
       const existing = tabs.find(
-        (t) => t.kind === "claude" && t.projectPath === project.path && t.account === account,
+        (t) => t.kind === "claude" && t.projectPath === project.path && t.account === account
+          && (t.agent ?? "claude") === agent,
       );
       if (existing) {
         set({ activeTabId: existing.id });
@@ -227,6 +234,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       sessionId: null,
       status: "creating",
       kind,
+      // 只有 Pi 分頁帶 agent；claude 不填（與舊分頁同形），wire 上也只在 pi 時送 agent
+      ...(kind === "claude" && agent === "pi" ? { agent } : {}),
     };
     // terminal 分頁插到同專案分頁群尾端（需求 2）；其餘（claude）維持末端
     set((s) => ({
@@ -234,7 +243,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeTabId: id,
     }));
     try {
-      const sessionId = await createSession(port, { path: project.path, account, kind });
+      const sessionId = await createSession(port, { path: project.path, account, kind, ...(tab.agent ? { agent: tab.agent } : {}) });
       // 若 tab 在建立期間已被關閉，補清這個剛建好的 session（防 orphan，審查 round 1 HIGH）
       if (!get().tabs.some((t) => t.id === id)) {
         await closeSession(port, sessionId);
@@ -248,9 +257,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch (e) {
       // tab 還在才標 error（已關閉就無需處理）
       if (get().tabs.some((t) => t.id === id)) {
+        // 判別碼用鴨子型別取（不用 instanceof SessionError：測試會把 ../lib/sidecar 整個 mock 掉）
+        const code = (e as { code?: unknown } | null)?.code;
         set((s) => ({
           tabs: s.tabs.map((t) =>
-            t.id === id ? { ...t, status: "error", error: String(e) } : t,
+            t.id === id ? { ...t, status: "error", error: String(e), errorCode: typeof code === "string" ? code : undefined } : t,
           ),
         }));
       }
@@ -450,7 +461,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().closeTab(tabId);
     // forceNew=true：允許同專案多 claude 視窗後，重啟須建自己的新 session，
     // 否則去重會誤聚焦到同專案兄弟分頁而非重開本分頁。
-    await get().openTab(project, tab.account, tab.kind, true);
+    await get().openTab(project, tab.account, tab.kind, true, tab.agent ?? "claude");
   },
 
   // sidecar 重啟：舊 session 全沒了，所有 tab 標 ended、清 sessionId（前端原子轉移用）。
