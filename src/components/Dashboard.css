@@ -182,6 +182,10 @@
 .dash-bar.is-unattr > i {
   background: color-mix(in srgb, var(--dim) 75%, var(--surface-2));
 }
+/* Pi 的模型用量條（Pi spec §5.11）：--ai，跟 Claude 的橘（--primary）、Codex 的青（--session）分開 */
+.dash-bar.is-pi > i {
+  background: linear-gradient(90deg, var(--ai), color-mix(in srgb, var(--ai) 70%, var(--text)));
+}
 
 /* 用量比時間進度多 10 個百分點以上：填充改用 --warning（票 46，spec §4.3、§8）。class 由 CodexPanel 判斷後給 */
 .dash-bar.is-codex.is-ahead > i {
@@ -508,6 +512,11 @@
   display: none;
   font-family: var(--font-mono);
 }
+/* 窄：Pi 欄（th／td 都帶這個 class）藏起來，寬（≥720）才顯示（Pi spec §5.4，使用者選「窄的時候藏」）：
+   demo 量到加這一欄後 546px 面板的專案名稱欄從 157px 縮到 87px、名稱換行。跟路徑同一個斷點、同一種寫法（基礎窄、檔尾還原） */
+.dash-table .dash-col-pi {
+  display: none;
+}
 
 /* Heatmap 時軸（00 / 06 / 12 / 18）*/
 .dash-hm-axis {
@@ -530,5 +539,6 @@
   .dash-kpi { grid-template-columns: repeat(5, 1fr); }
   .dash-row { grid-template-columns: 1fr 1.3fr; }
   .dash-proj-path { display: block; }
+  .dash-table .dash-col-pi { display: table-cell; }
   .dash-cx-strip > .dash-win-title { flex-basis: auto; }
 }

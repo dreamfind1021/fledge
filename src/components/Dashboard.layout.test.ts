@@ -36,6 +36,15 @@ describe("觀測面板窄窗口：數字卡、兩欄的列、專案表（票 35 
   });
 });
 
+// Pi spec §5.4：專案表的 Pi 欄（th／td 都帶 .dash-col-pi）窄面板藏起來、寬（≥720）才顯示——
+// demo 量到加這一欄後 546px 面板的專案名稱欄從 157px 縮到 87px、名稱換行；使用者選「窄的時候藏」
+describe("專案表 Pi 欄：窄面板藏起來（Pi spec §5.4）", () => {
+  it("窄（預設）：.dash-col-pi display none；寬（≥720）：table-cell", () => {
+    expect(decl(css, ".dash-table .dash-col-pi", "display")).toBe("none");
+    expect(decl(wide(), ".dash-table .dash-col-pi", "display")).toBe("table-cell");
+  });
+});
+
 describe("Codex 一整條：多個窗口共用一組欄寬（票 46，spec §4.3）", () => {
   // 取代票 35 第 3 題的兩行排法：一整條佔整排寬，名稱｜進度條｜百分比共用同一組欄寬，每條進度條一樣長
   it("窗口清單是 auto 1fr auto 的 grid；放不下一行時標題自己一行（flex-wrap、清單最少 240px）", () => {

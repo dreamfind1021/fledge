@@ -46,6 +46,7 @@ export function mergeTempProjects(projects: ProjectUsage[]): ProjectRow[] {
   const sum = (pick: (p: ProjectUsage) => number) => temp.reduce((s, p) => s + pick(p), 0);
   const merged: ProjectRow = {
     path: "", claude_cost: sum((p) => p.claude_cost), codex_cost: sum((p) => p.codex_cost), total: sum((p) => p.total),
+    pi_tokens: sum((p) => p.pi_tokens),
     last_active: Math.max(...temp.map((p) => p.last_active)), tempPaths: temp.map((p) => p.path),
   };
   return [...projects.filter((p) => !isTempPath(p.path)), merged].sort((a, b) => b.total - a.total);

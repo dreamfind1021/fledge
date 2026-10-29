@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { render, cleanup } from "@testing-library/react";
-import { CodexPanel, DailyChart, ModelBars, ProjectsTable } from "./Dashboard";
+import { CodexPanel, DailyChart, ModelBars, PiStrip, ProjectsTable } from "./Dashboard";
 import { rankModels } from "../lib/dashboardLogic";
 import type { CodexUnattributed, CodexUsage, CodexUsageWindow, UsageDashboard } from "../lib/sidecar";
 
@@ -179,8 +179,8 @@ describe("CodexPanel：時間進度線與用太快變黃", () => {
 });
 
 // 票 46，spec §4.1：暫存資料夾合併成一列、全部列出（拿掉前 30 名上限）
-const proj = (path: string, total: number): UsageDashboard["projects"][number] =>
-  ({ path, claude_cost: total, codex_cost: 0, total, last_active: 0 });
+const proj = (path: string, total: number, pi_tokens = 0): UsageDashboard["projects"][number] =>
+  ({ path, claude_cost: total, codex_cost: 0, total, pi_tokens, last_active: 0 });
 
 describe("ProjectsTable", () => {
   afterEach(cleanup);
@@ -198,6 +198,60 @@ describe("ProjectsTable", () => {
     const many = Array.from({ length: 35 }, (_, i) => proj(`/Users/u/p${i}`, 100 - i));
     const { container } = render(<ProjectsTable t={t} days={30} projects={[...many, proj("/tmp/a", 1), proj("/tmp/b", 1)]} />);
     expect(container.querySelectorAll("tbody tr")).toHaveLength(36);
+  });
+});
+
+// Pi spec §5.4：專案表在 Codex 之後、合計之前加「Pi」欄——token 數依語系縮寫、0 顯示「—」、不顯示金額
+describe("ProjectsTable：Pi 欄", () => {
+  afterEach(cleanup);
+  it("欄位順序：專案、Claude、Codex、Pi、合計、最後活動；Pi 欄 th／td 都帶 .dash-col-pi（窄面板藏這一欄用）", () => {
+    const { container } = render(<ProjectsTable t={t} days={30} lang="zh-TW" projects={[proj("/u/a", 1, 48_210_000)]} />);
+    expect([...container.querySelectorAll("thead th")].map((e) => e.textContent))
+      .toEqual(["projects.project", "projects.claude", "projects.codex", "projects.pi", "projects.total", "projects.lastActive"]);
+    expect(container.querySelector("thead th.dash-col-pi")?.textContent).toBe("projects.pi");
+    expect(container.querySelector("tbody td.dash-col-pi")?.textContent).toBe("4821萬");
+  });
+
+  it("token 數依語系縮寫（中文 4821萬／英文 48.2M）；0 顯示「—」", () => {
+    const en = render(<ProjectsTable t={t} days={30} lang="en" projects={[proj("/u/a", 1, 48_210_000), proj("/u/b", 1, 0)]} />);
+    expect([...en.container.querySelectorAll("tbody td.dash-col-pi")].map((e) => e.textContent)).toEqual(["48.2M", "—"]);
+  });
+
+  it("暫存資料夾合併列的 Pi 欄＝各資料夾 pi_tokens 加總", () => {
+    const { container } = render(<ProjectsTable t={t} days={30} lang="en" projects={[
+      proj("/private/tmp/a/x", 1, 1000), proj("/tmp/b", 1, 500)]} />);
+    expect(container.querySelector("tbody td.dash-col-pi")?.textContent).toBe("1.5K");
+  });
+});
+
+// Pi spec §5.11：Codex 額度那條下面再一條 Pi——每個模型一行「provider/model｜條（佔 Pi 總 token 的比例）｜token 數 · 呼叫次數」
+const piModel = (model: string, tokens: number, calls: number): UsageDashboard["pi_models"][number] => ({ model, tokens, calls });
+
+describe("PiStrip", () => {
+  afterEach(cleanup);
+  const three = [piModel("localai/qwen3.8-27b-q8", 50_000_000, 1284), piModel("omlx/b", 30_000_000, 40), piModel("omlx/c", 20_000_000, 1)];
+
+  it("每個模型一行、照後端給的順序；條寬＝佔 Pi 總 token 的比例；文案「4821萬 · 1,284 次」用 pi.calls", () => {
+    const { container } = render(<PiStrip models={three} lang="zh-TW" t={t} />);
+    expect(container.firstElementChild!.className).toBe("dash-win-card dash-cx-strip is-pi");
+    expect(container.querySelector(".dash-win-title")!.textContent).toBe("pi.title");
+    expect([...container.querySelectorAll(".dash-cx-label")].map((e) => e.textContent))
+      .toEqual(["localai/qwen3.8-27b-q8", "omlx/b", "omlx/c"]);
+    expect([...container.querySelectorAll<HTMLElement>(".dash-bar.is-pi > i")].map((e) => e.style.width))
+      .toEqual(["50%", "30%", "20%"]);
+    expect([...container.querySelectorAll(".dash-cx-meta")].map((e) => e.textContent))
+      .toEqual(["5000萬 · pi.calls:1,284", "3000萬 · pi.calls:40", "2000萬 · pi.calls:1"]);
+  });
+
+  it("英文：48.2M · pi.calls:1,284", () => {
+    const { container } = render(<PiStrip models={[piModel("localai/q", 48_210_000, 1284)]} lang="en" t={t} />);
+    expect(container.querySelector(".dash-cx-meta")!.textContent).toBe("48.2M · pi.calls:1,284");
+    expect(container.querySelector<HTMLElement>(".dash-bar.is-pi > i")!.style.width).toBe("100%");
+  });
+
+  it("pi_models 空陣列 → 整條不渲染（不是空條）", () => {
+    const { container } = render(<PiStrip models={[]} lang="en" t={t} />);
+    expect(container.firstElementChild).toBeNull();
   });
 });
 

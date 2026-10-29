@@ -93,12 +93,14 @@ export default function Dashboard({ port, isActive }: { port: number; isActive: 
       <KpiBar kpi={data.kpi} days={days} t={t} />
       {/* Codex 額度是數字卡下方一整條、每日成本獨佔一整排（票 46，spec §4.3）：並排時 Codex 卡被拉到跟長條圖一樣高，內容只佔一行 */}
       <CodexPanel codex={codex} unattributed={data.codex_unattributed ?? null} lang={i18n.language} t={t} />
+      {/* Pi 的模型層級用量（Pi spec §5.11，使用者選放法 1）：Codex 那條正下方再一條；沒有 Pi 用量時整條不出現 */}
+      <PiStrip models={data.pi_models} lang={i18n.language} t={t} />
       <DailyChart daily={data.daily} ranking={ranking} days={days} t={t} />
       <div className="dash-row">
         <ModelBars ranking={ranking} days={days} t={t} />
         <HourlyHeatmap hourly={data.hourly} days={days} t={t} />
       </div>
-      <ProjectsTable projects={data.projects} days={days} t={t} />
+      <ProjectsTable projects={data.projects} days={days} lang={i18n.language} t={t} />
     </div>
   );
 }
@@ -127,6 +129,10 @@ function KpiBar({ kpi, days, t }: { kpi: UsageDashboard["kpi"]; days: number; t:
         <div className="dash-kpi-split">
           <span className="dash-kpi-split-label">Codex</span>
           <span className="dash-kpi-split-value">{fmtPct(kpi.codex_cache_hit_rate)}</span>
+        </div>
+        <div className="dash-kpi-split">
+          <span className="dash-kpi-split-label">Pi</span>
+          <span className="dash-kpi-split-value">{fmtPct(kpi.pi_cache_hit_rate)}</span>
         </div>
         <div className="dash-kpi-label">{t("kpi.cacheHit", { days })}</div>
       </div>
@@ -182,6 +188,33 @@ export function CodexPanel({ codex, unattributed = null, lang = "en", t }: {
           {unattributed && quota && <UnattributedRow u={unattributed} win={quota} lang={lang} t={t} />}
         </div>
       )}
+    </div>
+  );
+}
+
+// Pi 的模型層級用量（Pi spec §5.11，demo 放法 1）：跟 Codex 額度同一種條、放在它正下方。左邊標題「Pi（地端）」，
+// 右邊每個模型一行「provider/model｜條（長度＝佔 Pi 總 token 的比例）｜token 數 · 呼叫次數」；條用 --ai（.is-pi），
+// 跟 Claude 的橘、Codex 的青分開。順序照後端（tokens 由大到小）、全部列出不截斷。期間內沒有 Pi 用量＝整條不渲染，不是空條。
+// 現有「模型分布」是金額排名，Pi 恆為 0 元進不了表，所以另立一條。export 僅供 render test（Dashboard.test.tsx）
+export function PiStrip({ models, lang, t }: { models: UsageDashboard["pi_models"]; lang: string; t: T }) {
+  if (models.length === 0) return null;
+  const total = models.reduce((s, m) => s + m.tokens, 0);
+  return (
+    <div className="dash-win-card dash-cx-strip is-pi">
+      <div className="dash-win-title">{t("pi.title")}</div>
+      <div className="dash-cx-rows">
+        {models.map((m) => (
+          <Fragment key={m.model}>
+            <span className="dash-cx-label">{m.model}</span>
+            <div className="dash-cx-bar">
+              <div className="dash-bar is-pi"><i style={{ width: `${total > 0 ? (m.tokens / total) * 100 : 0}%` }} /></div>
+            </div>
+            <span className="dash-cx-meta">
+              {fmtTokenCount(m.tokens, lang)} · {t("pi.calls", { n: m.calls.toLocaleString(lang) })}
+            </span>
+          </Fragment>
+        ))}
+      </div>
     </div>
   );
 }
@@ -347,13 +380,18 @@ function HourlyHeatmap({ hourly, days, t }: { hourly: number[][]; days: number; 
 }
 
 // export 僅供 render test（Dashboard.test.tsx）
-export function ProjectsTable({ projects, days, t }: { projects: UsageDashboard["projects"]; days: number; t: T }) {
+// Pi 欄（Pi spec §5.4）：在 Codex 之後、合計之前，顯示 token 總數（依語系縮寫）不顯示金額、0 顯示「—」；
+// th／td 都帶 .dash-col-pi，面板窄於 720px 時由 Dashboard.css 藏起來（加這一欄後 546px 面板的專案名稱欄會從 157px 縮到 87px）
+export function ProjectsTable({ projects, days, lang = "en", t }: {
+  projects: UsageDashboard["projects"]; days: number; lang?: string; t: T;
+}) {
   return (
     <div className="dash-panel">
       <div className="dash-panel-title">{t("projects.title", { days })}</div>
       <table className="dash-table">
         <thead><tr><th>{t("projects.project")}</th><th className="dash-th-num">{t("projects.claude")}</th>
-          <th className="dash-th-num">{t("projects.codex")}</th><th className="dash-th-num">{t("projects.total")}</th>
+          <th className="dash-th-num">{t("projects.codex")}</th><th className="dash-th-num dash-col-pi">{t("projects.pi")}</th>
+          <th className="dash-th-num">{t("projects.total")}</th>
           <th className="dash-th-num">{t("projects.lastActive")}</th></tr></thead>
         <tbody>
           {/* 全部列出，不設上限：只取前 30 名時，暫存資料夾就能把真專案擠出表外（票 46，spec §4.1） */}
@@ -365,6 +403,7 @@ export function ProjectsTable({ projects, days, t }: { projects: UsageDashboard[
               </td>
               <td>{fmtUSD(p.claude_cost)}</td>
               <td>{p.codex_cost > 0 ? fmtUSD(p.codex_cost) : "—"}</td>
+              <td className="dash-col-pi">{p.pi_tokens > 0 ? fmtTokenCount(p.pi_tokens, lang) : "—"}</td>
               <td className="dash-td-total">{fmtUSD(p.total)}</td>
               <td>{p.last_active ? fmtDayClock(p.last_active, t("time.yesterday")) : "—"}</td>
             </tr>

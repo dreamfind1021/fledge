@@ -957,6 +957,7 @@ export interface UsageDashboard {
     today_value: number;
     claude_cache_hit_rate: number | null;
     codex_cache_hit_rate: number | null;
+    pi_cache_hit_rate: number | null;   // 分母 input＋cacheRead＋cacheWrite；期間內沒有 Pi 用量＝null（Pi spec §6.1 #11）
     net_roi: number;
     subscriptions_total: number;
   };
@@ -975,8 +976,11 @@ export interface UsageDashboard {
     claude_cost: number;
     codex_cost: number;
     total: number;
+    pi_tokens: number;   // 該專案該期間 Pi 的 token 總數（input＋output＋cacheRead＋cacheWrite）；Pi 不顯示金額（Pi spec §5.4）
     last_active: number;
   }[];
+  // Pi 的模型層級用量（Pi spec §5.11）：另立一鍵、不塞進 models（那是金額表）；依 tokens 由大到小；摘要條目（pi/summary）不在裡面
+  pi_models: { model: string; tokens: number; calls: number }[];
   hourly: number[][];
   // 估算值（帳號總用量扣掉本機紀錄），不混進上面那些量到的數字。null＝歷史檔在期間內沒有任何日期；
   // 冷掃失敗的 error-only 形狀沒有這個鍵

@@ -34,8 +34,8 @@ describe("模型排名", () => {
 });
 
 // 票 46，spec §4.1
-const proj = (path: string, claude: number, codex: number, last: number) =>
-  ({ path, claude_cost: claude, codex_cost: codex, total: claude + codex, last_active: last });
+const proj = (path: string, claude: number, codex: number, last: number, pi = 0) =>
+  ({ path, claude_cost: claude, codex_cost: codex, total: claude + codex, pi_tokens: pi, last_active: last });
 
 describe("暫存資料夾合併成一列", () => {
   it("isTempPath：四個系統暫存根目錄底下算，其他不算（含開頭字樣相似的）", () => {
@@ -45,14 +45,15 @@ describe("暫存資料夾合併成一列", () => {
       .toEqual([false, false, false, false]);
   });
 
-  it("三欄加總守恆、最後活動取最晚、照合計排進中間、路徑全部留著", () => {
+  it("三欄加總守恆、Pi token 也加總、最後活動取最晚、照合計排進中間、路徑全部留著", () => {
     const rows = mergeTempProjects([
-      proj("/Users/u/big", 100, 0, 5), proj("/private/tmp/a", 3, 4, 9), proj("/Users/u/mid", 10, 0, 1),
-      proj("/var/folders/x/b", 0, 1, 20), proj("/Users/u/small", 1, 0, 2),
+      proj("/Users/u/big", 100, 0, 5), proj("/private/tmp/a", 3, 4, 9, 1000), proj("/Users/u/mid", 10, 0, 1),
+      proj("/var/folders/x/b", 0, 1, 20, 500), proj("/Users/u/small", 1, 0, 2),
     ]);
     expect(rows.map((r) => r.tempPaths ? "TEMP" : r.path)).toEqual(["/Users/u/big", "/Users/u/mid", "TEMP", "/Users/u/small"]);
     const merged = rows[2];
     expect([merged.claude_cost, merged.codex_cost, merged.total, merged.last_active]).toEqual([3, 5, 8, 20]);
+    expect(merged.pi_tokens).toBe(1500);
     expect(merged.tempPaths).toEqual(["/private/tmp/a", "/var/folders/x/b"]);
   });
 

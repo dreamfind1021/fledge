@@ -12,10 +12,11 @@ vi.mock("../lib/sidecar", () => ({ fetchUsageDashboard: vi.fn(), fetchCodexUsage
 
 const payload = (meta: Partial<UsageDashboard["scan_meta"]> = {}): UsageDashboard => ({
   kpi: { month_value: 1, week_value: 1, today_value: 1, claude_cache_hit_rate: 0.5, codex_cache_hit_rate: null,
-         net_roi: 1, subscriptions_total: 0 },
+         pi_cache_hit_rate: null, net_roi: 1, subscriptions_total: 0 },
   daily: [{ date: "2026-10-18", by_model: { "m-a": 3 }, total: 3 }],
   models: [{ model: "m-a", source: "claude", input: 0, output: 0, cache_read: 0, cache_create: 0, cost: 3 }],
-  projects: [{ path: "/Users/u/proj", claude_cost: 3, codex_cost: 0, total: 3, last_active: 0 }],
+  projects: [{ path: "/Users/u/proj", claude_cost: 3, codex_cost: 0, total: 3, pi_tokens: 0, last_active: 0 }],
+  pi_models: [],
   hourly: Array.from({ length: 7 }, () => Array(24).fill(0)),
   scan_meta: { state: "ok", missing_pricing: [], ...meta },
 });
@@ -68,8 +69,8 @@ describe("Dashboard 整頁：暫存資料夾合併列的字（票 46，spec §4.
   });
   const withTemp = () => {
     const p = payload();
-    p.projects.push({ path: "/private/tmp/x", claude_cost: 1, codex_cost: 0, total: 1, last_active: 0 },
-                    { path: "/tmp/y", claude_cost: 1, codex_cost: 0, total: 1, last_active: 0 });
+    p.projects.push({ path: "/private/tmp/x", claude_cost: 1, codex_cost: 0, total: 1, pi_tokens: 0, last_active: 0 },
+                    { path: "/tmp/y", claude_cost: 1, codex_cost: 0, total: 1, pi_tokens: 0, last_active: 0 });
     return p;
   };
 
@@ -289,5 +290,52 @@ describe("Dashboard 整頁：Codex 未歸屬用量", () => {
     const ui = await shown("zh-TW", { ...payload(), codex_unattributed: null });
     await waitFor(() => { if (!ui.container.querySelector(".dash-cx-label")) throw new Error("額度那一行還沒畫"); });
     expect(ui.queryByText("未歸屬用量")).toBeNull();
+  });
+});
+
+// Pi spec §5.4／§5.11：Pi 條放在 Codex 一整條之後、每日成本之前；KPI 快取卡多一行 Pi；專案表多一欄 Pi
+describe("Dashboard 整頁：Pi 條、KPI 的 Pi 行、專案表 Pi 欄", () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+  beforeEach(() => {
+    vi.mocked(fetchUsageDashboard).mockReset();
+    vi.mocked(fetchCodexUsage).mockReset().mockResolvedValue({ source: "unavailable", failure_reason: "network", observed_at: null });
+  });
+  const withPi = (): UsageDashboard => ({
+    ...payload(),
+    kpi: { ...payload().kpi, pi_cache_hit_rate: 0.3035 },
+    projects: [{ path: "/Users/u/proj", claude_cost: 3, codex_cost: 0, total: 3, pi_tokens: 48_210_000, last_active: 0 }],
+    pi_models: [{ model: "localai/qwen3.8-27b-q8", tokens: 48_210_000, calls: 1284 }],
+  });
+
+  it("沒有 Pi 用量：版面跟原本一樣、沒有 Pi 條；KPI 的 Pi 行顯示 —；專案表 Pi 欄 —", async () => {
+    const ui = await shown("zh-TW", payload());
+    const root = ui.container.querySelector(".dash-root")!;
+    expect([...root.children].map((e) => e.className)).toEqual(
+      ["dash-head", "dash-kpi", "dash-win-card dash-cx-strip", "dash-panel dash-daily-panel", "dash-row", "dash-panel"]);
+    expect([...root.querySelectorAll(".dash-kpi-split")].map((e) => e.textContent)).toEqual(["Claude50%", "Codex—", "Pi—"]);
+    expect(root.querySelector("tbody td.dash-col-pi")?.textContent).toBe("—");
+  });
+
+  it("中文：Pi（地端）那條在 Codex 之後、每日成本之前；4821萬 · 1,284 次；KPI Pi 30%；專案表 4821萬", async () => {
+    const ui = await shown("zh-TW", withPi());
+    const root = ui.container.querySelector(".dash-root")!;
+    expect([...root.children].map((e) => e.className)).toEqual(
+      ["dash-head", "dash-kpi", "dash-win-card dash-cx-strip", "dash-win-card dash-cx-strip is-pi",
+       "dash-panel dash-daily-panel", "dash-row", "dash-panel"]);
+    const strip = root.querySelector(".dash-cx-strip.is-pi")!;
+    expect(strip.querySelector(".dash-win-title")?.textContent).toBe("Pi（地端）");
+    expect(strip.querySelector(".dash-cx-label")?.textContent).toBe("localai/qwen3.8-27b-q8");
+    expect(strip.querySelector(".dash-cx-meta")?.textContent).toBe("4821萬 · 1,284 次");
+    expect([...root.querySelectorAll(".dash-kpi-split")].map((e) => e.textContent)).toEqual(["Claude50%", "Codex—", "Pi30%"]);
+    expect(root.querySelector("thead th.dash-col-pi")?.textContent).toBe("Pi");
+    expect(root.querySelector("tbody td.dash-col-pi")?.textContent).toBe("4821萬");
+  });
+
+  it("英文：Pi (local)；48.2M · 1,284 calls；專案表 48.2M", async () => {
+    const ui = await shown("en", withPi());
+    const strip = ui.container.querySelector(".dash-cx-strip.is-pi")!;
+    expect(strip.querySelector(".dash-win-title")?.textContent).toBe("Pi (local)");
+    expect(strip.querySelector(".dash-cx-meta")?.textContent).toBe("48.2M · 1,284 calls");
+    expect(ui.container.querySelector("tbody td.dash-col-pi")?.textContent).toBe("48.2M");
   });
 });

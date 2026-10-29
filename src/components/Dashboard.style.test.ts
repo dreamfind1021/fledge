@@ -102,6 +102,16 @@ describe("未歸屬用量的條", () => {
   });
 });
 
+// Pi spec §5.11：Pi 條的顏色用 --ai，跟 Claude 的橘（--primary）、Codex 的青（--session）分開
+describe("Pi 條", () => {
+  it(".dash-bar.is-pi 的填充用 --ai，不用 --primary／--session", () => {
+    const bg = decl(dash, ".dash-bar.is-pi > i", "background");
+    expect(bg).toContain("var(--ai)");
+    expect(bg).not.toContain("var(--primary)");
+    expect(bg).not.toContain("var(--session)");
+  });
+});
+
 describe("Codex 進度條用太快時變黃", () => {
   it("is-ahead 的填充用 --warning", () => {
     expect(decl(dash, ".dash-bar.is-codex.is-ahead > i", "background")).toContain("var(--warning)");
