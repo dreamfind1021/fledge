@@ -62,7 +62,8 @@ export function recordProgramStatus(tabId: string, state: string): void {
   setActivity(tabId, state === "working" ? "working" : "idle");
 }
 
-// WebSocket 單獨斷線（PTY 裡的 Pi 還活著、Terminal 不 dispose、之後會重連）時呼叫：放掉接管、燈設 waiting。
+// WebSocket 單獨斷線（PTY 裡的 Pi 還活著、Terminal 不 dispose、之後會重連）時呼叫：放掉接管、activity 設 idle（燈顯示 waiting）。
+// 呼叫端（Terminal.onclose）要把它排在 xterm 解析佇列之後，不然斷線前收到、還沒解析的 OSC 會事後再接管。
 // 為什麼要放：sidecar 的 pump 綁在連線上，斷線期間 PTY 的輸出留在核心緩衝區、重連後照順序送到，
 // 但「已經從 PTY 讀出、send 那一刻失敗」的那一個 chunk 會丟；裡面若帶著 Pi 的 `done`，接管不放的話
 // 燈會卡在 working 直到 Pi 下次換狀態（Codex plan C 審查 medium）。重連後 size-gate 先接手、下一個 OSC 再接管，跟新 session 一樣。

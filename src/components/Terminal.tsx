@@ -374,8 +374,14 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
       };
       socket.onclose = (e) => {
         if (disposed) return;
-        // 非 dispose 的斷線（重連、offline、ended 都算）：放掉 OSC 7501 的接管，見 activityTracker.releaseProgramStatus
-        releaseProgramStatus(tabId);
+        // 非 dispose 的斷線（重連、offline、ended 都算）：放掉 OSC 7501 的接管，見 activityTracker.releaseProgramStatus。
+        // 要排在 xterm 的解析佇列後面：onmessage 的 term.write 是非同步解析（WriteBuffer 用 setTimeout 分批），
+        // 斷線前收到、還沒解析的 chunk 若帶 OSC，直接放會被它事後再接管（Codex plan C R2）。空字串 write 的 callback
+        // 在它前面所有 chunk 解析完才跑；重連後的新 chunk 排在它後面，順序正確。dispose 後不跑：cleanup 已 clearActivity，
+        // 且同一個 tabId 可能已掛了新的 Terminal（重啟），不能動它的接管。
+        term.write("", () => {
+          if (!disposed) releaseProgramStatus(tabId);
+        });
         // 4001/1008：session 已結束 → 不重連
         if (!shouldReconnect(e.code)) {
           setTabStatus(tabId, "ended");
