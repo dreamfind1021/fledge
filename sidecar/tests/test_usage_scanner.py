@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from fledge_sidecar.app_config import AppConfig
-from fledge_sidecar.usage.scanner import claude_files, codex_config_model, codex_files
+from fledge_sidecar.usage.scanner import (claude_files, codex_config_model, codex_files, pi_files, pi_home,
+                                          pi_session_header)
 
 
 def _config_with_accounts(tmp_path: Path, dirs: dict[str, str]) -> AppConfig:
@@ -203,3 +204,50 @@ def test_codex_config_model(tmp_path: Path, content, expected):
     if content is not None:
         (tmp_path / "config.toml").write_bytes(content)
     assert codex_config_model(tmp_path) == expected
+
+
+# ── Pi（Pi spec §6.1 #8／#9）──
+def _pi_session(dirpath, name: str, first_line: str) -> "Path":
+    dirpath.mkdir(parents=True, exist_ok=True)
+    f = dirpath / name
+    f.write_text(first_line + "\n" + json.dumps({"type": "message", "message": {"role": "user"}}) + "\n", encoding="utf-8")
+    return f
+
+
+def test_pi_files_only_session_files_recursive_realpath_dedup(tmp_path):
+    """`sessions/**/*.jsonl` 遞迴；第一行不是 `{"type":"session"}`（別的 type、壞 JSON、空檔）跳過；symlink 去重；回 realpath 排序。"""
+    home = tmp_path / "pi"
+    a = _pi_session(home / "sessions" / "--p-a--", "a.jsonl", json.dumps({"type": "session", "version": 3, "id": "a", "cwd": "/p/a"}))
+    b = _pi_session(home / "sessions" / "deep" / "er", "b.jsonl", json.dumps({"type": "session", "version": 3, "id": "b", "cwd": "/p/b"}))
+    _pi_session(home / "sessions" / "x", "notsession.jsonl", json.dumps({"type": "message", "message": {"role": "user"}}))
+    _pi_session(home / "sessions" / "x", "bad.jsonl", "not json {")
+    (home / "sessions" / "x" / "empty.jsonl").write_text("", encoding="utf-8")
+    (home / "sessions" / "x" / "notes.txt").write_text(json.dumps({"type": "session"}), encoding="utf-8")   # 副檔名不對
+    os.symlink(a, home / "sessions" / "x" / "alias.jsonl")                                                    # 同一檔的 symlink
+    assert pi_files(home) == sorted([Path(str(a.resolve())), Path(str(b.resolve()))])
+
+
+def test_pi_files_missing_home_is_empty(tmp_path):
+    assert pi_files(tmp_path / "nope") == []
+    (tmp_path / "pi").mkdir()
+    assert pi_files(tmp_path / "pi") == []        # 有 home 沒有 sessions/
+
+
+def test_pi_home_env_override_else_default(monkeypatch):
+    monkeypatch.setenv("FLEDGE_PI_HOME", "/tmp/pi-x")
+    assert pi_home() == Path("/tmp/pi-x")
+    monkeypatch.delenv("FLEDGE_PI_HOME")
+    assert pi_home() == Path.home() / ".pi" / "agent"
+
+
+def test_pi_files_and_header_reader_skip_unreadable_file(tmp_path):
+    """拒讀（macOS TCC）：掃描層 best-effort——`pi_files` 略過那一檔不拋、`pi_session_header` 回 None（跟壞 JSON 同語義）。"""
+    home = tmp_path / "pi"
+    a = _pi_session(home / "sessions" / "x", "a.jsonl", json.dumps({"type": "session", "version": 3, "id": "a", "cwd": "/p/a"}))
+    locked = _pi_session(home / "sessions" / "x", "locked.jsonl", json.dumps({"type": "session", "version": 3, "id": "l", "cwd": "/p/l"}))
+    locked.chmod(0)
+    try:
+        assert pi_files(home) == [Path(str(a.resolve()))]
+        assert pi_session_header(locked) is None
+    finally:
+        locked.chmod(0o600)

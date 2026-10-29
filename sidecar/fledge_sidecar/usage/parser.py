@@ -1,10 +1,11 @@
-"""兩格式逐行解析 → 瘦條目（design §5）。
+"""三格式逐行解析 → 瘦條目（design §5；Pi 見 Pi spec §7）。
 
 容錯契約（對下游 cache/_parse_one 的承諾）：**內容層不拋例外**——壞行/壞值跳過並計數；
 I/O 例外（檔案在 stat 後消失等 race）由呼叫端 wrap 處理。"""
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,17 +14,29 @@ from fledge_sidecar.usage import pricing
 
 
 def _to_int(value) -> int:
-    """金流入口的安全轉型：非數值/None 一律 0——單行壞資料不得炸掉整檔解析。"""
+    """金流入口的安全轉型：非數值/None/非有限 一律 0——單行壞資料不得炸掉整檔解析。
+    JSON 的 `1e309` 經 json.loads 是 inf，int(inf) 是 OverflowError（nan 是 ValueError）；不攔的話 cache._parse_one
+    只接 OSError、整輪掃描會掛掉（Codex plan B R1 high）。三個 parser 共用。"""
     try:
         return int(value or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
+
+
+def _to_float(value) -> float:
+    """Pi 的 cost.total 是 Pi 自己算好的浮點數（信任 Pi，Pi spec §5.3）；壞值、非有限一律 0。
+    超大的 JSON 整數（401 位）經 json.loads 是 int、float(int) 拋 OverflowError（Codex plan R2 high），跟 inf 一樣歸 0。"""
+    try:
+        x = float(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return x if math.isfinite(x) else 0.0
 
 
 @dataclass(frozen=True)
 class UsageEntry:
     ts: float                 # epoch 秒（UTC）
-    source: str               # 'claude' | 'codex'
+    source: str               # 'claude' | 'codex' | 'pi'
     model: str
     input_tokens: int
     output_tokens: int
@@ -33,9 +46,12 @@ class UsageEntry:
     cost: float
     project: str              # cwd
     session_id: str
-    dedup_key: str            # claude: "msgid:reqid"；codex: ""（canonical selection 已保唯一）
+    dedup_key: str            # claude: "msgid:reqid"；codex: ""（canonical selection 已保唯一）；pi: "pi:{id}:{timestamp}"
     sidechain: bool           # claude isSidechain；去重替換規則用（design §6）
     missing_pricing: bool
+    # pi：所在檔案 header 的 timestamp（epoch 秒）——fork 逐條複製後同鍵的多份取最早的那份（Pi spec §5.5）；
+    # claude／codex 填 0。有預設值：舊 L2 沒這個欄位也載得起來（SCHEMA_VERSION 升版後反正重建）
+    origin_ts: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -172,3 +188,73 @@ def parse_codex_file(path: Path) -> CodexFileResult:
                     sidechain=False, missing_pricing=missing,
                 ))
     return CodexFileResult(entries=entries, skipped=skipped, session_id=session_id)
+
+
+# Pi session 檔計費條目的模型：provider/model 都有才算有；沒有時摘要條目歸 pi/summary（不推定模型，Pi spec §7），
+# 其他歸 pi/unknown
+_PI_SUMMARY_TYPES = ("compaction", "branch_summary")
+
+
+def parse_pi_file(path: Path) -> tuple[list[UsageEntry], int]:
+    """Pi session 檔（Pi spec §7）：第一行 header 取 cwd／id／timestamp（→ 全檔 origin_ts，§5.5）；
+    只計四類計費條目（assistant 訊息的 message.usage；compaction／branch_summary／usage 的頂層 usage），
+    與 Pi 自己的 /usage 同一套（§5.10）；cost 直接取 usage.cost.total（§5.3）；壞行計 skipped 不拋。
+    header 只認第一行（Pi 的格式）：缺或不在第一行時 project 空、origin_ts 0、session_id 退回 realpath，其餘照常；
+    後面出現的 session 行當普通行略過、不改寫歸屬。"""
+    entries: list[UsageEntry] = []
+    skipped = 0
+    cwd = ""
+    session_id = str(path.resolve())
+    origin_ts = 0.0
+    n = 0   # 已處理的非空行數（第一行才是 header）
+    with open(path, "rb") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            n += 1
+            try:
+                data = json.loads(line)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                skipped += 1
+                continue
+            if not isinstance(data, dict):
+                skipped += 1
+                continue
+            t = data.get("type")
+            if t == "session":
+                if n == 1:
+                    cwd = str(data.get("cwd") or "")
+                    session_id = str(data.get("id") or session_id)
+                    origin_ts = _parse_ts(str(data.get("timestamp") or "")) or 0.0
+                continue
+            if t == "message":
+                msg = data.get("message")
+                if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                    continue
+                usage, provider, model = msg.get("usage"), msg.get("provider"), msg.get("model")
+            elif t == "usage" or t in _PI_SUMMARY_TYPES:
+                usage, provider, model = data.get("usage"), data.get("provider"), data.get("model")
+            else:
+                continue   # user／toolResult／system／model_change／thinking_level_change／custom／context_edit…
+            if not isinstance(usage, dict):
+                continue
+            ts = _parse_ts(str(data.get("timestamp") or ""))
+            if ts is None:
+                skipped += 1
+                continue
+            if isinstance(provider, str) and provider and isinstance(model, str) and model:
+                model_name = f"{provider}/{model}"
+            else:
+                model_name = "pi/summary" if t in _PI_SUMMARY_TYPES else "pi/unknown"
+            cost_obj = usage.get("cost")
+            cost = _to_float(cost_obj.get("total")) if isinstance(cost_obj, dict) else 0.0
+            eid, ets = data.get("id"), data.get("timestamp")
+            entries.append(UsageEntry(
+                ts=ts, source="pi", model=model_name,
+                input_tokens=_to_int(usage.get("input")), output_tokens=_to_int(usage.get("output")),
+                cache_read_tokens=_to_int(usage.get("cacheRead")), cache_create_5m=_to_int(usage.get("cacheWrite")),
+                cache_create_1h=0, cost=cost, project=cwd, session_id=session_id,
+                dedup_key=f"pi:{eid}:{ets}" if eid and ets else "",
+                sidechain=False, missing_pricing=False, origin_ts=origin_ts,
+            ))
+    return entries, skipped

@@ -1,15 +1,18 @@
-"""兩源檔案發現（design §4/§5.2）。
+"""三源檔案發現（design §4/§5.2；Pi 見 Pi spec §6.1 #8）。
 
 claude：各帳號 config_dir/projects 遞迴 *.jsonl，realpath 去重（symlink 帳號別名）。
 codex：sessions/ + archived_sessions/ 的 rollout-*.jsonl，per-session canonical selection——
 優先序 active sessions/ > mtime_ns 新 > size 大（條目數 proxy）> 路徑字串（決定性 tie-break）。
 session_id 以首行 session_meta 窺視；無法取得則以 realpath 自成一組。
 
-**路徑契約**：兩源回傳值一律為 resolve 後的 realpath（Task 6 cache 以此為 key）。
+pi：`<pi_home>/sessions/**/*.jsonl`，只收第一行是 `{"type":"session"}` 的檔。
+
+**路徑契約**：三源回傳值一律為 resolve 後的 realpath（Task 6 cache 以此為 key）。
 """
 from __future__ import annotations
 
 import json
+import os
 import tomllib
 from pathlib import Path
 
@@ -125,3 +128,37 @@ def codex_config_model(codex_home: Path) -> str | None:
         return None
     model = data.get("model")
     return model if isinstance(model, str) and model else None
+
+
+def pi_home() -> Path:
+    """Pi 的 agent 目錄：`FLEDGE_PI_HOME` 或 `~/.pi/agent`（Pi spec §7；測試用環境變數指到 tmp）。
+    Pi 自己的 `PI_CODING_AGENT_DIR`／`sessionDir` 設定改了位置的情況本版不追（已知限制）。"""
+    return Path(os.environ.get("FLEDGE_PI_HOME") or (Path.home() / ".pi" / "agent"))
+
+
+def pi_session_header(path: Path) -> dict | None:
+    """Pi session 檔的第一行（`{"type":"session",…}`，含 cwd／id／timestamp）；第一行不是它、壞 JSON、空檔 → None。
+    `pi_files` 用它篩檔，`project_scanner` 用它讀 cwd 算 recent（同一個讀法，不各寫一份）。
+    讀不到（含拒讀）一律 None：兩個呼叫端都是 best-effort（Codex plan R4：recent 是提示，不值得權限旗標契約）。"""
+    try:
+        with open(path, "rb") as f:
+            data = json.loads(f.readline(_PEEK_LIMIT))
+    except (OSError, ValueError):   # JSONDecodeError 與 UTF-8 解碼錯誤都是 ValueError
+        return None
+    return data if isinstance(data, dict) and data.get("type") == "session" else None
+
+
+def pi_files(pi_home: Path) -> list[Path]:
+    """`<pi_home>/sessions/**/*.jsonl` 遞迴；只收 session 檔；realpath 去重（symlink）、排序（Pi spec §6.1 #8）。"""
+    root = pi_home / "sessions"
+    if not root.is_dir():
+        return []
+    seen: set[str] = set()
+    for f in root.rglob("*.jsonl"):
+        try:
+            if not f.is_file() or pi_session_header(f) is None:
+                continue
+            seen.add(str(f.resolve()))
+        except OSError:   # 拒讀／消失：掃描層 best-effort，略過那一檔
+            continue
+    return sorted(Path(rp) for rp in seen)
