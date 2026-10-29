@@ -17,6 +17,9 @@ export const MIN_OUTPUT_BYTES = 16;
 
 type Activity = "working" | "idle";
 const tracker = new Map<string, { timer: ReturnType<typeof setTimeout>; last: Activity }>();
+// 已改由程式自己的狀態回報（OSC 7501）驅動的分頁：size-gate 對它們不再生效（Pi spec §5.6）。
+// 放這裡而不放 Tab：它跟計時器是同一件事的狀態，Terminal dispose 時一起清（clearActivity）。
+const statusDriven = new Set<string>();
 
 // 旁路訊號：吞掉自身錯誤，永不影響呼叫端（Terminal.onmessage）。
 function setActivity(tabId: string, activity: Activity | undefined): void {
@@ -31,6 +34,7 @@ function setActivity(tabId: string, activity: Activity | undefined): void {
 // 只有「實質輸出」（size >= MIN_OUTPUT_BYTES）才算 working（轉換時 setState）+ 重排閒置計時器；
 // 小 chunk（游標心跳 / 打字 echo）直接忽略，不影響 working/idle 判定。
 export function recordActivity(tabId: string, size: number): void {
+  if (statusDriven.has(tabId)) return;  // 已由狀態回報接管：輸出大小不再是訊號
   if (size < MIN_OUTPUT_BYTES) return; // 忽略 idle 游標心跳等小 chunk（見 MIN_OUTPUT_BYTES 註解）
   const prev = tracker.get(tabId);
   if (prev) clearTimeout(prev.timer);
@@ -45,10 +49,24 @@ export function recordActivity(tabId: string, size: number): void {
   tracker.set(tabId, { timer, last: "working" });
 }
 
+// 程式自己回報狀態（Pi 的 OSC 7501）時呼叫：第一次收到就接管該分頁——先取消 size-gate 已排的閒置計時器
+// （帶著第一個 OSC 的那個 chunk 自己會先排一個，不取消的話兩秒後燈被它關掉、Pi 對相同狀態不重複回報），
+// 之後 recordActivity 對這個分頁直接忽略。working → working；blocked／done／error／idle／未知 → idle（燈顯示 waiting）。
+// 計時器的 callback 不另外檢查接管：clearTimeout 在同一個 JS 執行緒裡先於 callback，取消後它不會再跑；
+// 接管後也不會再排新的（recordActivity 早退），所以那個檢查永遠到不了。
+export function recordProgramStatus(tabId: string, state: string): void {
+  const prev = tracker.get(tabId);
+  if (prev) clearTimeout(prev.timer);
+  tracker.delete(tabId);
+  statusDriven.add(tabId);
+  setActivity(tabId, state === "working" ? "working" : "idle");
+}
+
 // Terminal dispose / session 結束時呼叫：清計時器 + 內部狀態 + 重置 store activity。
 export function clearActivity(tabId: string): void {
   const prev = tracker.get(tabId);
   if (prev) clearTimeout(prev.timer);
   tracker.delete(tabId);
+  statusDriven.delete(tabId);   // 新 session 從 size-gate 重新開始，再由下一個 OSC 接管
   setActivity(tabId, undefined);
 }

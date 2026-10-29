@@ -8,7 +8,8 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { resizeSession, wsUrl } from "../lib/sidecar";
 import { useAppStore } from "../store/useAppStore";
 import { shouldReconnect, nextDelay, MAX_RECONNECT_ATTEMPTS } from "../lib/wsReconnect";
-import { recordActivity, clearActivity } from "../lib/activityTracker";
+import { recordActivity, recordProgramStatus, clearActivity } from "../lib/activityTracker";
+import { parseProgramStatus } from "../lib/programStatus";
 import { createImeGhost, followTheme, readTermMinContrast, readTermTheme } from "../styles/term-theme";
 import { ImeReplayGuard } from "../lib/imeReplayGuard";
 import { ImeDraftTracker } from "../lib/imeDraftTracker";
@@ -172,6 +173,13 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
       scrollback: 5000,
     });
     termRef.current = term;
+    // 程式狀態回報（OSC 7501）：Pi 分頁的燈改由它驅動（Pi spec §5.6／§8）。對所有 PTY 分頁註冊——
+    // claude 從不送 7501，對它是 no-op，不必依 agent 分支。回 true＝已處理、不往下傳。
+    const programStatus = term.parser.registerOscHandler(7501, (data) => {
+      const state = parseProgramStatus(data);
+      if (state != null) recordProgramStatus(tabId, state);
+      return true;
+    });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(containerRef.current);
@@ -514,6 +522,7 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
       window.removeEventListener("keyup", onLinkModUp);
       window.removeEventListener("blur", onLinkModReset);
       linkProvider.dispose();
+      programStatus.dispose();
       unregisterTerminal(tabId);
       term.dispose();
       clearActivity(tabId);

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { recordActivity, clearActivity, IDLE_MS, MIN_OUTPUT_BYTES } from "./activityTracker";
+import { recordActivity, recordProgramStatus, clearActivity, IDLE_MS, MIN_OUTPUT_BYTES } from "./activityTracker";
 import { useAppStore } from "../store/useAppStore";
 
 const spy = () => useAppStore.getState().setTabActivity as ReturnType<typeof vi.fn>;
@@ -83,5 +83,64 @@ describe("activityTracker", () => {
     const calls = spy().mock.calls;
     expect(calls.some((c) => c[0] === "t2" && c[1] === "idle")).toBe(true);
     expect(calls.some((c) => c[0] === "t1")).toBe(false);
+  });
+});
+
+// Pi 分頁：收到 OSC 7501 狀態回報後，燈改由狀態驅動、size-gate 退場（Pi spec §5.6）
+describe("activityTracker 的狀態接管（OSC 7501）", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useAppStore.setState({ setTabActivity: vi.fn() });
+  });
+  afterEach(() => {
+    clearActivity("t1");
+    clearActivity("t2");
+    vi.useRealTimers();
+  });
+
+  it("working → working；blocked／done／error／idle／未知 → idle", () => {
+    recordProgramStatus("t1", "working");
+    expect(spy()).toHaveBeenLastCalledWith("t1", "working");
+    for (const state of ["blocked", "done", "error", "idle", "whatever"]) {
+      recordProgramStatus("t1", state);
+      expect(spy()).toHaveBeenLastCalledWith("t1", "idle");
+    }
+  });
+
+  it("先被 size-gate 排了閒置計時器、再收到 working：過了 IDLE_MS 燈還是 working（Codex spec R1）", () => {
+    recordActivity("t1", BIG);                       // 帶著第一個 OSC 的那個 chunk 自己會先排一個計時器
+    recordProgramStatus("t1", "working");
+    spy().mockClear();
+    vi.advanceTimersByTime(IDLE_MS * 2);
+    expect(spy()).not.toHaveBeenCalled();            // 舊計時器已取消，沒有人把燈關掉
+  });
+
+  it("接管後 size-gate 的輸出不再影響：不設 working、不排計時器", () => {
+    recordProgramStatus("t1", "done");
+    spy().mockClear();
+    recordActivity("t1", BIG);
+    vi.advanceTimersByTime(IDLE_MS * 2);
+    expect(spy()).not.toHaveBeenCalled();
+  });
+
+  it("clearActivity 清掉接管：之後 size-gate 重新生效", () => {
+    recordProgramStatus("t1", "working");
+    clearActivity("t1");
+    expect(spy()).toHaveBeenLastCalledWith("t1", undefined);
+    spy().mockClear();
+    recordActivity("t1", BIG);
+    expect(spy()).toHaveBeenCalledWith("t1", "working");
+    vi.advanceTimersByTime(IDLE_MS);
+    expect(spy()).toHaveBeenLastCalledWith("t1", "idle");
+  });
+
+  it("per-tab 隔離：t1 被接管，t2 仍走 size-gate", () => {
+    recordProgramStatus("t1", "working");
+    spy().mockClear();
+    recordActivity("t2", BIG);
+    expect(spy()).toHaveBeenCalledWith("t2", "working");
+    vi.advanceTimersByTime(IDLE_MS);
+    expect(spy()).toHaveBeenLastCalledWith("t2", "idle");
+    expect(spy().mock.calls.some((c) => c[0] === "t1")).toBe(false);
   });
 });
