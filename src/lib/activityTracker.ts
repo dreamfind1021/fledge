@@ -62,6 +62,17 @@ export function recordProgramStatus(tabId: string, state: string): void {
   setActivity(tabId, state === "working" ? "working" : "idle");
 }
 
+// WebSocket 單獨斷線（PTY 裡的 Pi 還活著、Terminal 不 dispose、之後會重連）時呼叫：放掉接管、燈設 waiting。
+// 為什麼要放：sidecar 的 pump 綁在連線上，斷線期間 PTY 的輸出留在核心緩衝區、重連後照順序送到，
+// 但「已經從 PTY 讀出、send 那一刻失敗」的那一個 chunk 會丟；裡面若帶著 Pi 的 `done`，接管不放的話
+// 燈會卡在 working 直到 Pi 下次換狀態（Codex plan C 審查 medium）。重連後 size-gate 先接手、下一個 OSC 再接管，跟新 session 一樣。
+// 為什麼設 idle 不設 undefined：常見情況是 Pi 閒置時 socket 抖一下，設 undefined 燈會消失到下一次輸出。
+// 只對已接管的分頁生效：Claude 分頁從沒被接管，呼叫是 no-op、不碰 store（spec §5.6「Claude 不變」）。
+export function releaseProgramStatus(tabId: string): void {
+  if (!statusDriven.delete(tabId)) return;
+  setActivity(tabId, "idle");
+}
+
 // Terminal dispose / session 結束時呼叫：清計時器 + 內部狀態 + 重置 store activity。
 export function clearActivity(tabId: string): void {
   const prev = tracker.get(tabId);

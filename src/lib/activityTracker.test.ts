@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { recordActivity, recordProgramStatus, clearActivity, IDLE_MS, MIN_OUTPUT_BYTES } from "./activityTracker";
+import { recordActivity, recordProgramStatus, releaseProgramStatus, clearActivity, IDLE_MS, MIN_OUTPUT_BYTES } from "./activityTracker";
 import { useAppStore } from "../store/useAppStore";
 
 const spy = () => useAppStore.getState().setTabActivity as ReturnType<typeof vi.fn>;
@@ -132,6 +132,28 @@ describe("activityTracker 的狀態接管（OSC 7501）", () => {
     expect(spy()).toHaveBeenCalledWith("t1", "working");
     vi.advanceTimersByTime(IDLE_MS);
     expect(spy()).toHaveBeenLastCalledWith("t1", "idle");
+  });
+
+  it("releaseProgramStatus 放掉接管並設 idle：之後 size-gate 重新生效（socket 斷線、Codex plan C medium）", () => {
+    recordProgramStatus("t1", "working");
+    spy().mockClear();
+    releaseProgramStatus("t1");
+    expect(spy()).toHaveBeenCalledTimes(1);
+    expect(spy()).toHaveBeenLastCalledWith("t1", "idle");
+    spy().mockClear();
+    recordActivity("t1", BIG);
+    expect(spy()).toHaveBeenCalledWith("t1", "working");
+    vi.advanceTimersByTime(IDLE_MS);
+    expect(spy()).toHaveBeenLastCalledWith("t1", "idle");
+  });
+
+  it("releaseProgramStatus 對未接管的分頁是 no-op：不碰 store（Claude 分頁不變）", () => {
+    recordActivity("t2", BIG);
+    spy().mockClear();
+    releaseProgramStatus("t2");
+    expect(spy()).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(IDLE_MS);
+    expect(spy()).toHaveBeenLastCalledWith("t2", "idle");
   });
 
   it("per-tab 隔離：t1 被接管，t2 仍走 size-gate", () => {

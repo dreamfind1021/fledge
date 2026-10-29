@@ -8,7 +8,7 @@ import { WebglAddon } from "@xterm/addon-webgl";
 import { resizeSession, wsUrl } from "../lib/sidecar";
 import { useAppStore } from "../store/useAppStore";
 import { shouldReconnect, nextDelay, MAX_RECONNECT_ATTEMPTS } from "../lib/wsReconnect";
-import { recordActivity, recordProgramStatus, clearActivity } from "../lib/activityTracker";
+import { recordActivity, recordProgramStatus, releaseProgramStatus, clearActivity } from "../lib/activityTracker";
 import { parseProgramStatus } from "../lib/programStatus";
 import { createImeGhost, followTheme, readTermMinContrast, readTermTheme } from "../styles/term-theme";
 import { ImeReplayGuard } from "../lib/imeReplayGuard";
@@ -374,6 +374,8 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
       };
       socket.onclose = (e) => {
         if (disposed) return;
+        // 非 dispose 的斷線（重連、offline、ended 都算）：放掉 OSC 7501 的接管，見 activityTracker.releaseProgramStatus
+        releaseProgramStatus(tabId);
         // 4001/1008：session 已結束 → 不重連
         if (!shouldReconnect(e.code)) {
           setTabStatus(tabId, "ended");
