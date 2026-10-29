@@ -196,8 +196,11 @@ class UsageCache:
         # 在此吸收：本輪略過該檔、下輪掃描自癒——不讓單檔 race 變成整面儀表板 error
         try:
             st = os.stat(p)
-            if source in ("claude", "pi"):
-                entries, skipped = parse_claude_file(p) if source == "claude" else parse_pi_file(p)
+            if source == "claude":
+                entries, skipped = parse_claude_file(p)
+                return rp, FileCacheEntry(st.st_size, st.st_mtime_ns, source, entries, skipped)
+            if source == "pi":
+                entries, skipped = parse_pi_file(p)
                 return rp, FileCacheEntry(st.st_size, st.st_mtime_ns, source, entries, skipped)
             r: CodexFileResult = parse_codex_file(p)
             return rp, FileCacheEntry(st.st_size, st.st_mtime_ns, source, r.entries, r.skipped)

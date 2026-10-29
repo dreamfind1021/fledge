@@ -331,11 +331,11 @@ describe("Dashboard 整頁：Pi 條、KPI 的 Pi 行、專案表 Pi 欄", () => 
     expect(root.querySelector("tbody td.dash-col-pi")?.textContent).toBe("4821萬");
   });
 
-  it("英文：Pi (local)；48.2M · 1,284 calls；專案表 48.2M", async () => {
+  it("英文：Pi (local)；48.2M · 1,284 call(s)；專案表 48.2M", async () => {
     const ui = await shown("en", withPi());
     const strip = ui.container.querySelector(".dash-cx-strip.is-pi")!;
     expect(strip.querySelector(".dash-win-title")?.textContent).toBe("Pi (local)");
-    expect(strip.querySelector(".dash-cx-meta")?.textContent).toBe("48.2M · 1,284 calls");
+    expect(strip.querySelector(".dash-cx-meta")?.textContent).toBe("48.2M · 1,284 call(s)");
     expect(ui.container.querySelector("tbody td.dash-col-pi")?.textContent).toBe("48.2M");
   });
 });

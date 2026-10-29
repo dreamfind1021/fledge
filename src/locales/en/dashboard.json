@@ -17,7 +17,7 @@
   "daily": { "title": "Daily cost ({{days}} days)", "other": "Other", "today": "Today" },
   "models": { "title": "Model breakdown ({{days}} days)", "other": "Other ({{n}})" },
   "hourly": { "title": "Activity by hour ({{days}} days)", "dow": "Mon,Tue,Wed,Thu,Fri,Sat,Sun" },
-  "pi": { "title": "Pi (local)", "calls": "{{n}} calls" },
+  "pi": { "title": "Pi (local)", "calls": "{{n}} call(s)" },
   "projects": { "title": "Project usage ({{days}} days)", "project": "Project", "claude": "Claude",
                 "codex": "Codex", "pi": "Pi", "total": "Total", "lastActive": "Last active",
                 "tempName": "Temporary folders", "tempCount": "{{n}} folder(s)" },

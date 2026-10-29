@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -59,10 +60,11 @@ def _pi_recent(home: Path) -> dict[str, float]:
     """Pi 用過的專案 → 最新 session 檔的 mtime（Pi spec §6.1 #12）。整個 sessions/ 只掃一次、讀每檔第一行的 cwd，
     不逐專案 glob（Pi 的目錄名編碼跟 Claude 不同、不值得再寫一份）。cwd 走 resolve 跟 proj["path"] 同款。
     best-effort：拒讀（檔／子目錄／home）、讀完 header 才消失的檔，一律略過、不標旗標——recent 只是側欄提示
-    （Codex plan B R1～R4：三層旗標契約被連打三輪後砍掉）。rglob 本身會吞掉目錄拒讀，正好是要的語義。"""
+    （Codex plan B R1～R4：三層旗標契約被連打三輪後砍掉）。rglob 本身會吞掉子目錄拒讀，但 Path.is_dir()
+    在 Python 3.12（打包版）遇 EACCES 會往外拋、3.14 才吞掉，所以守門改用 os.path.isdir（任何版本都吞 OSError）。"""
     out: dict[str, float] = {}
     root = home / "sessions"
-    for f in root.rglob("*.jsonl") if root.is_dir() else ():
+    for f in root.rglob("*.jsonl") if os.path.isdir(root) else ():
         try:
             if not f.is_file():
                 continue

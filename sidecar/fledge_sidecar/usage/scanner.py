@@ -151,7 +151,8 @@ def pi_session_header(path: Path) -> dict | None:
 def pi_files(pi_home: Path) -> list[Path]:
     """`<pi_home>/sessions/**/*.jsonl` 遞迴；只收 session 檔；realpath 去重（symlink）、排序（Pi spec §6.1 #8）。"""
     root = pi_home / "sessions"
-    if not root.is_dir():
+    # 不用 Path.is_dir()：Python 3.12（打包版）遇 EACCES 會往外拋、3.14 才吞掉；os.path.isdir 任何版本都吞 OSError
+    if not os.path.isdir(root):
         return []
     seen: set[str] = set()
     for f in root.rglob("*.jsonl"):
