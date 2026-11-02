@@ -6,6 +6,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useAppStore } from "./store/useAppStore";
 import type { BootstrapResult, Tab } from "./store/useAppStore";
 import appEn from "./locales/en/app.json";
+import { registerTerminal, unregisterTerminal } from "./lib/terminalRegistry";
+import { applyTermFontAction, getTermFontSize } from "./lib/termFontSize";
 
 // App 掛了一整棵樹（xterm、dnd-kit、Tauri plugin…）——這裡只驗啟動接線，
 // 把重量級子樹換成空殼，讓測試聚焦在 App 自己的邏輯。
@@ -524,5 +526,90 @@ describe("App：精靈的開啟來源與 ×", () => {
 
     act(() => { useAppStore.setState({ tabs: [liveTab("demo")], pendingCloseTabId: "tab-1" }); });
     expect(useAppStore.getState().modalOpen).toBe(true);
+  });
+});
+
+// 票 50：Cmd+= / Cmd+- / Cmd+0 改工作區終端機的字級（spec docs/superpowers/specs/2026-11-02-terminal-font-zoom-design.md §4.5）。
+// Workspace 在這裡是空殼、不會掛 Terminal：「作用中分頁掛著終端機」由測試直接登錄 terminalRegistry 模擬——Terminal 掛載時做的就是這件事。
+// 寫進 localStorage 由 termFontSize.test.ts 守（App 只呼叫 applyTermFontAction）
+describe("終端機字級快捷鍵", () => {
+  const press = (key: string) => {
+    const e = new KeyboardEvent("keydown", { key, metaKey: true, cancelable: true, bubbles: true });
+    act(() => { window.dispatchEvent(e); });
+    return e;
+  };
+  const termTab = (status: Tab["status"] = "ready"): Tab => ({
+    id: "t1", projectPath: "/p/demo", account: "work", title: "demo", sessionId: "s-1", status, kind: "terminal",
+  });
+  const dashTab: Tab = { id: "t1", projectPath: "", account: "", title: "dashboard", sessionId: null, status: "ready", kind: "dashboard" };
+
+  beforeEach(async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    await i18n.changeLanguage("zh-TW");
+    useAppStore.setState({
+      startup: "running", startupError: null, port: 1234, config: null, tabs: [], activeTabId: null,
+      backendStatus: "up", claudeFound: true, permissionError: false, pendingCloseTabId: null,
+      bootstrap: stubBootstrap({ firstRun: false, projectsError: null }),
+    });
+    applyTermFontAction("reset");   // 字級是模組層狀態、跨測試留著：每條從 13 開始
+  });
+  afterEach(() => {
+    unregisterTerminal("t1");
+    vi.useRealTimers();
+    cleanup();
+  });
+
+  /** 開機畫面走完；分頁 t1 作用中，hasTerminal＝它是否掛著終端機 */
+  async function mount(tab: Tab, hasTerminal: boolean) {
+    const ui = render(<App />);
+    await settleSplash();
+    act(() => { useAppStore.setState({ tabs: [tab], activeTabId: tab.id }); });
+    if (hasTerminal) registerTerminal(tab.id, { paste: () => {}, isComposing: () => false });
+    return ui;
+  }
+
+  it.each([
+    ["=", 14],
+    ["+", 14],
+    ["-", 12],
+  ])("作用中分頁掛著終端機：Cmd+%s → 字級 %i", async (key, size) => {
+    await mount(termTab(), true);
+    press(key);
+    expect(getTermFontSize()).toBe(size);
+  });
+
+  it("作用中分頁掛著終端機：Cmd+0 → 回到 13", async () => {
+    await mount(termTab(), true);
+    press("=");
+    press("=");
+    press("0");
+    expect(getTermFontSize()).toBe(13);
+  });
+
+  // 畫面上沒有終端機時改了，看不到變化卻偷偷改了（spec A3）；按鍵照樣吃掉，跟其他快捷鍵一樣不落回 webview
+  it.each([
+    ["作用中分頁是儀表板", dashTab],
+    ["終端機分頁已結束", termTab("ended")],
+  ])("%s（沒掛終端機）：Cmd+= 不改字級、照樣吃掉按鍵", async (_label, tab) => {
+    await mount(tab, false);
+    const e = press("=");
+    expect(getTermFontSize()).toBe(13);
+    expect(e.defaultPrevented).toBe(true);
+  });
+
+  it("設定頁開著：Cmd+= 不改字級", async () => {
+    const ui = await mount(termTab(), true);
+    ui.getByTestId("sidebar-settings").click();
+    await waitFor(() => expect(ui.queryByTestId("settings")).not.toBeNull());
+    press("=");
+    expect(getTermFontSize()).toBe(13);
+  });
+
+  // 專案選擇器是空殼、看不出開了沒有；沒開的話這裡的 Cmd+= 會改到字級（終端機掛著），所以斷言本身就證明它開著
+  it("專案選擇器開著：Cmd+= 不改字級", async () => {
+    await mount(termTab(), true);
+    press("t");
+    press("=");
+    expect(getTermFontSize()).toBe(13);
   });
 });

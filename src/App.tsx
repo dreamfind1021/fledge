@@ -5,6 +5,7 @@ import { DndContext, DragOverlay, PointerSensor, pointerWithin, useSensor, useSe
 import { fetchHealth, rawHealth, restartSidecar } from "./lib/sidecar";
 import { getTerminal } from "./lib/terminalRegistry";
 import { formatPathsForPaste } from "./lib/dropPath";
+import { applyTermFontAction, termFontActionForKey } from "./lib/termFontSize";
 import { useAppStore } from "./store/useAppStore";
 import { isLiveClaudeTab } from "./lib/liveTab";
 import { displayTabTitle } from "./lib/tabTitle";
@@ -208,16 +209,18 @@ function App() {
     void runStartup();
   }, [runStartup]);
 
-  // 快捷鍵：Cmd+W 關當前（執行中先確認）、Cmd+1~9 切 tab
+  // 快捷鍵：Cmd+W 關當前（執行中先確認）、Cmd+1~9 切 tab、Cmd+= / Cmd+- / Cmd+0 工作區終端機字級
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.metaKey) return;
+      const fontAction = termFontActionForKey(e.key);
       const handled =
         e.key === "," ||
         e.key === "t" ||
         e.key === "r" ||
         e.key === "w" ||
-        (e.key >= "1" && e.key <= "9");
+        (e.key >= "1" && e.key <= "9") ||
+        fontAction !== null;
       if (!handled) return;
       // 先擋掉 Tauri/webview 對這些 meta key 的預設（Cmd+W 關視窗、Cmd+R reload…），
       // 再決定是否執行 app 邏輯——否則 modal 開時 bail 會讓 Cmd+W 直接關掉整個程式。
@@ -236,7 +239,12 @@ function App() {
         }
         return;
       }
-      if (e.key === ",") {
+      if (fontAction) {
+        // 只在作用中分頁真的掛著終端機時才改（票 50，spec §4.5）：畫面上沒有終端機時改了，看不到變化卻偷偷改了。
+        // terminalRegistry 由 Terminal 掛載時登錄、卸載時移除，跟 Workspace 掛不掛終端機的條件自動一致
+        const id = useAppStore.getState().activeTabId;
+        if (id && getTerminal(id)) applyTermFontAction(fontAction);
+      } else if (e.key === ",") {
         setShowSettings(true);
       } else if (e.key === "t") {
         setShowPicker(true);
