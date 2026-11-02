@@ -147,6 +147,15 @@ describe("Terminal 的字級", () => {
     expect(term().options.fontSize).toBe(14);
   });
 
+  // 幽靈字是 term.open 之後才掛進 DOM 的；建立時字級就要對（同上，掛載那次重繪也會套，所以不先 mountTerminal）
+  it("建立時：幽靈字（組字草稿）用存的字級", () => {
+    applyTermFontAction("in");
+    const { container } = render(<Terminal port={1} sessionId="s1" tabId="t1" isActive zoomable />);
+    const el = container.querySelector<HTMLElement>(".xterm-helpers > div");
+    expect(el).not.toBeNull();
+    expect(el!.style.fontSize).toBe("14px");
+  });
+
   it("建立時：沒有 zoomable 固定 13（設置卡）", () => {
     applyTermFontAction("in");
     mountTerminal();
@@ -165,6 +174,16 @@ describe("Terminal 的字級", () => {
     act(() => applyTermFontAction("in"));
     act(() => flushRaf());
     expect(h.resize).toHaveBeenCalledWith(1, "s1", 24, Math.round(1000 / 14));
+  });
+
+  // 組字懸置的幽靈字要跟終端機同字級，否則換字級後草稿停在舊大小（spec 反目標 A5）
+  it("看得到時字級變了：幽靈字的 font-size 跟著變", () => {
+    const { container } = mountTerminal({ zoomable: true });
+    act(() => applyTermFontAction("in"));
+    act(() => flushRaf());
+    const el = container.querySelector<HTMLElement>(".xterm-helpers > div");
+    expect(el).not.toBeNull();
+    expect(el!.style.fontSize).toBe("14px");
   });
 
   // 隱藏中套用的話，xterm 的 DOM 量法會留下舊字級的尺寸、切回也不重量（spec §4.2，Codex spec R1）

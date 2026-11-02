@@ -590,6 +590,8 @@ describe("終端機字級快捷鍵", () => {
   it.each([
     ["作用中分頁是儀表板", dashTab],
     ["終端機分頁已結束", termTab("ended")],
+    ["終端機分頁建立中", termTab("creating")],
+    ["終端機分頁出錯", termTab("error")],
   ])("%s（沒掛終端機）：Cmd+= 不改字級、照樣吃掉按鍵", async (_label, tab) => {
     await mount(tab, false);
     const e = press("=");
