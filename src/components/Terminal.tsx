@@ -10,7 +10,8 @@ import { useAppStore } from "../store/useAppStore";
 import { shouldReconnect, nextDelay, MAX_RECONNECT_ATTEMPTS } from "../lib/wsReconnect";
 import { recordActivity, recordProgramStatus, releaseProgramStatus, clearActivity } from "../lib/activityTracker";
 import { parseProgramStatus } from "../lib/programStatus";
-import { createImeGhost, followTheme, readTermMinContrast, readTermTheme } from "../styles/term-theme";
+import { applyTermFontSize, createImeGhost, followTheme, readTermMinContrast, readTermTheme } from "../styles/term-theme";
+import { getTermFontSize, onTermFontSizeChange, TERM_FONT_SIZE_DEFAULT } from "../lib/termFontSize";
 import { ImeReplayGuard } from "../lib/imeReplayGuard";
 import { ImeDraftTracker } from "../lib/imeDraftTracker";
 import { FlowController, type FlowSignal } from "../lib/flowControl";
@@ -63,9 +64,11 @@ interface TerminalProps {
    *  在 store 內沒有對應 tab，`setTabStatus` 是 no-op，卡片因此收不到任何結束訊號。
    *  **不含放棄重連的分支**——那時命令可能還在跑，說它結束是謊報。 */
   onEnded?: () => void;
+  /** 工作區的終端機傳 true：字級跟著 Cmd+= / Cmd+- / Cmd+0 變（票 50）。設置卡不傳，固定 13（spec N2） */
+  zoomable?: boolean;
 }
 
-export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnded }: TerminalProps) {
+export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnded, zoomable }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const isActiveRef = useRef(isActive);
@@ -73,6 +76,8 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
   // teardown+rebuild xterm（term.dispose 毀掉終端機內容）
   const onEndedRef = useRef(onEnded);
   onEndedRef.current = onEnded;
+  // 掛載點決定、不會變（Workspace 傳、設置卡不傳）；走 ref 不放進 effect 依賴，免得多一個重建 xterm 的理由
+  const zoomableRef = useRef(zoomable);
   const forceRefreshRef = useRef<(() => void) | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
   const webglCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -161,7 +166,8 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
     const term = new XTerm({
       // xterm canvas 不解析 CSS 變數 → fontFamily 用實字串、theme 由 readTermTheme() 讀成實 hex
       fontFamily: "JetBrains Mono, ui-monospace, monospace",
-      fontSize: 13,
+      // 工作區終端機用使用者調過的字級（票 50），設置卡固定預設（spec N2）
+      fontSize: zoomableRef.current ? getTermFontSize() : TERM_FONT_SIZE_DEFAULT,
       theme: readTermTheme(),
       // 淺色主題把不到 4.5 的字調到 4.5（Claude Code 用 RGB 寫死的淡字，spec §12.5）；切主題時由 followTheme 重設
       minimumContrastRatio: readTermMinContrast(),
@@ -230,7 +236,7 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
     // 幽靈草稿（接線）：純視覺、不進 PTY。掛 .xterm-helpers＝與 helper textarea 同座標系，
     // 其 style.left/top 即游標座標；懸置當下定格、第一個互動移除，偏移屬可接受的暫態。
     const imeDraft = new ImeDraftTracker();
-    const imeGhost = createImeGhost();
+    const imeGhost = createImeGhost(term.options.fontSize);
     term.element?.querySelector(".xterm-helpers")?.appendChild(imeGhost);
     // 切主題時這個終端機跟著換色（票 07）；清理時取消訂閱，不再碰已經 dispose 的 xterm
     const stopFollowingTheme = followTheme(term, imeGhost);
@@ -472,11 +478,19 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
         refreshRaf = null;
         // 排程後才切走的殘留 rAF：隱藏中不量測不重繪（hidden tab 不渲染、不 churn）
         if (!containerRef.current?.offsetParent) return;
+        // 字級在看得到之後、fit 之前才套用（票 50，spec §4.2）：隱藏中改字級，xterm 的 DOM 量法會留下舊尺寸、切回也不重量。
+        // 真的換了字級就收掉懸置草稿：它的座標是懸置當下定格的，字級變了就對不上游標（同點擊、切走時的保守做法，Codex plan R1）
+        if (zoomableRef.current && applyTermFontSize(term, imeGhost, getTermFontSize())) {
+          imeDraft.dismiss();
+          syncImeGhost();
+        }
         syncSize();
         term.refresh(0, term.rows - 1);
       });
     };
     forceRefreshRef.current = forceRefresh;
+    // 字級變了交給 forceRefresh：看得到的當場套用並重算行列（rAF 合併連按），隱藏中的等切回時 forceRefresh 再套（票 50）
+    const stopFollowingFontSize = zoomableRef.current ? onTermFontSizeChange(forceRefresh) : () => {};
 
     // 視窗回前景／app 回焦：僅 active terminal 響應（ref 取當下值，不擴 effect 依賴）
     const onVisibilityChange = () => {
@@ -525,6 +539,7 @@ export function Terminal({ port, sessionId, tabId, isActive, projectPath, onEnde
       imeContainer.removeEventListener("contextmenu", onContextMenuEvent);
       imeGhost.remove();
       stopFollowingTheme();
+      stopFollowingFontSize();
       window.removeEventListener("blur", onImeWinBlur);
       window.removeEventListener("keydown", onLinkModDown);
       window.removeEventListener("keyup", onLinkModUp);

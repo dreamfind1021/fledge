@@ -65,6 +65,7 @@ export function Workspace() {
                       tabId={t.id}
                       isActive={t.id === activeTabId}
                       projectPath={t.projectPath}
+                      zoomable // 工作區終端機共用一個可調字級（票 50）；設置卡的 CardTerminal 不傳
                     />
                     {/* 右下懸浮「相關」：只給有 projectPath 的 session 分頁（claude／terminal）；
                         此 div 已是 position:absolute（即定位包覆塊），float 以它為錨點、不改終端機尺寸 */}

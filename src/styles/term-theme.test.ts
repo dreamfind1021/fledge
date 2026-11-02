@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ITheme } from "@xterm/xterm";
-import { createImeGhost, followTheme, readTermMinContrast, readTermTheme } from "./term-theme";
+import { applyTermFontSize, createImeGhost, followTheme, readTermMinContrast, readTermTheme } from "./term-theme";
 import { setTheme } from "../lib/theme";
 import { THEMES } from "../lib/themeIds";
 import { contrast, resolveColor, token } from "../testing/cssRules";
@@ -69,6 +69,39 @@ describe("createImeGhost：輸入法懸置草稿", () => {
     const ink = resolveColor(`color-mix(in srgb, var(--term-text) ${opacity * 100}%, var(--term-bg))`, theme);
     expect(contrast(ink, token("term-bg", theme))).toBeGreaterThanOrEqual(4.5);
   });
+
+  // 字級（票 50）：草稿跟著終端機的字級，不然組字時草稿跟終端機的字一大一小（spec A5）
+  it("給字級時草稿用那個字級", () => {
+    expect(createImeGhost(18).style.fontSize).toBe("18px");
+  });
+
+  it("不給字級時是 13px（設置卡的終端機）", () => {
+    expect(createImeGhost().style.fontSize).toBe("13px");
+  });
+});
+
+// 字級套到工作區終端機與它的草稿（票 50，spec §4.2／§4.4）：草稿的字級只在這裡跟著終端機一起設
+describe("applyTermFontSize：終端機與草稿一起換字級", () => {
+  it("設終端機的 fontSize", () => {
+    const term = { options: { fontSize: 13 } };
+    applyTermFontSize(term, document.createElement("div"), 16);
+    expect(term.options.fontSize).toBe(16);
+  });
+
+  it("設草稿的 font-size", () => {
+    const ghost = createImeGhost(13);
+    applyTermFontSize({ options: { fontSize: 13 } }, ghost, 16);
+    expect(ghost.style.fontSize).toBe("16px");
+  });
+
+  // 回傳值決定要不要收掉懸置草稿（Terminal.tsx）：每次重繪都會呼叫，字級沒變時不能回 true
+  it("換了字級：回 true", () => {
+    expect(applyTermFontSize({ options: { fontSize: 13 } }, document.createElement("div"), 16)).toBe(true);
+  });
+
+  it("字級跟原本一樣：回 false", () => {
+    expect(applyTermFontSize({ options: { fontSize: 16 } }, document.createElement("div"), 16)).toBe(false);
+  });
 });
 
 describe("followTheme：已開著的終端機跟著主題換色", () => {
@@ -131,9 +164,10 @@ describe("followTheme：已開著的終端機跟著主題換色", () => {
 describe("Terminal.tsx 的接線", () => {
   const SRC = import.meta.glob("/src/components/Terminal.tsx", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
   const src = SRC["/src/components/Terminal.tsx"];
-  // 草稿另外在這裡手寫一份的話，上面 createImeGhost 的對比測試就驗不到實際畫出來的那個（票 38）
-  it("輸入法懸置草稿用 createImeGhost() 建立", () => {
-    expect(src).toContain("const imeGhost = createImeGhost();");
+  // 草稿另外在這裡手寫一份的話，上面 createImeGhost 的對比測試就驗不到實際畫出來的那個（票 38）；
+  // 字級取自剛建好的終端機，草稿與終端機的字級只有一個來源（票 50，spec §4.4）
+  it("輸入法懸置草稿用 createImeGhost() 建立、字級取自終端機", () => {
+    expect(src).toContain("const imeGhost = createImeGhost(term.options.fontSize);");
   });
   it("建立 xterm 時用 followTheme 訂閱", () => {
     expect(typeof src).toBe("string");

@@ -1,5 +1,6 @@
 import type { ITheme } from "@xterm/xterm";
 import { onThemeChange } from "../lib/theme";
+import { TERM_FONT_SIZE_DEFAULT } from "../lib/termFontSize";
 
 // 從 :root/[data-theme] 讀 CSS 變數值（hex），組 xterm 主題。
 // xterm canvas 不吃 CSS 變數，必須讀成實字串再餵：Terminal mount 當下讀一次，
@@ -49,17 +50,30 @@ export function readTermMinContrast(): number {
 
 /**
  * 輸入法懸置草稿的元素（純視覺、不進 PTY），Terminal.tsx 掛到 .xterm-helpers 底下。字色是終端機前景色、打淡化，
- * 看得出還沒送出。它是 DOM 元素、不是 xterm 畫的字：minimumContrastRatio 管不到，對比由 term-theme.test.ts 建一個出來驗（票 38）
+ * 看得出還沒送出。它是 DOM 元素、不是 xterm 畫的字：minimumContrastRatio 管不到，對比由 term-theme.test.ts 建一個出來驗（票 38）。
+ * 字級跟終端機一樣（票 50）：建立時由呼叫端傳終端機的字級，之後由 applyTermFontSize 一起換
  */
-export function createImeGhost(): HTMLDivElement {
+export function createImeGhost(fontSize: number = TERM_FONT_SIZE_DEFAULT): HTMLDivElement {
   const ghost = document.createElement("div");
   // 淡化 0.62：淺色主題對終端機底剛好過 4.5（0.55 只有約 3.85，票 38）
   ghost.style.cssText =
     "position:absolute;pointer-events:none;z-index:2;display:none;white-space:pre;" +
     "opacity:0.62;border-bottom:1px dashed currentColor;" +
-    "font-family:JetBrains Mono,ui-monospace,monospace;font-size:13px;";
+    "font-family:JetBrains Mono,ui-monospace,monospace;";
+  ghost.style.fontSize = `${fontSize}px`;
   ghost.style.color = readTermTheme().foreground ?? "#ccc";
   return ghost;
+}
+
+/**
+ * 把字級套到工作區終端機與它的輸入法草稿（票 50，spec §4.2／§4.4），回傳有沒有真的換。Terminal.tsx 只在終端機看得到時、
+ * fit 之前呼叫：隱藏中改字級，xterm 的 DOM 量法會留下舊字級的格子尺寸、切回也不重量
+ */
+export function applyTermFontSize(term: { options: { fontSize?: number } }, imeGhost: HTMLElement, size: number): boolean {
+  if (term.options.fontSize === size) return false;
+  term.options.fontSize = size;
+  imeGhost.style.fontSize = `${size}px`;
+  return true;
 }
 
 /**

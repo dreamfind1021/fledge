@@ -7,8 +7,10 @@ import enApp from "../locales/en/app.json";
 import { useAppStore } from "../store/useAppStore";
 import { Workspace } from "./Workspace";
 
-// xterm 進 jsdom 會炸（canvas/WebGL）；本檔只驗 kind 分派，終端機換成可辨識的替身
-vi.mock("./Terminal", () => ({ Terminal: () => <div data-testid="terminal" /> }));
+// xterm 進 jsdom 會炸（canvas/WebGL）；本檔只驗 kind 分派與傳給終端機的 props，終端機換成可辨識的替身
+vi.mock("./Terminal", () => ({
+  Terminal: ({ zoomable }: { zoomable?: boolean }) => <div data-testid="terminal" data-zoomable={String(zoomable === true)} />,
+}));
 vi.mock("../lib/sidecar", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/sidecar")>()),
   fetchTasksOverview: () => Promise.resolve({ projects: [], permission_error: false }),
@@ -76,5 +78,26 @@ describe("Workspace 的 session 建立失敗", () => {
     expect(screen.queryByText(enApp.errors.agent_not_found.replace("{{agent}}", "pi"))).not.toBeNull();
     expect(screen.queryByText("開啟失敗：SessionError: createSession failed: 500")).not.toBeNull();
     expect(screen.queryByText(/failed: 400/)).toBeNull();
+  });
+});
+
+// 字級（票 50，spec §4.3）：工作區的終端機跟著 Cmd+= / Cmd+- / Cmd+0 變；設置卡不跟（CardTerminal.test.tsx）
+describe("Workspace 的終端機", () => {
+  beforeEach(() => {
+    // projectPath 留空：不畫右下的「相關」浮窗（它一掛上就打 sidecar），本檔不驗它
+    useAppStore.setState({
+      port: 1234, projects: [], activeTabId: "t1", config: null,
+      tabs: [{ id: "t1", projectPath: "", account: "work", title: "fledge", sessionId: "s1", status: "ready", kind: "terminal" }],
+    });
+  });
+  afterEach(cleanup);
+
+  it("傳 zoomable 給 Terminal", () => {
+    render(
+      <DndContext>
+        <Workspace />
+      </DndContext>,
+    );
+    expect(screen.getByTestId("terminal").dataset.zoomable).toBe("true");
   });
 });
