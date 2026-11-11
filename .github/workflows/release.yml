@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   release:
-    runs-on: macos-14            # Apple Silicon (arm64)
+    runs-on: macos-26            # Apple Silicon (arm64)
     permissions:
       contents: write            # 建/編輯 release
     env:
