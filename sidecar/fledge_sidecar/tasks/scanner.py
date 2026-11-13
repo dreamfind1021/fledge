@@ -261,6 +261,8 @@ def scan_tasks(tasks_fd: int) -> list[dict[str, Any]]:
     for row in rows:
         if row["number"] is not None and seen[row["number"]] > 1:
             row["anomalies"].append(ANOMALY_NUMBER_DUPLICATE)
+    # 檔名是字串排序，100 會夾在 10 與 11 之間；面板清單直接用這個順序，要改成依編號
+    rows.sort(key=_number_key)
     return rows
 
 

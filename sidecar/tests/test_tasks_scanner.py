@@ -175,6 +175,19 @@ def test_one_bad_file_does_not_fail_the_whole_project(tmp_path):
     assert rows[0]["anomalies"] == [] and rows[2]["anomalies"] == []   # 其他兩張不受影響
 
 
+def test_tickets_are_ordered_by_number_not_filename(tmp_path):
+    """編號過百的票要排在最後，不是夾在 10 與 11 之間。
+
+    檔名照字串排會得到 03 → 100 → 12：面板清單直接用這個順序，票 100 看起來像不見了。"""
+    config, proj = _setup(tmp_path)
+    tasks = _tasks_dir(proj)
+    for short in ("03-甲.md", "12-乙.md", "100-丙.md"):
+        (tasks / short).write_text(TICKET.format(status="todo", title=short), encoding="utf-8")
+    with scanner.open_tasks_dir(str(proj), config) as td:
+        rows = scanner.scan_tasks(td.fd)
+    assert [r["number"] for r in rows] == [3, 12, 100]
+
+
 def test_fingerprint_changes_with_content_and_is_stable(tmp_path):
     config, proj = _setup(tmp_path)
     tasks = _tasks_dir(proj)
