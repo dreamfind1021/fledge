@@ -100,6 +100,7 @@ def test_glob_with_no_match_leaves_no_literal_pattern(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     proc = _run(["--list", "-o", str(tmp_path / "out")], home)
     assert "settings.json.bak.*" not in proc.stdout
+    assert "settings.json.bak-*" not in proc.stdout
 
 
 def test_glob_handles_filename_with_space(tmp_path: Path):
@@ -162,6 +163,35 @@ def test_ticket17_top_level_dirs_are_classified(tmp_path: Path):
     ).stdout
     assert "accounts/default/output-styles/style.md" in listing
     assert "feedback" not in listing
+
+
+# ── 票 52：2026-11-15 備份時標 `?` 的兩類項目 ─────────────────────────────────
+
+
+def test_ticket52_items_are_classified(tmp_path: Path):
+    """收：`settings.json.bak-<日期>[-說明]` 是改設定前手動留的舊版，丟了回不來——與
+    `bak.<時間戳>` 同類，只是分隔符是減號，原本的 glob 對不上。
+    不收：`state/` 目前只有 `mcp-discover-verdicts.json`（MCP 伺服器協定版本的探測結果），
+    是連線時重新探測就會長回來的快取。"""
+    home, config_dir = _fake_home(tmp_path)
+    for name in ("settings.json.bak-20261006", "settings.json.bak-20261020-bwtext-deny"):
+        (config_dir / name).write_text('{"real":1}', encoding="utf-8")
+    (config_dir / "state").mkdir()
+    (config_dir / "state" / "mcp-discover-verdicts.json").write_text("{}", encoding="utf-8")
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    assert "清單上沒有" not in proc.stdout
+    assert "收  settings.json.bak-20261006" in proc.stdout
+    assert "收  settings.json.bak-20261020-bwtext-deny" in proc.stdout
+    assert "收  state" not in proc.stdout
+    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    listing = subprocess.run(
+        ["tar", "tzf", str(bundle)], capture_output=True, text=True, timeout=60
+    ).stdout
+    assert "accounts/default/settings.json.bak-20261006" in listing
+    assert "accounts/default/settings.json.bak-20261020-bwtext-deny" in listing
+    assert "mcp-discover-verdicts.json" not in listing
 
 
 # ── HOME 含特殊字元（票 11）──────────────────────────────────────────────────

@@ -54,7 +54,9 @@ ASSET_FILES=(CLAUDE.md settings.json settings.local.json .claude.json history.js
 #
 # `settings.json.bak.<時間戳>` 是共通設置把 settings.json 換成 symlink 前，那份使用者
 # 手寫設定的唯一副本：丟了回不來，按 ADR-0004 的可再生性判準它是資產。
-ASSET_GLOBS=(settings.json.bak.*)
+# `settings.json.bak-<日期>[-說明]` 是改設定前手動留的舊版，同樣丟了回不來；分隔符是減號，
+# 上一個 pattern 對不上，所以另列（票 52）。
+ASSET_GLOBS=(settings.json.bak.* settings.json.bak-*)
 
 # 對某個帳號目錄展開 ASSET_GLOBS，結果放進全域 matched 陣列。
 # 局部開 nullglob：零匹配時得到空陣列，而不是留下字面 pattern。掃描／複製／未分類判定
@@ -77,11 +79,13 @@ expand_globs() {
 # 「出現了清單上沒有的新東西」能被偵測出來——Claude Code 加目錄時要有人重新判定。
 # `feedback` 是 SendFeedback 工具的本機草稿佇列（`feedback/drafts/`），使用者核准送出後即
 # 消失——暫存佇列不是資產（票 17）。
+# `state` 目前只有 `mcp-discover-verdicts.json`（MCP 伺服器回報的協定版本＋觀測時間），
+# 連線時重新探測就會長回來，是快取（票 52）。
 KNOWN_SKIP=(
   cache telemetry backups tasks session-env sessions shell-snapshots chrome daemon downloads
   stats-cache.json mcp-needs-auth-cache.json daemon.log daemon-auth-status.json
   daemon-auth-cooldown .last-cleanup .last-update-result.json .DS_Store .claude.json.backup
-  feedback
+  feedback state
 )
 
 # 帳號目錄之外的資產。清單放在共用檔而非寫死在這裡：sidecar 的 containment 防呆要讀
