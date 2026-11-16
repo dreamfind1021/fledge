@@ -273,7 +273,7 @@ def test_backup_succeeds_when_no_extra_paths_exist(tmp_path: Path):
 
 
 def _fake_bin(tmp_path: Path, name: str, body: str) -> Path:
-    """造一個假的外部命令，用 PATH 前置注入。"""
+    """造一個假的外部命令，用 PATH 前置注入（`cp`、`ln` 這類腳本照 PATH 找的命令）。"""
     d = tmp_path / "fakebin"
     d.mkdir(exist_ok=True)
     f = d / name
@@ -282,13 +282,17 @@ def _fake_bin(tmp_path: Path, name: str, body: str) -> Path:
     return d
 
 
-def _dying_tar(tmp_path: Path) -> Path:
+def _fake_tar(tmp_path: Path, body: str) -> str:
+    """造一個假的 tar，回它的路徑給 `FLEDGE_TAR` 用。腳本寫死 `/usr/bin/tar`、不從 PATH 找，
+    所以假 tar 只能經這個測試接縫換進去。"""
+    return str(_fake_bin(tmp_path, "tar", body) / "tar")
+
+
+def _dying_tar(tmp_path: Path) -> str:
     """假的 tar：**先把輸出檔建出來再失敗**——模擬磁碟滿／被 signal 中斷這種
     「已經開始寫才死」的情境。直接 exit 1 的假 tar 不會產生檔案，那樣測到的是
     假綠：它證明不了原子發布，只證明了「沒寫就沒有殘骸」。"""
-    return _fake_bin(
-        tmp_path, "tar", '#!/bin/sh\ncase "$1" in *c*) echo garbage > "$2" ;; esac\nexit 1\n'
-    )
+    return _fake_tar(tmp_path, '#!/bin/sh\ncase "$1" in *c*) echo garbage > "$2" ;; esac\nexit 1\n')
 
 
 def test_no_bundle_name_when_tar_fails(tmp_path: Path):
@@ -299,7 +303,7 @@ def test_no_bundle_name_when_tar_fails(tmp_path: Path):
     正常色——正是整份設計要防的假安全感。"""
     home, _ = _fake_home(tmp_path)
     out = tmp_path / "out"
-    proc = _run(["-o", str(out)], home, extra_env={"PATH": f"{_dying_tar(tmp_path)}:{os.environ['PATH']}"})
+    proc = _run(["-o", str(out)], home, extra_env={"FLEDGE_TAR": _dying_tar(tmp_path)})
     assert proc.returncode != 0
     assert list(out.glob("claude-backup-*.tar.gz")) == []
 
@@ -308,7 +312,8 @@ def test_partial_is_cleaned_when_tar_fails(tmp_path: Path):
     """trap 也要清掉半成品，否則每次失敗都在備份碟留一份。"""
     home, _ = _fake_home(tmp_path)
     out = tmp_path / "out"
-    _run(["-o", str(out)], home, extra_env={"PATH": f"{_dying_tar(tmp_path)}:{os.environ['PATH']}"})
+    proc = _run(["-o", str(out)], home, extra_env={"FLEDGE_TAR": _dying_tar(tmp_path)})
+    assert proc.returncode != 0, "假 tar 沒有被叫到——這條測的就不是失敗路徑"
     assert list(out.glob(".claude-backup-*.partial")) == []
 
 
@@ -404,11 +409,12 @@ def test_concurrent_runs_do_not_share_partial(tmp_path: Path):
     out = tmp_path / "out"
     # 假 HOME 很小，兩個程序不做任何事就會先後跑完、根本不重疊——那樣的測試是假綠，
     # 它證明的是「沒有併行」而不是「併行安全」。用會拖慢的 tar 造出真正的重疊窗口。
-    slow_tar = _fake_bin(
-        tmp_path, "tar",
-        '#!/bin/sh\ncase "$1" in *c*) sleep 1 ;; esac\nexec /usr/bin/tar "$@"\n',
+    called = tmp_path / "slow-tar-called"
+    slow_tar = _fake_tar(
+        tmp_path,
+        f'#!/bin/sh\ncase "$1" in *c*) echo x >> {called}; sleep 1 ;; esac\nexec /usr/bin/tar "$@"\n',
     )
-    env = {**os.environ, "HOME": str(home), "PATH": f"{slow_tar}:{os.environ['PATH']}"}
+    env = {**os.environ, "HOME": str(home), "FLEDGE_TAR": slow_tar}
     env.pop("FLEDGE_BACKUP_DIR", None)
     procs = [
         subprocess.Popen(
@@ -426,6 +432,8 @@ def test_concurrent_runs_do_not_share_partial(tmp_path: Path):
     assert subprocess.run(["tar", "tzf", str(bundles[0])], capture_output=True).returncode == 0
     assert list(out.glob(".claude-backup-*.partial")) == [], "半成品沒被清乾淨"
     assert sum(1 for p in procs if p.returncode == 0) == 1, "應恰有一個成功、一個讓位"
+    # 假 tar 沒被叫到的話兩個程序根本沒被拖慢，上面那些斷言證明的是「沒有併行」
+    assert called.read_text(encoding="utf-8").count("x") >= 1, "慢 tar 沒有被叫到"
 
 
 def test_partial_name_is_per_process(tmp_path: Path):
@@ -435,11 +443,11 @@ def test_partial_name_is_per_process(tmp_path: Path):
     這裡直接攔截 tar 拿到的 partial 路徑：兩次不同的執行必須拿到不同的檔名。"""
     home, _ = _fake_home(tmp_path)
     seen = tmp_path / "seen.txt"
-    recorder = _fake_bin(
-        tmp_path, "tar",
+    recorder = _fake_tar(
+        tmp_path,
         f'#!/bin/sh\ncase "$1" in *c*) echo "$2" >> {seen} ;; esac\nexec /usr/bin/tar "$@"\n',
     )
-    env = {"PATH": f"{recorder}:{os.environ['PATH']}"}
+    env = {"FLEDGE_TAR": recorder}
     _run(["-o", str(tmp_path / "out1")], home, extra_env=env)
     _run(["-o", str(tmp_path / "out2")], home, extra_env=env)
     names = [Path(line).name for line in seen.read_text(encoding="utf-8").split()]
@@ -447,6 +455,20 @@ def test_partial_name_is_per_process(tmp_path: Path):
     assert names[0] != names[1], f"兩次執行拿到同一個 partial：{names}"
     for n in names:
         assert n.startswith(".claude-backup-") and n.endswith(".tar.gz.partial")
+
+
+def test_tar_on_path_is_not_used(tmp_path: Path):
+    """App 把使用者登入 shell 的 PATH 原樣交給 sidecar（`src-tauri/src/sidecar.rs`）。PATH 前面
+    若是 Homebrew 的 GNU tar，它不認得 bsdtar 的參數，備份會失敗——腳本必須寫死
+    `/usr/bin/tar`，不從 PATH 找（xz 改版 spec §6.1）。"""
+    home, _ = _fake_home(tmp_path)
+    called = tmp_path / "path-tar-called"
+    path_tar = _fake_bin(tmp_path, "tar", f'#!/bin/sh\necho "$@" >> {called}\nexit 1\n')
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home, extra_env={"PATH": f"{path_tar}:{os.environ['PATH']}"})
+    assert proc.returncode == 0, proc.stderr
+    assert not called.exists(), "腳本用了 PATH 裡的 tar"
+    assert len(list(out.glob("claude-backup-*.tar.gz"))) == 1
 
 
 def test_publish_never_clobbers_existing_bundle(tmp_path: Path):

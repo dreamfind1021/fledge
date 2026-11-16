@@ -86,6 +86,12 @@ def _fake_bin(tmp_path: Path, name: str, body: str) -> Path:
     return d
 
 
+def _fake_tar(tmp_path: Path, body: str) -> str:
+    """造一個假的 tar，回它的路徑給 `FLEDGE_TAR` 用。腳本寫死 `/usr/bin/tar`、不從 PATH 找，
+    所以假 tar 只能經這個測試接縫換進去。"""
+    return str(_fake_bin(tmp_path, "tar", body) / "tar")
+
+
 # ── 備份包來源必須明確 ────────────────────────────────────────────────────────
 
 
@@ -120,12 +126,12 @@ def test_picks_newest_bundle_from_env_dir(tmp_path: Path):
 # ── 展開的原子性（驗收 #4）────────────────────────────────────────────────────
 
 
-def _dying_tar(tmp_path: Path) -> Path:
+def _dying_tar(tmp_path: Path) -> str:
     """假的 tar：**先在解壓目標裡寫東西再失敗**——模擬壞包／磁碟滿／被中斷這種「已經開始
     解才死」的情境。直接 exit 1 的假 tar 不會產生任何檔案，那樣測到的是假綠：它證明不了
     原子性，只證明了「沒寫就沒有殘骸」。`tar xzf <包> -C <目錄>` → $4 是目標目錄。"""
-    return _fake_bin(
-        tmp_path, "tar",
+    return _fake_tar(
+        tmp_path,
         '#!/bin/sh\ncase "$1" in *x*) mkdir -p "$4" 2>/dev/null;'
         ' echo garbage > "$4/half-extracted" ;; esac\nexit 1\n',
     )
@@ -138,7 +144,7 @@ def test_dest_is_not_created_when_extraction_fails(tmp_path: Path):
     bundle = _make_bundle(tmp_path, home)
     dest = tmp_path / "restored"
     proc = _run([str(bundle), "-o", str(dest)], home,
-                extra_env={"PATH": f"{_dying_tar(tmp_path)}:{os.environ['PATH']}"})
+                extra_env={"FLEDGE_TAR": _dying_tar(tmp_path)})
     assert proc.returncode != 0
     assert not dest.exists()
     # 驗收 #4 要的是「明確說明」：tar 的原文只說解壓失敗，說不出那代表備份包壞了
@@ -150,8 +156,9 @@ def test_no_staging_residue_when_extraction_fails(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     bundle = _make_bundle(tmp_path, home)
     dest = tmp_path / "sub" / "restored"
-    _run([str(bundle), "-o", str(dest)], home,
-         extra_env={"PATH": f"{_dying_tar(tmp_path)}:{os.environ['PATH']}"})
+    proc = _run([str(bundle), "-o", str(dest)], home,
+                extra_env={"FLEDGE_TAR": _dying_tar(tmp_path)})
+    assert proc.returncode != 0, "假 tar 沒有被叫到——這條測的就不是失敗路徑"
     leftovers = [p.name for p in (tmp_path / "sub").iterdir()] if (tmp_path / "sub").exists() else []
     assert leftovers == [], leftovers
 
@@ -536,13 +543,13 @@ def test_publish_refuses_when_dest_appeared_during_extraction(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     bundle = _make_bundle(tmp_path, home)
     dest = tmp_path / "restored"
-    rival = _fake_bin(
-        tmp_path, "tar",
+    rival = _fake_tar(
+        tmp_path,
         '#!/bin/sh\ncase "$1" in *x*) mkdir -p "$RIVAL_DEST";'
         ' echo other > "$RIVAL_DEST/manifest.json" ;; esac\nexec /usr/bin/tar "$@"\n',
     )
     proc = _run([str(bundle), "-o", str(dest)], home,
-                extra_env={"PATH": f"{rival}:{os.environ['PATH']}", "RIVAL_DEST": str(dest)})
+                extra_env={"FLEDGE_TAR": rival, "RIVAL_DEST": str(dest)})
 
     assert proc.returncode != 0
     assert (dest / "manifest.json").read_text(encoding="utf-8").strip() == "other"  # 別人的沒被動
@@ -558,11 +565,12 @@ def test_concurrent_restores_to_the_same_dest(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     bundle = _make_bundle(tmp_path, home)
     dest = tmp_path / "restored"
-    slow_tar = _fake_bin(
-        tmp_path, "tar",
-        '#!/bin/sh\ncase "$1" in *x*) sleep 1 ;; esac\nexec /usr/bin/tar "$@"\n',
+    called = tmp_path / "slow-tar-called"
+    slow_tar = _fake_tar(
+        tmp_path,
+        f'#!/bin/sh\ncase "$1" in *x*) echo x >> {called}; sleep 1 ;; esac\nexec /usr/bin/tar "$@"\n',
     )
-    env = {**os.environ, "HOME": str(home), "PATH": f"{slow_tar}:{os.environ['PATH']}"}
+    env = {**os.environ, "HOME": str(home), "FLEDGE_TAR": slow_tar}
     env.pop("FLEDGE_BACKUP_DIR", None)
     procs = [
         subprocess.Popen(
@@ -580,6 +588,8 @@ def test_concurrent_restores_to_the_same_dest(tmp_path: Path):
     nested = [p.name for p in dest.iterdir() if p.name.startswith(".")]
     assert nested == [], nested
     assert list(tmp_path.glob(".*fledge-restore*")) == []
+    # 假 tar 沒被叫到的話兩個程序根本沒被拖慢，上面那些斷言證明的是「沒有併行」
+    assert called.read_text(encoding="utf-8").count("x") >= 1, "慢 tar 沒有被叫到"
 
 
 # ── 中斷後不留殘骸（真機驗收 B7）──────────────────────────────────────────────
@@ -596,19 +606,22 @@ def test_hangup_during_extraction_leaves_nothing(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     bundle = _make_bundle(tmp_path, home)
     dest = tmp_path / "restored"
-    slow = _fake_bin(
-        tmp_path, "tar",
-        '#!/bin/sh\ncase "$1" in *x*) sleep 3 ;; esac\nexec /usr/bin/tar "$@"\n',
+    called = tmp_path / "slow-tar-called"
+    slow = _fake_tar(
+        tmp_path,
+        f'#!/bin/sh\ncase "$1" in *x*) echo x >> {called}; sleep 3 ;; esac\nexec /usr/bin/tar "$@"\n',
     )
-    env = {**os.environ, "HOME": str(home), "PATH": f"{slow}:{os.environ['PATH']}"}
+    env = {**os.environ, "HOME": str(home), "FLEDGE_TAR": slow}
     env.pop("FLEDGE_BACKUP_DIR", None)
     proc = subprocess.Popen(
         ["/bin/bash", str(SCRIPT), str(bundle), "-o", str(dest)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
     )
-    # 等 staging 建出來、tar 開始跑，再模擬掛斷
+    # 等假 tar **真的被叫到**再模擬掛斷。原本等的是 staging 出現，但 staging 建好到 tar 開始跑
+    # 只差幾毫秒，掛斷幾乎都落在 tar 開始之前——這條測試一直綠，卻沒測到「解壓中掛斷」
+    # （xz 改版 Task 1 加了下面「慢 tar 有沒有被叫到」的斷言才發現）。
     for _ in range(50):
-        if list(tmp_path.glob(".*fledge-restore*")):
+        if called.exists():
             break
         subprocess.run(["sleep", "0.1"], check=False)
     proc.send_signal(signal.SIGHUP)
@@ -617,6 +630,22 @@ def test_hangup_during_extraction_leaves_nothing(tmp_path: Path):
     assert proc.returncode != 0
     assert not dest.exists(), "中斷不得留下半套的展開結果"
     assert list(tmp_path.glob(".*fledge-restore*")) == [], "staging 殘骸沒被清掉"
+    assert called.exists(), "慢 tar 沒有被叫到——掛斷時根本不在解壓中"
+
+
+def test_tar_on_path_is_not_used(tmp_path: Path):
+    """PATH 前面若是 Homebrew 的 GNU tar，行為與錯誤訊息都和 bsdtar 不同——腳本必須寫死
+    `/usr/bin/tar`，不從 PATH 找（xz 改版 spec §6.1）。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    called = tmp_path / "path-tar-called"
+    path_tar = _fake_bin(tmp_path, "tar", f'#!/bin/sh\necho "$@" >> {called}\nexit 1\n')
+    dest = tmp_path / "restored"
+    proc = _run([str(bundle), "-o", str(dest)], home,
+                extra_env={"PATH": f"{path_tar}:{os.environ['PATH']}"})
+    assert proc.returncode == 0, proc.stderr
+    assert not called.exists(), "腳本用了 PATH 裡的 tar"
+    assert (dest / "manifest.json").is_file()
 
 
 def _stale(path: Path) -> Path:

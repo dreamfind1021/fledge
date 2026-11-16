@@ -21,6 +21,13 @@ OUT_DIR="${FLEDGE_BACKUP_DIR:-}"
 CONFIG_JSON="${HOME}/.fledge/config.json"
 LIST_ONLY=false
 
+# 一律用系統內建的 bsdtar，**不從 PATH 找**（xz 改版 spec §6.1）。App 把使用者登入 shell 的
+# PATH 原樣交給 sidecar 與它開的終端機（`src-tauri/src/sidecar.rs`）；PATH 前面若是 Homebrew
+# 的 GNU tar，參數與錯誤訊息都和 bsdtar 不同，而備份包的格式只對 bsdtar 驗證過。
+# `FLEDGE_TAR` 只是**測試接縫**（比照 FLEDGE_MAX_ENTRIES）：測試要換成會失敗／會拖慢的假 tar。
+# 能設環境變數的人本來就能執行任意命令，它不是安全邊界。
+TAR="${FLEDGE_TAR:-/usr/bin/tar}"
+
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) OUT_DIR="$2"; shift 2 ;;
@@ -463,10 +470,10 @@ json.dump({
 }, open(out_path, "w"), indent=2, ensure_ascii=False)
 PY
 
-tar czf "${partial}" -C "${stage}" accounts fledge manifest.json $([ -d "${stage}/extra" ] && echo extra)
+"${TAR}" czf "${partial}" -C "${stage}" accounts fledge manifest.json $([ -d "${stage}/extra" ] && echo extra)
 
 # ── 驗證：讀得回來才算數，通過了才叫得出最終名 ──────────────────────────────
-if ! tar tzf "${partial}" > /dev/null 2>&1; then
+if ! "${TAR}" tzf "${partial}" > /dev/null 2>&1; then
   echo "打包後驗證失敗，刪除半成品：${partial}" >&2
   rm -f "${partial}"
   exit 1
@@ -489,7 +496,7 @@ else
   echo "註：hard link 不可用（${publish_error}），改用 rename 發布。" >&2
   mv "${partial}" "${out}"
 fi
-entries=$(tar tzf "${out}" | wc -l | tr -d ' ')
+entries=$("${TAR}" tzf "${out}" | wc -l | tr -d ' ')
 
 echo
 echo "✅ ${out}"

@@ -21,6 +21,13 @@ BUNDLE=""
 DEST=""
 DIFF_ONLY=false
 
+# 一律用系統內建的 bsdtar，**不從 PATH 找**（xz 改版 spec §6.1）。App 把使用者登入 shell 的
+# PATH 原樣交給 sidecar 與它開的終端機（`src-tauri/src/sidecar.rs`）；PATH 前面若是 Homebrew
+# 的 GNU tar，參數與錯誤訊息都和 bsdtar 不同，而備份包的格式只對 bsdtar 驗證過。
+# `FLEDGE_TAR` 只是**測試接縫**（比照 FLEDGE_MAX_ENTRIES）：測試要換成會失敗／會拖慢的假 tar。
+# 能設環境變數的人本來就能執行任意命令，它不是安全邊界。
+TAR="${FLEDGE_TAR:-/usr/bin/tar}"
+
 while [ $# -gt 0 ]; do
   case "$1" in
     -o) DEST="$2"; shift 2 ;;
@@ -363,7 +370,7 @@ if [ "${DIFF_ONLY}" = false ]; then
   echo "展開 $(basename "${BUNDLE}") → ${DEST}"
   # tar 自己的錯誤（`gzip: stdin: unexpected end of file` 之類）留著給人看，但要在後面補一句
   # 說得出「這代表什麼」的話——驗收要的是「明確說明」，而系統原文只說了「解壓失敗」。
-  if ! tar xzf "${BUNDLE}" -C "${staging}"; then
+  if ! "${TAR}" xzf "${BUNDLE}" -C "${staging}"; then
     echo "備份包解不開，多半是它本身損壞（傳輸中斷、儲存媒介出錯）：${BUNDLE}" >&2
     echo "換一份備份包再試；上面那行是 tar 的原始錯誤。" >&2
     exit 1
