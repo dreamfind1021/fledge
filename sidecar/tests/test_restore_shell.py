@@ -51,7 +51,7 @@ def _make_bundle(tmp_path: Path, home: Path) -> Path:
         capture_output=True, text=True, env=env, timeout=120,
     )
     assert proc.returncode == 0, proc.stderr
-    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    (bundle,) = list(out.glob("claude-backup-*.tar.xz"))
     return bundle
 
 

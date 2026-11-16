@@ -546,9 +546,9 @@ def test_adopt_config_accepts_extra_name_from_the_real_backup_script(
         ["/bin/bash", str(REPO / "scripts" / "backup-claude.sh"), "-o", str(out)],
         capture_output=True, text=True, env=env, timeout=120)
     assert proc.returncode == 0, proc.stderr
-    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    (bundle,) = list(out.glob("claude-backup-*.tar.xz"))
     src = tmp_path / "unpacked"
-    # 展開等同 `restore-claude.sh` 的 `tar -xzf`；那支腳本的展開契約有自己的測試檔，
+    # 展開等同 `restore-claude.sh` 的 `tar xf`；那支腳本的展開契約有自己的測試檔，
     # 這裡要鎖的是「備份腳本產的 manifest 形狀」×「sidecar 的判準」。
     with tarfile.open(bundle) as tf:
         tf.extractall(src, filter="tar")

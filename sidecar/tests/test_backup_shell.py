@@ -129,7 +129,7 @@ def test_glob_matches_are_actually_packed(tmp_path: Path):
     out = tmp_path / "out"
     proc = _run(["-o", str(out)], home)
     assert proc.returncode == 0, proc.stderr
-    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    (bundle,) = list(out.glob("claude-backup-*.tar.xz"))
     listing = subprocess.run(
         ["tar", "tzf", str(bundle)], capture_output=True, text=True, timeout=60
     ).stdout
@@ -160,7 +160,7 @@ def test_ticket17_top_level_dirs_are_classified(tmp_path: Path):
         assert f"收  {d}" in proc.stdout
     assert "收  feedback" not in proc.stdout
     # 列出來不等於真的收進去：驗包裡有資產、沒有草稿佇列
-    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    (bundle,) = list(out.glob("claude-backup-*.tar.xz"))
     listing = subprocess.run(
         ["tar", "tzf", str(bundle)], capture_output=True, text=True, timeout=60
     ).stdout
@@ -188,13 +188,113 @@ def test_ticket52_items_are_classified(tmp_path: Path):
     assert "收  settings.json.bak-20261006" in proc.stdout
     assert "收  settings.json.bak-20261020-bwtext-deny" in proc.stdout
     assert "收  state" not in proc.stdout
-    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    (bundle,) = list(out.glob("claude-backup-*.tar.xz"))
     listing = subprocess.run(
         ["tar", "tzf", str(bundle)], capture_output=True, text=True, timeout=60
     ).stdout
     assert "accounts/default/settings.json.bak-20261006" in listing
     assert "accounts/default/settings.json.bak-20261020-bwtext-deny" in listing
     assert "mcp-discover-verdicts.json" not in listing
+
+
+# ── 寫入端改用 xz 等級 1（xz 改版 spec §6.1、§6.2、§6.6）─────────────────────────
+
+
+def _fixed_date(tmp_path: Path, stamp: str) -> dict:
+    """固定腳本拿到的時間戳：同一分鐘的情境要確定性地造出來，不能靠「剛好沒跨分鐘」。"""
+    fake = _fake_bin(tmp_path, "date", f"#!/bin/sh\necho {stamp}\n")
+    return {"PATH": f"{fake}:{os.environ['PATH']}"}
+
+
+def test_new_bundles_are_xz_at_level_1(tmp_path: Path):
+    """新備份是 `.tar.xz`、壓縮等級 1（使用者定案：882 MB → 425 MB，打包只多約 13 秒）。"""
+    home, _ = _fake_home(tmp_path)
+    seen = tmp_path / "tar-args"
+    tar = _fake_tar(tmp_path, f'#!/bin/sh\necho "$@" >> {seen}\nexec /usr/bin/tar "$@"\n')
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home, extra_env={"FLEDGE_TAR": tar})
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*"))
+    assert bundle.name.endswith(".tar.xz")
+    assert bundle.read_bytes()[:6] == b"\xfd7zXZ\x00"          # 內容真的是 xz，不只是檔名
+    pack = [ln for ln in seen.read_text(encoding="utf-8").splitlines() if ln.startswith("cJf ")]
+    assert len(pack) == 1 and "--options xz:compression-level=1" in pack[0], pack
+    # 驗證與數項目合成一次讀取之後，印出來的項目數仍要等於包裡實際的數目
+    n = len(subprocess.run(["/usr/bin/tar", "tf", str(bundle)], capture_output=True, text=True,
+                           timeout=60).stdout.splitlines())
+    assert f"．{n} 個項目" in proc.stdout, proc.stdout
+
+
+@pytest.mark.parametrize("suffix", [".tar.gz", ".tar.xz"])
+def test_a_same_minute_bundle_of_either_format_blocks_a_new_backup(tmp_path: Path, suffix: str):
+    """同一分鐘已有任一格式的完成包就拒絕開始：不然這次若被強制中止，殘骸的時間戳與那份包
+    相同，「上一次沒跑完」的判斷（嚴格大於）就看不到它。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    existing = out / f"claude-backup-20261116-0900{suffix}"
+    existing.write_bytes(b"old")
+    called = tmp_path / "tar-called"
+    tar = _fake_tar(tmp_path, f'#!/bin/sh\necho "$@" >> {called}\nexec /usr/bin/tar "$@"\n')
+    env = {**_fixed_date(tmp_path, "20261116-0900"), "FLEDGE_TAR": tar}
+    proc = _run(["-o", str(out)], home, extra_env=env)
+    assert proc.returncode != 0
+    assert "已存在" in proc.stderr
+    assert not called.exists(), "應該在開始打包之前就擋下（發布前那一道只是縮小窗口）"
+    assert existing.read_bytes() == b"old"
+    assert sorted(p.name for p in out.iterdir()) == [existing.name]
+
+
+def test_an_old_format_bundle_appearing_during_packing_still_blocks_publish(tmp_path: Path):
+    """發布前再查一次舊格式：開始時沒有、打包期間才出現的同分鐘 gzip 包（另一個還沒更新的
+    舊版腳本），也不能讓它與這次的 xz 包並存。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    rival = out / "claude-backup-20261116-0900.tar.gz"
+    tar = _fake_tar(
+        tmp_path,
+        f'#!/bin/sh\ncase "$1" in cJf) echo rival > "{rival}" ;; esac\nexec /usr/bin/tar "$@"\n',
+    )
+    env = {**_fixed_date(tmp_path, "20261116-0900"), "FLEDGE_TAR": tar}
+    proc = _run(["-o", str(out)], home, extra_env=env)
+    assert proc.returncode != 0
+    assert rival.read_text(encoding="utf-8").strip() == "rival"
+    assert not (out / "claude-backup-20261116-0900.tar.xz").exists()
+    assert list(out.glob(".claude-backup-*.partial")) == []
+
+
+def test_xz_partials_are_reclaimed_with_the_same_strict_naming(tmp_path: Path):
+    """殘骸回收認新格式，而且照樣只刪本腳本自己產生的命名（sidecar 的 `_PARTIAL_RE` 同一組）。
+    舊格式的殘骸照舊回收——改版前被中斷留下的那些。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    ours = [out / ".claude-backup-20200101-0000-12345-678.tar.xz.partial",
+            out / ".claude-backup-20200101-0001-12345-678.tar.gz.partial"]
+    theirs = [out / ".claude-backup-20200101-0000-imported.tar.xz.partial",
+              out / ".claude-backup-20200101-0000-12345-678.tar.bz2.partial"]
+    for f in [*ours, *theirs]:
+        f.write_bytes(b"x")
+        old = os.path.getmtime(f) - 48 * 3600
+        os.utime(f, (old, old))
+    assert _run(["-o", str(out)], home).returncode == 0
+    for f in ours:
+        assert not f.exists(), f"{f.name} 是自己的超齡殘骸，應該被回收"
+    for f in theirs:
+        assert f.exists(), f"{f.name} 不是本腳本產生的格式，不該被刪"
+
+
+def test_bundle_list_at_the_end_shows_both_formats(tmp_path: Path):
+    """結尾的「已有的備份包」新舊兩種一起列；只有其中一種時也不能讓腳本在印完成功後才失敗。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "claude-backup-20200101-0000.tar.gz").write_bytes(b"old")
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    listed = proc.stdout.split("已有的備份包：")[1]
+    assert "claude-backup-20200101-0000.tar.gz" in listed
+    assert ".tar.xz" in listed
 
 
 # ── 刻意不收的子路徑：skills/.trash（xz 改版 spec §6.4）─────────────────────────
@@ -408,7 +508,7 @@ def test_home_with_a_quote_still_backs_up(tmp_path: Path):
     out = tmp_path / "out"
     proc = _run(["-o", str(out)], home)
     assert proc.returncode == 0, proc.stderr
-    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    (bundle,) = list(out.glob("claude-backup-*.tar.xz"))
     listing = subprocess.run(
         ["tar", "tzf", str(bundle)], capture_output=True, text=True, timeout=60
     ).stdout
@@ -491,7 +591,7 @@ def test_backup_succeeds_when_no_extra_paths_exist(tmp_path: Path):
     out = tmp_path / "out"
     proc = _run(["-o", str(out)], home)
     assert proc.returncode == 0, proc.stderr
-    assert list(out.glob("claude-backup-*.tar.gz"))
+    assert list(out.glob("claude-backup-*.tar.xz"))
 
 
 # ── 原子發布與殘骸回收（票 06）──────────────────────────────────────────────
@@ -530,7 +630,7 @@ def test_no_bundle_name_when_tar_fails(tmp_path: Path):
     out = tmp_path / "out"
     proc = _run(["-o", str(out)], home, extra_env={"FLEDGE_TAR": _dying_tar(tmp_path)})
     assert proc.returncode != 0
-    assert list(out.glob("claude-backup-*.tar.gz")) == []
+    assert list(out.glob("claude-backup-*")) == []
 
 
 def test_partial_is_cleaned_when_tar_fails(tmp_path: Path):
@@ -548,7 +648,7 @@ def test_bundle_appears_only_after_verification(tmp_path: Path):
     out = tmp_path / "out"
     proc = _run(["-o", str(out)], home)
     assert proc.returncode == 0, proc.stderr
-    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    (bundle,) = list(out.glob("claude-backup-*.tar.xz"))
     assert subprocess.run(["tar", "tzf", str(bundle)], capture_output=True).returncode == 0
     assert list(out.glob(".claude-backup-*.partial")) == []
 
@@ -609,7 +709,7 @@ def test_no_match_does_not_add_empty_item(tmp_path: Path):
     out = tmp_path / "out"
     proc = _run(["-o", str(out)], home)
     assert proc.returncode == 0, proc.stderr
-    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    (bundle,) = list(out.glob("claude-backup-*.tar.xz"))
     listing = subprocess.run(
         ["tar", "tzf", str(bundle)], capture_output=True, text=True, timeout=60
     ).stdout
@@ -651,7 +751,7 @@ def test_concurrent_runs_do_not_share_partial(tmp_path: Path):
     for p in procs:
         p.wait(timeout=180)
 
-    bundles = list(out.glob("claude-backup-*.tar.gz"))
+    bundles = list(out.glob("claude-backup-*.tar.xz"))
     assert len(bundles) == 1, f"同分鐘併行應只發布一份，實得 {[b.name for b in bundles]}"
     # 發布出來的那份必須完整：被另一個程序寫壞的話這裡會失敗
     assert subprocess.run(["tar", "tzf", str(bundles[0])], capture_output=True).returncode == 0
@@ -679,7 +779,7 @@ def test_partial_name_is_per_process(tmp_path: Path):
     assert len(names) == 2
     assert names[0] != names[1], f"兩次執行拿到同一個 partial：{names}"
     for n in names:
-        assert n.startswith(".claude-backup-") and n.endswith(".tar.gz.partial")
+        assert n.startswith(".claude-backup-") and n.endswith(".tar.xz.partial")
 
 
 def test_tar_on_path_is_not_used(tmp_path: Path):
@@ -693,7 +793,7 @@ def test_tar_on_path_is_not_used(tmp_path: Path):
     proc = _run(["-o", str(out)], home, extra_env={"PATH": f"{path_tar}:{os.environ['PATH']}"})
     assert proc.returncode == 0, proc.stderr
     assert not called.exists(), "腳本用了 PATH 裡的 tar"
-    assert len(list(out.glob("claude-backup-*.tar.gz"))) == 1
+    assert len(list(out.glob("claude-backup-*.tar.xz"))) == 1
 
 
 # ── 還原端會擋的包不發布（xz 改版 spec §6.5、G5）────────────────────────────
@@ -753,7 +853,7 @@ def test_publish_never_clobbers_existing_bundle(tmp_path: Path):
     out.mkdir()
     # 先跑一次拿到真實的檔名，再用它預先佔位
     _run(["-o", str(out)], home)
-    (existing,) = list(out.glob("claude-backup-*.tar.gz"))
+    (existing,) = list(out.glob("claude-backup-*.tar.xz"))
     original = existing.read_bytes()
 
     proc = _run(["-o", str(out)], home)   # 同一分鐘內再跑一次 → 撞同名
@@ -805,7 +905,7 @@ def test_publish_falls_back_when_hard_link_unsupported(tmp_path: Path):
     )
     proc = _run(["-o", str(out)], home, extra_env={"PATH": f"{broken_ln}:{os.environ['PATH']}"})
     assert proc.returncode == 0, proc.stderr
-    assert len(list(out.glob("claude-backup-*.tar.gz"))) == 1
+    assert len(list(out.glob("claude-backup-*.tar.xz"))) == 1
     assert "Operation not supported" in proc.stderr, "退回 rename 時要把真正的原因說出來"
     assert list(out.glob(".claude-backup-*.partial")) == []
 
@@ -820,7 +920,7 @@ def test_publish_still_refuses_to_clobber_when_ln_unsupported(tmp_path: Path):
     )
     env = {"PATH": f"{broken_ln}:{os.environ['PATH']}"}
     _run(["-o", str(out)], home, extra_env=env)
-    (existing,) = list(out.glob("claude-backup-*.tar.gz"))
+    (existing,) = list(out.glob("claude-backup-*.tar.xz"))
     original = existing.read_bytes()
 
     proc = _run(["-o", str(out)], home, extra_env=env)   # 同分鐘再跑一次
@@ -856,7 +956,7 @@ def _pack(tmp_path: Path, home: Path, name: str = "out") -> Path:
     out = tmp_path / f"out-{name}"
     proc = _run(["-o", str(out)], home)
     assert proc.returncode == 0, proc.stderr
-    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    (bundle,) = list(out.glob("claude-backup-*.tar.xz"))
     return bundle
 
 
@@ -1058,7 +1158,7 @@ def test_extra_path_containing_a_tab_keeps_its_name(tmp_path: Path):
     proc = subprocess.run(["/bin/bash", str(script), "-o", str(out)],
                           capture_output=True, text=True, env=env, timeout=120)
     assert proc.returncode == 0, proc.stderr
-    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    (bundle,) = list(out.glob("claude-backup-*.tar.xz"))
     dest = tmp_path / "unpacked"
     with tarfile.open(bundle) as tf:
         tf.extractall(dest, filter="tar")
@@ -1128,7 +1228,7 @@ def test_refuses_when_output_dir_sits_inside_a_symlinked_extra(tmp_path: Path):
     assert "輸出目錄在備份來源裡" in proc.stderr, \
         f"失敗了但沒說原因，使用者不知道該怎麼辦：{proc.stderr[:300]!r}"
     assert ".agents" in proc.stderr, f"沒說是哪一項來源害的：{proc.stderr[:300]!r}"
-    assert list(out.glob("*.tar.gz")) == []
+    assert list(out.glob("*.tar.*")) == []
 
 
 def test_refuses_when_output_dir_is_the_extra_root_itself(tmp_path: Path):
@@ -1388,7 +1488,7 @@ def test_a_blank_source_root_never_matches_everything(tmp_path: Path):
                           capture_output=True, text=True, env=env, timeout=120,
                           cwd=str(tmp_path))
     assert proc.returncode == 0, f"空的來源根把一切都擋掉了：{proc.stderr[:300]!r}"
-    assert list(out.glob("claude-backup-*.tar.gz"))
+    assert list(out.glob("claude-backup-*.tar.xz"))
 
 
 def test_script_and_sidecar_agree_on_containment(tmp_path: Path):
@@ -1447,7 +1547,7 @@ def test_manifest_lists_exactly_what_was_packed(tmp_path: Path):
     proc = _run(["-o", str(out)], home,
                 extra_env={"PATH": f"{fake}:{os.environ['PATH']}"})
     assert proc.returncode == 0, proc.stderr
-    (bundle,) = list(out.glob("claude-backup-*.tar.gz"))
+    (bundle,) = list(out.glob("claude-backup-*.tar.xz"))
     dest = tmp_path / "unpacked"
     with tarfile.open(bundle) as tf:
         tf.extractall(dest, filter="tar")

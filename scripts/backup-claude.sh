@@ -427,7 +427,7 @@ fi
 # ── 打包 ────────────────────────────────────────────────────────────────────
 #
 mkdir -p "${OUT_DIR}"
-out="${OUT_DIR}/claude-backup-${stamp}.tar.gz"
+out="${OUT_DIR}/claude-backup-${stamp}.tar.xz"
 # 驗證通過前寫的名字：前導 `.` 加 `.partial` 後綴，兩重都不符合「完整備份包」的形狀，
 # 所以半成品永遠不會被 UI 當成一次成功的備份（原子發布）。
 #
@@ -437,8 +437,15 @@ out="${OUT_DIR}/claude-backup-${stamp}.tar.gz"
 #
 # 光靠 PID 只在單機成立：輸出目錄若是網路掛載，兩台主機同分鐘拿到相同 PID 並不罕見；
 # PID 也會重用。加一段 $RANDOM 把碰撞機率壓到可忽略。
-partial="${OUT_DIR}/.claude-backup-${stamp}-$$-${RANDOM}.tar.gz.partial"
-[ -e "${out}" ] && { echo "輸出檔已存在，不覆蓋：${out}" >&2; exit 1; }
+partial="${OUT_DIR}/.claude-backup-${stamp}-$$-${RANDOM}.tar.xz.partial"
+# 同一分鐘只能有一份備份包，**不分格式**（xz 改版 spec §6.6）：同分鐘已有舊的 .tar.gz 時照樣
+# 開始的話，這次若被強制中止，殘骸的時間戳與那份 gzip 包相同，而 sidecar 判斷「上一次沒跑完」
+# 用的是嚴格大於，就看不到它了。兩個程序同時啟動、都在完成包出現前通過這裡，是現行 gzip
+# 就有的既有限制，這一道不處理（spec §6.6）。
+same_minute_gz="${OUT_DIR}/claude-backup-${stamp}.tar.gz"
+for f in "${out}" "${same_minute_gz}"; do
+  if [ -e "${f}" ]; then echo "輸出檔已存在，不覆蓋：${f}" >&2; exit 1; fi
+done
 
 # 回收超齡殘骸：SIGKILL、程序崩潰或斷電時下面的 trap 不會執行，殘骸會一直累積，
 # 吃掉的正是要拿來放備份的空間。**嚴格命名 + 24 小時年齡閘**——只刪本腳本自己產生的
@@ -447,10 +454,11 @@ partial="${OUT_DIR}/.claude-backup-${stamp}-$$-${RANDOM}.tar.gz.partial"
 # find 先粗篩，再**逐檔以 regex 覆核 basename**：glob 的 `-*` 會匹配 `-`、`-imported`
 # 這種不是本腳本產生的名字，而 sidecar 的 `_PARTIAL_RE` 只認 `-<數字>-<數字>`。兩邊認定
 # 不一致 = 腳本會刪掉 UI 明確不承認是自己殘骸的檔案，違反「只刪自己建的」。
+# 新舊兩種副檔名都認：改版前被中斷留下的 .tar.gz.partial 一樣是自己的殘骸。
 while IFS= read -r -d '' f; do
-  [[ "$(basename "${f}")" =~ ^\.claude-backup-[0-9]{8}-[0-9]{4}-[0-9]+-[0-9]+\.tar\.gz\.partial$ ]] || continue
+  [[ "$(basename "${f}")" =~ ^\.claude-backup-[0-9]{8}-[0-9]{4}-[0-9]+-[0-9]+\.tar\.(xz|gz)\.partial$ ]] || continue
   rm -f "${f}"
-done < <(find "${OUT_DIR}" -maxdepth 1 -type f -name '.claude-backup-*.tar.gz.partial' \
+done < <(find "${OUT_DIR}" -maxdepth 1 -type f -name '.claude-backup-*.tar.*.partial' \
   -mmin +1440 -print0 2>/dev/null)
 
 # staging 用 APFS clone（同卷零成本、瞬間完成），tar 再打包它。
@@ -550,10 +558,17 @@ json.dump({
 }, open(out_path, "w"), indent=2, ensure_ascii=False)
 PY
 
-"${TAR}" czf "${partial}" -C "${stage}" accounts fledge manifest.json $([ -d "${stage}/extra" ] && echo extra)
+# xz 等級 1（使用者定案，2026-11-16 實測同一份 3654 MB 的內容）：gzip 882 MB／41 秒、xz 等級 1
+# 425 MB／54 秒、等級 3 377 MB／97 秒、等級 6 331 MB／263 秒。等級 1 拿到大部分的好處，打包幾乎
+# 不變慢；再往上每多省幾十 MB 要多等一到三分鐘。macOS 內建的 tar 接受 `xz:threads` 但沒有效果
+# （實測），單核心是既定條件。
+"${TAR}" cJf "${partial}" --options xz:compression-level=1 \
+  -C "${stage}" accounts fledge manifest.json $([ -d "${stage}/extra" ] && echo extra)
 
 # ── 驗證：讀得回來才算數，通過了才叫得出最終名 ──────────────────────────────
-if ! "${TAR}" tzf "${partial}" > /dev/null 2>&1; then
+# 驗證與數項目合成一次讀取：xz 包讀一遍約十幾秒，分兩次讀就多等一次。不帶壓縮旗標，讓
+# bsdtar 自己認格式。
+if ! listing=$("${TAR}" tf "${partial}" 2>/dev/null); then
   echo "打包後驗證失敗，刪除半成品：${partial}" >&2
   rm -f "${partial}"
   exit 1
@@ -574,6 +589,13 @@ fi
 # 一律報成「輸出檔已存在」**——使用者會朝完全錯誤的方向排查，而真正的原因是
 # `Operation not supported`／權限／quota／I/O error。所以依「目標存不存在」分流，
 # 並在退回 rename 時把原始錯誤說出來。
+entries=$(printf '%s\n' "${listing}" | wc -l | tr -d ' ')
+# 開始時沒有、打包期間才出現的同分鐘舊格式包（例如還沒更新的舊版腳本），發布前再查一次——
+# `ln` 的 no-clobber 只管同名的 .tar.xz。這仍是 check-then-act，只縮小窗口（spec §6.6）。
+if [ -e "${same_minute_gz}" ]; then
+  echo "輸出檔已存在（另一個備份可能同分鐘完成），不覆蓋：${same_minute_gz}" >&2
+  exit 1
+fi
 if publish_error=$(ln "${partial}" "${out}" 2>&1); then
   rm -f "${partial}"
 elif [ -e "${out}" ]; then
@@ -584,16 +606,20 @@ else
   echo "註：hard link 不可用（${publish_error}），改用 rename 發布。" >&2
   mv "${partial}" "${out}"
 fi
-entries=$("${TAR}" tzf "${out}" | wc -l | tr -d ' ')
 
 echo
 echo "✅ ${out}"
 echo "   $(du -h "${out}" | cut -f1)．${entries} 個項目"
 echo
 echo "已有的備份包："
-ls -1t "${OUT_DIR}"/claude-backup-*.tar.gz 2>/dev/null | head -10 | while read -r f; do
+# 新舊兩種格式一起列（xz 改版 spec G2）。用 nullglob 陣列，不讓 ls 去碰沒展開的 pattern：
+# 其中一種一份都沒有時 ls 會回非零，在 pipefail＋set -e 之下整支腳本會在印完成功之後才失敗。
+shopt -s nullglob
+all_bundles=("${OUT_DIR}"/claude-backup-*.tar.xz "${OUT_DIR}"/claude-backup-*.tar.gz)
+shopt -u nullglob
+ls -1t "${all_bundles[@]}" | head -10 | while read -r f; do
   echo "   $(du -h "$f" | cut -f1)  $(basename "$f")"
 done
-n=$(ls -1 "${OUT_DIR}"/claude-backup-*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
+n=${#all_bundles[@]}
 [ "${n}" -gt 5 ] && echo "   （共 ${n} 份。本腳本不自動刪除任何備份，要清請自行處理。）"
 exit 0

@@ -2617,7 +2617,7 @@ def test_plan_and_install_agree_on_a_symlinked_extra_from_the_real_backup_script
         capture_output=True, text=True, env=env, timeout=120)
     assert proc.returncode == 0, proc.stderr
     src = tmp_path / "unpacked"
-    with tarfile.open(next(out.glob("claude-backup-*.tar.gz"))) as tf:
+    with tarfile.open(next(out.glob("claude-backup-*.tar.xz"))) as tf:
         tf.extractall(src, filter="tar")
     agents_in_bundle = src / "extra" / ".agents"
     assert not agents_in_bundle.is_symlink() and agents_in_bundle.is_dir(), \
