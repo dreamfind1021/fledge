@@ -5,9 +5,12 @@
 """
 import json
 import os
+import shutil
 import subprocess
 import tarfile
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "backup-claude.sh"
@@ -192,6 +195,206 @@ def test_ticket52_items_are_classified(tmp_path: Path):
     assert "accounts/default/settings.json.bak-20261006" in listing
     assert "accounts/default/settings.json.bak-20261020-bwtext-deny" in listing
     assert "mcp-discover-verdicts.json" not in listing
+
+
+# ── 刻意不收的子路徑：skills/.trash（xz 改版 spec §6.4）─────────────────────────
+
+
+def _trash(skills_dir: Path) -> Path:
+    """在 `<skills_dir>/.trash` 底下造一個刪掉的 skill（2 MiB，大到估算看得出差別）。回它的資料夾。"""
+    t = skills_dir / ".trash" / "1794532752422-5898-0DOxvL" / "old-skill"
+    t.mkdir(parents=True)
+    (t / "SKILL.md").write_bytes(b"T" * (2 << 20))
+    return t
+
+
+def _listing(out: Path) -> list[str]:
+    (bundle,) = list(out.glob("claude-backup-*.tar.*"))
+    return subprocess.run(
+        ["/usr/bin/tar", "tf", str(bundle)], capture_output=True, text=True, timeout=60
+    ).stdout.splitlines()
+
+
+def test_skills_trash_is_not_packed_but_other_skills_are(tmp_path: Path):
+    """刪掉的 skill 不是資產（使用者判定）；同一個 `skills/` 底下的其他東西照收，來源原封不動。"""
+    home, config_dir = _fake_home(tmp_path)
+    t = _trash(config_dir / "skills")
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    listing = _listing(out)
+    assert "accounts/default/skills/demo.md" in listing
+    assert [n for n in listing if ".trash" in n] == []
+    assert (t / "SKILL.md").read_bytes() == b"T" * (2 << 20)
+
+
+def test_scan_estimate_leaves_out_the_trash(tmp_path: Path):
+    """估算要與打包同一條界線：不收的東西不算進「收 skills」那一行。"""
+    home, config_dir = _fake_home(tmp_path)
+    _trash(config_dir / "skills")
+    proc = _run(["--list", "-o", str(tmp_path / "out")], home)
+    assert proc.returncode == 0, proc.stderr
+    line = next(ln for ln in proc.stdout.splitlines() if "收  skills" in ln)
+    assert int(line.split()[-2]) < 1024, line
+
+
+def test_trash_under_the_extra_location_is_not_packed(tmp_path: Path):
+    """帳號外位置（預設 `~/.agents`）是 skill 真身常放的地方——同一條規則（Codex 第 1 輪 F2）。"""
+    home, _ = _fake_home(tmp_path)
+    agents = home / ".agents"
+    (agents / "skills" / "real-skill").mkdir(parents=True)
+    (agents / "skills" / "real-skill" / "SKILL.md").write_text("R", encoding="utf-8")
+    t = _trash(agents / "skills")
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    listing = _listing(out)
+    assert "extra/.agents/skills/real-skill/SKILL.md" in listing
+    assert [n for n in listing if ".trash" in n] == []
+    assert (t / "SKILL.md").exists()
+
+
+def test_extra_root_that_is_a_symlink_still_drops_the_trash(tmp_path: Path):
+    """帳號外位置本身是連結時（extra 的合約是「解最外層一層」），排除套在解參照後的那棵樹上。"""
+    home, _ = _fake_home(tmp_path)
+    real = tmp_path / "elsewhere" / "agents-real"
+    (real / "skills" / "real-skill").mkdir(parents=True)
+    (real / "skills" / "real-skill" / "SKILL.md").write_text("R", encoding="utf-8")
+    t = _trash(real / "skills")
+    (home / ".agents").symlink_to(real)
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    listing = _listing(out)
+    assert "extra/.agents/skills/real-skill/SKILL.md" in listing
+    assert [n for n in listing if ".trash" in n] == []
+    assert (t / "SKILL.md").exists()
+
+
+def test_symlinked_skills_dir_is_kept_as_a_link_and_its_target_untouched(tmp_path: Path):
+    """帳號的 `skills` 本身是連結時照原樣存成連結；從 staging 刪垃圾桶之前要確認 staging 裡的
+    `skills` 是真資料夾——穿過連結去刪，刪到的是連結目標（現役）裡的垃圾桶。"""
+    home, config_dir = _fake_home(tmp_path)
+    shutil.rmtree(config_dir / "skills")
+    target = tmp_path / "skills-elsewhere"
+    (target / "s").mkdir(parents=True)
+    t = _trash(target)
+    (config_dir / "skills").symlink_to(target)
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    listing = _listing(out)
+    assert "accounts/default/skills" in listing
+    assert [n for n in listing if n.startswith("accounts/default/skills/")] == []
+    assert (t / "SKILL.md").is_file(), "從 staging 刪垃圾桶時穿過了連結，刪到連結目標（現役）裡的檔案"
+
+
+@pytest.mark.parametrize("kind", ["link", "file"])
+def test_trash_that_is_a_symlink_or_a_file_is_still_left_out(tmp_path: Path, kind: str):
+    home, config_dir = _fake_home(tmp_path)
+    trash = config_dir / "skills" / ".trash"
+    if kind == "link":
+        trash.symlink_to(tmp_path / "anywhere")
+    else:
+        trash.write_text("not a dir", encoding="utf-8")
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    assert [n for n in _listing(out) if ".trash" in n] == []
+
+
+def test_a_huge_trash_does_not_make_the_backup_fail(tmp_path: Path):
+    """排除垃圾桶不能反過來害備份失敗：垃圾桶本身大小與項目數都超過門檻，有效資產仍要備份
+    成功、還原得回來（Codex 第 2 輪：staging、打包內容、判準量測必須是同一棵樹——垃圾桶要在
+    量測之前從 staging 刪掉）。"""
+    home, config_dir = _fake_home(tmp_path)
+    t = config_dir / "skills" / ".trash" / "x"
+    t.mkdir(parents=True)
+    (t / "zeros.bin").write_bytes(b"\0" * (12 << 20))     # 單獨打包會超過 100 倍
+    for i in range(60):
+        (t / f"f{i}").write_text("x", encoding="utf-8")     # 超過下面設的 50 個上限
+    env = {"FLEDGE_MAX_ENTRIES": "50"}
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home, extra_env=env)
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.*"))
+    restore = subprocess.run(
+        ["/bin/bash", str(REPO / "scripts" / "restore-claude.sh"), str(bundle), "-o", str(tmp_path / "unpacked")],
+        capture_output=True, text=True, env={**os.environ, "HOME": str(home), **env}, timeout=120,
+    )
+    assert restore.returncode == 0, restore.stderr
+
+
+def test_symlink_inside_the_trash_raises_no_warning(tmp_path: Path):
+    """不收的東西不該觸發「連結指向備份範圍外」的警告——那是在警告一條根本不會收的連結。"""
+    home, config_dir = _fake_home(tmp_path)
+    (config_dir / "skills" / ".trash").mkdir()
+    (config_dir / "skills" / ".trash" / "old").symlink_to(tmp_path / "outside-target")
+    proc = _run(["--list", "-o", str(tmp_path / "out")], home)
+    assert proc.returncode == 0, proc.stderr
+    assert "連結指向備份範圍外" not in proc.stdout
+
+
+@pytest.mark.parametrize("where", ["skills", "extra"])
+def test_an_unreadable_directory_fails_the_backup_instead_of_packing_it_empty(tmp_path: Path, where: str):
+    """列不出內容的目錄不能被當成空目錄（Codex plan 第 1、2 輪）：整項 `cp -R` 讀不到就失敗、
+    備份跟著失敗；不能變成「備份成功卻少了整個目錄」。"""
+    home, config_dir = _fake_home(tmp_path)
+    if where == "skills":
+        target = config_dir / "skills"
+    else:
+        target = home / ".agents"
+        (target / "skills").mkdir(parents=True)
+    out = tmp_path / "out"
+    target.chmod(0)
+    try:
+        proc = _run(["-o", str(out)], home)
+    finally:
+        target.chmod(0o755)          # 不還原的話 pytest 清不掉 tmp_path
+    assert proc.returncode != 0, proc.stdout
+    assert "Permission denied" in proc.stderr
+    assert list(out.glob("claude-backup-*")) == []
+
+
+def test_an_empty_skills_dir_is_still_packed(tmp_path: Path):
+    """真的空的目錄照常備份——「列不出」才是錯，「沒東西」不是。"""
+    home, config_dir = _fake_home(tmp_path)
+    (config_dir / "skills" / "demo.md").unlink()
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    assert "accounts/default/skills/" in _listing(out)
+
+
+def test_names_ending_in_a_newline_are_not_mistaken_for_excluded(tmp_path: Path):
+    """只排除確切的 `skills/.trash`：名字是「.trash＋換行」或「skills＋換行」的東西照收
+    （Codex plan 第 1 輪：命令替換會吃掉尾端換行；用萬用字元比對也會多刪）。"""
+    home, config_dir = _fake_home(tmp_path)
+    odd = config_dir / "skills" / ".trash\n"
+    odd.mkdir()
+    (odd / "keep.md").write_text("K", encoding="utf-8")
+    agents_odd = home / ".agents" / "skills\n" / ".trash"
+    agents_odd.mkdir(parents=True)
+    (agents_odd / "keep2.md").write_text("K2", encoding="utf-8")
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.*"))
+    with tarfile.open(bundle) as tf:
+        names = tf.getnames()
+    assert "accounts/default/skills/.trash\n/keep.md" in names
+    assert "extra/.agents/skills\n/.trash/keep2.md" in names
+
+
+def test_manifest_records_the_excluded_paths(tmp_path: Path):
+    """manifest 記下這一包刻意不收什麼，還原端的差異報告依它過濾、不另寫一份清單。"""
+    home, _ = _fake_home(tmp_path)
+    out = tmp_path / "out"
+    assert _run(["-o", str(out)], home).returncode == 0
+    (bundle,) = list(out.glob("claude-backup-*.tar.*"))
+    raw = subprocess.run(["/usr/bin/tar", "-xOf", str(bundle), "manifest.json"],
+                         capture_output=True, timeout=60).stdout
+    assert json.loads(raw)["excluded"] == ["skills/.trash"]
 
 
 # ── HOME 含特殊字元（票 11）──────────────────────────────────────────────────

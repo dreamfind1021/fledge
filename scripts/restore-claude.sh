@@ -475,6 +475,19 @@ def safe_keys(mapping, label, account_style):
     return out
 
 
+# 備份端刻意不收的子路徑（manifest 的 `excluded`，xz 改版 spec §6.4）。現役那邊當然還在，
+# 不過濾的話每次還原都會把垃圾桶裡的檔案列成「備份後新增」。**它也是不可信輸入**，但只用來
+# 從「只在現役有」裡**拿掉**項目——最壞是報告少列幾項，不會讓比對走出展開目錄或掃到別處。
+# 形狀不對就當沒有（舊包本來就沒有這一欄），不能在發布之後炸 traceback。
+_raw_excluded = m.get("excluded")
+EXCLUDED = [x for x in (_raw_excluded if isinstance(_raw_excluded, list) else [])
+            if isinstance(x, str) and x and not x.startswith("/") and ".." not in x.split("/")]
+
+
+def is_excluded(rel):
+    return any(rel == x or rel.startswith(x + "/") for x in EXCLUDED)
+
+
 # **只取 manifest 的 key**，位置一律從本機 config 查（理由見 `local_live_paths`）。
 targets = [(k, LIVE_ACCOUNTS.get(k), os.path.join(dest, "accounts", k))
            for k in safe_keys(m.get("accounts", {}), "帳號", account_style=True)]
@@ -498,7 +511,8 @@ for key, live, backed in targets:
     only_b = sorted(set(b) - set(l))
     only_l = sorted(k for k in set(l) - set(b)
                     # 現役多出來的，若是我們本來就不收的項目，不算差異
-                    if k.split(os.sep)[0] in {x.split(os.sep)[0] for x in b})
+                    if k.split(os.sep)[0] in {x.split(os.sep)[0] for x in b}
+                    and not is_excluded(k))
     differ = sorted(k for k in set(b) & set(l) if b[k] != l[k])
 
     print(f"\n[{key}] {live}")     # 印**本機**的位置（被比對的那一個），不是 manifest 的舊路徑

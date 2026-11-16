@@ -1080,6 +1080,48 @@ def test_gzip_bundle_between_100_and_200_times_is_now_refused(tmp_path: Path):
     assert not dest.exists()
 
 
+def test_diff_does_not_report_the_live_trash_as_new(tmp_path: Path):
+    """備份端刻意不收 `skills/.trash`，現役那邊當然還在——差異報告不能把它列成「備份後新增」，
+    否則每次還原都看到一堆垃圾桶裡的檔案（xz 改版 spec §6.4）。真的新增的照樣要列。"""
+    home, config_dir = _fake_home(tmp_path)
+    (config_dir / "skills" / ".trash" / "old").mkdir(parents=True)
+    (config_dir / "skills" / ".trash" / "old" / "SKILL.md").write_text("T", encoding="utf-8")
+    bundle = _make_bundle(tmp_path, home)
+    (config_dir / "skills" / "added-later.md").write_text("N", encoding="utf-8")
+
+    proc = _run([str(bundle), "-o", str(tmp_path / "restored")], home)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "skills/added-later.md" in proc.stdout          # 對照組：真的新增的照列
+    assert ".trash" not in proc.stdout
+    assert "只在現役 1．" in proc.stdout
+
+
+def test_a_malformed_excluded_field_is_ignored_not_fatal(tmp_path: Path):
+    """`excluded` 也是不可信輸入：形狀不對就當沒有，不能讓差異報告在發布後炸 traceback。"""
+    import io
+    import tarfile
+
+    home, config_dir = _fake_home(tmp_path)
+    d = tmp_path / "odd"
+    d.mkdir()
+    bundle = d / "claude-backup-20260101-1200.tar.gz"
+    manifest = json.dumps({"created": "x", "accounts": {"default": str(config_dir)},
+                           "excluded": 42}).encode()
+    with tarfile.open(bundle, "w:gz") as tf:
+        ti = tarfile.TarInfo("manifest.json")
+        ti.size = len(manifest)
+        tf.addfile(ti, io.BytesIO(manifest))
+        ti = tarfile.TarInfo("accounts/default/skills/demo.md")
+        ti.size = 4
+        tf.addfile(ti, io.BytesIO(b"live"))
+
+    proc = _run([str(bundle), "-o", str(tmp_path / "restored")], home)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
 def test_manifest_cannot_point_the_diff_at_an_arbitrary_local_directory(tmp_path: Path):
     """**manifest 的 accounts／extra value 是不可信輸入**：差異報告原本直接拿它當「現役側」
     去 `expanduser` + 遞迴 `snapshot`，於是一份惡意包可以指定掃描本機任意目錄，並把檔名

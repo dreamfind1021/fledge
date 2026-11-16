@@ -95,6 +95,13 @@ KNOWN_SKIP=(
   feedback state
 )
 
+# 被備份的根目錄底下刻意不收的子路徑——相對於**每一個**根：帳號的 config_dir，以及帳號外位置
+# （`backup-extra-paths.txt`，預設 `~/.agents`，skill 真身常放那裡）。`skills/.trash` 是刪掉的
+# skill 放的垃圾桶：刪掉的東西不是資產（使用者判定，xz 改版 spec §6.4）。
+# **只在這裡定義一次**：掃描估算、symlink 警告、從 staging 刪除都讀它；manifest 照抄一份給
+# 還原端的差異報告用，還原端不另寫清單。每一項都要有父路徑（`a/b` 的形狀）。
+EXCLUDE_PATHS=(skills/.trash)
+
 # 帳號目錄之外的資產。清單放在共用檔而非寫死在這裡：sidecar 的 containment 防呆要讀
 # 同一份（它決定備份輸出目錄不得落在哪些目錄裡），各存一份就會漂移——只改 bash 的話，
 # 新來源會被打包但 containment 不知道它，使用者就能把備份設進那個來源裡。
@@ -131,6 +138,58 @@ expand_home() { case "$1" in "~/"*) echo "${HOME}/${1#\~/}" ;; "~") echo "${HOME
 # 插值進去會變成 SyntaxError）。空字串會被正規化成 CWD，呼叫端必須先擋掉。
 resolve_path() {
   python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+}
+
+# 相對路徑是不是 EXCLUDE_PATHS 之一、或落在其中之一底下（symlink 警告用）。
+# case 的 pattern 加引號＝字面比對（路徑裡的 `*`、`[` 不會被當萬用字元），只有結尾的 `/*` 是 glob。
+is_excluded() {
+  local rel="$1" ex
+  for ex in "${EXCLUDE_PATHS[@]}"; do
+    case "${rel}" in "${ex}"|"${ex}"/*) return 0 ;; esac
+  done
+  return 1
+}
+
+# `<根>/<排除路徑>` 除了最後一段以外，每一段都是真資料夾（不是 symlink）才回 0。
+# 從 staging 刪除前一定要過這一關：`cp -R` 把 symlink 存成 symlink，帳號的 `skills` 若是指向
+# 現役目錄的連結，`staging/.../skills/.trash` 就在連結目標裡，刪下去刪到的是現役檔案。
+# 最後一段（`.trash` 本身）是連結或一般檔沒關係——`rm -rf` 刪的是它本身，不跟隨。
+parents_are_real_dirs() {
+  local cur="$1" part
+  local -a parts
+  IFS=/ read -r -a parts <<< "${2%/*}"
+  for part in "${parts[@]}"; do
+    cur="${cur}/${part}"
+    [ -d "${cur}" ] && [ ! -L "${cur}" ] || return 1
+  done
+}
+
+# 從 staging 的某個根（`accounts/<key>` 或 `extra/<名稱>`）刪掉 EXCLUDE_PATHS（xz 改版 spec §6.4）。
+# **照舊整項 `cp -Rc` 再刪**，不在複製時逐項跳過：逐項列舉要自己把「列不出來」傳成失敗，
+# 做錯就是「備份成功卻少了整個目錄」（plan 審查連兩輪打在這裡）；整項複製把這件事交給
+# `cp`，讀不到就失敗，跟改版前一樣。刪除排在量測與打包之前，staging、包的內容、展開量判準
+# 三者是同一棵樹。
+drop_excluded() {
+  local root="$1" ex
+  for ex in "${EXCLUDE_PATHS[@]}"; do
+    if parents_are_real_dirs "${root}" "${ex}"; then rm -rf "${root:?}/${ex}"; fi
+  done
+}
+
+# 掃描估算要與打包同一條界線：`<根>` 底下、落在 `<項目>/` 之下（項目給空字串＝整個根）的
+# 排除路徑，會被刪掉的那些的大小（KB）。判斷用的是同一個 parents_are_real_dirs，只是對象是來源。
+excluded_kb() {
+  local root="$1" item="$2" ex kb total=0
+  for ex in "${EXCLUDE_PATHS[@]}"; do
+    if [ -n "${item}" ]; then
+      case "${ex}" in "${item}"/*) ;; *) continue ;; esac
+    fi
+    if parents_are_real_dirs "${root}" "${ex}" && { [ -e "${root}/${ex}" ] || [ -L "${root}/${ex}" ]; }; then
+      kb=$(du -sk "${root}/${ex}" 2>/dev/null | cut -f1 || echo 0)
+      total=$((total + kb))
+    fi
+  done
+  echo "${total}"
 }
 
 # ── 帳號清單 ────────────────────────────────────────────────────────────────
@@ -265,6 +324,7 @@ while IFS=$'\t' read -r key raw_dir; do
   for item in "${ASSET_DIRS[@]}" "${ASSET_FILES[@]}" ${matched[@]+"${matched[@]}"}; do
     [ -e "${dir}/${item}" ] || continue
     kb=$(du -sk "${dir}/${item}" 2>/dev/null | cut -f1 || echo 0)
+    kb=$((kb - $(excluded_kb "${dir}" "${item}")))     # 與打包同一條界線：不收的不算
     total_kb=$((total_kb + kb))
     plan_lines+=("$(printf '      收  %-16s %8s KB' "${item}" "${kb}")")
   done
@@ -275,6 +335,7 @@ while IFS=$'\t' read -r key raw_dir; do
     [ -d "${dir}/${item}" ] || continue
     while IFS= read -r link; do
       [ -n "${link}" ] || continue
+      is_excluded "${link#"${dir}/"}" && continue   # 不收的東西不警告（xz 改版 spec §6.4）
       target=$(cd "$(dirname "${link}")" && cd "$(dirname "$(readlink "${link}")")" 2>/dev/null && pwd)/$(basename "$(readlink "${link}")")
       case "${target}" in
         "${dir}"/*) ;;   # 指回自己帳號內，內容會一起被收
@@ -329,6 +390,7 @@ for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   # 不收那些——實測 5100 KB 對實收 100 KB。修掉「最外層算成 0」時很容易順手用 `-L`，
   # 那只是把一個「一邊有一邊沒有」換成另一個。
   kb=$(du -sk "${real}" 2>/dev/null | cut -f1 || echo 0)
+  kb=$((kb - $(excluded_kb "${real}" "")))
   total_kb=$((total_kb + kb))
   plan_lines+=("$(printf '  [帳號外] %-24s %8s KB' "${extra}" "${kb}")")
   # 收的東西與清單上寫的路徑不是同一個位置時，備份前就要看得到
@@ -415,6 +477,7 @@ while IFS=$'\t' read -r key raw_dir; do
     cp -Rc "${dir}/${item}" "${stage}/accounts/${key}/" 2>/dev/null \
       || cp -R "${dir}/${item}" "${stage}/accounts/${key}/"
   done
+  drop_excluded "${stage}/accounts/${key}"
 done <<< "${accounts}"
 
 # extra 的合約：**解一層參照後的真實目錄樹**。
@@ -441,6 +504,7 @@ for extra in ${EXTRA_PATHS[@]+"${EXTRA_PATHS[@]}"}; do
   mkdir -p "${stage}/extra/${name}"
   cp -Rc "${p}/." "${stage}/extra/${name}/" 2>/dev/null \
     || cp -R "${p}/." "${stage}/extra/${name}/"
+  drop_excluded "${stage}/extra/${name}"     # 帳號外同一條規則
   # manifest 只從這份清單產生，不重新探測來源（見下方 manifest 段的理由）。
   # 名字與路徑**交錯存放**，不用分隔字元串接——理由同 extra_roots。
   packed_extra+=("${name}" "${p}")
@@ -462,11 +526,14 @@ cp "${CONFIG_JSON}" "${stage}/fledge/config.json"
 # 名字與路徑**逐項走 argv**（交錯：name path name path…），不串成一份文字再解析：
 # 兩者都是不受限的檔案系統字串，用 tab 串再切會被路徑自己的 tab 帶偏，用換行分行則會被
 # `splitlines()` 截斷——兩種字元在 Unix 路徑裡都合法。argv 沒有這個問題。
-python3 - "${stage}/manifest.json" "${stamp}" ${packed_extra[@]+"${packed_extra[@]}"} <<'PY'
+python3 - "${stage}/manifest.json" "${stamp}" "${#EXCLUDE_PATHS[@]}" "${EXCLUDE_PATHS[@]}" \
+  ${packed_extra[@]+"${packed_extra[@]}"} <<'PY'
 import json, os, sys, platform
 out_path, stamp = sys.argv[1], sys.argv[2]
 cfg = json.load(open(os.path.expanduser("~/.fledge/config.json")))
-extra = dict(zip(sys.argv[3::2], sys.argv[4::2]))
+n_excluded = int(sys.argv[3])
+excluded = sys.argv[4:4 + n_excluded]
+extra = dict(zip(sys.argv[4 + n_excluded::2], sys.argv[5 + n_excluded::2]))
 json.dump({
     "format": 1,
     "created": stamp,
@@ -477,6 +544,9 @@ json.dump({
     # 帳號目錄之外的資產（skill 真身可能放這裡，再從 skills/ symlink 過去）
     "extra": extra,
     "excludes_credentials": True,
+    # 刻意不收的子路徑（相對於每個帳號目錄與帳號外位置）。還原端的差異報告依它過濾，
+    # 不另寫一份清單；舊包沒有這一欄＝沒有排除任何東西（xz 改版 spec §6.4）。
+    "excluded": excluded,
 }, open(out_path, "w"), indent=2, ensure_ascii=False)
 PY
 
