@@ -72,6 +72,22 @@ def test_default_dest_is_derived_from_the_bundle_stamp(tmp_path: Path, monkeypat
     )
 
 
+def test_default_dest_strips_the_xz_suffix_too(tmp_path: Path, monkeypatch):
+    """新格式的包推出的展開目錄名，與舊格式一樣只帶時間戳。"""
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert restore.default_dest("claude-backup-20261116-0900.tar.xz") == str(
+        Path(tmp_path / "home") / ".claude-restore-20261116-0900"
+    )
+
+
+def test_bundle_path_resolves_a_listed_xz_bundle(tmp_path: Path):
+    d = _backup_dir(tmp_path)
+    (d / "claude-backup-20261116-0900.tar.xz").write_bytes(b"x")
+    assert restore.bundle_path(str(d), "claude-backup-20261116-0900.tar.xz") == str(
+        d / "claude-backup-20261116-0900.tar.xz"
+    )
+
+
 # ── 展開位置防呆（驗收 #3）────────────────────────────────────────────────────
 
 
@@ -311,6 +327,15 @@ def test_dest_for_bundle_path_derives_from_a_conforming_filename(tmp_path: Path,
     bundle.write_bytes(b"x")
     assert restore.dest_for_bundle_path(None, str(bundle)) == str(
         Path(tmp_path / "home") / ".claude-restore-20260101-1200"
+    )
+
+
+def test_dest_for_bundle_path_derives_from_an_xz_filename(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    bundle = tmp_path / "claude-backup-20261116-0900.tar.xz"
+    bundle.write_bytes(b"x")
+    assert restore.dest_for_bundle_path(None, str(bundle)) == str(
+        Path(tmp_path / "home") / ".claude-restore-20261116-0900"
     )
 
 

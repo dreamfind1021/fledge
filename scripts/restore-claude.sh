@@ -7,11 +7,11 @@
 # 資料」的風險。
 #
 # 用法：
-#   scripts/restore-claude.sh <備份包.tar.gz>        # 指定備份包
+#   scripts/restore-claude.sh <備份包>               # 指定備份包（.tar.xz 或舊的 .tar.gz）
 #   scripts/restore-claude.sh -o <展開目錄> ...      # 指定展開位置
 #   scripts/restore-claude.sh --diff-only -o <目錄>  # 只比差異，不展開（用既有的展開目錄）
 #
-# 備份包來源：直接給 .tar.gz 路徑，或設 FLEDGE_BACKUP_DIR 用該目錄裡最新的一份。
+# 備份包來源：直接給備份包路徑，或設 FLEDGE_BACKUP_DIR 用該目錄裡最新的一份（兩種格式都算）。
 # 兩者都沒有就報錯——不預設任何路徑（寫死的預設值只對某一台機器有意義）。
 
 set -euo pipefail
@@ -40,15 +40,18 @@ done
 # --diff-only 不需要備份包（它讀既有展開目錄裡的 manifest），其餘情況都要。
 if [ -z "${BUNDLE}" ] && [ "${DIFF_ONLY}" = false ]; then
   [ -n "${BACKUP_DIR}" ] || {
-    echo "未指定備份包。給一個 .tar.gz 路徑，或設定 FLEDGE_BACKUP_DIR。" >&2; exit 1; }
-  BUNDLE=$(ls -1t "${BACKUP_DIR}"/claude-backup-*.tar.gz 2>/dev/null | head -1 || true)
+    echo "未指定備份包。給一個備份包（.tar.xz 或 .tar.gz）路徑，或設定 FLEDGE_BACKUP_DIR。" >&2; exit 1; }
+  # 新舊兩種格式一起比 mtime（xz 改版 spec G2）。其中一種一份都沒有時，ls 對那個沒展開的
+  # pattern 報錯並回非零——錯誤訊息丟掉、`|| true` 接住，另一種照樣列出來。
+  BUNDLE=$(ls -1t "${BACKUP_DIR}"/claude-backup-*.tar.xz "${BACKUP_DIR}"/claude-backup-*.tar.gz \
+    2>/dev/null | head -1 || true)
   [ -n "${BUNDLE}" ] || { echo "在 ${BACKUP_DIR} 找不到任何備份包。" >&2; exit 1; }
 fi
 if [ "${DIFF_ONLY}" = false ]; then
   [ -f "${BUNDLE}" ] || { echo "找不到備份包：${BUNDLE}" >&2; exit 1; }
 fi
 
-DEST="${DEST:-${HOME}/.claude-restore-$(basename "${BUNDLE}" .tar.gz | sed 's/^claude-backup-//')}"
+DEST="${DEST:-${HOME}/.claude-restore-$(basename "${BUNDLE}" | sed -E -e 's/^claude-backup-//' -e 's/\.tar\.(xz|gz)$//')}"
 
 # ── 展開量的防呆（票 12）──────────────────────────────────────────────────────
 # tar bomb：壓縮後幾 KB、展開後爆量。判準用**壓縮比**而不是絕對大小——後者會誤擋「真的
@@ -370,7 +373,8 @@ if [ "${DIFF_ONLY}" = false ]; then
   echo "展開 $(basename "${BUNDLE}") → ${DEST}"
   # tar 自己的錯誤（`gzip: stdin: unexpected end of file` 之類）留著給人看，但要在後面補一句
   # 說得出「這代表什麼」的話——驗收要的是「明確說明」，而系統原文只說了「解壓失敗」。
-  if ! "${TAR}" xzf "${BUNDLE}" -C "${staging}"; then
+  # 不帶壓縮旗標，讓 bsdtar 自己認格式：新的 xz 與舊的 gzip 都走這一行。
+  if ! "${TAR}" xf "${BUNDLE}" -C "${staging}"; then
     echo "備份包解不開，多半是它本身損壞（傳輸中斷、儲存媒介出錯）：${BUNDLE}" >&2
     echo "換一份備份包再試；上面那行是 tar 的原始錯誤。" >&2
     exit 1

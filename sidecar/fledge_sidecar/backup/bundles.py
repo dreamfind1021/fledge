@@ -1,6 +1,6 @@
 """備份包清單（純函式）。
 
-**只認 `claude-backup-YYYYMMDD-HHMM.tar.gz` 這個確切形狀。** 半成品被顯示成一次成功的
+**只認 `claude-backup-YYYYMMDD-HHMM` 加 `BUNDLE_SUFFIXES` 之一這個確切形狀。** 半成品被顯示成一次成功的
 備份，是這張卡最危險的失敗模式——使用者會看到「0 天前」配正常色，而那次其實沒跑完。
 掃描端因此嚴格比對；寫入端保證最終檔名只在驗證通過後才出現（見備份執行票）。
 
@@ -13,12 +13,18 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
-_BUNDLE_RE = re.compile(r"^claude-backup-(\d{8})-(\d{4})\.tar\.gz$")
-# 腳本在驗證通過前寫的名字：`.claude-backup-<stamp>-<pid>-<rand>.tar.gz.partial`。前導 `.` 與
+# 認得的備份包副檔名，新的在前。**sidecar 端檔名判準的唯一來源**：下面兩個 regex 與
+# `restore.default_dest` 都從這裡取，副檔名清單不另寫第二份。舊的 `.tar.gz` 要一直認得——
+# 使用者手上的舊備份包還要能還原與移機（xz 改版 spec G2）。
+BUNDLE_SUFFIXES = (".tar.xz", ".tar.gz")
+_SUFFIX_RE = "|".join(re.escape(s) for s in BUNDLE_SUFFIXES)
+
+_BUNDLE_RE = re.compile(rf"^claude-backup-(\d{{8}})-(\d{{4}})(?:{_SUFFIX_RE})$")
+# 腳本在驗證通過前寫的名字：`.claude-backup-<stamp>-<pid>-<rand><副檔名>.partial`。前導 `.` 與
 # `.partial` 後綴兩重都不符合 _BUNDLE_RE，所以半成品永遠不會被當成一次成功的備份。
 # PID 與隨機段是為了讓同分鐘啟動的兩個備份不共用同一個檔案——光靠 PID 只在單機成立
 # （網路掛載上兩台主機可能同分鐘拿到相同 PID）。腳本的回收邏輯用同一組認定。
-_PARTIAL_RE = re.compile(r"^\.claude-backup-(\d{8})-(\d{4})-\d+-\d+\.tar\.gz\.partial$")
+_PARTIAL_RE = re.compile(rf"^\.claude-backup-(\d{{8}})-(\d{{4}})-\d+-\d+(?:{_SUFFIX_RE})\.partial$")
 
 
 @dataclass(frozen=True)

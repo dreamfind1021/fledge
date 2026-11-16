@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from fledge_sidecar.backup.bundles import days_since, last_attempt_failed, list_bundles
+from fledge_sidecar.backup.bundles import days_since, is_bundle_name, last_attempt_failed, list_bundles
 
 
 def _touch(d: Path, name: str, size: int = 10) -> None:
@@ -61,6 +61,29 @@ def test_missing_directory_returns_empty(tmp_path: Path):
     assert list_bundles(str(tmp_path / "nope")) == []
 
 
+# ── 新舊兩種格式（xz 改版）──────────────────────────────────────────────────────
+
+
+def test_xz_and_gz_bundles_are_both_listed(tmp_path: Path):
+    """新備份是 `.tar.xz`；舊的 `.tar.gz` 也要照樣列出來——使用者手上的舊包還要能還原與移機。"""
+    _touch(tmp_path, "claude-backup-20260727-1432.tar.gz")
+    _touch(tmp_path, "claude-backup-20261116-0900.tar.xz")
+    assert [b.name for b in list_bundles(str(tmp_path))] == [
+        "claude-backup-20261116-0900.tar.xz",
+        "claude-backup-20260727-1432.tar.gz",
+    ]
+
+
+def test_only_the_two_known_suffixes_are_bundles(tmp_path: Path):
+    """認的是 `.tar.xz` 與 `.tar.gz` 兩種，不是「任何 tar 開頭的東西」。"""
+    for name in ("claude-backup-20261116-0900.tar.bz2", "claude-backup-20261116-0900.tgz",
+                 "claude-backup-20261116-0900.tar.zst", "claude-backup-20261116-0900.xz"):
+        _touch(tmp_path, name)
+    assert list_bundles(str(tmp_path)) == []
+    assert is_bundle_name("claude-backup-20261116-0900.tar.xz") is True
+    assert is_bundle_name("claude-backup-20261116-0900.tar.bz2") is False
+
+
 # ── 天數 ──────────────────────────────────────────────────────────────────────
 
 
@@ -105,6 +128,13 @@ def test_last_attempt_failed_with_no_bundles_at_all(tmp_path: Path):
     """從未成功過但有殘骸：仍要算失敗。"""
     _touch(tmp_path, ".claude-backup-20260729-0900-12345-678.tar.gz.partial")
     assert last_attempt_failed(str(tmp_path), []) is True
+
+
+def test_xz_partial_newer_than_bundle_means_last_attempt_failed(tmp_path: Path):
+    """新格式的殘骸也要認得——否則改版後第一次被中斷的備份，卡片會照樣顯示上一次的成功。"""
+    _touch(tmp_path, "claude-backup-20260727-1432.tar.gz")
+    _touch(tmp_path, ".claude-backup-20261116-0900-12345-678.tar.xz.partial")
+    assert last_attempt_failed(str(tmp_path), list_bundles(str(tmp_path))) is True
 
 
 def test_no_partial_means_no_failure(tmp_path: Path):

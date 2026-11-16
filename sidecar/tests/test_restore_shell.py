@@ -9,6 +9,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "restore-claude.sh"
 BACKUP_SCRIPT = REPO / "scripts" / "backup-claude.sh"
@@ -113,6 +115,45 @@ def test_fails_without_bundle_or_backup_dir(tmp_path: Path):
     assert proc.stderr.strip() != ""
 
 
+def _recompress(bundle: Path, dest_dir: Path, suffix: str) -> Path:
+    """把真的備份腳本產的包原封不動改壓成指定格式（bsdtar 的 `@<封存檔>` 逐項複製成員），
+    檔名照備份包規則換副檔名。用來造「新舊兩種格式」的包，不依賴備份腳本當下寫哪一種。"""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    stem = bundle.name.removesuffix(".tar.gz").removesuffix(".tar.xz")
+    out = dest_dir / f"{stem}{suffix}"
+    flag = {".tar.xz": "-cJf", ".tar.gz": "-czf"}[suffix]
+    subprocess.run(["/usr/bin/tar", flag, str(out), f"@{bundle}"], check=True, timeout=120)
+    return out
+
+
+@pytest.mark.parametrize("newer", [".tar.xz", ".tar.gz"])
+def test_picks_newest_bundle_across_both_formats(tmp_path: Path, newer: str):
+    """沒指定備份包時取備份目錄裡最新的一份——新舊兩種格式都要列入比較（xz 改版 spec G2）。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    d = tmp_path / "mixed"
+    older = ".tar.gz" if newer == ".tar.xz" else ".tar.xz"
+    old_path = _recompress(bundle, d, older)
+    new_path = _recompress(bundle, d, newer)
+    os.utime(old_path, (1, 1))
+    dest = tmp_path / "restored"
+    proc = _run(["-o", str(dest)], home, extra_env={"FLEDGE_BACKUP_DIR": str(d)})
+    assert proc.returncode == 0, proc.stderr
+    assert f"展開 {new_path.name} →" in proc.stdout
+    assert (dest / "manifest.json").is_file()
+
+
+@pytest.mark.parametrize("suffix", [".tar.xz", ".tar.gz"])
+def test_default_dest_name_carries_only_the_stamp(tmp_path: Path, suffix: str):
+    """沒給 `-o` 時展開到 `~/.claude-restore-<時間戳>`——兩種副檔名都要去乾淨。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _recompress(_make_bundle(tmp_path, home), tmp_path / "b2", suffix)
+    stamp = bundle.name.removeprefix("claude-backup-").removesuffix(suffix)
+    proc = _run([str(bundle)], home)
+    assert proc.returncode == 0, proc.stderr
+    assert (home / f".claude-restore-{stamp}" / "manifest.json").is_file()
+
+
 def test_picks_newest_bundle_from_env_dir(tmp_path: Path):
     home, _ = _fake_home(tmp_path)
     bundle = _make_bundle(tmp_path, home)
@@ -129,7 +170,7 @@ def test_picks_newest_bundle_from_env_dir(tmp_path: Path):
 def _dying_tar(tmp_path: Path) -> str:
     """假的 tar：**先在解壓目標裡寫東西再失敗**——模擬壞包／磁碟滿／被中斷這種「已經開始
     解才死」的情境。直接 exit 1 的假 tar 不會產生任何檔案，那樣測到的是假綠：它證明不了
-    原子性，只證明了「沒寫就沒有殘骸」。`tar xzf <包> -C <目錄>` → $4 是目標目錄。"""
+    原子性，只證明了「沒寫就沒有殘骸」。`tar xf <包> -C <目錄>` → $4 是目標目錄。"""
     return _fake_tar(
         tmp_path,
         '#!/bin/sh\ncase "$1" in *x*) mkdir -p "$4" 2>/dev/null;'

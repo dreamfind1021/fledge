@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 from fledge_sidecar.app_config import AppConfig
-from fledge_sidecar.backup.bundles import is_bundle_name, list_bundles
+from fledge_sidecar.backup.bundles import BUNDLE_SUFFIXES, is_bundle_name, list_bundles
 from fledge_sidecar.backup.containment import check_backup_dir
 from fledge_sidecar.backup.script import restore_script_path
 from fledge_sidecar.paths import expand_and_validate, probe_dir
@@ -25,7 +25,6 @@ DestVerdict = Literal[
 ]
 
 _BUNDLE_PREFIX = "claude-backup-"
-_BUNDLE_SUFFIX = ".tar.gz"
 # 展開目錄的命名：帶備份包時間戳，所以同時還原兩份包不會互相覆蓋，使用者也從目錄名
 # 就看得出這是哪一份。
 _DEST_PREFIX = ".claude-restore-"
@@ -161,7 +160,9 @@ def default_dest(bundle_name: str) -> str:
 
     `bundle_name` 必須是過了 `bundle_path` 的名字，故形狀已知；仍用 removeprefix/suffix
     而非索引切片，畸形名字最壞只是目錄名醜，不會切出一個奇怪的路徑。"""
-    stamp = bundle_name.removeprefix(_BUNDLE_PREFIX).removesuffix(_BUNDLE_SUFFIX)
+    stamp = bundle_name.removeprefix(_BUNDLE_PREFIX)
+    for suffix in BUNDLE_SUFFIXES:      # 副檔名清單只在 bundles.py 一處（xz 改版 spec §6.3）
+        stamp = stamp.removesuffix(suffix)
     return str(Path.home() / f"{_DEST_PREFIX}{stamp}")
 
 
