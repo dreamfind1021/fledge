@@ -54,78 +54,8 @@ fi
 DEST="${DEST:-${HOME}/.claude-restore-$(basename "${BUNDLE}" | sed -E -e 's/^claude-backup-//' -e 's/\.tar\.(xz|gz)$//')}"
 
 # ── 展開量的防呆（票 12）──────────────────────────────────────────────────────
-# tar bomb：壓縮後幾 KB、展開後爆量。判準用**壓縮比**而不是絕對大小——後者會誤擋「真的
-# 有很多資產」的誠實大包，而壓縮比正是 tar bomb 的特徵。
-#
-# **宣稱等級**：這不是「防止磁碟耗盡」，也不是「防止 inode 耗盡」。解壓當下的空間與 inode
-# 都已經被佔掉了（磁碟真的滿的話是 tar 自己失敗，由既有的 cleanup 處理），這一層擋的是
-# **不讓一個離譜的展開目錄留在磁碟上**——大得離譜或項目多得離譜都算。
-# 它擋得住「宣告小、實際大」（量的是實際落地的東西，不看 header 宣告值），擋不住「解壓
-# 過程中就把磁碟塞爆」（那需要 streaming 計量）。
-EXPANSION_MIN_BYTES=8388608   # 8 MiB 以下不看比例：小包的 gzip 固定開銷會讓比例失真
-EXPANSION_MAX_RATIO=200       # 真實備份包多是文字（jsonl／md），實測比例個位數到十幾倍
-# **大小配額擋不住「多」**：symlink、目錄與零大小檔案的 st_size 全是 0，幾十萬個這種成員
-# 可以讓總量停在 0 而完全繞過比例判準，留下的正是一個離譜的展開目錄（inode 耗用、清理極慢）。
-# 上限依實測定：本機真實 `~/.claude` 是 1.5 萬個項目，留 13 倍餘裕。
-# `FLEDGE_MAX_ENTRIES` 只是**測試接縫**（比照 FLEDGE_BACKUP_SCRIPTS_DIR）——造 20 萬個成員的
-# 測試會慢到不可接受。能設環境變數的人本來就能執行任意命令，它不是安全邊界。
-MAX_ENTRIES="${FLEDGE_MAX_ENTRIES:-200000}"
-
-check_expansion() {
-  python3 - "$1" "$2" "${EXPANSION_MIN_BYTES}" "${EXPANSION_MAX_RATIO}" "${MAX_ENTRIES}" <<'PYEOF'
-import os, stat, sys
-
-staging, bundle = sys.argv[1], sys.argv[2]
-floor, max_ratio, max_entries = int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
-
-# 只加總**一般檔**的大小：目錄項本身的 st_size 在 APFS 有幾百 bytes，算進去會讓「很多
-# 空目錄」的包被誤判。symlink 不跟隨（lstat），它的 size 是目標字串長度。
-total = 0
-entries = 0
-seen = set()
-for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
-    entries += len(dirnames) + len(filenames)
-    for name in filenames:
-        try:
-            st = os.lstat(os.path.join(dirpath, name))
-        except OSError:
-            continue
-        if not stat.S_ISREG(st.st_mode):
-            continue
-        # hardlink：同一個 inode 的每個名字 lstat 都回相同的 st_size，逐名加總會把一份
-        # 內容算 N 次。誤擋方向雖然安全，但仍然是誤擋。
-        key = (st.st_dev, st.st_ino)
-        if key in seen:
-            continue
-        seen.add(key)
-        total += st.st_size
-
-# **項目數的上限與大小無關**：零大小的成員不貢獻 total，只有這一道擋得住「多」。
-if entries > max_entries:
-    print(
-        f"拒絕發布：這份備份包展開後有 {entries} 個項目，遠超過正常備份包的規模。",
-        file=sys.stderr,
-    )
-    print("正常的備份包不會有這種數量，多半是一份惡意或損壞的包。", file=sys.stderr)
-    raise SystemExit(1)
-
-if total <= floor:
-    raise SystemExit(0)
-try:
-    packed = os.stat(bundle).st_size
-except OSError:
-    raise SystemExit(0)          # 量不到來源就不做這個判斷，不擋合法的還原
-# 不用整數截斷比較——`total // packed > 200` 會讓實際 200.9 倍的包通過。
-if packed > 0 and total > packed * max_ratio:
-    print(
-        f"拒絕發布：這份備份包展開後是它本身的 {total // packed} 倍"
-        f"（{total // (1 << 20)} MiB ← {packed // 1024} KiB）。",
-        file=sys.stderr,
-    )
-    print("正常的備份包不會有這種比例，多半是一份惡意或損壞的包。", file=sys.stderr)
-    raise SystemExit(1)
-PYEOF
-}
+# 判準在 `expansion_guard.py`，與 `backup-claude.sh` 的發布前檢查**共用同一份**（xz 改版
+# spec §6.5）：抄兩份會漂移成「備份說可以、還原說不行」。門檻的依據與宣稱等級都寫在那個檔裡。
 
 # ── manifest 的安全讀取（票 12）───────────────────────────────────────────────
 # 備份包的內容是**不可信輸入**（使用者可能從網路下載到一份假的）。原本用 `[ -f ]` 判存在、
@@ -197,6 +127,14 @@ expand_home() { case "$1" in "~/"*) echo "${HOME}/${1#\~/}" ;; "~") echo "${HOME
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_JSON="${HOME}/.fledge/config.json"
 EXTRA_PATHS_FILE="${SCRIPT_DIR}/backup-extra-paths.txt"
+# 展開量判準，與 backup-claude.sh 共用
+EXPANSION_GUARD="${SCRIPT_DIR}/expansion_guard.py"
+# 判準檔不見時寧可擋下也不放行，而且要在解壓**之前**停（理由同 backup-claude.sh）。
+if [ "${DIFF_ONLY}" = false ] && [ ! -f "${EXPANSION_GUARD}" ]; then
+  echo "找不到 ${EXPANSION_GUARD}——它應該與本腳本放在同一個資料夾。" >&2
+  echo "少了它無法檢查備份包展開後的大小，所以這次不還原。" >&2
+  exit 1
+fi
 
 # 判定整段收在**一個 Python 區塊**裡，不在 bash 與 python 之間傳路徑清單。前一版把 root
 # 清單以換行序列化再由 `read` 逐行切割，含換行的路徑會被拆成兩個 root（資料與分隔符混用）；
@@ -386,7 +324,10 @@ if [ "${DIFF_ONLY}" = false ]; then
   verify_manifest "${staging}/manifest.json" || exit 1
 
   # 展開量的防呆同樣在**發布前**：拒絕時 staging 由 EXIT trap 清掉，磁碟上不留東西。
-  check_expansion "${staging}" "${BUNDLE}" || exit 1
+  if ! python3 "${EXPANSION_GUARD}" "${staging}" "${BUNDLE}"; then
+    echo "拒絕發布：正常的備份包不會有這種比例或數量，多半是一份惡意或損壞的包。" >&2
+    exit 1
+  fi
 
   # **發布走 os.rename 而不是 mv**：`mv A B` 在 B 是既有目錄時會把 A 移**進去**變成
   # B/<staging名>，於是兩個同時還原到同一個 DEST 的程序，第二個會把自己整棵樹藏進第一份

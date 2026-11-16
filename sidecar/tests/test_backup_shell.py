@@ -255,6 +255,28 @@ def test_missing_shared_list_file_is_not_fatal(tmp_path: Path):
     assert proc.returncode == 0, proc.stderr
 
 
+def test_missing_expansion_guard_fails_before_packing(tmp_path: Path):
+    """判準檔不見時寧可擋下也不放行：少了它無法確認備份包還原得回來。要在打包**之前**
+    就停（打包可能要一分鐘），並說清楚少的是哪個檔。"""
+    home, _ = _fake_home(tmp_path)
+    lonely = tmp_path / "lonely"
+    lonely.mkdir()
+    copy = lonely / "backup-claude.sh"
+    copy.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    called = tmp_path / "tar-called"
+    tar = _fake_tar(tmp_path, f'#!/bin/sh\necho "$@" >> {called}\nexec /usr/bin/tar "$@"\n')
+    out = tmp_path / "out"
+    proc = subprocess.run(
+        ["/bin/bash", str(copy), "-o", str(out)],
+        capture_output=True, text=True,
+        env={**os.environ, "HOME": str(home), "FLEDGE_TAR": tar}, timeout=120,
+    )
+    assert proc.returncode != 0
+    assert "expansion_guard.py" in proc.stderr
+    assert not called.exists(), "缺判準檔仍然開始打包了"
+    assert list(out.glob("claude-backup-*")) == []
+
+
 def test_backup_succeeds_when_no_extra_paths_exist(tmp_path: Path):
     """回歸：`~/.agents` 之類的額外來源全都不存在時，備份仍要成功。
 
@@ -469,6 +491,53 @@ def test_tar_on_path_is_not_used(tmp_path: Path):
     assert proc.returncode == 0, proc.stderr
     assert not called.exists(), "腳本用了 PATH 裡的 tar"
     assert len(list(out.glob("claude-backup-*.tar.gz"))) == 1
+
+
+# ── 還原端會擋的包不發布（xz 改版 spec §6.5、G5）────────────────────────────
+
+
+def test_backup_refuses_a_bundle_the_restore_guard_would_reject(tmp_path: Path):
+    """還原時會被擋的包，備份時就不能顯示成功——否則要等到需要還原那天才發現，而那時
+    現役資料多半已經沒了。"""
+    home, config_dir = _fake_home(tmp_path)
+    (config_dir / "skills" / "zeros.bin").write_bytes(b"\0" * (12 << 20))   # 壓縮後幾 KB
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode != 0, proc.stdout
+    assert "超過 100 倍的上限" in proc.stderr
+    assert "不發布" in proc.stderr
+    assert list(out.glob("claude-backup-*")) == []
+    assert list(out.glob(".claude-backup-*.partial")) == []
+
+
+def test_backup_refuses_too_many_entries(tmp_path: Path):
+    home, config_dir = _fake_home(tmp_path)
+    for i in range(60):
+        (config_dir / "skills" / f"s{i}.md").write_text("x", encoding="utf-8")
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home, extra_env={"FLEDGE_MAX_ENTRIES": "50"})
+    assert proc.returncode != 0, proc.stdout
+    assert "個的上限" in proc.stderr
+    assert list(out.glob("claude-backup-*")) == []
+
+
+def test_a_bundle_that_passes_backup_also_passes_restore(tmp_path: Path):
+    """兩端量的是同一棵樹、用同一份判準：備份端放行的包，還原端也要放行。
+    資料調在 100 倍下面（gzip 約 84 倍、xz 約 90 倍），兩端量法若不一致，這條最先紅。"""
+    home, config_dir = _fake_home(tmp_path)
+    (config_dir / "skills" / "mixed.bin").write_bytes(b"\0" * (12 << 20) + os.urandom(140_000))
+    out = tmp_path / "out"
+    proc = _run(["-o", str(out)], home)
+    assert proc.returncode == 0, proc.stderr
+    (bundle,) = list(out.glob("claude-backup-*.tar.*"))
+    dest = tmp_path / "unpacked"
+    restore = subprocess.run(
+        ["/bin/bash", str(REPO / "scripts" / "restore-claude.sh"), str(bundle), "-o", str(dest)],
+        capture_output=True, text=True, env={**os.environ, "HOME": str(home)}, timeout=120,
+    )
+    assert restore.returncode == 0, restore.stderr
+    total = sum(p.stat().st_size for p in dest.rglob("*") if p.is_file() and not p.is_symlink())
+    assert 70 < total / bundle.stat().st_size < 100, total / bundle.stat().st_size
 
 
 def test_publish_never_clobbers_existing_bundle(tmp_path: Path):
@@ -740,6 +809,9 @@ def _script_with_extra_list(tmp_path: Path, lines: str) -> Path:
     copy.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
     copy.chmod(0o755)
     (d / "backup-extra-paths.txt").write_text(lines, encoding="utf-8")
+    # 展開量判準同樣以 `SCRIPT_DIR` 找，缺了它腳本會在打包前停下（xz 改版 Task 3）
+    guard = REPO / "scripts" / "expansion_guard.py"
+    (d / guard.name).write_text(guard.read_text(encoding="utf-8"), encoding="utf-8")
     return copy
 
 

@@ -1,3 +1,4 @@
+import re
 import subprocess
 from pathlib import Path
 
@@ -142,5 +143,24 @@ def test_build_script_bundles_script_and_extra_paths():
     body = build.read_text(encoding="utf-8")
     # 還原腳本一併鎖住：漏收它的話打包版按下還原會直接失敗，而 dev 環境（讀 repo 的
     # scripts/）完全看不出來——與備份腳本是同一種只在打包版現形的失效。
-    for filename in (SCRIPT_FILENAME, EXTRA_PATHS_FILENAME, RESTORE_SCRIPT_FILENAME):
+    # 兩支腳本以 `"${SCRIPT_DIR}/<檔名>"` 取用的同目錄檔案也一律要在清單裡：新增共用檔時忘了
+    # 加，同樣只在打包版現形（xz 改版加 `expansion_guard.py` 時寫成通則）。
+    scripts = build.parents[1] / "scripts"
+    referenced = set()
+    for name in (SCRIPT_FILENAME, RESTORE_SCRIPT_FILENAME):
+        text = (scripts / name).read_text(encoding="utf-8")
+        referenced |= set(re.findall(r'"\$\{SCRIPT_DIR\}/([A-Za-z0-9_.-]+)"', text))
+    assert EXTRA_PATHS_FILENAME in referenced, "抓不到 ${SCRIPT_DIR}/ 的引用——regex 失準會讓這條空掃"
+    for filename in sorted(referenced | {SCRIPT_FILENAME, RESTORE_SCRIPT_FILENAME}):
         assert f"--add-data \"../scripts/{filename}:scripts\"" in body, filename
+
+
+def test_both_scripts_use_the_shared_expansion_guard():
+    """展開量的判準只能有一份（xz 改版 spec §6.5）：兩支腳本都呼叫 `expansion_guard.py`，
+    誰也不在自己裡面留一份門檻。抄兩份會漂移成「備份說可以、還原說不行」。"""
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+    for name in (SCRIPT_FILENAME, RESTORE_SCRIPT_FILENAME):
+        body = (scripts / name).read_text(encoding="utf-8")
+        assert 'EXPANSION_GUARD="${SCRIPT_DIR}/expansion_guard.py"' in body, name
+        assert 'python3 "${EXPANSION_GUARD}"' in body, name
+        assert "EXPANSION_MAX_RATIO" not in body, name

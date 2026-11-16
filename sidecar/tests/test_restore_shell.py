@@ -365,12 +365,39 @@ def test_missing_shared_list_file_is_not_fatal(tmp_path: Path):
     lonely.mkdir()
     copy = lonely / "restore-claude.sh"
     copy.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    # 展開量判準不是這條要測的對象，照樣放在旁邊（缺它的情況見下一條）
+    guard = REPO / "scripts" / "expansion_guard.py"
+    (lonely / guard.name).write_text(guard.read_text(encoding="utf-8"), encoding="utf-8")
     proc = subprocess.run(
         ["/bin/bash", str(copy), str(bundle), "-o", str(tmp_path / "restored")],
         capture_output=True, text=True,
         env={**os.environ, "HOME": str(home)}, timeout=120,
     )
     assert proc.returncode == 0, proc.stderr
+
+
+def test_missing_expansion_guard_fails_before_extracting(tmp_path: Path):
+    """判準檔不見時寧可擋下也不放行，而且要在解壓**之前**停、說清楚少的是哪個檔——
+    不能印成「多半是一份惡意或損壞的包」。"""
+    home, _ = _fake_home(tmp_path)
+    bundle = _make_bundle(tmp_path, home)
+    lonely = tmp_path / "lonely"
+    lonely.mkdir()
+    copy = lonely / "restore-claude.sh"
+    copy.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    called = tmp_path / "tar-called"
+    tar = _fake_tar(tmp_path, f'#!/bin/sh\necho "$@" >> {called}\nexec /usr/bin/tar "$@"\n')
+    dest = tmp_path / "restored"
+    proc = subprocess.run(
+        ["/bin/bash", str(copy), str(bundle), "-o", str(dest)],
+        capture_output=True, text=True,
+        env={**os.environ, "HOME": str(home), "FLEDGE_TAR": tar}, timeout=120,
+    )
+    assert proc.returncode != 0
+    assert "expansion_guard.py" in proc.stderr
+    assert "惡意" not in proc.stderr
+    assert not called.exists(), "缺判準檔仍然開始解壓了"
+    assert not dest.exists()
 
 
 def _config_with_account(home: Path, config_dir: Path) -> None:
@@ -1017,12 +1044,40 @@ def test_hardlinked_names_are_not_counted_twice(tmp_path: Path):
     dest = tmp_path / "unpacked"
 
     # 去重後 total ≈ 1 MiB（在 8 MiB 門檻以下，連比例都不看）；逐名加總則是 301 MiB
-    # 配上 1 MiB 的包＝約 300 倍，遠超過 200 倍門檻而被拒。**數字是實測挑的**：先寫的
+    # 配上 1 MiB 的包＝約 300 倍，遠超過 100 倍門檻而被拒。**數字是實測挑的**：先寫的
     # 「3 MiB × 4 條」版本兩種實作都會放行——它對「有沒有去重」根本不敏感，是假綠。
     proc = _run([str(bundle), "-o", str(dest)], home)
 
     assert proc.returncode == 0, proc.stderr
     assert (dest / "accounts" / "default" / "real.bin").exists()
+
+
+def test_gzip_bundle_between_100_and_200_times_is_now_refused(tmp_path: Path):
+    """門檻從 200 收緊到 100（xz 改版 spec §6.5）：以前會放行的 100–200 倍舊包，現在會被擋。
+    這是**刻意的改變**，釘住它。資料用一大段零（幾乎壓光）加一段隨機位元組（壓不掉）調出倍數。"""
+    import io
+    import tarfile
+
+    home, _ = _fake_home(tmp_path)
+    d = tmp_path / "between"
+    d.mkdir()
+    bundle = d / "claude-backup-20260101-1200.tar.gz"
+    manifest = json.dumps({"created": "x", "accounts": {}}).encode()
+    payload = b"\0" * (12 << 20) + os.urandom(72_000)
+    with tarfile.open(bundle, "w:gz") as tf:
+        for name, data in (("manifest.json", manifest), ("accounts/default/mixed.bin", payload)):
+            ti = tarfile.TarInfo(name)
+            ti.size = len(data)
+            tf.addfile(ti, io.BytesIO(data))
+    ratio = (len(manifest) + len(payload)) / bundle.stat().st_size     # 判準同一套量法
+    assert 120 < ratio < 190, ratio                                     # 確實落在 100–200 之間
+    dest = tmp_path / "unpacked"
+
+    proc = _run([str(bundle), "-o", str(dest)], home)
+
+    assert proc.returncode != 0, proc.stdout
+    assert "超過 100 倍的上限" in proc.stderr
+    assert not dest.exists()
 
 
 def test_manifest_cannot_point_the_diff_at_an_arbitrary_local_directory(tmp_path: Path):

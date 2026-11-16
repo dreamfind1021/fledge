@@ -100,6 +100,8 @@ KNOWN_SKIP=(
 # 新來源會被打包但 containment 不知道它，使用者就能把備份設進那個來源裡。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXTRA_PATHS_FILE="${SCRIPT_DIR}/backup-extra-paths.txt"
+# 展開量判準，與 restore-claude.sh 共用（見打包段的發布前檢查）
+EXPANSION_GUARD="${SCRIPT_DIR}/expansion_guard.py"
 EXTRA_PATHS=()
 if [ -f "${EXTRA_PATHS_FILE}" ]; then
   while IFS= read -r line || [ -n "${line}" ]; do
@@ -352,6 +354,14 @@ fi
 
 [ "${LIST_ONLY}" = true ] && exit 0
 
+# 判準檔不見時寧可擋下也不放行（少了它無法確認備份包還原得回來），而且要在打包**之前**停——
+# 打包可能要一分鐘，做完才說不行是白等。
+[ -f "${EXPANSION_GUARD}" ] || {
+  echo "找不到 ${EXPANSION_GUARD}——它應該與本腳本放在同一個資料夾。" >&2
+  echo "少了它無法確認備份包還原得回來，所以這次不備份。" >&2
+  exit 1
+}
+
 # ── 打包 ────────────────────────────────────────────────────────────────────
 #
 mkdir -p "${OUT_DIR}"
@@ -475,6 +485,14 @@ PY
 # ── 驗證：讀得回來才算數，通過了才叫得出最終名 ──────────────────────────────
 if ! "${TAR}" tzf "${partial}" > /dev/null 2>&1; then
   echo "打包後驗證失敗，刪除半成品：${partial}" >&2
+  rm -f "${partial}"
+  exit 1
+fi
+# 還原端會擋的包不發布（xz 改版 spec §6.5、G5）：對 staging 與暫存包套用**還原端同一份**判準。
+# 少了這一道，還原時會被擋的包照樣顯示「備份成功」，要等到需要還原那天才發現——那時現役
+# 資料多半已經沒了。在這裡失敗，使用者當下就看得到，現役資料也還在。
+if ! python3 "${EXPANSION_GUARD}" "${stage}" "${partial}"; then
+  echo "這份備份包還原時會被擋下（原因見上一行），所以不發布，已刪除半成品。" >&2
   rm -f "${partial}"
   exit 1
 fi
