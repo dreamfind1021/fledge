@@ -9,7 +9,7 @@
 
 - **專案名稱：** Fledge — AI Workflow Studio（短名 `fledge`）
 - **技術棧：** Tauri 2.x（Rust 殼）+ Python sidecar（FastAPI）+ React + TypeScript（Vite）
-- **最後更新：** 2026-11-16
+- **最後更新：** 2026-11-17
 
 > 一句話定位：給 Claude Code 套圖形化 OS 殼，底層跑真實 `claude` CLI（繼承所有 skills/CLAUDE.md/MCP/帳號），上層 GUI 管理專案選擇、帳號分隔、多 sessions。
 
@@ -209,6 +209,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `test_usage_pricing.py` | 定價正規化（別名/後綴/synthetic/表外未知款不猜價）＋兩源計價公式＋Claude 分段（門檻嚴格大於／長度四項各自能越線／output 不計入長度／五欄整組換／無分段的款不受影響／Haiku 5.5 官方分段價釘死） |
 | `test_sync_pricing.py` | `admin/sync_pricing.py` 的表建構與渲染（假上游 dict、不連外也不掃本機）：裸 key 過濾／日期版合併／同名不同價視為衝突／PINNED 保值／EXCLUDED 不入表／cached 缺失退回 input 價／已知合理偏離不被防線換掉且仍擋得住二次漂移／新世代不被靜默略過且字首要有世代邊界／非文字產品依 mode 擋掉／查無定價的四種原因分得開（EXCLUDED 優先）／上游正數不論偏離多遠都照收而非改寫／非有限正數才推導並出聲／診斷與建表共用候選（同名多 key 不誤判）／渲染結果可 exec 回原表／版本隨內容變／分段：門檻從欄位名讀、batch 變體不混入、分段 cache 缺層推導並標估值、分段 output 缺值擋下、多門檻與同名分段不一致算衝突、EXCLUDED 連分段不收、PINNED 不管分段、只改分段價或門檻也換版本、dry-run 印新增與改動的分段、移除分段需 `--allow-removals` |
 | `test_derive_theme.py` | `admin/derive_theme.py`：推導主題的現值＝推導結果、淺色配方 `primary`（主色換成指定色）的輸出釘在字面值且不改傳進來的午夜藍基準、CLI 結束碼、改一格恰好點名那一格；結構防線的負對照（同一塊兩次、沒有配方的塊、`[data-theme]:root` 寫法、區塊內重複宣告、午夜藍的 `!important`、漏分號的最後一條等） |
+| `test_verify_release.py` | `admin/verify_release.py`（票 54）：一組全過的基準（假新版／假對照組／假 Release 目錄＋暫存 git repo 打 tag）跑完必須恰好是那 18 行且全過；每條負對照只改一個地方、斷言恰好預期的那幾行失敗——版號與對照組同版、Authority／`LSMinimumSystemVersion`／minos 不同或兩邊都空、成品帶舊 rc 的腳本、打包宣告與成品一起漏檔仍失敗、差一個位元組、清單外多一個檔、整個 `scripts/` 不見、tag 裡沒有、指紋的新版沒有模組／沒有字串／對照組也有／namespace package（兩邊）／對照組讀不開或讀取出錯（不算「不含」）、雜湊不符或零個 OK、這一版的 dmg 沒被 shasum 驗過（沒列、沒下載、只出現在註解／格式不對／檔名尾端有空白或 tab 的行）、範本清單變了或兩邊都空；個別出錯不中斷（含 PyInstaller 在打開或讀取時丟 `SystemExit`）、參數格式錯是結束碼 2。只替換最底層（外部指令的輸出文字照真實 `codesign`／`vtool` 格式、打開 PYZ 那一步），不 import PyInstaller |
 | `test_usage_parser.py` | 三格式解析（容錯/cache precedence/差分 clamp/壞 ts/中文 cwd；pi：fixture `fixtures/pi/session-a.jsonl` 四類逐個加總、摘要歸 `pi/summary`、dedup_key、`origin_ts`、無 header） |
 | `test_usage_scanner.py` | realpath 去重（symlink 帳號）＋codex canonical 三層 tier＋fallback＋`codex_config_model` 七種 config.toml＋pi（只收 session 檔、遞迴、symlink 去重、`pi_home` 環境變數） |
 | `test_codex_usage.py` | Codex app-server 兩個入口（normalize 欄位映射／缺鍵→bad_response、閘門不 spawn、RpcError 401→unauthorized、逾時／EOF→network、預設 factory 各用各的逾時預算；帳號每日用量的壞 bucket／沒有 accountId／預設模型／額度窗口（不看位置取最長的、只有 5 小時、沒有重置時間、重置時間或長度是 inf、長度離譜→None）；假 codex 腳本真子進程往返與回收） |
@@ -264,6 +265,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 |------|------|
 | `sync_pricing.py` | 從 LiteLLM 的 `model_prices_and_context_window.json` 重生 `usage/pricing_table.py`（手動執行，不在 runtime 連外——理由見 ADR-0005）。只收第一方裸 key（濾掉 `vertex_ai/`、Bedrock `-v1:0` 等區域價）；Codex 側再過兩道：`_CODEX_KEY_RE`（`^gpt-[56](?:[.-]|$)`，世代號後必須接結尾／`.`／`-`，純字首會連 `gpt-60…`、`gpt-6a…` 一起收）＋ `_CODEX_MODES`（只收上游宣告 `mode` 為 chat／responses 的，擋非文字產品；**刻意不用名字 allowlist**——Codex CLI 記錄的是 `gpt-5.5`、`gpt-5.6-sol` 這種純模型名，名字分辨不出是不是 Codex 會跑的款，allowlist 得追不完的 tier，漏列＝使用者實際在用的款不計成本；**fail-closed**：`mode` 缺漏或不認得一律不收——放行未知等於讓上游 schema 漂移把非文字產品無聲收進表、日後以文字 token 三元組算出錯帳）；查無定價時由 `explain_missing()` 分四類據實說明（EXCLUDED 刻意排除／收錄條件沒涵蓋／上游缺價欄／上游真的沒有——**EXCLUDED 優先判**，否則刻意排除的款會被說成前綴漏收，把人導向錯的修法）；表 key 用 pricing.py 自己的 normalize 產生；cache 價一律存上游真價：**有限正數照收，不論偏離標準倍率多遠**；只有缺值才用倍率（Claude 三層 1.25/2/0.1、Codex cached 0.1）推導成估價，且每筆估價都會在輸出裡標明「估值，非官方價」；上游給了非有限正數才視同損壞、改估價並要人複核。Claude 依 prompt 長度分段的價：收上游 `<基本欄位>_above_<N>k_tokens`（門檻＝N×1000；`_batches` 等計費模式變體結尾不符、不收），五欄套與基本價相同的規則，寫進 `CLAUDE_LONG_CONTEXT`；`PINNED` 只管基本價；dry-run 印出新增（含門檻與五欄）、改動（舊值→新值）、移除的分段。**刻意不做「偏離倍率就視同損壞」的比例猜測**——那分不出資料錯誤與供應商合法調價（Fable 5.1 把 cache read 降到 0.025× 就被誤判成損壞、改寫成 4 倍估價還照常寫檔），其立案依據（claude-3-haiku 的 24×、claude-3-opus 的 0.4×）上游已修正，實測開關它對現行表零影響。刻意偏離上游的項目走 `PINNED`／`EXCLUDED`——人決定、寫得出理由。真正的阻斷交給 `invalid_prices()`。**寫檔前的阻斷條件**（整檔覆蓋是破壞性的）：上游非空 mapping、同一正規化名不得對到不同價（含分段：一個上游 key 有分段、另一個沒有也算；同一款多個門檻也算）、每個價（含分段）須為有限正數且門檻為正（缺 `output` 會變 0＝output 免費）、移除既有模型或分段需 `--allow-removals`。寫檔後掃本機用量報「仍查無定價」的模型。`--dry-run`／`--from <json>`／`--no-check-local`／`--allow-removals` |
 | `derive_theme.py` | 主題色值推導（票 37）：午夜藍以外的主題（濃巧棕、深鐵黑、冷調灰、柔潤黃）的色值全部由這裡的規則從 `src/index.css` 的午夜藍推出，每個主題的輸入參數寫在 `RECIPES`（深色＝色票；淺色＝色相、彩度、卡片、陰影底色）。`<主題代號>` 印整塊 CSS＋對比報告（不改檔），`check` 逐條比對 `src/index.css`，外加結構防線：主題區塊只准「屬性: 值;」（擋 `!important`、重複宣告、漏分號）、`data-theme` 只准兩種標準寫法、每塊恰好一個、CSS 有的主題都要有配方。**要調色時改配方或規則再重產，不手改 CSS 的單格**。只用 Python 內建，系統的 python3 3.9 可跑 |
+| `verify_release.py` | 發版時驗 CI 成品（票 54；rc 與正式版各跑一次，用 sidecar venv 的 python，因為讀 PYZ 要 PyInstaller）。補 CI 做不到的三類：跟上一版比（Authority、`LSMinimumSystemVersion`、主程式與 sidecar 的 minos 都要非空且相同；對照組不得同版）、跟 git 逐位元組比（`PACKAGED_SCRIPTS` 四支腳本 vs `git show <tag>:scripts/<名>`＋成品 `scripts/` 不得有清單外的檔；清單**刻意寫死、不從 `build_binary.sh` 推**——預期要獨立於被驗的東西）、下載後再驗（`checksums.txt`、這一版的 dmg 要真的被 shasum 驗過〔看 shasum 的輸出、不自己解析 `checksums.txt`：shasum 會略過註解、格式不對、檔名尾端有空白的行照樣回 0；兩項看同一次 shasum；保證範圍是手誤〔下載錯版本、漏下載〕，不含刻意偽造的檔名〕、範本清單 `{id: included}` 與上一版相同）。sidecar 的 PYZ 先做讀取自我檢查（兩版的 `fledge_sidecar` 都要含 `__version__`），再驗 `--fp 模組:字串`「新版有、對照組沒有」；`extract(raw=True)` 不 unmarshal，PYZ 目錄裡沒有該模組是唯一算「不含」的情況，其他讀不開一律失敗；PyInstaller 讀檔時執行檔不見會丟 `SystemExit`（不屬於 `Exception`），在 PYZ 接縫轉成一般錯誤，才不會中斷整份報告。單一 `--tag` 推出版號與 git ref。每項一行「過／失敗」、個別出錯只讓那一行失敗；結束碼 0／1／2。發版步驟寫在檔頭 docstring |
 
 ### docs/agents/ — Agent skills 設定（mattpocock engineering skills 讀取）
 | 檔案 | 用途 |
@@ -321,8 +323,9 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `sidecar/.../paths.py`（正規化/驗證行為變更） | `routes/config.py`、`routes/projects.py`、`app_config.py`（load 遷移）、`test_paths.py` 及上述各 test |
 | `sidecar/.../__main__.py`（port 協定變更） | `src-tauri/src/sidecar.rs`（抓 port 的 prefix 比對） |
 | `src-tauri/tauri.conf.json`（`bundle.macOS.signingIdentity` 名稱變更） | `scripts/check-signing-identity.sh`（讀它）、`.github/workflows/release.yml`（Import 確認名稱、`EXPECTED_SIGNING_CERT_SHA1` 指紋）、GitHub 的兩個 secret（`FLEDGE_SIGNING_P12_*`）、`docs/guides/signing-certificate.md`（維護者筆記，不進 git）、`test_check_signing_identity.py`（釘死名稱）、`guides/macos-permissions*.md`（換憑證＝所有人再授權一次） |
-| `src-tauri/tauri.conf.json`（`bundle.resources` 名/路徑變更） | `sidecar/build_binary.sh`（onedir 資料夾命名）、`src/sidecar.rs`（`resource_dir().join("fledge-sidecar")` 路徑） |
+| `src-tauri/tauri.conf.json`（`bundle.resources` 名/路徑變更） | `sidecar/build_binary.sh`（onedir 資料夾命名）、`src/sidecar.rs`（`resource_dir().join("fledge-sidecar")` 路徑）、`admin/verify_release.py`（成品內路徑常數 `SIDECAR`／`SCRIPTS_DIR`；沒跟著改會在發版驗收時判失敗） |
 | `sidecar/pyproject.toml`（新增套件） | `build_binary.sh`（PyInstaller hidden imports） |
+| `sidecar/pyproject.toml`（`pyinstaller` 版本變更） | `admin/verify_release.py` 的 `open_real_pyz`／`_module_bytes`（PYZ 讀取行為；下一次發版驗收時兩行讀取自我檢查會用真成品驗到，失敗就照新版 `PyInstaller/archive/readers.py` 改） |
 | `src/components/Sidebar.tsx`（分組邏輯變更） | `src/lib/sidebarGroups.ts`、`src/lib/sidebarGroups.test.ts` |
 | `store/useAppStore.ts`（Tab 模型變更） | `src/App.tsx`（共用 isLiveClaudeTab predicate）、`src/components/TabBar.tsx`、`src/components/Terminal.tsx` |
 | `sidecar/.../usage/pricing.py`（正規化/公式/例外清單變更） | **儀表板所有成本數字**；`test_usage_pricing.py`；改 `PINNED`／`EXCLUDED` 後要重跑 `admin/sync_pricing.py` 讓表跟上。**改 `normalize_*_model` 必須升 `usage/cache.py` 的 `SCHEMA_VERSION`**——L2 存的是正規化後的 model 名，`pricing_version` 只觸發重算不重 parse，舊名會用新表繼續算下去。**改計價公式但表不變時 `PRICING_VERSION` 不會變**——L2 不重算、舊金額留著，公式變更要跟表內容變更同一個 commit 出貨 |
@@ -356,6 +359,7 @@ React UI                           → src/         Zustand store + Sidebar/TabB
 | `sidecar/.../setup/templates.py`（`TEMPLATE_SPECS` 增刪／`source_class` 變更） | `setup/template_manifest.py`（分類唯一真實來源）、`sidecar/resources/templates-public/`（頂層目錄名須在 allowlist）、`.github/workflows/release.yml`（seed 分類與 drift 檢查）、`test_templates.py`、`test_template_manifest.py` |
 | `scripts/expansion_guard.py`（門檻或量測邏輯變更） | `scripts/backup-claude.sh` 與 `scripts/restore-claude.sh` 的發布前檢查（兩邊都只呼叫它，不得各留一份）、`sidecar/build_binary.sh` 的 `--add-data`、`test_expansion_guard.py`／`test_backup_shell.py`／`test_restore_shell.py` |
 | `sidecar/build_binary.sh`（範本 staging 變更） | `scripts/verify_templates_artifact.py`、`.github/workflows/release.yml`、`setup/template_manifest.py`、`test_release_workflow.py` |
+| `sidecar/build_binary.sh`（增刪目的是 `scripts` 的 `--add-data`） | `admin/verify_release.py` 的 `PACKAGED_SCRIPTS` 要一起改（不改的話發版驗收時判失敗：成品多一個清單外的檔、或清單上那支「不存在」） |
 | `sidecar/resources/templates-public/**`（seed 內容增刪） | 同目錄的 `manifest.json` 必須一起重產（`build_manifest_entries`），否則 `test_templates.py` 的 drift 測試與 release workflow 的 ③ 都會失敗 |
 | `src/lib/tabOrder.ts`（排序/插入邏輯變更） | `store/useAppStore.ts`、`tabOrder.test.ts` |
 | `src/lib/terminalRegistry.ts`（handle contract 變更） | `Terminal.tsx`、`App.tsx`（onDragEnd 貼路徑、字級快捷鍵的「有沒有掛終端機」） |
