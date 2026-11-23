@@ -8,7 +8,7 @@ from __future__ import annotations
 
 # <生成日期>.<表內容 sha256 前 8 碼>：內容一變就變，改表不可能忘記遞增。
 # cache.py 只做相等比對，不解析內容。
-TABLE_VERSION = "2026-11-11.8f3db000"
+TABLE_VERSION = "2026-11-23.66f7cb1a"
 
 # Claude：(input, output, cache_5m_write, cache_1h_write, cache_read)——三層 cache 存
 # 上游真價而非倍率（倍率只對現行世代成立，claude-3-haiku 實為 1.2x/0.12x）；
@@ -79,8 +79,11 @@ CODEX_PRICING: dict[str, tuple[float, float, float]] = {
     "gpt-6-astra-law": (10.0, 1.0, 50.0),
     "gpt-6-cyber": (20.0, 2.0, 100.0),
     "gpt-6-luna": (0.1, 0.01, 0.5),
-    "gpt-6-rosalind": (15.0, 1.5, 75.0),
+    "gpt-6-rosalind": (10.0, 1.0, 50.0),
     "gpt-6-sol": (2.0, 0.2, 10.0),
     "gpt-6.1-sol": (2.0, 0.1, 10.0),
     "gpt-6.1-terra": (1.0, 0.05, 5.0),
+    "gpt-6.2-astra": (8.0, 0.4, 40.0),
+    "gpt-6.2-astra-law": (8.0, 0.4, 40.0),
+    "gpt-6.2-sol": (2.0, 0.1, 10.0),
 }
